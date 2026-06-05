@@ -29,6 +29,7 @@ interface Link {
 
 interface Student {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: number;
@@ -320,7 +321,7 @@ export default function TrustedAdultsAdmin({ canManage }: Props) {
                           cursor: "pointer",
                         }}
                       >
-                        {s.lastName}, {s.firstName} — Gr {s.grade} ({s.studentId})
+                        {s.lastName}, {s.firstName} — Gr {s.grade} ({s.localSisId ?? "—"})
                       </button>
                     ))
                   )}

@@ -28,11 +28,17 @@ import {
 } from "recharts";
 import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, howtoListStyle } from "./HowToUseHelp";
-import InsightsFilterBar, {
+import {
   EMPTY_FILTERS,
   filtersToQuery,
   type InsightsFilterValue,
 } from "./InsightsFilterBar";
+import InsightsPicker, {
+  csvFilename,
+  downloadCsv,
+  extractTopLists,
+  topListsToCsv,
+} from "./InsightsPicker";
 import BandStudentsDrawer from "./BandStudentsDrawer";
 
 interface Grower {
@@ -81,15 +87,6 @@ interface Props {
   onOpenProfile: (studentId: string) => void;
 }
 
-const GRADE_OPTIONS = [
-  { value: "", label: "All grades" },
-  { value: "K", label: "K" },
-  ...Array.from({ length: 12 }, (_, i) => ({
-    value: String(i + 1),
-    label: `Grade ${i + 1}`,
-  })),
-];
-
 // Subject palette: blue=ELA, orange=Math (matches conventional ed reports).
 const ELA_COLOR = "#2563eb"; // blue-600
 const MATH_COLOR = "#ea580c"; // orange-600
@@ -122,7 +119,7 @@ const LEVEL_LABEL: Record<1 | 2 | 3 | 4 | 5, string> = {
 };
 
 export default function AcademicsDashboard({ onOpenProfile }: Props) {
-  const [grade, setGrade] = useState("");
+  const [selectedGrades, setSelectedGrades] = useState<string[]>([]);
   const [filters, setFilters] = useState<InsightsFilterValue>(EMPTY_FILTERS);
   const [data, setData] = useState<AcademicsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -139,7 +136,7 @@ export default function AcademicsDashboard({ onOpenProfile }: Props) {
   // Build the shared query string (grade + cross-cutting filters).
   function buildQuery(): URLSearchParams {
     const qs = filtersToQuery(filters);
-    if (grade) qs.set("grade", grade);
+    if (selectedGrades.length > 0) qs.set("grades", selectedGrades.join(","));
     return qs;
   }
 
@@ -170,7 +167,7 @@ export default function AcademicsDashboard({ onOpenProfile }: Props) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [grade, filters]);
+  }, [selectedGrades, filters]);
 
   function openBand(subject: "ela" | "math", level: 1 | 2 | 3 | 4 | 5) {
     setDrillSubject(subject);
@@ -214,29 +211,22 @@ export default function AcademicsDashboard({ onOpenProfile }: Props) {
             and how the cohort is tracking against proficiency.
           </p>
         </div>
-        <div
-          style={{
-            display: "flex",
-            gap: "0.5rem",
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
-        >
-          <select
-            value={grade}
-            onChange={(e) => setGrade(e.target.value)}
-            style={selectStyle}
-          >
-            {GRADE_OPTIONS.map((g) => (
-              <option key={g.value} value={g.value}>
-                {g.label}
-              </option>
-            ))}
-          </select>
-        </div>
       </div>
 
-      <InsightsFilterBar value={filters} onChange={setFilters} />
+      <InsightsPicker
+        grades={selectedGrades}
+        onGradesChange={setSelectedGrades}
+        filters={filters}
+        onFiltersChange={setFilters}
+        onDownloadCsv={() => {
+          if (!data) return;
+          downloadCsv(
+            csvFilename("academics", selectedGrades),
+            topListsToCsv(extractTopLists(data)),
+          );
+        }}
+        csvDisabled={!data}
+      />
 
       <HowToUseHelp title="How to use Academics">
         <HowToSection title="What this dashboard is">

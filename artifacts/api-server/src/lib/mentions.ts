@@ -88,8 +88,16 @@ export async function updateMentionCaseIdForInteraction(opts: {
   schoolId: number;
   interactionId: number;
   newCaseId: number | null;
+  // Optional transaction executor. When the caller is already inside a
+  // db.transaction(...) block (e.g. the watchlist PATCH attach path that
+  // also calls assignWitnessSeqForInteraction), pass `tx` so the mention
+  // pointer update participates in the same atomic unit — otherwise a
+  // rollback would leave the mentions index pointing at the new caseId
+  // while the interaction itself reverts to the old caseId.
+  executor?: Pick<typeof db, "select" | "update">;
 }) {
-  const stmts = await db
+  const exec = opts.executor ?? db;
+  const stmts = await exec
     .select({ id: witnessStatementsTable.id })
     .from(witnessStatementsTable)
     .where(
@@ -100,7 +108,7 @@ export async function updateMentionCaseIdForInteraction(opts: {
     );
   if (stmts.length === 0) return;
   const ids = stmts.map((s) => s.id);
-  await db
+  await exec
     .update(caseMentionsTable)
     .set({ caseId: opts.newCaseId })
     .where(

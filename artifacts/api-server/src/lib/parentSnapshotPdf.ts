@@ -101,6 +101,7 @@ function drawDocument(
   if (sec.interventions) drawInterventionsBlock(doc, s);
   if (sec.staffNotes) drawStaffNotesBlock(doc, s);
   if (sec.oss) drawOssBlock(doc, s);
+  if (sec.reteach) drawReteachBlock(doc, s);
 
   drawFooter(doc, s);
 }
@@ -304,6 +305,42 @@ function drawAttendanceBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
       value: String(s.attendance.checkInsThisWeek),
       color: COLORS.muted,
     });
+    // Aggregate attendance metrics mirroring the parent Dashboard.
+    // Render dashes when the school hasn't loaded any attendance-day
+    // data yet so the PDF doesn't pretend to know a 0% rate.
+    stats.push({
+      label: "Attendance (YTD)",
+      value: s.attendance.pct.ytd ? `${s.attendance.pct.ytd.pct}%` : "—",
+      color: COLORS.accent,
+    });
+    stats.push({
+      label: "Attendance (30d)",
+      value: s.attendance.pct.last30 ? `${s.attendance.pct.last30.pct}%` : "—",
+      color: COLORS.accent,
+    });
+    // Period-level on-time streak — only when the school has a default
+    // bell schedule configured (otherwise `onTimeStreak` is null and we
+    // skip the streak tiles entirely, matching the parent dashboard).
+    if (s.attendance.onTimeStreak) {
+      stats.push({
+        label: "On-time streak",
+        value: `${s.attendance.onTimeStreak.current} pds`,
+        color: COLORS.positive,
+      });
+      stats.push({
+        label: "Longest (YTD)",
+        value: `${s.attendance.onTimeStreak.longestYtd} pds`,
+        color: COLORS.positive,
+      });
+      stats.push({
+        label: "On-time % (YTD)",
+        value:
+          s.attendance.onTimeStreak.pctYtd != null
+            ? `${s.attendance.onTimeStreak.pctYtd}%`
+            : "—",
+        color: COLORS.positive,
+      });
+    }
   }
   if (s.sectionsAvailable.hallPasses) {
     stats.push({
@@ -536,6 +573,61 @@ function drawOssBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
     }
   }
   doc.fillColor(COLORS.text);
+}
+
+// ---------- Reteach (extra support) ----------
+// Counts-only rollup. Teacher notes / strategy are not in the payload
+// and never rendered here. Each row is one benchmark code with 1:1 +
+// small-group counts.
+function drawReteachBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
+  sectionTitle(doc, "Extra Support — Focused Reteach");
+  doc
+    .fontSize(10)
+    .font("Helvetica")
+    .fillColor(COLORS.muted)
+    .text(
+      "In addition to regular classroom lessons, your child's teachers have provided extra focused practice on the standards below. Counts are for this school year.",
+      { width: doc.page.width - doc.page.margins.left - doc.page.margins.right },
+    );
+  doc.fillColor(COLORS.text);
+  doc.moveDown(0.4);
+
+  const items = s.reteach?.items ?? [];
+  if (items.length === 0) {
+    drawEmpty(doc, "No focused reteach logged this school year.");
+    return;
+  }
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const colW = (right - left) / 4;
+  const headerY = doc.y;
+  doc.fontSize(10).font("Helvetica-Bold").fillColor(COLORS.muted);
+  ["Benchmark", "1:1", "Small group", "Most recent"].forEach((h, i) => {
+    doc.text(h, left + colW * i, headerY, { width: colW - 8 });
+  });
+  let y = headerY + 16;
+  doc
+    .moveTo(left, y - 2)
+    .lineTo(right, y - 2)
+    .lineWidth(0.5)
+    .strokeColor(COLORS.border)
+    .stroke();
+
+  doc.font("Helvetica").fillColor(COLORS.text);
+  for (const r of items) {
+    ensureSpace(doc, 18);
+    const cells = [
+      r.benchmarkCode,
+      String(r.oneOnOne),
+      String(r.smallGroup),
+      fmtDate(r.lastAt),
+    ];
+    cells.forEach((c, i) => {
+      doc.text(c, left + colW * i, y, { width: colW - 8 });
+    });
+    y += 16;
+  }
+  doc.y = y + 4;
 }
 
 // ---------- Footer ----------

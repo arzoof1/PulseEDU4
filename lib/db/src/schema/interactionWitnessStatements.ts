@@ -29,6 +29,13 @@ export const witnessStatementsTable = pgTable(
     remindCount: integer("remind_count").notNull().default(0),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     body: text("body").notNull().default(""),
+    // Per-case sequence number, assigned at the moment the owning
+    // interaction is attached to a case (promote-to-case OR a PATCH
+    // that sets caseId). Null while the statement's interaction is
+    // still loose. Combined with the case number to form a human-
+    // readable identifier admins can quote: CASE-26-27-0042-WS-03.
+    // See formatWitnessStatementId() in lib/witnessStatementId.ts.
+    wsSeq: integer("ws_seq"),
   },
   (t) => ({
     schoolIdx: index("witness_statements_school_idx").on(t.schoolId),

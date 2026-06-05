@@ -121,6 +121,7 @@ interface StatementRow {
   requestedAt: string;
   remindCount: number;
   completedAt: string | null;
+  formattedId?: string | null;
 }
 
 interface Resp {
@@ -1964,12 +1965,23 @@ function PlayerDrawer({
                 (() => {
                   const sp = statusPillStyle(stmt.status);
                   return (
-                    <span
-                      className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold"
-                      style={{ background: sp.bg, color: sp.fg }}
-                    >
-                      {sp.label}
-                    </span>
+                    <div className="flex shrink-0 items-center gap-1">
+                      {stmt.formattedId ? (
+                        <span
+                          className="cursor-pointer select-all rounded-full border px-1.5 py-0.5 font-mono text-[9px] tracking-tight"
+                          style={{ borderColor: C.line, color: C.inkSoft }}
+                          title="Click to select — paste into audit log or report"
+                        >
+                          {stmt.formattedId}
+                        </span>
+                      ) : null}
+                      <span
+                        className="rounded-full px-1.5 py-0.5 text-[10px] font-bold"
+                        style={{ background: sp.bg, color: sp.fg }}
+                      >
+                        {sp.label}
+                      </span>
+                    </div>
                   );
                 })()}
             </div>

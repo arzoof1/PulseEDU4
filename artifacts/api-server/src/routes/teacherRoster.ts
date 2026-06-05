@@ -32,21 +32,62 @@ import {
   studentAccommodationsTable,
   schoolAccommodationsTable,
   safetyPlansTable,
+  studentRetentionsTable,
   issAttendanceDayTable,
   ossLogDaysTable,
   issAcknowledgementsTable,
 } from "@workspace/db";
 import { and, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
+import {
+  loadFastHistory,
+  pickHistory,
+  type FastHistoryEntry,
+  type FastHistoryMap,
+} from "../lib/fastHistory.js";
 import {
   bucketFor,
+  bucketTarget,
   hasChart,
   placeOnChart,
   placePm3,
+  SUB_LEVEL_LABEL,
   type Subject,
   type Placement,
   type BucketInfo,
 } from "../lib/fastCutScores.js";
+import { decideLearningGain } from "../lib/learningGains.js";
+
+// Per-PM placement enriched with the gap-to-next-sublevel caption used
+// by the roster pills. Gap is computed on the CURRENT-grade chart (same
+// approach the FAST Benchmarks tab uses) so the number is "points to
+// clear our chart's next stop" — what teachers expect to see.
+interface PlacementWithGap extends Placement {
+  gap: number | null;
+  nextStopLabel: string | null;
+}
+
+function withGap(
+  placement: Placement | null,
+  pmScore: number | null,
+  subject: Subject,
+  grade: number,
+): PlacementWithGap | null {
+  if (!placement) return null;
+  if (pmScore == null) {
+    return { ...placement, gap: null, nextStopLabel: null };
+  }
+  const target = bucketTarget(subject, grade, placement.subLevel);
+  if (!target) {
+    return { ...placement, gap: null, nextStopLabel: null };
+  }
+  return {
+    ...placement,
+    gap: target.score - pmScore,
+    nextStopLabel: SUB_LEVEL_LABEL[target.nextStop],
+  };
+}
 
 const router: IRouter = Router();
 
@@ -86,6 +127,16 @@ function subtractSchoolDays(n: number): Date {
   return d;
 }
 
+interface PriorPm3 {
+  // School-year label (e.g. "24-25") from the FL historical importer.
+  schoolYear: string;
+  pm3: number;
+  // Placement is computed against the PRIOR grade's chart (the year
+  // this PM3 was actually administered), so the color-banded pill
+  // reads as "end of last year's grade" not "end of this year's."
+  placement: PlacementWithGap | null;
+}
+
 interface SubjectBlock {
   pm1: number | null;
   pm2: number | null;
@@ -93,12 +144,44 @@ interface SubjectBlock {
   // Placement of EACH PM score on its own chart. PM1/PM2 use current
   // grade; PM3 uses prior grade (so it represents end-of-prior-year
   // mastery before fall regression).
-  pm1Placement: Placement | null;
-  pm2Placement: Placement | null;
-  pm3Placement: Placement | null;
+  pm1Placement: PlacementWithGap | null;
+  pm2Placement: PlacementWithGap | null;
+  pm3Placement: PlacementWithGap | null;
   bucket: BucketInfo;
   priorYearScore: number | null;
   priorYearBq: boolean;
+  // Most-recent prior-year PM3 from the FL Florida importer's
+  // historical mode (the row tagged is_historical=true). Rendered as
+  // a real pill in its own column on the roster — the leftmost cell
+  // in the chronological story Prior → PM1 → PM2 → PM3 → LG. Null
+  // when no historical row has been uploaded for this (student,
+  // subject) yet. Only one prior year is surfaced on the roster;
+  // multi-year history still lives on the student profile FAST card.
+  priorPm3: PriorPm3 | null;
+  // FAST Learning Gain (FLDOE rule, Phase 1 subset).
+  //   true  — student demonstrated a learning gain this year. Either
+  //           moved up a performance level vs. prior-year PM3, or
+  //           maintained L3 / L4 / L5. The roster swaps the LG-column
+  //           bucket icon for a green check when this is true.
+  //   false — prior + current PM3 are both known but the student did
+  //           NOT meet the move-up / maintain-L3+ test. Bucket icon
+  //           still renders, unchanged.
+  //   null  — not enough data to decide (missing prior-year PM3,
+  //           missing current-year PM3, no chart, or grade band has
+  //           no placement). Bucket icon renders, unchanged.
+  // Phase 1 caveats (documented in replit.md "Open work"):
+  //   * Within-level point growth for students stuck at L1/L2 is NOT
+  //     credited yet — that rule needs per-grade thresholds the
+  //     district has not confirmed. Those students will read `false`
+  //     (no check) even when FLDOE would credit them. Conservative
+  //     default; never falsely awards a check.
+  //   * Subject-band promotions (e.g. 7th grader on Algebra I) are
+  //     not credited — we compare against prior-year MATH PM3 by
+  //     default. Out-of-scope for Phase 1; the FL importer would
+  //     need to capture the prior course code.
+  //   * Retention/skip uses (currentGrade − 1) for the prior chart;
+  //     same caveat already documented on `priorPm3.placement`.
+  learningGain: boolean | null;
   // True when no chart exists for this subject/grade combo (e.g. Algebra
   // 1 / Geometry / Math past G8). Client uses this to render only a
   // "—" instead of empty pills.
@@ -109,8 +192,51 @@ function buildSubjectBlock(
   row: typeof studentFastScoresTable.$inferSelect | undefined,
   subject: Subject,
   grade: number,
+  history: FastHistoryEntry[],
 ): SubjectBlock {
   const noChart = !hasChart(subject, grade);
+  // Most-recent prior-year PM3, with placement computed against the
+  // chart for the grade the student was IN when they took the test
+  // (i.e. current grade − 1). We deliberately use `placeOnChart` here
+  // rather than `placePm3`: `placePm3` is a current-PM3 convenience
+  // that internally subtracts a grade (it interprets its arg as the
+  // student's *current* grade and looks up the prior-grade chart).
+  // For a historical row we already know the test-administration grade
+  // directly, so `placeOnChart(score, subject, priorGrade)` produces
+  // the correct band — no double subtraction.
+  //
+  // Caveats this implementation accepts (logged for follow-up):
+  //   * Retention/skip: we assume prior test grade = current − 1.
+  //     For a retained student that's wrong (last-year PM3 was the
+  //     same grade); for a skip it's wrong in the other direction.
+  //     The FL historical importer doesn't currently capture grade-
+  //     at-test, so there's no reliable signal to disambiguate. The
+  //     score number on the pill stays correct in all cases — only
+  //     the color band could mis-label for these edge cases.
+  //   * Grade < 1 / no chart / EOC subjects → placement: null
+  //     (pill renders score only, no color band). Safer than a
+  //     misleading band.
+  const priorPm3: PriorPm3 | null = (() => {
+    const top = history[0];
+    if (!top) return null;
+    const priorGrade = grade - 1;
+    const canPlace =
+      priorGrade >= 1 &&
+      (subject === "ela" || subject === "math") &&
+      hasChart(subject, priorGrade);
+    return {
+      schoolYear: top.schoolYear,
+      pm3: top.pm3,
+      placement: canPlace
+        ? withGap(
+            placeOnChart(top.pm3, subject, priorGrade),
+            top.pm3,
+            subject,
+            priorGrade,
+          )
+        : null,
+    };
+  })();
   if (!row) {
     return {
       pm1: null,
@@ -119,22 +245,80 @@ function buildSubjectBlock(
       pm1Placement: null,
       pm2Placement: null,
       pm3Placement: null,
-      bucket: { targetScore: null, gap: null, color: null },
+      bucket: {
+        targetScore: null,
+        gap: null,
+        color: null,
+        currentSubLevel: null,
+        nextStopLabel: null,
+      },
       priorYearScore: null,
       priorYearBq: false,
+      priorPm3,
+      learningGain: null,
       noChart,
     };
   }
-  const pm1Placement =
-    row.pm1 != null ? placeOnChart(row.pm1, subject, grade) : null;
-  const pm2Placement =
-    row.pm2 != null ? placeOnChart(row.pm2, subject, grade) : null;
-  const pm3Placement =
-    row.pm3 != null ? placePm3(row.pm3, subject, grade) : null;
+  const pm1Placement = withGap(
+    row.pm1 != null ? placeOnChart(row.pm1, subject, grade) : null,
+    row.pm1,
+    subject,
+    grade,
+  );
+  const pm2Placement = withGap(
+    row.pm2 != null ? placeOnChart(row.pm2, subject, grade) : null,
+    row.pm2,
+    subject,
+    grade,
+  );
+  const pm3Placement = withGap(
+    row.pm3 != null ? placePm3(row.pm3, subject, grade) : null,
+    row.pm3,
+    subject,
+    grade,
+  );
   const bucket =
     row.pm3 != null
       ? bucketFor(row.pm3, subject, grade)
-      : { targetScore: null, gap: null, color: null };
+      : {
+          targetScore: null,
+          gap: null,
+          color: null,
+          currentSubLevel: null,
+          nextStopLabel: null,
+        };
+  // Learning Gain decision. We need BOTH a prior-year PM3 level and a
+  // current-year PM3 level on charts. PM3 placement uses the prior-grade
+  // chart by FAST convention (placePm3 internally subtracts a grade), so
+  // pm3Placement.level reads as "what level did they hit at end of last
+  // year's grade band" — exactly what FLDOE compares to.
+  // Note: priorPm3.placement uses the *test administration* grade chart
+  // (computed above with `placeOnChart(..., grade-1)`); that's the same
+  // chart pm3Placement uses, so the two levels are directly comparable.
+  //
+  // Rule (per district guidance, confirmed May 2026):
+  //   - Moved up a performance level → MET
+  //   - Stayed at L5 → MET (top of scale; growth not measurable)
+  //   - Stayed at L3 or L4 → MET only when this year's PM3 is at least
+  //     last year's PM3 + 1 (i.e. some scale-score growth, not flat).
+  //     "Maintaining proficiency" requires evidence of forward motion;
+  //     a flat or declining score within the same band does not count.
+  //   - Stayed at L1 or L2 → MET only when this year's PM3 sub-tier is
+  //     HIGHER than last year's sub-tier. Same or lower sub-tier within
+  //     the band does not count. Sub-tiers come from `placeOnChart`:
+  //       L1 splits into thirds → "1.1" / "1.2" / "1.3"
+  //       L2 splits into halves → "2.1" / "2.2"  (no "2.3" today; if the
+  //         FLDOE chart adds a Level-2 Upper third, extend the L2 ranges
+  //         in `fastCutScores.ts` and this branch picks it up for free).
+  //   - Dropped a level → NOT MET.
+  const learningGain: boolean | null = decideLearningGain({
+    priorLevel: priorPm3?.placement?.level ?? null,
+    currentLevel: pm3Placement?.level ?? null,
+    priorScore: priorPm3?.pm3 ?? null,
+    currentScore: row.pm3 ?? null,
+    priorSubLevel: priorPm3?.placement?.subLevel ?? null,
+    currentSubLevel: pm3Placement?.subLevel ?? null,
+  });
   return {
     pm1: row.pm1,
     pm2: row.pm2,
@@ -145,6 +329,8 @@ function buildSubjectBlock(
     bucket,
     priorYearScore: row.priorYearScore,
     priorYearBq: row.priorYearBq,
+    priorPm3,
+    learningGain,
     noChart,
   };
 }
@@ -304,6 +490,7 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     issToday,
     ossToday,
     issAcksToday,
+    retentions,
   ] = await Promise.all([
     db
       .select()
@@ -321,6 +508,15 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
         and(
           eq(studentFastScoresTable.schoolId, schoolId),
           inArray(studentFastScoresTable.studentId, studentIds),
+          // FAST Phase 1: scores are now keyed by school_year. Filter
+          // to current SY so prior-year backfill rows don't shadow
+          // current-year rows in the per-(student, subject) map below.
+          // Legacy rows were backfilled to the current SY by the
+          // ensureFastScoresSchema migration, so this is safe.
+          eq(
+            studentFastScoresTable.schoolYear,
+            schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+          ),
         ),
       ),
     db
@@ -440,7 +636,41 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
           inArray(issAcknowledgementsTable.studentId, studentIds),
         ),
       ),
+    // Retention indicator (R-in-circle on the roster). One row per
+    // (student, repeated grade); a kid retained twice has two rows.
+    db
+      .select({
+        studentId: studentRetentionsTable.studentId,
+        gradeLevel: studentRetentionsTable.gradeLevel,
+      })
+      .from(studentRetentionsTable)
+      .where(
+        and(
+          eq(studentRetentionsTable.schoolId, schoolId),
+          inArray(studentRetentionsTable.studentId, studentIds),
+        ),
+      ),
   ]);
+
+  // Multi-year FAST history (PM3-only, prior years within the school's
+  // configured visible window). Loaded outside the parent Promise.all
+  // because it needs a second round-trip for the
+  // fast_history_years_visible setting; keeping it here avoids
+  // serializing the much heavier roster joins above. ELA + Math only —
+  // EOC subjects render no history chip on the roster.
+  const historyMap: FastHistoryMap = await loadFastHistory({
+    schoolId,
+    studentIds,
+    subjects: ["ela", "math"],
+  });
+
+  const retentionsByStudent = new Map<string, number[]>();
+  for (const r of retentions) {
+    const list = retentionsByStudent.get(r.studentId) ?? [];
+    list.push(r.gradeLevel);
+    retentionsByStudent.set(r.studentId, list);
+  }
+  for (const [, list] of retentionsByStudent) list.sort((a, b) => a - b);
 
   const issByStudent = new Map<string, { source: string; adminLogId: number | null }>();
   for (const r of issToday) {
@@ -512,11 +742,32 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     const isInvisible = !recognizedIds.has(stu.studentId);
     return {
       studentId: stu.studentId,
+      // District-level Local SIS ID (6-digit). Co-exists with FLEID in
+      // student_id; FLEID stays canonical for FAST. UI prefers this for
+      // visible identifier labels everywhere outside FAST screens.
+      localSisId: stu.localSisId ?? null,
       firstName: stu.firstName,
       lastName: stu.lastName,
       grade: stu.grade,
-      ela: buildSubjectBlock(elaRow, "ela", grade),
-      math: buildSubjectBlock(mathRow, "math", grade),
+      // Student photo (single-entry: yearbook upload OR camera). When
+      // null OR consent=false the client renders a colored initials
+      // bubble. Surface here so the roster row can show a face — many
+      // teachers know returning students by sight long before they
+      // memorize their names.
+      photoObjectKey: stu.photoObjectKey,
+      photoConsent: stu.photoConsent,
+      ela: buildSubjectBlock(
+        elaRow,
+        "ela",
+        grade,
+        pickHistory(historyMap, stu.studentId, "ela"),
+      ),
+      math: buildSubjectBlock(
+        mathRow,
+        "math",
+        grade,
+        pickHistory(historyMap, stu.studentId, "math"),
+      ),
       // Invisibility = no non-voided PBIS entry in the school's
       // invisibleDays window. Tier is the highest active MTSS plan
       // tier (or null when the student has no open plan).
@@ -541,6 +792,10 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
       issToday: issByStudent.get(stu.studentId) ?? null,
       ossToday: ossSet.has(stu.studentId),
       issAcks: ackByStudent.get(stu.studentId) ?? [],
+      // Grades the student was retained in (ascending). Empty array
+      // when the student has no retention rows. The roster renders an
+      // R-in-a-circle pill after the chain icon when this is non-empty.
+      retainedGrades: retentionsByStudent.get(stu.studentId) ?? [],
       // Active safety plan summary (or null). The roster pill / hover
       // popover use this directly — no extra round-trip needed.
       safetyPlan: (() => {
@@ -595,14 +850,25 @@ router.get("/teacher-roster/teachers", async (req: Request, res: Response) => {
 
   // Core team: every staff in this school who teaches at least one
   // non-planning section. (We surface only people who actually have a
-  // roster — surfacing every staff would clutter the dropdown.)
-  const teachersWithSections = await db
-    .selectDistinct({
+  // roster — surfacing every staff would clutter the dropdown.) We
+  // also pull course names so we can infer each teacher's department
+  // for grouping in the picker — no DB column needed today.
+  const sections = await db
+    .select({
       teacherStaffId: classSectionsTable.teacherStaffId,
+      courseName: classSectionsTable.courseName,
+      isPlanning: classSectionsTable.isPlanning,
     })
     .from(classSectionsTable)
     .where(eq(classSectionsTable.schoolId, schoolId));
-  const teacherIds = teachersWithSections.map((t) => t.teacherStaffId);
+  const coursesByTeacher = new Map<number, string[]>();
+  for (const s of sections) {
+    if (s.isPlanning) continue;
+    const list = coursesByTeacher.get(s.teacherStaffId) ?? [];
+    list.push(s.courseName);
+    coursesByTeacher.set(s.teacherStaffId, list);
+  }
+  const teacherIds = [...coursesByTeacher.keys()];
   if (teacherIds.length === 0) {
     res.json({ teachers: [] });
     return;
@@ -618,12 +884,61 @@ router.get("/teacher-roster/teachers", async (req: Request, res: Response) => {
     );
   const out = teachers
     .filter((t) => t.active)
-    .map((t) => ({ id: t.id, displayName: t.displayName }))
+    .map((t) => ({
+      id: t.id,
+      displayName: t.displayName,
+      department: inferDepartment(coursesByTeacher.get(t.id) ?? []),
+    }))
     .sort((a, b) =>
       (a.displayName ?? "").localeCompare(b.displayName ?? ""),
     );
   res.json({ teachers: out });
 });
+
+// Map a teacher's course names to a coarse department label for the
+// picker. Keyword-based — anything unmatched lands in "Other" and an
+// admin can clean up a course name (or we add keywords) to reclassify.
+// Order matters: more specific tokens (Algebra, Geometry) check before
+// the generic Math match.
+function inferDepartment(courseNames: string[]): string {
+  if (courseNames.length === 0) return "Other";
+  const tally = new Map<string, number>();
+  for (const raw of courseNames) {
+    const name = raw.toLowerCase();
+    let dept = "Other";
+    if (/(algebra|geometry|\bmath|pre-?calc|calculus|statistics)/.test(name)) {
+      dept = "Math";
+    } else if (/(\bela\b|english|language arts|reading|literature|writing)/.test(name)) {
+      dept = "ELA";
+    } else if (/(science|biology|chemistry|physics|earth|environmental)/.test(name)) {
+      dept = "Science";
+    } else if (/(social studies|history|civics|geography|economics|government|us history|world history)/.test(name)) {
+      dept = "Social Studies";
+    } else if (/(spanish|french|german|chinese|latin|world language)/.test(name)) {
+      dept = "World Languages";
+    } else if (/(\bpe\b|physical education|health|wellness)/.test(name)) {
+      dept = "PE / Health";
+    } else if (/(art|music|band|chorus|drama|theater|theatre|dance|media|tv|journalism|yearbook)/.test(name)) {
+      dept = "Electives";
+    } else if (/(ese|esol|ell|intensive|resource|support|skills)/.test(name)) {
+      dept = "Support";
+    } else if (/(technology|computer|coding|stem|engineering|robotics)/.test(name)) {
+      dept = "CTE / STEM";
+    }
+    tally.set(dept, (tally.get(dept) ?? 0) + 1);
+  }
+  // Pick the department this teacher teaches most often; ties broken
+  // by the keyword check order above via insertion order.
+  let bestDept = "Other";
+  let bestCount = -1;
+  for (const [dept, count] of tally) {
+    if (count > bestCount) {
+      bestCount = count;
+      bestDept = dept;
+    }
+  }
+  return bestDept;
+}
 
 // Teacher acknowledgement of an ISS-day soft reminder. The teacher clicks
 // "Posted in Canvas" or "Sent hard copy" on the roster banner. We record

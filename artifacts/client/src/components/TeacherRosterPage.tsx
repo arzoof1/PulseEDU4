@@ -13,25 +13,85 @@
 // Bucket is intentionally suppressed for grade 3 and for any subject
 // without a chart (Algebra 1 / Geometry — not in v1).
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  Fragment,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { authFetch } from "../lib/authToken";
 import SuggestSeparationModal from "./SuggestSeparationModal";
+import StudentPhoto from "./StudentPhoto";
+import TeacherBenchmarksTab from "./TeacherBenchmarksTab";
+import GroupInsightsTab from "./GroupInsightsTab";
+import TeacherInstructionLogTab from "./TeacherInstructionLogTab";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
+
+// Top-level tab in this page. "roster" is the original FAST PM
+// pills + flags table; "benchmarks" is the FAST Phase 2 per-item
+// mastery heatmap + bottom-3 tile.
+type RosterTab = "roster" | "benchmarks" | "instruction" | "groupInsights";
 
 interface TeacherOpt {
   id: number;
   displayName: string | null;
+  // Server-inferred department label (from course names on
+  // class_sections). May be missing on older bundles.
+  department?: string;
 }
+
+// Color tints per department for the picker. Light pastel backgrounds so
+// the colored rows remain legible against black option text. Chrome and
+// Firefox honor inline backgroundColor on <option>; Safari ignores it
+// (rows still group via <optgroup>, just without color).
+const DEPARTMENT_ORDER: string[] = [
+  "ELA",
+  "Math",
+  "Science",
+  "Social Studies",
+  "World Languages",
+  "PE / Health",
+  "Electives",
+  "CTE / STEM",
+  "Support",
+  "Other",
+];
+const DEPARTMENT_TINTS: Record<string, string> = {
+  ELA: "#dbeafe",
+  Math: "#fee2e2",
+  Science: "#dcfce7",
+  "Social Studies": "#fef3c7",
+  "World Languages": "#ede9fe",
+  "PE / Health": "#ffedd5",
+  Electives: "#fce7f3",
+  "CTE / STEM": "#cffafe",
+  Support: "#f1f5f9",
+  Other: "#ffffff",
+};
 
 interface Placement {
   level: 1 | 2 | 3 | 4 | 5;
   subLevel: string;
+  // Points to the NEXT sub-level on the current-grade chart, and the
+  // label of that next sub-level. Both null when the student is at L5
+  // (no next stop) or when no current-grade chart exists. Rendered as a
+  // small "+12 → L3 lo" caption under each PM pill so teachers see at a
+  // glance what each student needs to climb the chart.
+  gap?: number | null;
+  nextStopLabel?: string | null;
 }
+
+type BucketColor = "red" | "orange" | "green" | "blue" | "purple";
 
 interface Bucket {
   targetScore: number | null;
   gap: number | null;
-  color: "green" | "orange" | "red" | null;
+  color: BucketColor | null;
+  currentSubLevel: string | null;
+  nextStopLabel: string | null;
 }
 
 interface SubjectBlock {
@@ -44,6 +104,25 @@ interface SubjectBlock {
   bucket: Bucket;
   priorYearScore: number | null;
   priorYearBq: boolean;
+  // Most-recent prior-year PM3 from the FL historical importer. Rendered
+  // as the leftmost pill in the chronological story
+  // Prior → PM1 → PM2 → PM3 → LG. Null when no historical row has been
+  // uploaded for this (student, subject). Placement is computed against
+  // the prior-grade chart on the server; null for EOC subjects (Algebra
+  // 1 / Geometry) where the prior-grade chart doesn't apply.
+  priorPm3: {
+    schoolYear: string;
+    pm3: number;
+    placement: Placement | null;
+  } | null;
+  // FAST Learning Gain (server-computed). When true the LG column
+  // renders a green check instead of the bucket icon — the student
+  // either moved up a performance level vs. prior-year PM3 or
+  // maintained L3/L4/L5. false = decided "no LG" (bucket stays).
+  // null = cannot decide (missing prior or current PM3, no chart,
+  // no placement). See server-side `buildSubjectBlock` for the full
+  // rule + Phase 1 caveats.
+  learningGain: boolean | null;
   noChart: boolean;
 }
 
@@ -63,9 +142,17 @@ interface SafetyPlanSummary {
 
 interface RosterRow {
   studentId: string;
+  // District-level Local SIS ID (6-digit). Co-exists with FLEID; FLEID
+  // remains canonical for FAST. Render this as the visible identifier
+  // everywhere outside FAST screens.
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: number | string;
+  // Student photo (server-supplied). Renders as <StudentPhoto/>; falls
+  // back to colored initials bubble when null OR consent=false.
+  photoObjectKey?: string | null;
+  photoConsent?: boolean;
   ela: SubjectBlock;
   math: SubjectBlock;
   safetyPlan: SafetyPlanSummary | null;
@@ -90,6 +177,9 @@ interface RosterRow {
   issToday: { source: string; adminLogId: number | null } | null;
   ossToday: boolean;
   issAcks: Array<{ period: number; method: string }>;
+  // Grades the student was retained in (ascending). Empty when none.
+  // Drives the small black "R" pill rendered after the chain icon.
+  retainedGrades: number[];
 }
 
 interface RosterResponse {
@@ -123,6 +213,19 @@ interface Props {
   // active safety plans) but is non-clickable — hover still shows the
   // contents popover.
   onOpenSafetyPlan?: (studentId: string) => void;
+  // When provided, the Benchmarks tab's "Suggest small group" modal
+  // shows a "Open in Class Composer" button that calls this. Gated by
+  // the host (admin / Core Team only); regular teachers see the
+  // suggested list but no composer handoff.
+  onOpenClassComposer?: () => void;
+  // Fires whenever the user picks a different teacher from the
+  // dropdown. The host (App.tsx) uses this to remember the picked
+  // teacher across page unmounts — e.g. when a SuperUser opens a
+  // Student Profile (spider) and clicks Back, we want to land back on
+  // the *picked* teacher's roster, not on the SuperUser's own (which
+  // doesn't exist). For roles where the dropdown is locked to self,
+  // this still fires once on first load and is harmless.
+  onTeacherChange?: (teacherId: number) => void;
 }
 
 // Red "SP" pill that appears immediately after the student's name when
@@ -286,31 +389,43 @@ const LEVEL_FG: Record<1 | 2 | 3 | 4 | 5, string> = {
   5: "#fff",
 };
 
-const BUCKET_COLOR: Record<"green" | "orange" | "red", string> = {
-  green: "#16a34a",
-  orange: "#f59e0b",
-  red: "#dc2626",
-};
-
-// Pastel fill + dark text/stroke for the bucket icon. The earlier
-// solid-color fill with white text didn't have enough contrast for the
-// gap number to be readable at any size, so the icon now uses a tinted
-// pail with the matching dark color for the stroke and number.
-const BUCKET_FILL: Record<"green" | "orange" | "red", string> = {
-  green: "#dcfce7",
-  orange: "#fef3c7",
+// Pastel fill + dark text/stroke for the bucket icon, keyed to the
+// student's CURRENT FAST level (per the FAST palette: L1 red, L2
+// orange, L3 green, L4 blue, L5 purple). The earlier solid-color fill
+// with white text didn't have enough contrast for the gap number to be
+// readable at any size, so the icon uses a tinted pail with a matching
+// dark stroke/number.
+const BUCKET_FILL: Record<BucketColor, string> = {
   red: "#fee2e2",
+  orange: "#fef3c7",
+  green: "#dcfce7",
+  blue: "#dbeafe",
+  purple: "#ede9fe",
 };
-const BUCKET_INK: Record<"green" | "orange" | "red", string> = {
-  green: "#14532d",
-  orange: "#78350f",
+const BUCKET_INK: Record<BucketColor, string> = {
   red: "#7f1d1d",
+  orange: "#78350f",
+  green: "#14532d",
+  blue: "#1e3a8a",
+  purple: "#4c1d95",
 };
 
-// Click-to-flip pill. Default face shows the FAST sub-level; clicking
-// (or focusing + pressing Enter/Space) flips it to show the raw scale
-// score. Each pill manages its own flipped state so users can pop open
-// just the cells they care about without losing the rest of the table.
+// Roster-wide default for what every ScorePill shows on its front
+// face. The toggle at the top of the Roster tab flips this for the
+// whole page; individual pills can still be clicked to override on a
+// case-by-case basis, but the next change to the global toggle
+// re-syncs every pill to the new default so the page never gets
+// stuck in a half-flipped state.
+type PillView = "level" | "score";
+const PillViewContext = createContext<PillView>("level");
+
+// Click-to-flip pill. Default face is driven by PillViewContext
+// (Roster-wide "Show: Level | Scale score" toggle); a per-pill click
+// overrides locally so users can pop open just the cells they care
+// about without losing the rest of the table. When the global view
+// changes, the local override is cleared so every pill snaps back to
+// the new default — otherwise stale overrides would silently
+// contradict what the toggle says.
 function ScorePill({
   score,
   placement,
@@ -320,14 +435,83 @@ function ScorePill({
   placement: Placement | null;
   pmLabel: string;
 }) {
-  const [flipped, setFlipped] = useState(false);
+  const view = useContext(PillViewContext);
+  const [override, setOverride] = useState<PillView | null>(null);
+  useEffect(() => {
+    setOverride(null);
+  }, [view]);
+  const effective: PillView = override ?? view;
+  const flipped = effective === "score";
   // Pills sized to roughly match the 44px bucket icon for a consistent
   // visual rhythm across the row. Raw scale scores can be 3 digits, so
   // minWidth needs to accommodate that without wrapping.
+  // All pill cells render with the same vertical envelope (pill +
+  // reserved caption slot) so rows stay aligned even when some cells
+  // have a "+12 → L3 lo" caption and adjacent cells don't.
+  const CAPTION_SLOT_HEIGHT = 12;
   if (score == null || placement == null) {
     return (
       <span
-        title={`${pmLabel}: no score`}
+        style={{
+          display: "inline-flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 2,
+        }}
+      >
+        <span
+          title={`${pmLabel}: no score`}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            minWidth: 44,
+            height: 36,
+            padding: "0 10px",
+            borderRadius: 8,
+            background: "#e5e7eb",
+            color: "#6b7280",
+            fontSize: 14,
+            textAlign: "center",
+          }}
+        >
+          —
+        </span>
+        <span aria-hidden style={{ height: CAPTION_SLOT_HEIGHT }} />
+      </span>
+    );
+  }
+  const tooltip = `${pmLabel} • Level ${placement.subLevel} • Scale score ${score} (click to flip)`;
+  // Caption mirrors the FAST Benchmarks tab: "+12 → L3 lo" when there's
+  // still climb available, "At {next}" once the student has met the next
+  // sub-level, nothing when they're at L5 / no chart. Renders just below
+  // the pill; adds ~12px of vertical space per row.
+  const gap = placement.gap;
+  const nextStop = placement.nextStopLabel;
+  let caption: { text: string; color: string } | null = null;
+  if (gap != null && nextStop) {
+    caption =
+      gap <= 0
+        ? { text: `At ${nextStop}`, color: "#14532d" }
+        : { text: `+${gap} → ${nextStop}`, color: "#3730a3" };
+  }
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 2,
+      }}
+    >
+      <button
+        type="button"
+        title={tooltip}
+        aria-label={tooltip}
+        aria-pressed={flipped}
+        onClick={() =>
+          setOverride(effective === "level" ? "score" : "level")
+        }
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -336,45 +520,33 @@ function ScorePill({
           height: 36,
           padding: "0 10px",
           borderRadius: 8,
-          background: "#e5e7eb",
-          color: "#6b7280",
-          fontSize: 14,
+          border: "none",
+          background: LEVEL_BG[placement.level],
+          color: LEVEL_FG[placement.level],
+          fontSize: 16,
+          fontWeight: 700,
           textAlign: "center",
+          cursor: "pointer",
+          fontFamily: "inherit",
+          lineHeight: 1,
         }}
       >
-        —
+        {flipped ? score : placement.subLevel}
+      </button>
+      <span
+        aria-hidden={caption ? undefined : true}
+        style={{
+          minHeight: CAPTION_SLOT_HEIGHT,
+          fontSize: 9,
+          fontWeight: 600,
+          color: caption?.color ?? "transparent",
+          lineHeight: 1.1,
+          whiteSpace: "nowrap",
+        }}
+      >
+        {caption?.text ?? "\u00A0"}
       </span>
-    );
-  }
-  const tooltip = `${pmLabel} • Level ${placement.subLevel} • Scale score ${score} (click to flip)`;
-  return (
-    <button
-      type="button"
-      title={tooltip}
-      aria-label={tooltip}
-      aria-pressed={flipped}
-      onClick={() => setFlipped((f) => !f)}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        minWidth: 44,
-        height: 36,
-        padding: "0 10px",
-        borderRadius: 8,
-        border: "none",
-        background: LEVEL_BG[placement.level],
-        color: LEVEL_FG[placement.level],
-        fontSize: 16,
-        fontWeight: 700,
-        textAlign: "center",
-        cursor: "pointer",
-        fontFamily: "inherit",
-        lineHeight: 1,
-      }}
-    >
-      {flipped ? score : placement.subLevel}
-    </button>
+    </span>
   );
 }
 
@@ -384,15 +556,21 @@ function ScorePill({
 // original) so the gap number is comfortably legible.
 const BUCKET_PX = 44;
 function BucketIcon({ bucket }: { bucket: Bucket }) {
-  if (bucket.targetScore == null || bucket.color == null) return null;
+  if (bucket.color == null) return null;
+  // L5 (top of chart) has no next stop, but we still want a colored
+  // pail so the achievement is visible. Show a checkmark.
+  const atTop = bucket.targetScore == null && bucket.currentSubLevel === "5";
+  if (bucket.targetScore == null && !atTop) return null;
   const gap = bucket.gap ?? 0;
-  const label =
-    gap <= 0
-      ? `At/above target (target ${bucket.targetScore})`
-      : `${gap} pt${gap === 1 ? "" : "s"} to next level (target ${bucket.targetScore})`;
+  const stop = bucket.nextStopLabel ?? "next level";
+  const label = atTop
+    ? "At top of chart (Level 5)"
+    : gap <= 0
+      ? `At/above ${stop} (target ${bucket.targetScore})`
+      : `${gap} pt${gap === 1 ? "" : "s"} to ${stop} (target ${bucket.targetScore})`;
   const fill = BUCKET_FILL[bucket.color];
   const ink = BUCKET_INK[bucket.color];
-  const overlay = gap <= 0 ? "✓" : String(Math.abs(gap));
+  const overlay = atTop || gap <= 0 ? "✓" : String(Math.abs(gap));
   return (
     <span
       title={label}
@@ -553,6 +731,58 @@ function BucketCell({ bucket }: { bucket: Bucket }) {
   return <BucketIcon bucket={bucket} />;
 }
 
+// Green check shown in the LG column when the student demonstrated a
+// FAST Learning Gain (moved up a performance level OR maintained L3+).
+// Replaces the bucket icon entirely — the bucket is "points to next
+// sub-level" guidance and is moot once LG is already realized.
+// Tooltip explains the rule so a teacher hovering over the check
+// understands what triggered it.
+function LgCheck({
+  priorLevel,
+  currentLevel,
+}: {
+  priorLevel: number | null;
+  currentLevel: number | null;
+}) {
+  const reason =
+    priorLevel != null && currentLevel != null
+      ? currentLevel > priorLevel
+        ? `Moved L${priorLevel} → L${currentLevel}`
+        : `Maintained L${currentLevel}`
+      : "Learning Gain met";
+  return (
+    <span
+      title={`${reason} — FAST Learning Gain met`}
+      aria-label={`Learning Gain met: ${reason}`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 32,
+        height: 32,
+        borderRadius: "50%",
+        background: "#dcfce7",
+        border: "1.5px solid #16a34a",
+        color: "#15803d",
+      }}
+    >
+      <svg
+        width="18"
+        height="18"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <polyline points="5 12 10 17 19 8" />
+      </svg>
+    </span>
+  );
+}
+
 // Renders four <td>s (PM1 / PM2 / PM3 / LG) so the per-pill column
 // headers in the table header line up cleanly above each pill. When the
 // subject has no chart for the student's grade (e.g. Math for a 9th
@@ -564,10 +794,50 @@ const GROUP_DIVIDER: React.CSSProperties = {
   borderLeft: "1px solid #e5e7eb",
 };
 
+// Small "+12 from PM2" / "−8 from PM1" indicator under a PM pill, so
+// teachers don't have to do the subtraction in their head while scanning
+// the roster. Green for growth, red for decline, neutral gray for flat.
+// Renders nothing when either side is missing (most common case: a
+// student who didn't sit one of the windows) — better empty than wrong.
+function PmDelta({
+  from,
+  to,
+  fromLabel,
+}: {
+  from: number | null;
+  to: number | null;
+  fromLabel: string;
+}) {
+  if (from == null || to == null) return null;
+  const delta = to - from;
+  const sign = delta > 0 ? "+" : delta < 0 ? "−" : "±";
+  const color = delta > 0 ? "#15803d" : delta < 0 ? "#b91c1c" : "#6b7280";
+  return (
+    <div
+      title={`${sign}${Math.abs(delta)} scale-score points vs ${fromLabel}`}
+      style={{
+        marginTop: 2,
+        fontSize: 10,
+        lineHeight: 1.2,
+        color,
+        fontWeight: 600,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {sign}
+      {Math.abs(delta)}{" "}
+      <span style={{ color: "#9ca3af", fontWeight: 400 }}>
+        from {fromLabel}
+      </span>
+    </div>
+  );
+}
+
 function SubjectCells({
   block,
   subjectLabel,
   showLg,
+  showPriorPm3,
   showPm3,
   showPm1,
   showPm2,
@@ -575,6 +845,7 @@ function SubjectCells({
   block: SubjectBlock;
   subjectLabel: string;
   showLg: boolean;
+  showPriorPm3: boolean;
   showPm3: boolean;
   showPm1: boolean;
   showPm2: boolean;
@@ -582,9 +853,10 @@ function SubjectCells({
   // colspan shrinks to match the actually-rendered cells so the "n/a"
   // row still exactly fills the subject group.
   const groupCols =
-    (showPm3 ? 1 : 0) +
+    (showPriorPm3 ? 1 : 0) +
     (showPm1 ? 1 : 0) +
     (showPm2 ? 1 : 0) +
+    (showPm3 ? 1 : 0) +
     (showLg ? 1 : 0);
   if (block.noChart) {
     if (groupCols === 0) return null;
@@ -606,25 +878,52 @@ function SubjectCells({
   const cell: React.CSSProperties = {
     padding: "6px 6px",
     textAlign: "center",
+    // Top-align so every pill sits on the same baseline across Prior /
+    // PM1 / PM2 / PM3. Without this, cells whose caption stack is
+    // taller (e.g. PM2 with a "+12 from PM1" delta line, or Prior with
+    // its year sub-label) middle-align and push their pill up relative
+    // to neighbors that only render the pill + reserved caption slot.
+    verticalAlign: "top",
   };
-  // Per product preference, PM3 is the most-recent / most important
-  // score and renders first, followed by the older PM1 and PM2, then
-  // the LG bucket. The first visible cell carries the group divider.
+  // True chronological order: Prior (last year's PM3) → PM1 (fall) →
+  // PM2 (winter) → PM3 (spring) → LG bucket. Deltas read naturally
+  // left-to-right, each one comparing against the immediately previous
+  // window so the eye can scan the trajectory across the row.
   let dividerUsed = false;
   const dividerStyle = (): React.CSSProperties => {
     if (dividerUsed) return cell;
     dividerUsed = true;
     return { ...cell, ...GROUP_DIVIDER };
   };
+  const prior = block.priorPm3;
   return (
     <>
-      {showPm3 && (
+      {showPriorPm3 && (
         <td style={dividerStyle()}>
-          <ScorePill
-            score={block.pm3}
-            placement={block.pm3Placement}
-            pmLabel={`${subjectLabel} PM3`}
-          />
+          {prior ? (
+            <>
+              <ScorePill
+                score={prior.pm3}
+                placement={prior.placement}
+                pmLabel={`${subjectLabel} prior-year PM3 (${prior.schoolYear})`}
+              />
+              <div
+                title={`${prior.schoolYear} PM3 from historical import`}
+                style={{
+                  marginTop: 2,
+                  fontSize: 10,
+                  lineHeight: 1.2,
+                  color: "#9ca3af",
+                  fontWeight: 500,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {prior.schoolYear}
+              </div>
+            </>
+          ) : (
+            <span style={{ color: "#d1d5db", fontSize: 12 }}>—</span>
+          )}
         </td>
       )}
       {showPm1 && (
@@ -634,6 +933,17 @@ function SubjectCells({
             placement={block.pm1Placement}
             pmLabel={`${subjectLabel} PM1`}
           />
+          {/* Prior-PM3 → PM1 is a cross-year comparison (different
+              chart, different grade), so we only render the delta when
+              the user has the Prior column visible — otherwise the
+              "from Prior" label has no anchor on screen. */}
+          {showPriorPm3 && (
+            <PmDelta
+              from={prior?.pm3 ?? null}
+              to={block.pm1}
+              fromLabel="Prior"
+            />
+          )}
         </td>
       )}
       {showPm2 && (
@@ -643,11 +953,36 @@ function SubjectCells({
             placement={block.pm2Placement}
             pmLabel={`${subjectLabel} PM2`}
           />
+          <PmDelta from={block.pm1} to={block.pm2} fromLabel="PM1" />
+        </td>
+      )}
+      {showPm3 && (
+        <td style={dividerStyle()}>
+          <ScorePill
+            score={block.pm3}
+            placement={block.pm3Placement}
+            pmLabel={`${subjectLabel} PM3`}
+          />
+          <PmDelta from={block.pm2} to={block.pm3} fromLabel="PM2" />
         </td>
       )}
       {showLg && (
         <td style={dividerStyle()}>
-          <BucketCell bucket={block.bucket} />
+          {block.learningGain === true ? (
+            <LgCheck
+              priorLevel={prior?.placement?.level ?? null}
+              currentLevel={block.pm3Placement?.level ?? null}
+            />
+          ) : prior ? (
+            // Bucket = "points to next sub-level vs. last year's PM3
+            // baseline." Without a prior-year PM3 the digit inside the
+            // pail is meaningless, so we render a plain "—" instead of
+            // a bucket. Once the historical PM3 lands, the bucket (or
+            // the green ✓ if LG was met) takes its place.
+            <BucketCell bucket={block.bucket} />
+          ) : (
+            <span style={{ color: "#d1d5db", fontSize: 12 }}>—</span>
+          )}
         </td>
       )}
     </>
@@ -695,6 +1030,32 @@ function ProgramPill({
 }) {
   const meta = PROGRAM_META[kind];
   const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLSpanElement | null>(null);
+  // Popover uses position:fixed so it escapes the roster table's horizontal
+  // overflow container (which was clipping it on right-edge chips and
+  // bottom rows). Measure on open and again on scroll/resize so it tracks
+  // the anchor.
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  useEffect(() => {
+    if (!open || !anchorRef.current) return;
+    const measure = () => {
+      const r = anchorRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const W = 280;
+      // Prefer left-align under the chip; clamp 8px from viewport edges.
+      let left = r.left;
+      if (left + W > window.innerWidth - 8) left = window.innerWidth - W - 8;
+      if (left < 8) left = 8;
+      setCoords({ top: r.bottom + 4, left });
+    };
+    measure();
+    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("scroll", measure, true);
+      window.removeEventListener("resize", measure);
+    };
+  }, [open]);
   const sorted = [...row.accommodations].sort((a, b) =>
     a.name.localeCompare(b.name),
   );
@@ -707,8 +1068,8 @@ function ProgramPill({
       onBlur={() => setOpen(false)}
     >
       <span
+        ref={anchorRef}
         tabIndex={0}
-        title={meta.title}
         aria-label={meta.title}
         style={{
           display: "inline-block",
@@ -725,15 +1086,14 @@ function ProgramPill({
       >
         {meta.label}
       </span>
-      {open && (
+      {open && coords && (
         <div
           role="tooltip"
           style={{
-            position: "absolute",
-            top: "100%",
-            left: 0,
-            marginTop: 4,
-            zIndex: 10,
+            position: "fixed",
+            top: coords.top,
+            left: coords.left,
+            zIndex: 10000,
             background: "white",
             border: "1px solid #e5e7eb",
             borderTop: `3px solid ${meta.fg}`,
@@ -964,12 +1324,55 @@ export default function TeacherRosterPage({
   onBack,
   onOpenSpider,
   onOpenSafetyPlan,
+  onOpenClassComposer,
+  onTeacherChange,
 }: Props) {
   const [teachers, setTeachers] = useState<TeacherOpt[]>([]);
+  // Department filter for the picker. Empty string = "All departments".
+  // Persisted only for the page lifetime; resets on reload.
+  const [deptFilter, setDeptFilter] = useState<string>("");
   const [teacherId, setTeacherId] = useState<number | null>(
     defaultTeacherId,
   );
+  // Track whether the user has manually picked a teacher in this
+  // session. Initial "the user just landed and we filled in their own
+  // id from the prop" does NOT count — so when `defaultTeacherId`
+  // arrives late (auth still hydrating at mount time), we still get
+  // to honor it. After any explicit pick from the dropdown, we stop
+  // overriding their choice.
+  const userPickedTeacherRef = useRef(false);
+  // If `defaultTeacherId` was null at mount (auth still loading) and
+  // then arrives a tick later, sync local state — otherwise the page
+  // sits on whatever `sorted[0]` the teachers-load effect picked,
+  // which is rarely what the user wanted.
+  useEffect(() => {
+    if (userPickedTeacherRef.current) return;
+    if (defaultTeacherId != null && defaultTeacherId !== teacherId) {
+      setTeacherId(defaultTeacherId);
+    }
+  }, [defaultTeacherId, teacherId]);
+  // Bubble every teacher change up to the host so it can remember the
+  // picked teacher across unmounts (spider round-trip, etc).
+  useEffect(() => {
+    if (teacherId != null && onTeacherChange) onTeacherChange(teacherId);
+  }, [teacherId, onTeacherChange]);
   const [period, setPeriod] = useState<number | null>(null);
+  const [tab, setTab] = useState<RosterTab>("roster");
+  // Roster-wide pill view default. Persisted to localStorage so the
+  // teacher's choice survives reloads + navigation. Per-browser, not
+  // per-server-user — keeps the schema clean and avoids a round-trip
+  // for what is purely a display preference. Default "level" matches
+  // the historical behavior (pills show FAST sub-level on first load).
+  const PILL_VIEW_KEY = "pulseedu.teacherRoster.pillView";
+  const [pillView, setPillView] = useState<PillView>(() => {
+    if (typeof window === "undefined") return "level";
+    const raw = window.localStorage.getItem(PILL_VIEW_KEY);
+    return raw === "score" ? "score" : "level";
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(PILL_VIEW_KEY, pillView);
+  }, [pillView]);
   const [data, setData] = useState<RosterResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -980,27 +1383,33 @@ export default function TeacherRosterPage({
   // Per-user view toggles. Each maps to one optional column. Defaults
   // to all-on; persisted to localStorage so the teacher's preference
   // survives reloads. Bumped key to v2 since we added pm-level toggles.
+  type SubjectFilter = "both" | "ela" | "math";
   type Visibility = {
     lg: boolean;
     bq: boolean;
     invisible: boolean;
+    priorPm3: boolean;
     pm3: boolean;
     pm1: boolean;
     pm2: boolean;
     programs: boolean;
+    subject: SubjectFilter;
   };
   const VIS_DEFAULT: Visibility = {
     lg: true,
     bq: true,
     invisible: true,
+    priorPm3: true,
     pm3: true,
     pm1: true,
     pm2: true,
     programs: true,
+    subject: "both",
   };
   // Bumped to v3 because the Programs (ESE / 504 / ELL) toggle was
   // added; previous keys are missing the field but the `??` fallbacks
   // below default it to true, so old saved prefs upgrade cleanly.
+  // (The subject filter, added later, also falls back to "both".)
   const VIS_KEY = "teacherRoster.visibility.v3";
   const [visibility, setVisibility] = useState<Visibility>(() => {
     if (typeof window === "undefined") return VIS_DEFAULT;
@@ -1008,14 +1417,20 @@ export default function TeacherRosterPage({
       const raw = window.localStorage.getItem(VIS_KEY);
       if (!raw) return VIS_DEFAULT;
       const parsed = JSON.parse(raw) as Partial<Visibility>;
+      const subject: SubjectFilter =
+        parsed.subject === "ela" || parsed.subject === "math"
+          ? parsed.subject
+          : "both";
       return {
         lg: parsed.lg ?? true,
         bq: parsed.bq ?? true,
         invisible: parsed.invisible ?? true,
+        priorPm3: parsed.priorPm3 ?? true,
         pm3: parsed.pm3 ?? true,
         pm1: parsed.pm1 ?? true,
         pm2: parsed.pm2 ?? true,
         programs: parsed.programs ?? true,
+        subject,
       };
     } catch {
       return VIS_DEFAULT;
@@ -1028,8 +1443,10 @@ export default function TeacherRosterPage({
       /* ignore quota / privacy-mode errors */
     }
   }, [visibility]);
-  const toggleVis = (key: keyof Visibility) =>
+  const toggleVis = (key: Exclude<keyof Visibility, "subject">) =>
     setVisibility((v) => ({ ...v, [key]: !v[key] }));
+  const showEla = visibility.subject !== "math";
+  const showMath = visibility.subject !== "ela";
 
   // Load teacher options on mount (the API decides what to return based
   // on the caller's role — plain teachers get a single-entry list).
@@ -1042,10 +1459,28 @@ export default function TeacherRosterPage({
       })
       .then((j: { teachers: TeacherOpt[] }) => {
         if (cancelled) return;
-        setTeachers(j.teachers);
-        // Pre-select the user's own row if no default came in.
-        if (teacherId == null && j.teachers.length > 0) {
-          setTeacherId(j.teachers[0].id);
+        // Sort alphabetically by display name (case-insensitive,
+        // locale-aware) so Core Team can scan the dropdown quickly.
+        // Staff without a display name sink to the bottom.
+        const sorted = [...j.teachers].sort((a, b) => {
+          const an = a.displayName ?? "";
+          const bn = b.displayName ?? "";
+          if (!an && !bn) return 0;
+          if (!an) return 1;
+          if (!bn) return -1;
+          return an.localeCompare(bn, undefined, { sensitivity: "base" });
+        });
+        setTeachers(sorted);
+        // Only fall back to the alphabetically-first teacher if we
+        // truly have no default (e.g. unauthenticated preview). If
+        // `defaultTeacherId` arrives a tick later, the sync effect
+        // above will catch up.
+        if (
+          teacherId == null &&
+          defaultTeacherId == null &&
+          sorted.length > 0
+        ) {
+          setTeacherId(sorted[0].id);
         }
       })
       .catch(() => {
@@ -1217,32 +1652,109 @@ export default function TeacherRosterPage({
       >
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           {onBack && (
-            <button onClick={onBack} style={{ padding: "4px 10px" }}>
-              ← Back
+            <button
+              onClick={() => {
+                // If the user is on the Benchmarks or Instruction Log
+                // sub-tab, "Back" should step back to the Roster sub-tab
+                // first — not exit the page entirely. Only when they're
+                // already on the Roster sub-tab do we leave the page.
+                if (tab !== "roster") {
+                  setTab("roster");
+                  return;
+                }
+                onBack();
+              }}
+              style={{ padding: "4px 10px" }}
+              title={tab !== "roster" ? "Back to Roster" : "Back"}
+            >
+              ← {tab !== "roster" ? "Back to Roster" : "Back"}
             </button>
           )}
           <h2 style={{ margin: 0 }}>Teacher Roster</h2>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {isCoreTeam && teachers.length > 1 && (
-            <label style={{ fontSize: 13 }}>
-              Teacher:&nbsp;
-              <select
-                value={teacherId ?? ""}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setTeacherId(v ? Number(v) : null);
-                  setPeriod(null);
-                }}
-              >
-                {teachers.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.displayName ?? `Staff #${t.id}`}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
+          {isCoreTeam && teachers.length > 1 && (() => {
+            // Departments actually present in this school's teacher list,
+            // ordered by our canonical sequence so the dropdowns stay
+            // consistent year over year.
+            const presentDepts = DEPARTMENT_ORDER.filter((d) =>
+              teachers.some((t) => (t.department ?? "Other") === d),
+            );
+            const filtered = deptFilter
+              ? teachers.filter(
+                  (t) => (t.department ?? "Other") === deptFilter,
+                )
+              : teachers;
+            // Group filtered teachers by department for <optgroup>.
+            const grouped: Record<string, TeacherOpt[]> = {};
+            for (const t of filtered) {
+              const d = t.department ?? "Other";
+              (grouped[d] ??= []).push(t);
+            }
+            return (
+              <>
+                {presentDepts.length > 1 && (
+                  <label style={{ fontSize: 13 }}>
+                    Dept:&nbsp;
+                    <select
+                      value={deptFilter}
+                      onChange={(e) => setDeptFilter(e.target.value)}
+                      style={{
+                        background: deptFilter
+                          ? DEPARTMENT_TINTS[deptFilter] ?? "#ffffff"
+                          : "#ffffff",
+                      }}
+                    >
+                      <option value="">All departments</option>
+                      {presentDepts.map((d) => (
+                        <option
+                          key={d}
+                          value={d}
+                          style={{
+                            backgroundColor:
+                              DEPARTMENT_TINTS[d] ?? "#ffffff",
+                          }}
+                        >
+                          {d}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <label style={{ fontSize: 13 }}>
+                  Teacher:&nbsp;
+                  <select
+                    value={teacherId ?? ""}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      userPickedTeacherRef.current = true;
+                      setTeacherId(v ? Number(v) : null);
+                      setPeriod(null);
+                    }}
+                  >
+                    {presentDepts
+                      .filter((d) => grouped[d]?.length)
+                      .map((d) => (
+                        <optgroup key={d} label={d}>
+                          {grouped[d]!.map((t) => (
+                            <option
+                              key={t.id}
+                              value={t.id}
+                              style={{
+                                backgroundColor:
+                                  DEPARTMENT_TINTS[d] ?? "#ffffff",
+                              }}
+                            >
+                              {t.displayName ?? `Staff #${t.id}`}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                  </select>
+                </label>
+              </>
+            );
+          })()}
         </div>
       </div>
 
@@ -1256,10 +1768,28 @@ export default function TeacherRosterPage({
         </HowToSection>
         <HowToSection title="What the columns mean">
           <ul style={howtoListStyle}>
-            <li><strong>LG / BQ</strong> — Learning Gains and Bottom Quartile flags from the latest FAST window.</li>
-            <li><strong>PM1 / PM2 / PM3</strong> — FAST Progress Monitoring scores.</li>
+            <li><strong>LG column</strong> — a green check ✓ appears when the student met the FAST Learning Gain (moved up a performance level vs. last year's PM3, OR maintained L3/L4/L5). Otherwise the LG column shows the bucket icon (points to next sub-level). Empty when there's no prior-year PM3 to compare to, or no current PM3 yet.</li>
+            <li><strong>BQ</strong> — Bottom Quartile flag from last year's PM3.</li>
+            <li><strong>Prior → PM1 → PM2 → PM3</strong> — last year's spring PM3 (from the historical importer) followed by this year's three FAST Progress Monitoring windows, in chronological order. Small "+N from PMx" deltas under each pill show point-change since the previous window.</li>
             <li><strong>Programs</strong> — service flags driving accommodations.</li>
-            <li><strong>Bucket gap</strong> — points to next FAST level on this grade. Suppressed for grade 3 and untracked subjects.</li>
+            <li><strong>Bucket gap</strong> — points to next FAST level on this grade. Suppressed for grade 3 and untracked subjects. Replaced by a green check ✓ when LG is met.</li>
+            <li>
+              <strong>🔗 chain</strong> next to a name — opens the
+              "Suggest separation" dialog so you can flag students who
+              should be kept apart this period. Once a student is in one
+              or more flagged pairs, the icon turns into a red{" "}
+              <strong>🚫 N</strong> pill (N = number of pairings) — click
+              it to view or edit the existing suggestions. Suggestions
+              are scoped to the period you're viewing and are visible to
+              the next teacher who has the same students.
+            </li>
+            <li>
+              <strong>R</strong> in a black circle — student has been
+              retained at one or more grade levels. Hover for the list
+              (e.g. "Retained: Grade 3, Grade 5"). Admins, Behavior
+              Specialists, MTSS Coordinators, and Counselors can
+              mark/unmark from the Student Profile.
+            </li>
           </ul>
         </HowToSection>
         <RoleSection for="teacher" title="Daily use for teachers">
@@ -1275,11 +1805,86 @@ export default function TeacherRosterPage({
         </RoleSection>
       </HowToUseHelp>
 
-      {/* Period selector — chip row */}
+      {/* Top-level tabs: classic roster vs FAST Phase 2 benchmark
+          heatmap. Hidden state (period, visibility toggles) is
+          preserved across tab switches so a user can flip back to
+          the roster with their period chip still set. */}
       <div
         style={{
           display: "flex",
-          gap: 6,
+          gap: 4,
+          borderBottom: "1px solid #d4d4d4",
+          marginBottom: 12,
+        }}
+        role="tablist"
+        aria-label="Teacher Roster views"
+      >
+        {(
+          [
+            { value: "roster", label: "Roster" },
+            { value: "benchmarks", label: "Benchmarks" },
+            { value: "instruction", label: "Instruction Log" },
+            { value: "groupInsights", label: "Group Insights" },
+          ] as Array<{ value: RosterTab; label: string }>
+        ).map((t) => {
+          const active = tab === t.value;
+          return (
+            <button
+              key={t.value}
+              role="tab"
+              aria-selected={active}
+              onClick={() => setTab(t.value)}
+              style={{
+                padding: "8px 14px",
+                border: "1px solid #d4d4d4",
+                borderBottom: active ? "1px solid white" : "1px solid #d4d4d4",
+                borderRadius: "6px 6px 0 0",
+                background: active ? "white" : "#f3f4f6",
+                color: active ? "#111827" : "#374151",
+                fontWeight: active ? 600 : 500,
+                cursor: "pointer",
+                marginBottom: -1,
+              }}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === "benchmarks" && (
+        <TeacherBenchmarksTab
+          teacherId={teacherId}
+          isOwnRoster={isOwnRoster}
+          rosterSelectedPeriod={data?.selectedPeriod ?? null}
+          rosterAvailablePeriods={data?.availablePeriods ?? []}
+          onOpenClassComposer={onOpenClassComposer}
+        />
+      )}
+
+      {tab === "instruction" && (
+        <TeacherInstructionLogTab
+          teacherId={teacherId}
+          isOwnRoster={isOwnRoster}
+          isCoreTeam={isCoreTeam}
+        />
+      )}
+
+      {tab === "groupInsights" && teacherId != null && (
+        <GroupInsightsTab teacherId={teacherId} />
+      )}
+
+      {tab === "roster" && (
+      <PillViewContext.Provider value={pillView}>
+      {/* Period selector + Pill view toggle — combined row.
+          Period chips on the left (primary filter), pill-view toggle
+          right-aligned (display preference, persisted per browser).
+          Keeping both on a single row trims one full row of vertical
+          chrome above the roster without hiding either control. */}
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
           alignItems: "center",
           marginBottom: 12,
           flexWrap: "wrap",
@@ -1315,35 +1920,91 @@ export default function TeacherRosterPage({
             P{p}
           </button>
         ))}
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: "#6b7280" }}>Show pills as:</span>
+        <div
+          role="group"
+          aria-label="FAST pill display mode"
+          title="Flip every FAST pill on the page. Click any individual pill to flip just that one."
+          style={{
+            display: "inline-flex",
+            border: "1px solid #d1d5db",
+            borderRadius: 999,
+            overflow: "hidden",
+            background: "#fff",
+          }}
+        >
+          {(
+            [
+              { value: "level", label: "Level" },
+              { value: "score", label: "Scale score" },
+            ] as Array<{ value: PillView; label: string }>
+          ).map((opt, i) => {
+            const active = pillView === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setPillView(opt.value)}
+                style={{
+                  padding: "4px 12px",
+                  border: "none",
+                  borderLeft: i === 0 ? "none" : "1px solid #d1d5db",
+                  background: active ? "#1f2937" : "transparent",
+                  color: active ? "#fff" : "#374151",
+                  fontWeight: active ? 700 : 500,
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      {/* Legend */}
+      {/* Legend — wrapped in the same disclosure pattern as
+          "How to use Teacher Roster" so veteran users get a clean
+          header without losing reference info. Defaults to collapsed;
+          HowToUseHelp uses the global help-mode flag, so legend also
+          honors the user's "hide all help" preference. */}
+      <HowToUseHelp title="Legend">
       <div
         style={{
           display: "flex",
           gap: 16,
           alignItems: "center",
           flexWrap: "wrap",
-          marginBottom: 8,
+          padding: "8px 12px",
           fontSize: 12,
           color: "#374151",
         }}
       >
-        <span>Pills: PM3 / PM1 / PM2 (sub-level on current chart; PM3 on prior-grade chart)</span>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-          LG (learning-gain bucket) =
+        <span>Pills: Prior PM3 → PM1 → PM2 → PM3 (chronological; sub-level on current chart, PM3 + Prior on prior-grade chart)</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+          LG bucket = pts to next sub-level (Low1 → Mid1 → High1 → Low2 → High2 → L3 → L4 → L5). Color = current FAST level:
           <BucketIcon
-            bucket={{ targetScore: 0, gap: 0, color: "green" }}
+            bucket={{ targetScore: 0, gap: 4, color: "red", currentSubLevel: "1.2", nextStopLabel: "High 1" }}
           />
-          at/above
+          L1
           <BucketIcon
-            bucket={{ targetScore: 0, gap: 3, color: "orange" }}
+            bucket={{ targetScore: 0, gap: 3, color: "orange", currentSubLevel: "2.1", nextStopLabel: "High 2" }}
           />
-          1–5
+          L2
           <BucketIcon
-            bucket={{ targetScore: 0, gap: 9, color: "red" }}
+            bucket={{ targetScore: 0, gap: 5, color: "green", currentSubLevel: "3", nextStopLabel: "Level 4" }}
           />
-          &gt; 5 pts to next level
+          L3
+          <BucketIcon
+            bucket={{ targetScore: 0, gap: 6, color: "blue", currentSubLevel: "4", nextStopLabel: "Level 5" }}
+          />
+          L4
+          <BucketIcon
+            bucket={{ targetScore: 0, gap: 0, color: "purple", currentSubLevel: "5", nextStopLabel: null }}
+          />
+          L5
         </span>
         <span>BQ = Bottom Quartile (prior-year final scale score)</span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -1383,7 +2044,56 @@ export default function TeacherRosterPage({
           <InvisibleEyeIcon tier={3} windowDays={data?.invisibleDays ?? null} />
           + active MTSS Tier 3
         </span>
+        <span
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+          title="Click on the row to suggest a separation pairing for this period; the icon turns red with a count once one or more pairs are flagged."
+        >
+          <span aria-hidden="true">🔗</span>
+          suggest separation /
+          <span
+            aria-hidden="true"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 2,
+              padding: "1px 6px",
+              borderRadius: 999,
+              border: "1px solid #fca5a5",
+              background: "#fef2f2",
+              color: "#b91c1c",
+              fontWeight: 700,
+            }}
+          >
+            🚫 N
+          </span>
+          already flagged this period (click to edit)
+        </span>
+        <span
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+          title="Student has been retained at one or more grade levels. Hover the badge on a row for the list."
+        >
+          <span
+            aria-hidden="true"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 18,
+              height: 18,
+              borderRadius: "50%",
+              background: "#0f172a",
+              color: "white",
+              fontSize: 11,
+              fontWeight: 800,
+              lineHeight: 1,
+            }}
+          >
+            R
+          </span>
+          retained (hover for grade levels)
+        </span>
       </div>
+      </HowToUseHelp>
 
       {/* View toggles — let teachers hide optional columns. PM pills
           stay always-on since they're the core data. Preferences are
@@ -1404,6 +2114,55 @@ export default function TeacherRosterPage({
         }}
       >
         <span style={{ fontWeight: 600 }}>Show:</span>
+        <span
+          role="group"
+          aria-label="Subject filter"
+          title="Show only ELA columns, only Math columns, or both"
+          style={{
+            display: "inline-flex",
+            border: "1px solid #cbd5e1",
+            borderRadius: 6,
+            overflow: "hidden",
+          }}
+        >
+          {(["both", "ela", "math"] as const).map((opt) => {
+            const active = visibility.subject === opt;
+            const label = opt === "both" ? "Both" : opt === "ela" ? "ELA" : "Math";
+            return (
+              <button
+                key={opt}
+                type="button"
+                onClick={() =>
+                  setVisibility((v) => ({ ...v, subject: opt }))
+                }
+                aria-pressed={active}
+                style={{
+                  padding: "3px 10px",
+                  border: "none",
+                  borderLeft: opt === "both" ? "none" : "1px solid #cbd5e1",
+                  background: active ? "#1d4ed8" : "white",
+                  color: active ? "white" : "#374151",
+                  fontWeight: active ? 700 : 500,
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </span>
+        <label
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+          title="Show or hide the prior-year PM3 column (most-recent historical PM3 from the FL importer)"
+        >
+          <input
+            type="checkbox"
+            checked={visibility.priorPm3}
+            onChange={() => toggleVis("priorPm3")}
+          />
+          Prior PM3
+        </label>
         <label
           style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
           title="Show or hide the PM3 column for both ELA and Math"
@@ -1557,33 +2316,38 @@ export default function TeacherRosterPage({
                 </th>
                 {(() => {
                   const groupCols =
-                    (visibility.pm3 ? 1 : 0) +
+                    (visibility.priorPm3 ? 1 : 0) +
                     (visibility.pm1 ? 1 : 0) +
                     (visibility.pm2 ? 1 : 0) +
+                    (visibility.pm3 ? 1 : 0) +
                     (visibility.lg ? 1 : 0);
                   if (groupCols === 0) return null;
                   return (
                     <>
-                      <th
-                        colSpan={groupCols}
-                        style={{
-                          padding: "8px 10px",
-                          textAlign: "center",
-                          ...GROUP_DIVIDER,
-                        }}
-                      >
-                        ELA
-                      </th>
-                      <th
-                        colSpan={groupCols}
-                        style={{
-                          padding: "8px 10px",
-                          textAlign: "center",
-                          ...GROUP_DIVIDER,
-                        }}
-                      >
-                        Math
-                      </th>
+                      {showEla && (
+                        <th
+                          colSpan={groupCols}
+                          style={{
+                            padding: "8px 10px",
+                            textAlign: "center",
+                            ...GROUP_DIVIDER,
+                          }}
+                        >
+                          ELA
+                        </th>
+                      )}
+                      {showMath && (
+                        <th
+                          colSpan={groupCols}
+                          style={{
+                            padding: "8px 10px",
+                            textAlign: "center",
+                            ...GROUP_DIVIDER,
+                          }}
+                        >
+                          Math
+                        </th>
+                      )}
                     </>
                   );
                 })()}
@@ -1603,7 +2367,9 @@ export default function TeacherRosterPage({
                   letterSpacing: 0.4,
                 }}
               >
-                {(["ELA", "Math"] as const).map((group) => {
+                {(["ELA", "Math"] as const)
+                  .filter((g) => (g === "ELA" ? showEla : showMath))
+                  .map((group) => {
                   // First visible cell in each group carries the divider.
                   let divUsed = false;
                   const div = (): React.CSSProperties => {
@@ -1617,9 +2383,17 @@ export default function TeacherRosterPage({
                   };
                   return (
                     <Fragment key={group}>
-                      {visibility.pm3 && <th style={div()}>PM3</th>}
+                      {visibility.priorPm3 && (
+                        <th
+                          style={div()}
+                          title="Most-recent prior-year PM3 from the FL historical importer. Renders as a real pill (color-coded against last year's grade chart). Use it to spot summer regression at a glance."
+                        >
+                          Prior
+                        </th>
+                      )}
                       {visibility.pm1 && <th style={div()}>PM1</th>}
                       {visibility.pm2 && <th style={div()}>PM2</th>}
+                      {visibility.pm3 && <th style={div()}>PM3</th>}
                       {visibility.lg && <th style={div()}>LG</th>}
                     </Fragment>
                   );
@@ -1661,8 +2435,20 @@ export default function TeacherRosterPage({
                         gap: 8,
                       }}
                     >
-                      <span>
-                        {row.lastName}, {row.firstName}
+                      <StudentPhoto
+                        firstName={row.firstName}
+                        lastName={row.lastName}
+                        photoObjectKey={row.photoObjectKey}
+                        photoConsent={row.photoConsent}
+                        size={28}
+                      />
+                      <span style={{ display: "inline-flex", flexDirection: "column", lineHeight: 1.15 }}>
+                        <span>{row.lastName}, {row.firstName}</span>
+                        {row.localSisId && (
+                          <span style={{ fontSize: 11, color: "#6b7280", fontFamily: "ui-monospace, monospace" }}>
+                            ID {row.localSisId}
+                          </span>
+                        )}
                       </span>
                       {row.safetyPlan && (
                         <SafetyPlanPill
@@ -1750,6 +2536,32 @@ export default function TeacherRosterPage({
                           </button>
                         );
                       })()}
+                      {row.retainedGrades && row.retainedGrades.length > 0 && (
+                        <span
+                          title={`Retained: ${row.retainedGrades
+                            .map((g) => `Grade ${g}`)
+                            .join(", ")}`}
+                          aria-label={`Retained at ${row.retainedGrades
+                            .map((g) => `Grade ${g}`)
+                            .join(", ")}`}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: 18,
+                            height: 18,
+                            borderRadius: "50%",
+                            background: "#0f172a",
+                            color: "white",
+                            fontSize: 11,
+                            fontWeight: 800,
+                            lineHeight: 1,
+                            cursor: "help",
+                          }}
+                        >
+                          R
+                        </span>
+                      )}
                       {row.issToday && (
                         <span
                           title="On In-School Suspension today"
@@ -1797,22 +2609,28 @@ export default function TeacherRosterPage({
                     </td>
                   )}
                   <td style={{ padding: "6px 10px" }}>{row.grade}</td>
-                  <SubjectCells
-                    block={row.ela}
-                    subjectLabel="ELA"
-                    showLg={visibility.lg}
-                    showPm3={visibility.pm3}
-                    showPm1={visibility.pm1}
-                    showPm2={visibility.pm2}
-                  />
-                  <SubjectCells
-                    block={row.math}
-                    subjectLabel="Math"
-                    showLg={visibility.lg}
-                    showPm3={visibility.pm3}
-                    showPm1={visibility.pm1}
-                    showPm2={visibility.pm2}
-                  />
+                  {showEla && (
+                    <SubjectCells
+                      block={row.ela}
+                      subjectLabel="ELA"
+                      showLg={visibility.lg}
+                      showPriorPm3={visibility.priorPm3}
+                      showPm3={visibility.pm3}
+                      showPm1={visibility.pm1}
+                      showPm2={visibility.pm2}
+                    />
+                  )}
+                  {showMath && (
+                    <SubjectCells
+                      block={row.math}
+                      subjectLabel="Math"
+                      showLg={visibility.lg}
+                      showPriorPm3={visibility.priorPm3}
+                      showPm3={visibility.pm3}
+                      showPm1={visibility.pm1}
+                      showPm2={visibility.pm2}
+                    />
+                  )}
                   {visibility.bq && (
                     <td style={{ padding: "6px 10px" }}>
                       <BqPills row={row} />
@@ -1823,6 +2641,8 @@ export default function TeacherRosterPage({
             </tbody>
           </table>
         </div>
+      )}
+      </PillViewContext.Provider>
       )}
       {sepTarget && sepSectionId != null && (
         <SuggestSeparationModal

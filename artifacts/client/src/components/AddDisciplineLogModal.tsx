@@ -16,6 +16,7 @@ interface Props {
 
 interface StudentRow {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: string | null;
@@ -29,6 +30,7 @@ interface ReasonRow {
   label: string;
   active: boolean;
   sortOrder: number;
+  scope?: "district" | "school";
 }
 
 interface CapacityResp {
@@ -112,6 +114,9 @@ export default function AddDisciplineLogModal({
   const [dates, setDates] = useState<Set<string>>(new Set());
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
   const [capacity, setCapacity] = useState<CapacityResp | null>(null);
+  // Admin-entered "Days for reports" — independent of the calendar
+  // selection (intentional: we don't auto-derive from dates).
+  const [dayCount, setDayCount] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [overrideCap, setOverrideCap] = useState(false);
@@ -127,12 +132,11 @@ export default function AddDisciplineLogModal({
     })();
   }, []);
 
-  // Load capacity for the visible month (ISS only).
+  // Load capacity + closed days for the visible month. The endpoint
+  // returns both: ISS uses the capacity meter, OSS uses only the
+  // closed-days list (school holidays / no-school dates) so the
+  // calendar can grey them out the same way it does for ISS.
   useEffect(() => {
-    if (kind !== "iss") {
-      setCapacity(null);
-      return;
-    }
     void (async () => {
       const from = ymd(startOfMonth(month));
       const to = ymd(endOfMonth(month));
@@ -141,7 +145,7 @@ export default function AddDisciplineLogModal({
       );
       if (r.ok) setCapacity((await r.json()) as CapacityResp);
     })();
-  }, [kind, month]);
+  }, [month]);
 
   // Student typeahead.
   const searchStudents = useCallback(async (q: string) => {
@@ -220,6 +224,15 @@ export default function AddDisciplineLogModal({
     };
     if (reasonId) body.reasonId = Number(reasonId);
     else if (reasonText.trim()) body.reasonText = reasonText.trim();
+    if (dayCount.trim()) {
+      const n = Number(dayCount);
+      if (!Number.isInteger(n) || n < 1 || n > 60) {
+        setError("Days must be a whole number between 1 and 60.");
+        setSaving(false);
+        return;
+      }
+      body.dayCount = n;
+    }
 
     const r = await authFetch(`/api/admin-hub/${kind}-logs`, {
       method: "POST",
@@ -345,7 +358,7 @@ export default function AddDisciplineLogModal({
                   {student.firstName} {student.lastName}
                 </div>
                 <div style={{ fontSize: 12, color: "var(--text-subtle)" }}>
-                  ID {student.studentId} · Grade {student.grade ?? "—"}
+                  ID {student.localSisId ?? "—"} · Grade {student.grade ?? "—"}
                   {student.ese && " · ESE"}
                   {student.is504 && " · 504"}
                   {student.ell && " · ELL"}
@@ -408,7 +421,7 @@ export default function AddDisciplineLogModal({
                         {s.firstName} {s.lastName}
                       </div>
                       <div style={{ fontSize: 11, color: "var(--text-subtle)" }}>
-                        {s.studentId} · Gr {s.grade ?? "—"}
+                        {s.localSisId ?? "—"} · Gr {s.grade ?? "—"}
                       </div>
                     </button>
                   ))}
@@ -454,6 +467,26 @@ export default function AddDisciplineLogModal({
             onChange={(e) => setNotes(e.target.value)}
             maxLength={4000}
           />
+        </div>
+
+        <div style={{ marginBottom: "0.85rem", maxWidth: 240 }}>
+          <span style={label}>
+            Days for reports (optional)
+          </span>
+          <input
+            type="number"
+            min={1}
+            max={60}
+            step={1}
+            value={dayCount}
+            onChange={(e) => setDayCount(e.target.value)}
+            placeholder="e.g. 3"
+            style={input}
+          />
+          <div style={{ fontSize: 11, color: "var(--text-subtle)", marginTop: 4 }}>
+            Total {kind.toUpperCase()} days assigned. Used by reports —
+            does not auto-fill the calendar.
+          </div>
         </div>
 
         <div style={{ marginBottom: "0.85rem" }}>

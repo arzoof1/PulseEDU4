@@ -37,12 +37,17 @@ import {
   displayPlaylistsTable,
   displayPlaylistItemsTable,
   displayPlaylistOverridesTable,
+  displayLiveControlTable,
+  classSectionsTable,
+  sectionRosterTable,
+  pickupQueueEventsTable,
 } from "@workspace/db";
-import { and, eq, sql, desc, asc, inArray } from "drizzle-orm";
+import { and, eq, gte, sql, desc, asc, inArray } from "drizzle-orm";
 import {
   ObjectStorageService,
   ObjectNotFoundError,
 } from "../lib/objectStorage.js";
+import { enforceDisplayPlaylistQuota } from "../lib/featureLicensing.js";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
@@ -190,6 +195,7 @@ router.get("/displays/playlists", async (req, res) => {
         defaultDurationSeconds: displayPlaylistsTable.defaultDurationSeconds,
         showPbisHousePage: displayPlaylistsTable.showPbisHousePage,
         showActiveHallPasses: displayPlaylistsTable.showActiveHallPasses,
+        showPickupQueue: displayPlaylistsTable.showPickupQueue,
         showHeartbeat: displayPlaylistsTable.showHeartbeat,
         scheduleEnabled: displayPlaylistsTable.scheduleEnabled,
         scheduleStartTime: displayPlaylistsTable.scheduleStartTime,
@@ -242,6 +248,12 @@ router.post("/displays/playlists", async (req, res) => {
       return;
     }
     const schoolId = activeSchoolId(staff);
+
+    // Phase 3 quota gate: refuse creation when the school has hit
+    // maxPlaylists. Returns 403 quota_exceeded with the same shape the
+    // parent-portal seat check uses so the client can render a uniform
+    // upsell toast.
+    if (!(await enforceDisplayPlaylistQuota(req, res, schoolId, 1))) return;
 
     const name =
       typeof req.body?.name === "string" ? req.body.name.trim().slice(0, 80) : "";
@@ -337,6 +349,133 @@ router.get("/displays/playlists/:id", async (req, res) => {
   }
 });
 
+// ---------- PUT: live remote-control state -------------------------
+//
+// Sets the live-control row for a playlist so every TV on /display/<id>
+// follows the presenter. Body:
+//   { mode: "auto"|"manual"|"presentation",
+//     itemIndex?: number, pageIndex?: number,
+//     presentationPlaylistId?: number|null, presentationUrl?: string|null }
+// Each successful write bumps `revision` so TVs detect the change on
+// their next ~2s poll.
+router.put("/displays/playlists/:id/live", async (req, res) => {
+  try {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!canManageDisplays(staff)) {
+      res.status(403).json({ error: "Not authorized" });
+      return;
+    }
+    const pl = await loadPlaylistForEdit(req, res, staff);
+    if (!pl) return;
+
+    const mode = String(req.body?.mode ?? "");
+    if (mode !== "auto" && mode !== "manual" && mode !== "presentation") {
+      res.status(400).json({ error: "mode must be auto, manual, or presentation" });
+      return;
+    }
+
+    const itemIndex = Math.max(
+      0,
+      Number.parseInt(String(req.body?.itemIndex ?? 0), 10) || 0,
+    );
+    const pageIndex = Math.max(
+      0,
+      Number.parseInt(String(req.body?.pageIndex ?? 0), 10) || 0,
+    );
+
+    let presentationPlaylistId: number | null = null;
+    let presentationUrl: string | null = null;
+
+    if (mode === "presentation") {
+      const rawUrl =
+        typeof req.body?.presentationUrl === "string"
+          ? req.body.presentationUrl.trim()
+          : "";
+      const rawDeck = req.body?.presentationPlaylistId;
+      if (rawUrl) {
+        if (!isValidEmbedUrl(rawUrl)) {
+          res.status(400).json({ error: "presentationUrl is not a valid public URL" });
+          return;
+        }
+        presentationUrl = rawUrl;
+      } else if (rawDeck !== undefined && rawDeck !== null && rawDeck !== "") {
+        const deckId = Number.parseInt(String(rawDeck), 10);
+        if (!Number.isFinite(deckId)) {
+          res.status(400).json({ error: "Invalid presentationPlaylistId" });
+          return;
+        }
+        // The deck must be a real playlist at the same school (tenant
+        // isolation — never let a presenter point a TV at another
+        // school's playlist).
+        const [deck] = await db
+          .select()
+          .from(displayPlaylistsTable)
+          .where(eq(displayPlaylistsTable.id, deckId));
+        if (!deck || deck.schoolId !== pl.schoolId) {
+          res.status(404).json({ error: "Deck playlist not found" });
+          return;
+        }
+        presentationPlaylistId = deckId;
+      } else {
+        res
+          .status(400)
+          .json({ error: "Presentation needs a deck playlist or a live URL" });
+        return;
+      }
+    }
+
+    const now = new Date();
+    // Bump the revision atomically in SQL (`revision + 1`) rather than
+    // read-then-write — TVs use `revision` as the sole change detector,
+    // so two concurrent PUTs computing the next value in app code could
+    // write the same revision with different state and one update would
+    // become permanently invisible. RETURNING gives us the true stored
+    // revision to echo back to the controller.
+    const [saved] = await db
+      .insert(displayLiveControlTable)
+      .values({
+        playlistId: pl.id,
+        schoolId: pl.schoolId,
+        mode,
+        itemIndex,
+        pageIndex,
+        presentationPlaylistId,
+        presentationUrl,
+        revision: 1,
+        updatedAt: now,
+        updatedByStaffId: staff.id,
+      })
+      .onConflictDoUpdate({
+        target: displayLiveControlTable.playlistId,
+        set: {
+          mode,
+          itemIndex,
+          pageIndex,
+          presentationPlaylistId,
+          presentationUrl,
+          revision: sql`${displayLiveControlTable.revision} + 1`,
+          updatedAt: now,
+          updatedByStaffId: staff.id,
+        },
+      })
+      .returning();
+
+    res.json({
+      mode: saved.mode,
+      itemIndex: saved.itemIndex,
+      pageIndex: saved.pageIndex,
+      presentationPlaylistId: saved.presentationPlaylistId,
+      presentationUrl: saved.presentationUrl,
+      revision: saved.revision,
+    });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[displays] set live control failed", e);
+    res.status(500).json({ error: "Failed to update live control" });
+  }
+});
+
 // ---------- PATCH: edit playlist (incl. reorder via itemOrder) ------
 
 router.patch("/displays/playlists/:id", async (req, res) => {
@@ -375,11 +514,32 @@ router.patch("/displays/playlists/:id", async (req, res) => {
     // Manual kill switch — toggling this OFF makes the public cycler
     // serve "off-air" immediately and hides the display from the
     // cross-display calendar. Items and overrides are preserved.
+    //
+    // Phase 3 quota note: re-activating a previously-deactivated
+    // playlist consumes a quota slot, so we re-check before allowing
+    // the inactive→active flip. Without this, schools could bypass
+    // maxPlaylists via deactivate → create → re-activate.
     if (req.body?.active !== undefined) {
-      update.active = Boolean(req.body.active);
+      const nextActive = Boolean(req.body.active);
+      if (nextActive && !pl.active) {
+        if (
+          !(await enforceDisplayPlaylistQuota(
+            req,
+            res,
+            pl.schoolId,
+            1,
+          ))
+        ) {
+          return;
+        }
+      }
+      update.active = nextActive;
     }
     if (req.body?.showActiveHallPasses !== undefined) {
       update.showActiveHallPasses = Boolean(req.body.showActiveHallPasses);
+    }
+    if (req.body?.showPickupQueue !== undefined) {
+      update.showPickupQueue = Boolean(req.body.showPickupQueue);
     }
     if (req.body?.showHeartbeat !== undefined) {
       update.showHeartbeat = Boolean(req.body.showHeartbeat);
@@ -744,6 +904,151 @@ router.delete("/displays/playlists/:id/items/:itemId", async (req, res) => {
 // no district student id, no teacher email, no notes — only fields the
 // front-of-school TV is OK to show. Computes `minutesOpen` server-side so
 // the cycler doesn't need a synced clock with the database.
+// Pickup queue, optionally filtered to one teacher's class roster.
+// Mirrors the derivation in /api/pickup/queue (today's append-only
+// event log, terminal events remove the student) but joins through
+// section_roster so a classroom-mounted TV only shows that teacher's
+// students. When ownerStaffId is null (commons display) the school-
+// wide queue is returned. Public endpoint — no PII (first name + last
+// initial only, same convention as the hall-passes slide).
+async function loadPickupQueueForOwner(
+  schoolId: number,
+  ownerStaffId: number | null,
+) {
+  // School-local "today" boundary, matching the pickup route helper.
+  const now = new Date();
+  const startOfToday = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    0,
+    0,
+    0,
+    0,
+  );
+
+  const events = await db
+    .select({
+      studentId: pickupQueueEventsTable.studentId,
+      action: pickupQueueEventsTable.action,
+      occurredAt: pickupQueueEventsTable.occurredAt,
+    })
+    .from(pickupQueueEventsTable)
+    .where(
+      and(
+        eq(pickupQueueEventsTable.schoolId, schoolId),
+        gte(pickupQueueEventsTable.occurredAt, startOfToday),
+      ),
+    )
+    .orderBy(asc(pickupQueueEventsTable.occurredAt));
+
+  const TERMINAL = new Set(["in_car", "auto_cleared", "walker_released"]);
+  type Entry = {
+    studentId: number;
+    addedAt: Date;
+    status: "in_queue" | "walking_out";
+  };
+  const byStudent = new Map<number, Entry>();
+  for (const e of events) {
+    if (TERMINAL.has(e.action)) {
+      byStudent.delete(e.studentId);
+      continue;
+    }
+    if (e.action === "added") {
+      byStudent.set(e.studentId, {
+        studentId: e.studentId,
+        addedAt: e.occurredAt,
+        status: "in_queue",
+      });
+    } else if (e.action === "released_to_walk") {
+      const ex = byStudent.get(e.studentId);
+      if (ex) ex.status = "walking_out";
+    }
+  }
+
+  let entries = Array.from(byStudent.values()).sort(
+    (a, b) => a.addedAt.getTime() - b.addedAt.getTime(),
+  );
+
+  // Owner-roster filter. section_roster.studentId is the TEXT district
+  // code, not the integer PK, so we have to join through students to
+  // translate. Returns the set of student integer PKs the owner teaches
+  // across all of their non-planning sections.
+  if (ownerStaffId !== null && entries.length > 0) {
+    const rosterRows = await db
+      .select({ id: studentsTable.id })
+      .from(classSectionsTable)
+      .innerJoin(
+        sectionRosterTable,
+        eq(sectionRosterTable.sectionId, classSectionsTable.id),
+      )
+      .innerJoin(
+        studentsTable,
+        and(
+          eq(studentsTable.studentId, sectionRosterTable.studentId),
+          eq(studentsTable.schoolId, classSectionsTable.schoolId),
+        ),
+      )
+      .where(
+        and(
+          eq(classSectionsTable.schoolId, schoolId),
+          eq(classSectionsTable.teacherStaffId, ownerStaffId),
+          eq(classSectionsTable.isPlanning, false),
+        ),
+      );
+    const allowed = new Set(rosterRows.map((r) => r.id));
+    entries = entries.filter((e) => allowed.has(e.studentId));
+  }
+
+  // Hydrate names + grade for the surviving set.
+  const ids = entries.map((e) => e.studentId);
+  let nameById = new Map<
+    number,
+    { firstName: string; lastName: string; grade: number }
+  >();
+  if (ids.length > 0) {
+    const rows = await db
+      .select({
+        id: studentsTable.id,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+      })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          inArray(studentsTable.id, ids),
+        ),
+      );
+    nameById = new Map(
+      rows.map((r) => [
+        r.id,
+        { firstName: r.firstName, lastName: r.lastName, grade: r.grade },
+      ]),
+    );
+  }
+
+  const queue = entries.map((e, idx) => {
+    const s = nameById.get(e.studentId);
+    const firstName = s?.firstName ?? "Student";
+    const lastInitial = s?.lastName ? `${s.lastName.charAt(0)}.` : "";
+    return {
+      position: idx + 1,
+      studentLabel: lastInitial ? `${firstName} ${lastInitial}` : firstName,
+      grade: s?.grade ?? null,
+      addedAt: e.addedAt.toISOString(),
+      status: e.status,
+    };
+  });
+
+  return {
+    queue,
+    ownerFiltered: ownerStaffId !== null,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 async function loadActiveHallPasses(schoolId: number) {
   const rows = await db
     .select({
@@ -798,6 +1103,47 @@ async function loadActiveHallPasses(schoolId: number) {
 
 // ---------- PUBLIC endpoints (no auth) --------------------------------
 
+// ---------- PUBLIC: live remote-control state (no auth) ------------
+//
+// Polled every ~2s by every TV on /display/<id>. Tiny payload so the
+// poll is cheap. Missing row = "auto" (normal cycler behavior).
+router.get("/displays/public/live/:id", async (req, res) => {
+  try {
+    const id = Number.parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [row] = await db
+      .select()
+      .from(displayLiveControlTable)
+      .where(eq(displayLiveControlTable.playlistId, id));
+    if (!row) {
+      res.json({
+        mode: "auto",
+        itemIndex: 0,
+        pageIndex: 0,
+        presentationPlaylistId: null,
+        presentationUrl: null,
+        revision: 0,
+      });
+      return;
+    }
+    res.json({
+      mode: row.mode,
+      itemIndex: row.itemIndex,
+      pageIndex: row.pageIndex,
+      presentationPlaylistId: row.presentationPlaylistId,
+      presentationUrl: row.presentationUrl,
+      revision: row.revision,
+    });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[displays] public live failed", e);
+    res.status(500).json({ error: "Failed to load live control" });
+  }
+});
+
 // Returns playlist + enabled items, with `mediaUrl` rewritten to the
 // public media route below. `houseData` is hydrated only when the
 // playlist has the toggle on, so we don't pay for the joins on every
@@ -828,6 +1174,7 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
           defaultDurationSeconds: pl.defaultDurationSeconds,
           showPbisHousePage: false,
           showActiveHallPasses: false,
+          showPickupQueue: false,
           showHeartbeat: false,
           scheduleEnabled: false,
           scheduleStartTime: null,
@@ -839,6 +1186,7 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
         items: [],
         overrides: [],
         houseData: null,
+        pickupQueueData: null,
       });
       return;
     }
@@ -921,6 +1269,7 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
         .select({
           id: pbisEntriesTable.id,
           studentId: pbisEntriesTable.studentId,
+          localSisId: studentsTable.localSisId,
           firstName: studentsTable.firstName,
           lastName: studentsTable.lastName,
           points: pbisEntriesTable.points,
@@ -951,6 +1300,19 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
     let hallPassData: unknown = null;
     if (pl.showActiveHallPasses) {
       hallPassData = await loadActiveHallPasses(pl.schoolId);
+    }
+
+    // Pickup queue (v2 toggle). Filtered to the playlist owner's
+    // class roster so a classroom-mounted TV only shows that
+    // teacher's students. When the playlist has no owner (e.g. a
+    // commons display), the toggle still works but renders the
+    // school-wide queue.
+    let pickupQueueData: unknown = null;
+    if (pl.showPickupQueue) {
+      pickupQueueData = await loadPickupQueueForOwner(
+        pl.schoolId,
+        pl.ownerStaffId,
+      );
     }
 
     // Per-display schedule overrides. Each override row points at ANOTHER
@@ -1038,6 +1400,7 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
         defaultDurationSeconds: pl.defaultDurationSeconds,
         showPbisHousePage: pl.showPbisHousePage,
         showActiveHallPasses: pl.showActiveHallPasses,
+        showPickupQueue: pl.showPickupQueue,
         showHeartbeat: pl.showHeartbeat,
         scheduleEnabled: pl.scheduleEnabled,
         scheduleStartTime: pl.scheduleStartTime,
@@ -1072,6 +1435,7 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
       })),
       houseData,
       hallPassData,
+      pickupQueueData,
     });
   } catch (e) {
     // eslint-disable-next-line no-console

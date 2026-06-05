@@ -23,6 +23,7 @@ const SECTION_KEYS = [
   "showMtss",
   "showOss",
   "showOssReason",
+  "showReteach",
   "allowWeeklyEmail",
 ] as const;
 type SectionKey = (typeof SECTION_KEYS)[number];
@@ -41,6 +42,7 @@ const SECTION_DEFAULTS: Record<SectionKey, boolean> = {
   showMtss: false,
   showOss: false,
   showOssReason: false,
+  showReteach: false,
   allowWeeklyEmail: true,
 };
 

@@ -15,6 +15,17 @@
 import { useEffect, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, howtoListStyle } from "./HowToUseHelp";
+import {
+  EMPTY_FILTERS,
+  filtersToQuery,
+  type InsightsFilterValue,
+} from "./InsightsFilterBar";
+import InsightsPicker, {
+  csvFilename,
+  downloadCsv,
+  extractTopLists,
+  topListsToCsv,
+} from "./InsightsPicker";
 
 // ---------- Types (mirror api-server response shape) ----------------------
 
@@ -100,23 +111,6 @@ const AMBER = "#d97706";
 
 // ---------- Grade filter options (same set as the other dashboards) -------
 
-const GRADE_OPTIONS: { value: string; label: string }[] = [
-  { value: "", label: "All grades" },
-  { value: "K", label: "Kindergarten" },
-  { value: "1", label: "1st grade" },
-  { value: "2", label: "2nd grade" },
-  { value: "3", label: "3rd grade" },
-  { value: "4", label: "4th grade" },
-  { value: "5", label: "5th grade" },
-  { value: "6", label: "6th grade" },
-  { value: "7", label: "7th grade" },
-  { value: "8", label: "8th grade" },
-  { value: "9", label: "9th grade" },
-  { value: "10", label: "10th grade" },
-  { value: "11", label: "11th grade" },
-  { value: "12", label: "12th grade" },
-];
-
 // ---------- Top-level component -------------------------------------------
 
 type Props = {
@@ -124,7 +118,8 @@ type Props = {
 };
 
 export function EarlyWarningDashboard({ onOpenProfile }: Props) {
-  const [grade, setGrade] = useState("");
+  const [selectedGrades, setSelectedGrades] = useState<string[]>([]);
+  const [filters, setFilters] = useState<InsightsFilterValue>(EMPTY_FILTERS);
   const [data, setData] = useState<EarlyWarningResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -134,7 +129,8 @@ export function EarlyWarningDashboard({ onOpenProfile }: Props) {
     setLoading(true);
     setError("");
     const qs = new URLSearchParams();
-    if (grade) qs.set("grade", grade);
+    if (selectedGrades.length > 0) qs.set("grades", selectedGrades.join(","));
+    for (const [k, v] of filtersToQuery(filters)) qs.set(k, v);
     authFetch(`/api/insights/early-warning?${qs.toString()}`)
       .then(async (r) => {
         if (cancelled) return;
@@ -156,7 +152,7 @@ export function EarlyWarningDashboard({ onOpenProfile }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [grade]);
+  }, [selectedGrades, filters]);
 
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
@@ -177,27 +173,22 @@ export function EarlyWarningDashboard({ onOpenProfile }: Props) {
             touch first this week.
           </p>
         </div>
-        <div
-          style={{
-            display: "flex",
-            gap: "0.5rem",
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
-        >
-          <select
-            value={grade}
-            onChange={(e) => setGrade(e.target.value)}
-            style={selectStyle}
-          >
-            {GRADE_OPTIONS.map((g) => (
-              <option key={g.value} value={g.value}>
-                {g.label}
-              </option>
-            ))}
-          </select>
-        </div>
       </div>
+
+      <InsightsPicker
+        grades={selectedGrades}
+        onGradesChange={setSelectedGrades}
+        filters={filters}
+        onFiltersChange={setFilters}
+        onDownloadCsv={() => {
+          if (!data) return;
+          downloadCsv(
+            csvFilename("early-warning", selectedGrades),
+            topListsToCsv(extractTopLists(data)),
+          );
+        }}
+        csvDisabled={!data}
+      />
 
       <HowToUsePanel />
 

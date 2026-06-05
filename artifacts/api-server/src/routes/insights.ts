@@ -43,10 +43,21 @@ import {
   interventionEntriesTable,
   parentStudentsTable,
   studentSeparationsTable,
+  studentRetentionsTable,
+  housesTable,
 } from "@workspace/db";
 import { and, eq, inArray, isNull, gte, lte, sql, desc, or } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
-import { placePm3, placeOnChart, hasChart } from "../lib/fastCutScores.js";
+import {
+  placePm3,
+  placeOnChart,
+  hasChart,
+  bucketTarget,
+  SUB_LEVEL_LABEL,
+  type Subject,
+} from "../lib/fastCutScores.js";
+import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
+import { loadFastHistory, pickHistory } from "../lib/fastHistory.js";
 import {
   parseInsightsFilters,
   applyInsightsFilters,
@@ -226,6 +237,86 @@ function topRisk(flags: RiskFlag[]): RiskFlag | null {
 // GET /api/insights/students/:studentId/profile
 // ---------------------------------------------------------------------------
 
+// Per-subject LG bucket "moving target" trajectory.
+//
+// Per FL LG rules: prior-year PM3 placed on the PRIOR-grade chart sets
+// the baseline sub-level; the target is the next sub-level's minimum
+// scale score on the CURRENT-grade chart. The target is fixed all year;
+// what moves is how far the student sits from it after each PM window.
+//
+// Returns null when there is no prior-year PM3, no current-grade chart
+// (EOC subjects without grade-keyed charts), or the student is already
+// at L5 (no next stop on the climb path).
+type BucketWindow = "prior" | "pm1" | "pm2" | "pm3";
+interface BucketTrajectoryPoint {
+  window: BucketWindow;
+  score: number | null;
+  gap: number | null; // target − score; positive = still need to climb
+  delta: number | null; // previous gap − current gap; positive = closing
+}
+interface BucketTrajectory {
+  targetScore: number;
+  targetSubLevelLabel: string;
+  baselineSubLevel: string;
+  baselineScore: number;
+  latestWindow: BucketWindow;
+  lgMet: boolean;
+  trajectory: BucketTrajectoryPoint[];
+}
+function buildBucketTrajectory(
+  subject: Subject,
+  grade: number,
+  priorYearScore: number | null,
+  pm1: number | null,
+  pm2: number | null,
+  pm3: number | null,
+): BucketTrajectory | null {
+  if (priorYearScore == null) return null;
+  const baselinePlacement = placePm3(priorYearScore, subject, grade);
+  if (!baselinePlacement) return null;
+  const target = bucketTarget(subject, grade, baselinePlacement.subLevel);
+  if (!target) return null;
+
+  const windows: Array<{ window: BucketWindow; score: number | null }> = [
+    { window: "prior", score: priorYearScore },
+    { window: "pm1", score: pm1 },
+    { window: "pm2", score: pm2 },
+    { window: "pm3", score: pm3 },
+  ];
+
+  let lastGap: number | null = null;
+  let latestWindow: BucketWindow = "prior";
+  const trajectory: BucketTrajectoryPoint[] = windows.map((w) => {
+    if (w.score == null) {
+      return { window: w.window, score: null, gap: null, delta: null };
+    }
+    const gap = target.score - w.score;
+    const delta = lastGap == null ? null : lastGap - gap;
+    lastGap = gap;
+    latestWindow = w.window;
+    return { window: w.window, score: w.score, gap, delta };
+  });
+
+  // LG considered met when the most recent PM (pm3 preferred, else pm2,
+  // else pm1) lands at or above the target on the current-grade chart.
+  // Phase 2 within-level sub-tier moves are handled by the teacher
+  // roster route; for the profile bucket strip the simpler "cleared
+  // the target" check is what the trajectory pill needs.
+  const latestScore = pm3 ?? pm2 ?? pm1 ?? null;
+  const lgMet = latestScore != null && latestScore >= target.score;
+
+  return {
+    targetScore: target.score,
+    targetSubLevelLabel: SUB_LEVEL_LABEL[target.nextStop],
+    baselineSubLevel: SUB_LEVEL_LABEL[baselinePlacement.subLevel],
+    baselineScore: priorYearScore,
+    latestWindow,
+    lgMet,
+    trajectory,
+  };
+}
+
+// (retention indicator data is loaded per request below — not at module scope.)
 router.get("/insights/students/:studentId/profile", async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (schoolId == null) return;
@@ -282,6 +373,21 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
     return;
   }
 
+  // Retention indicator (R-in-circle on the Student Profile header).
+  // Cheap query — at most a couple of rows per student.
+  const retentionRows = await db
+    .select({ gradeLevel: studentRetentionsTable.gradeLevel })
+    .from(studentRetentionsTable)
+    .where(
+      and(
+        eq(studentRetentionsTable.schoolId, schoolId),
+        eq(studentRetentionsTable.studentId, studentId),
+      ),
+    );
+  const retainedGradesList = retentionRows
+    .map((r) => r.gradeLevel)
+    .sort((a, b) => a - b);
+
   // ----- Pillar: Academics -----------------------------------------------
   const fastScores = await db
     .select()
@@ -290,8 +396,22 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
       and(
         eq(studentFastScoresTable.schoolId, schoolId),
         eq(studentFastScoresTable.studentId, studentId),
+        // FAST Phase 1: scope to current SY — student profile shows
+        // current-year scores; prior-year Florida backfill rows live
+        // on separate (school_year)-keyed rows.
+        eq(
+          studentFastScoresTable.schoolYear,
+          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+        ),
       ),
     );
+  // Multi-year prior-year PM3 history (FL Florida historical importer).
+  // Loaded for this single student so the FAST PM card can show prior
+  // years alongside current PM1/PM2/PM3. Empty when no historical rows.
+  const fastHistoryMap = await loadFastHistory({
+    schoolId,
+    studentIds: [studentId],
+  });
   const assessments = await db
     .select({
       name: assessmentsTable.assessmentName,
@@ -969,6 +1089,12 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
   res.json({
     header: {
       studentId: student.studentId,
+      // Internal DB id — needed by the inline dismissal-mode editor on
+      // the Student Profile, which calls PATCH /pickup/students/:id/
+      // dismissal-mode (the pickup endpoint is keyed by db id, not by
+      // the human-readable studentId).
+      studentDbId: student.id,
+      dismissalMode: student.dismissalMode,
       firstName: student.firstName,
       lastName: student.lastName,
       grade: student.grade,
@@ -983,6 +1109,30 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
       mtssTier,
       activeMtssPlanCount: activeMtssPlans.length,
       visibilityPath,
+      // Grades the student was retained in (ascending). Drives the R
+      // indicator on the Student Profile header.
+      retainedGrades: retainedGradesList,
+      // PBIS house affiliation (null when unassigned). Drives the
+      // colored house pill + admin "Change house" modal in the
+      // Student Profile header. Loaded lazily here so the profile
+      // route stays a single round-trip for the client.
+      house: await (async () => {
+        if (student.houseId == null) return null;
+        const [h] = await db
+          .select({
+            id: housesTable.id,
+            name: housesTable.name,
+            color: housesTable.color,
+          })
+          .from(housesTable)
+          .where(
+            and(
+              eq(housesTable.id, student.houseId),
+              eq(housesTable.schoolId, schoolId),
+            ),
+          );
+        return h ?? null;
+      })(),
     },
     window: {
       from: window.from.toISOString(),
@@ -999,6 +1149,24 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
           pm3: s.pm3,
           priorYearScore: s.priorYearScore,
           priorYearBq: s.priorYearBq,
+          // Multi-year PM3 history from the FL Florida historical
+          // importer. Newest-first; empty when no historical rows.
+          history: pickHistory(fastHistoryMap, studentId, s.subject),
+          // LG "moving target" trajectory. Baseline sub-level comes
+          // from prior-year PM3 placed on the PRIOR-grade chart
+          // (via placePm3). Target is the next-sublevel min on the
+          // CURRENT-grade chart. For each PM window we expose the
+          // raw score, the live gap (target − score), and the delta
+          // vs the previous populated window (positive = closing,
+          // negative = widening). null when no chart / no prior PM3.
+          bucket: buildBucketTrajectory(
+            s.subject as Subject,
+            student.grade,
+            s.priorYearScore,
+            s.pm1,
+            s.pm2,
+            s.pm3,
+          ),
         })),
         // Structured iReady AP1/AP2/AP3 grouped by subject. We group from
         // the in-memory `assessments` list (already fetched, ordered desc)
@@ -1293,6 +1461,11 @@ router.get("/insights/watchlist", async (req, res) => {
       and(
         eq(studentFastScoresTable.schoolId, schoolId),
         inArray(studentFastScoresTable.studentId, studentIds),
+        // FAST Phase 1: BQ flag lives on current-SY row.
+        eq(
+          studentFastScoresTable.schoolYear,
+          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+        ),
       ),
     );
   const bqByStudent = new Map<string, { ela: boolean; math: boolean }>();
@@ -1595,32 +1768,22 @@ router.get("/insights/engagement", async (req, res) => {
   // We parse to int defensively — anything we can't map to 0-12 silently
   // becomes "no filter" rather than crashing the route on a type mismatch
   // or silently returning zero results.
-  const gradeRaw = typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const { gradeInts, gradeLabel: gradeFilter } =
+    parseInsightsGradesParam(req);
 
   // Pull the grade-cohort student id set up front so every per-source
   // query can use the same filter without re-joining studentsTable. When
   // no cohort filter is set (or input was unparseable), leave
   // studentIds = null (full school).
   let studentIds: string[] | null = null;
-  if (gradeInt !== null) {
+  if (gradeInts && gradeInts.length > 0) {
     const rows = await db
       .select({ studentId: studentsTable.studentId })
       .from(studentsTable)
       .where(
         and(
           eq(studentsTable.schoolId, schoolId),
-          eq(studentsTable.grade, gradeInt),
+          inArray(studentsTable.grade, gradeInts),
         ),
       );
     studentIds = rows.map((r) => r.studentId);
@@ -1950,28 +2113,18 @@ router.get("/insights/behavior", async (req, res) => {
 
   // Same defensive grade parsing as /insights/engagement — see that handler
   // for the rationale (students.grade is integer; UI sends "K" as text).
-  const gradeRaw = typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const { gradeInts, gradeLabel: gradeFilter } =
+    parseInsightsGradesParam(req);
 
   let studentIds: string[] | null = null;
-  if (gradeInt !== null) {
+  if (gradeInts && gradeInts.length > 0) {
     const rows = await db
       .select({ studentId: studentsTable.studentId })
       .from(studentsTable)
       .where(
         and(
           eq(studentsTable.schoolId, schoolId),
-          eq(studentsTable.grade, gradeInt),
+          inArray(studentsTable.grade, gradeInts),
         ),
       );
     studentIds = rows.map((r) => r.studentId);
@@ -2265,19 +2418,8 @@ router.get("/insights/academics", async (req, res) => {
   // students.grade is INTEGER; the UI sends "K" for kindergarten and numeric
   // strings 1..12 otherwise. Anything we can't map silently becomes "no
   // filter" rather than crashing the route.
-  const gradeRaw =
-    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const { gradeInts, gradeLabel: gradeFilter } =
+    parseInsightsGradesParam(req);
 
   // Optional cross-cutting filters (teacher/period/ESE/504/tier/BQ).
   // Parsed once and applied right after the grade-narrowed cohort is
@@ -2300,7 +2442,7 @@ router.get("/insights/academics", async (req, res) => {
     .where(
       and(
         eq(studentsTable.schoolId, schoolId),
-        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+        gradeFilterSql(gradeInts),
       ),
     );
 
@@ -2366,6 +2508,11 @@ router.get("/insights/academics", async (req, res) => {
       and(
         eq(studentFastScoresTable.schoolId, schoolId),
         inArray(studentFastScoresTable.studentId, studentIds),
+        // FAST Phase 1: aggregate current SY only.
+        eq(
+          studentFastScoresTable.schoolYear,
+          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+        ),
       ),
     );
 
@@ -2512,11 +2659,11 @@ router.get("/insights/academics", async (req, res) => {
   async function sourceCount(source: string): Promise<number> {
     const [{ c }] = (
       await db.execute(
-        gradeInt !== null
+        studentIds !== null
           ? sql`SELECT COUNT(*)::int AS c FROM assessments
                 WHERE school_id = ${schoolId}
                   AND source = ${source}
-                  AND student_id = ANY(${studentIds})`
+                  AND student_id IN (${sql.join(studentIds.map((x) => sql`${x}`), sql`, `)})`
           : sql`SELECT COUNT(*)::int AS c FROM assessments
                 WHERE school_id = ${schoolId} AND source = ${source}`,
       )
@@ -2642,19 +2789,8 @@ router.get("/insights/academics/band", async (req, res) => {
   }
 
   // Same grade parsing as the parent route.
-  const gradeRaw =
-    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const { gradeInts, gradeLabel: gradeFilter } =
+    parseInsightsGradesParam(req);
 
   const filters = parseInsightsFilters(req);
 
@@ -2669,7 +2805,7 @@ router.get("/insights/academics/band", async (req, res) => {
     .where(
       and(
         eq(studentsTable.schoolId, schoolId),
-        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+        gradeFilterSql(gradeInts),
       ),
     );
 
@@ -2712,6 +2848,11 @@ router.get("/insights/academics/band", async (req, res) => {
         eq(studentFastScoresTable.schoolId, schoolId),
         eq(studentFastScoresTable.subject, subject),
         inArray(studentFastScoresTable.studentId, studentIds),
+        // FAST Phase 1: current SY only.
+        eq(
+          studentFastScoresTable.schoolYear,
+          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+        ),
       ),
     );
 
@@ -2884,12 +3025,105 @@ function classifySubArchetype(rec: TrajectoryStudentRec): string {
 
 // Build the per-cohort trajectory record set. Shared between the summary
 // endpoint and the drill-in endpoint so the two stay in sync.
+// Parse the trajectory subject filter. Accepts either:
+//   ?subjects=ela,math   (preferred, multi-select)
+//   ?subject=ela         (legacy single-select)
+// Returns at least one valid subject; defaults to ["ela"] if none parsed.
+function parseTrajectorySubjects(req: {
+  query: Record<string, unknown>;
+}): ("ela" | "math")[] {
+  const out = new Set<"ela" | "math">();
+  const add = (raw: string) => {
+    const s = raw.trim().toLowerCase();
+    if (s === "ela" || s === "math") out.add(s);
+  };
+  const subjectsRaw =
+    typeof req.query.subjects === "string" ? req.query.subjects : "";
+  if (subjectsRaw) {
+    for (const p of subjectsRaw.split(",")) add(p);
+  } else if (typeof req.query.subject === "string") {
+    add(req.query.subject);
+  }
+  if (out.size === 0) out.add("ela");
+  // Preserve a stable order (ela first, then math) for consistent labels.
+  const ordered: ("ela" | "math")[] = [];
+  if (out.has("ela")) ordered.push("ela");
+  if (out.has("math")) ordered.push("math");
+  return ordered;
+}
+
+// Parse a grade filter from query. Accepts either:
+//   ?grades=3,4,5   (preferred, multi-select)
+//   ?grade=5        (legacy single-select)
+//   ?grade=all      (no filter)
+// Returns null for "no filter" or an array of valid grade ints (K=0, 1..12).
+//
+// Used by every insights route. Trajectory has its own alias kept for
+// readability at call sites.
+export function parseInsightsGradesParam(req: {
+  query: Record<string, unknown>;
+}): { gradeInts: number[] | null; gradeLabel: string | null } {
+  const toInt = (raw: string): number | null => {
+    const s = raw.trim();
+    if (!s) return null;
+    if (s.toUpperCase() === "K") return 0;
+    const n = Number.parseInt(s, 10);
+    if (Number.isInteger(n) && n >= 0 && n <= 12) return n;
+    return null;
+  };
+  const gradesRaw =
+    typeof req.query.grades === "string" ? req.query.grades : "";
+  if (gradesRaw) {
+    const ints: number[] = [];
+    for (const part of gradesRaw.split(",")) {
+      const v = toInt(part);
+      if (v !== null && !ints.includes(v)) ints.push(v);
+    }
+    if (ints.length === 0) return { gradeInts: null, gradeLabel: null };
+    const label =
+      ints.length === 1
+        ? ints[0] === 0
+          ? "K"
+          : String(ints[0])
+        : `${ints.length} grades`;
+    return { gradeInts: ints, gradeLabel: label };
+  }
+  const gradeRaw =
+    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
+  if (!gradeRaw || gradeRaw.toLowerCase() === "all") {
+    return { gradeInts: null, gradeLabel: null };
+  }
+  const v = toInt(gradeRaw);
+  if (v === null) return { gradeInts: null, gradeLabel: null };
+  return { gradeInts: [v], gradeLabel: gradeRaw };
+}
+
+// Back-compat alias: trajectory callers used this name. Keeping it
+// keeps the diff at those sites quiet.
+const parseTrajectoryGradeFilter = parseInsightsGradesParam;
+
+// Build a Drizzle SQL clause that filters students.grade to a (possibly
+// multi-select) cohort. Returns `sql\`true\`` when no grade filter is
+// active so it can be dropped straight into an `and(...)` block.
+function gradeFilterSql(gradeInts: number[] | null) {
+  return gradeInts && gradeInts.length > 0
+    ? inArray(studentsTable.grade, gradeInts)
+    : sql`true`;
+}
+
 async function loadTrajectoryRecs(
   schoolId: number,
   subject: "ela" | "math",
-  gradeInt: number | null,
+  gradeInts: number[] | null,
   filters: ReturnType<typeof parseInsightsFilters>,
 ): Promise<TrajectoryStudentRec[]> {
+  // gradeInts === null  → "all grades"
+  // gradeInts.length === 0 → caller passed grades but none parsed → also all
+  // gradeInts.length >= 1 → restrict to that set
+  const gradeFilterSql =
+    gradeInts && gradeInts.length > 0
+      ? inArray(studentsTable.grade, gradeInts)
+      : sql`true`;
   let studentRows = await db
     .select({
       studentId: studentsTable.studentId,
@@ -2901,7 +3135,7 @@ async function loadTrajectoryRecs(
     .where(
       and(
         eq(studentsTable.schoolId, schoolId),
-        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+        gradeFilterSql,
       ),
     );
 
@@ -2947,6 +3181,11 @@ async function loadTrajectoryRecs(
         eq(studentFastScoresTable.schoolId, schoolId),
         eq(studentFastScoresTable.subject, subject),
         inArray(studentFastScoresTable.studentId, studentIds),
+        // FAST Phase 1: current SY only.
+        eq(
+          studentFastScoresTable.schoolYear,
+          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+        ),
       ),
     );
   // Explicit Map<K, V> typing -- fastRows flows from a Drizzle .select()
@@ -3004,28 +3243,19 @@ router.get("/insights/academics/trajectory", async (req, res) => {
     return;
   }
 
-  const subjectRaw =
-    typeof req.query.subject === "string"
-      ? req.query.subject.toLowerCase()
-      : "";
-  const subject: "ela" | "math" = subjectRaw === "math" ? "math" : "ela";
-
-  const gradeRaw =
-    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const subjects = parseTrajectorySubjects(req);
+  const { gradeInts, gradeLabel } = parseTrajectoryGradeFilter(req);
   const filters = parseInsightsFilters(req);
 
-  const recs = await loadTrajectoryRecs(schoolId, subject, gradeInt, filters);
+  // Multi-subject: concat per-subject record sets so a student tested in
+  // both ELA and Math contributes two rows (one trajectory per subject),
+  // which is the honest unit-of-analysis here.
+  const recsArrays = await Promise.all(
+    subjects.map((s) =>
+      loadTrajectoryRecs(schoolId, s, gradeInts, filters),
+    ),
+  );
+  const recs = recsArrays.flat();
 
   const matrix: Record<TrajectoryBand, Record<TrajectoryBand, number>> = {
     above: { above: 0, below: 0, well: 0, na: 0 },
@@ -3059,8 +3289,10 @@ router.get("/insights/academics/trajectory", async (req, res) => {
   }
 
   res.json({
-    subject,
-    grade: gradeFilter,
+    subject: subjects[0],
+    subjects,
+    grade: gradeLabel,
+    grades: gradeInts,
     total: recs.length,
     bandOrder: TRAJ_BAND_ORDER,
     matrix,
@@ -3088,16 +3320,7 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
     return;
   }
 
-  const subjectRaw =
-    typeof req.query.subject === "string"
-      ? req.query.subject.toLowerCase()
-      : "";
-  const subject: "ela" | "math" | null =
-    subjectRaw === "ela" ? "ela" : subjectRaw === "math" ? "math" : null;
-  if (!subject) {
-    res.status(400).json({ error: "subject (ela|math) required" });
-    return;
-  }
+  const subjects = parseTrajectorySubjects(req);
   const ARCHETYPE_KEYS: TrajectoryArchetype[] = [
     "climbed",
     "stayedHi",
@@ -3120,22 +3343,16 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
       ? req.query.subKey.trim()
       : null;
 
-  const gradeRaw =
-    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const { gradeInts } = parseTrajectoryGradeFilter(req);
   const filters = parseInsightsFilters(req);
 
-  const recs = await loadTrajectoryRecs(schoolId, subject, gradeInt, filters);
+  // Tag each rec with its subject so the multi-subject drill-in can
+  // tell the user *which* subject a row came from when both are on.
+  const tagged: { subject: "ela" | "math"; rec: TrajectoryStudentRec }[] = [];
+  for (const subj of subjects) {
+    const sRecs = await loadTrajectoryRecs(schoolId, subj, gradeInts, filters);
+    for (const r of sRecs) tagged.push({ subject: subj, rec: r });
+  }
 
   type Hit = {
     studentId: string;
@@ -3143,32 +3360,205 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
     grade: number | null;
     pm1: number | null;
     pm3: number | null;
+    subject?: "ela" | "math";
+    programPill?: "ESE" | "504" | null;
+    mtssPill?: "Tier 2+" | "Tier 3" | null;
+    bqEla?: boolean;
+    bqMath?: boolean;
   };
   const hits: Hit[] = [];
-  for (const r of recs) {
+  for (const { subject: subj, rec: r } of tagged) {
     if (classifyArchetype(r) !== wantArchetype) continue;
     if (subKey && classifySubArchetype(r) !== subKey) continue;
     hits.push({
       studentId: r.studentId,
-      studentName: r.studentName,
+      studentName:
+        subjects.length > 1
+          ? `${r.studentName} (${subj.toUpperCase()})`
+          : r.studentName,
       grade: r.grade,
       pm1: r.pm1,
       pm3: r.pm3,
+      subject: subj,
     });
   }
   hits.sort((a, b) => a.studentName.localeCompare(b.studentName));
 
   const CAP = 200;
   const truncated = hits.length > CAP;
+  const visible = truncated ? hits.slice(0, CAP) : hits;
+
+  // Decorate with the four pill flags (only for the visible slice — we
+  // never show pills for rows we don't render). Two cheap queries scoped
+  // to the trimmed studentId set.
+  const visibleIds = Array.from(new Set(visible.map((h) => h.studentId)));
+  if (visibleIds.length > 0) {
+    type FlagRow = { student_id: string; ese: boolean; is_504: boolean };
+    const flagRes = await db.execute<FlagRow>(sql`
+      SELECT student_id, ese, is_504
+      FROM students
+      WHERE school_id = ${schoolId} AND ${inArray(studentsTable.studentId, visibleIds)}
+    `);
+    const flagMap = new Map<string, FlagRow>();
+    for (const r of flagRes.rows) flagMap.set(r.student_id, r);
+
+    type TierRow = { student_id: string; tier: number };
+    const tierRes = await db.execute<TierRow>(sql`
+      SELECT student_id, MAX(tier)::int AS tier
+      FROM student_mtss_plans
+      WHERE school_id = ${schoolId}
+        AND closed_at IS NULL
+        AND ${inArray(studentMtssPlansTable.studentId, visibleIds)}
+      GROUP BY student_id
+    `);
+    const tierMap = new Map<string, number>();
+    for (const r of tierRes.rows) tierMap.set(r.student_id, Number(r.tier));
+
+    type BqRow = { student_id: string; subject: string; prior_year_bq: boolean };
+    const bqRes = await db.execute<BqRow>(sql`
+      SELECT student_id, subject, prior_year_bq
+      FROM student_fast_scores
+      WHERE school_id = ${schoolId}
+        AND subject IN ('ela','math')
+        AND prior_year_bq = true
+        AND ${inArray(studentFastScoresTable.studentId, visibleIds)}
+    `);
+    const bqEla = new Set<string>();
+    const bqMath = new Set<string>();
+    for (const r of bqRes.rows) {
+      if (r.subject === "ela") bqEla.add(r.student_id);
+      else if (r.subject === "math") bqMath.add(r.student_id);
+    }
+
+    for (const h of visible) {
+      const f = flagMap.get(h.studentId);
+      h.programPill = f?.ese ? "ESE" : f?.is_504 ? "504" : null;
+      const t = tierMap.get(h.studentId);
+      h.mtssPill = t === 3 ? "Tier 3" : t === 2 ? "Tier 2+" : null;
+      h.bqEla = bqEla.has(h.studentId);
+      h.bqMath = bqMath.has(h.studentId);
+    }
+  }
+
   res.json({
-    subject,
+    subject: subjects[0],
+    subjects,
     archetype: wantArchetype,
     subKey,
-    students: truncated ? hits.slice(0, CAP) : hits,
+    students: visible,
     truncated,
     total: hits.length,
   });
 });
+
+// ---------------------------------------------------------------------------
+// GET /insights/academics/trajectory/export.csv
+//
+// Per-student CSV export of the trajectory dataset honoring the same
+// filters (subject, grades, insights filters) as the summary endpoint.
+// One row per student with their FAST PMs, bands, archetype, and
+// sub-archetype so coordinators can pull the data into Excel/Sheets.
+// ---------------------------------------------------------------------------
+router.get(
+  "/insights/academics/trajectory/export.csv",
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (schoolId == null) return;
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!isCoreTeam(staff)) {
+      res
+        .status(403)
+        .json({ error: "Academics trajectory is core-team only" });
+      return;
+    }
+
+    const subjects = parseTrajectorySubjects(req);
+    const { gradeInts, gradeLabel } = parseTrajectoryGradeFilter(req);
+    const filters = parseInsightsFilters(req);
+    const tagged: { subject: "ela" | "math"; rec: TrajectoryStudentRec }[] = [];
+    for (const subj of subjects) {
+      const sRecs = await loadTrajectoryRecs(
+        schoolId,
+        subj,
+        gradeInts,
+        filters,
+      );
+      for (const r of sRecs) tagged.push({ subject: subj, rec: r });
+    }
+
+    const ARCHETYPE_LABEL: Record<TrajectoryArchetype, string> = {
+      climbed: "Climbing",
+      stayedHi: "Soaring",
+      slipped: "Sliding",
+      stuck: "Plateauing",
+      stayedLo: "Stuck-Low",
+      untested: "New Data",
+    };
+    const BAND_LABEL: Record<TrajectoryBand, string> = {
+      above: "Above",
+      below: "Below",
+      well: "Well Below",
+      na: "N/A",
+    };
+
+    // Escape per RFC 4180: wrap in quotes if value contains ", , or \n.
+    const esc = (v: string | number | null | undefined): string => {
+      if (v == null) return "";
+      const s = String(v);
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = [
+      "student_id",
+      "student_name",
+      "grade",
+      "subject",
+      "pm1",
+      "pm2",
+      "pm3",
+      "pm1_band",
+      "pm3_band",
+      "archetype",
+      "sub_archetype",
+    ];
+    const sorted = [...tagged].sort((a, b) =>
+      a.rec.studentName.localeCompare(b.rec.studentName),
+    );
+    const lines: string[] = [header.join(",")];
+    for (const { subject: subj, rec: r } of sorted) {
+      lines.push(
+        [
+          esc(r.studentId),
+          esc(r.studentName),
+          esc(r.grade === 0 ? "K" : r.grade),
+          esc(subj),
+          esc(r.pm1),
+          esc(r.pm2),
+          esc(r.pm3),
+          esc(BAND_LABEL[r.pm1Band]),
+          esc(BAND_LABEL[r.pm3Band]),
+          esc(ARCHETYPE_LABEL[classifyArchetype(r)]),
+          esc(classifySubArchetype(r)),
+        ].join(","),
+      );
+    }
+    const csv = lines.join("\r\n") + "\r\n";
+
+    const today = new Date().toISOString().slice(0, 10);
+    const gradeSlug = gradeLabel
+      ? gradeLabel.replace(/\s+/g, "")
+      : "all-grades";
+    const subjectSlug = subjects.join("-");
+    const filename = `trajectory_${subjectSlug}_${gradeSlug}_${today}.csv`;
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${filename}"`,
+    );
+    res.send(csv);
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /insights/sebsel — Social-Emotional / Behavioral whole-school view.
@@ -3202,19 +3592,8 @@ router.get("/insights/sebsel", async (req, res) => {
   // Same defensive grade parsing as the prior three dashboards. students.grade
   // is INTEGER; UI sends "K" for kindergarten and numeric strings 1..12.
   // Anything we can't map silently becomes "no filter" rather than crashing.
-  const gradeRaw =
-    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const { gradeInts, gradeLabel: gradeFilter } =
+    parseInsightsGradesParam(req);
 
   // Build the cohort: every student at the school, optionally narrowed
   // to one grade.
@@ -3232,7 +3611,7 @@ router.get("/insights/sebsel", async (req, res) => {
     .where(
       and(
         eq(studentsTable.schoolId, schoolId),
-        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+        gradeFilterSql(gradeInts),
       ),
     );
 
@@ -3633,19 +4012,8 @@ router.get("/insights/equity", async (req, res) => {
   }
 
   // Same defensive grade parsing pattern as the prior four dashboards.
-  const gradeRaw =
-    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const { gradeInts, gradeLabel: gradeFilter } =
+    parseInsightsGradesParam(req);
 
   // Cohort + demographic flags.
   let studentRows = await db
@@ -3663,7 +4031,7 @@ router.get("/insights/equity", async (req, res) => {
     .where(
       and(
         eq(studentsTable.schoolId, schoolId),
-        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+        gradeFilterSql(gradeInts),
       ),
     );
 
@@ -4250,19 +4618,12 @@ router.get("/insights/early-warning", async (req, res) => {
   }
 
   // Defensive grade parsing — same pattern as equity / academics / behavior.
-  const gradeRaw =
-    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const { gradeInts, gradeLabel: gradeFilter } =
+    parseInsightsGradesParam(req);
+  // Cross-cutting filter parsing (teacher/period/ELL/IEP/504/tier/BQ).
+  // Applied via narrowCohort() once the grade cohort is built so every
+  // downstream count and top-N list inherits the same denominator.
+  const filters = parseInsightsFilters(req);
 
   type Band = "low" | "watch" | "moderate" | "high" | "critical";
   const bandOf = (score: number): Band => {
@@ -4310,7 +4671,7 @@ router.get("/insights/early-warning", async (req, res) => {
 
   // Cohort. Pull names/grade so the leaderboard can render rich rows
   // without a second query.
-  const studentRows = await db
+  let studentRows = await db
     .select({
       studentId: studentsTable.studentId,
       firstName: studentsTable.firstName,
@@ -4321,7 +4682,7 @@ router.get("/insights/early-warning", async (req, res) => {
     .where(
       and(
         eq(studentsTable.schoolId, schoolId),
-        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+        gradeFilterSql(gradeInts),
       ),
     );
 
@@ -4330,7 +4691,23 @@ router.get("/insights/early-warning", async (req, res) => {
     return;
   }
 
-  const studentIds = studentRows.map((r) => r.studentId);
+  // Apply cross-cutting filters (teacher/period/ELL/IEP/504/tier/BQ) by
+  // narrowing the grade cohort to the filter-matching subset, then
+  // dropping any studentRows whose id no longer survives. Everything
+  // downstream — counts, top-risk, source sums — keys off studentIds.
+  const narrowed = await narrowCohort(
+    schoolId,
+    studentRows.map((r) => r.studentId),
+    filters,
+  );
+  // baseIds was non-null, so narrowCohort always returns string[] here.
+  const studentIds: string[] = narrowed.ids ?? [];
+  if (studentIds.length === 0) {
+    res.json(emptyEnvelope(0));
+    return;
+  }
+  const allowed = new Set(studentIds);
+  studentRows = studentRows.filter((r) => allowed.has(r.studentId));
 
   const now = Date.now();
   const windowDays = 30;
@@ -4680,20 +5057,8 @@ router.get("/insights/attendance", async (req, res) => {
   const toDateOnly = toIso.slice(0, 10);
 
   // Same defensive grade parsing as /insights/engagement.
-  const gradeRaw =
-    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
-
+  const { gradeInts, gradeLabel: gradeFilter } =
+    parseInsightsGradesParam(req);
   // Empty cohort response shape — used by both the grade fast-path and
   // the cross-cutting filter narrow.
   function emptyResponse() {
@@ -4725,14 +5090,14 @@ router.get("/insights/attendance", async (req, res) => {
   }
 
   let studentIds: string[] | null = null;
-  if (gradeInt !== null) {
+  if (gradeInts && gradeInts.length > 0) {
     const rows = await db
       .select({ studentId: studentsTable.studentId })
       .from(studentsTable)
       .where(
         and(
           eq(studentsTable.schoolId, schoolId),
-          eq(studentsTable.grade, gradeInt),
+          inArray(studentsTable.grade, gradeInts),
         ),
       );
     studentIds = rows.map((r) => r.studentId);

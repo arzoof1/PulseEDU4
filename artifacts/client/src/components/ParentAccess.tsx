@@ -18,6 +18,7 @@ interface InviteRow {
   expiresAt: string;
   acceptedAt: string | null;
   acceptedParentName: string | null;
+  acceptedLastLoginAt: string | null;
   resendCount: number;
   lastResentAt: string | null;
 }
@@ -26,6 +27,7 @@ interface StudentRow {
   student: {
     id: number;
     studentId: string;
+    localSisId: string | null;
     firstName: string;
     lastName: string;
     grade: string | null;
@@ -567,7 +569,11 @@ function StudentInviteRow({
         <div>
           <div style={{ fontWeight: 600 }}>{fullName}</div>
           <div style={{ fontSize: 12, color: "var(--text-subtle)" }}>
-            ID {student.studentId}
+            {/* Prefer the local SIS ID (Skyward / Focus) since that's
+                what the front office uses. Fall back to the FLEID
+                (canonical `student_id`) when the local ID hasn't
+                been imported for this student. */}
+            ID {student.localSisId ?? student.studentId}
             {student.grade ? ` · Grade ${student.grade}` : ""}
             {student.parentName ? ` · Skyward parent: ${student.parentName}` : ""}
           </div>
@@ -614,7 +620,7 @@ function StudentInviteRow({
               <StatusPill status={inv.status} />
               <span style={{ fontSize: 11, color: "var(--text-subtle)" }}>
                 {inv.status === "accepted"
-                  ? `Accepted ${fmtDate(inv.acceptedAt)}${inv.acceptedParentName ? ` · ${inv.acceptedParentName}` : ""}`
+                  ? `Accepted ${fmtDate(inv.acceptedAt)}${inv.acceptedParentName ? ` · ${inv.acceptedParentName}` : ""}${inv.acceptedLastLoginAt ? ` · last sign-in ${fmtDate(inv.acceptedLastLoginAt)}` : " · never signed in"}`
                   : inv.status === "pending"
                     ? `Sent ${fmtDate(inv.sentAt)} · expires ${fmtDate(inv.expiresAt)}${inv.resendCount ? ` · resent ${inv.resendCount}×` : ""}`
                     : inv.status === "expired"

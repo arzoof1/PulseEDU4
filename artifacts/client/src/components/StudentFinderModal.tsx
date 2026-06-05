@@ -10,9 +10,28 @@ import { authFetch } from "../lib/authToken";
 
 interface SearchHit {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: number;
+  // Current-period enrichment (server resolves the bell-schedule period
+  // active right now, then joins each hit's section roster against it).
+  // Null when no default bell schedule is configured or the lookup runs
+  // outside the school day.
+  currentPeriodName?: string | null;
+  currentRoom?: string | null;
+  currentTeacherName?: string | null;
+  currentWorkExtension?: string | null;
+}
+
+interface StaffHit {
+  id: number;
+  displayName: string;
+  email: string;
+  role: string;
+  defaultRoom: string | null;
+  workExtension: string | null;
+  cellPhone: string | null;
 }
 
 interface PeriodClass {
@@ -105,8 +124,10 @@ export function StudentFinderModal({
   // search heuristics on a name we already resolved.
   initialStudentId?: string;
 }) {
+  const [mode, setMode] = useState<"students" | "staff">("students");
   const [query, setQuery] = useState(initialQuery);
   const [hits, setHits] = useState<SearchHit[]>([]);
+  const [staffHits, setStaffHits] = useState<StaffHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<string | null>(
     initialStudentId ?? null,
@@ -131,35 +152,54 @@ export function StudentFinderModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // Debounced typeahead.
+  // Debounced typeahead. Mode flips between student and staff search;
+  // the two share the same input + debounce so swapping tabs feels
+  // instantaneous rather than re-firing a request.
   useEffect(() => {
     if (selected) return; // pause search once a student is loaded
     const q = query.trim();
     if (q.length < 1) {
       setHits([]);
+      setStaffHits([]);
       return;
     }
     setSearching(true);
     const handle = window.setTimeout(async () => {
       try {
-        const r = await authFetch(
-          `/api/student-finder/search?q=${encodeURIComponent(q)}`,
-        );
-        if (!r.ok) {
+        if (mode === "students") {
+          const r = await authFetch(
+            `/api/student-finder/search?q=${encodeURIComponent(q)}`,
+          );
+          if (!r.ok) {
+            setHits([]);
+            setSearching(false);
+            return;
+          }
+          const data = (await r.json()) as { students: SearchHit[] };
+          setHits(data.students ?? []);
+          setStaffHits([]);
+        } else {
+          const r = await authFetch(
+            `/api/student-finder/staff-search?q=${encodeURIComponent(q)}`,
+          );
+          if (!r.ok) {
+            setStaffHits([]);
+            setSearching(false);
+            return;
+          }
+          const data = (await r.json()) as { staff: StaffHit[] };
+          setStaffHits(data.staff ?? []);
           setHits([]);
-          setSearching(false);
-          return;
         }
-        const data = (await r.json()) as { students: SearchHit[] };
-        setHits(data.students ?? []);
       } catch {
         setHits([]);
+        setStaffHits([]);
       } finally {
         setSearching(false);
       }
     }, 180);
     return () => window.clearTimeout(handle);
-  }, [query, selected]);
+  }, [query, selected, mode]);
 
   // Load schedule when a student is picked.
   useEffect(() => {
@@ -305,12 +345,63 @@ export function StudentFinderModal({
         {/* Search OR schedule */}
         {showingResults ? (
           <div style={{ padding: "12px 18px 18px", overflowY: "auto" }}>
+            {/* Mode tabs — students vs staff. Staff mode is for "what's
+                Ms. Smith's room / extension?" lookups; it does not load
+                a schedule, just shows the directory row inline. */}
+            <div
+              role="tablist"
+              aria-label="Finder mode"
+              style={{
+                display: "flex",
+                gap: 6,
+                marginBottom: 10,
+                borderBottom: "1px solid var(--border)",
+              }}
+            >
+              {(["students", "staff"] as const).map((m) => {
+                const active = mode === m;
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => {
+                      setMode(m);
+                      // Clear the other mode's stale results so we don't
+                      // briefly render student rows under the Staff tab
+                      // (or vice-versa) until the new debounced search
+                      // resolves.
+                      setHits([]);
+                      setStaffHits([]);
+                    }}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      borderBottom: `2px solid ${active ? "#0ea5e9" : "transparent"}`,
+                      color: active ? "#0c4a6e" : "var(--muted, #64748b)",
+                      fontWeight: active ? 700 : 500,
+                      padding: "6px 10px",
+                      cursor: "pointer",
+                      fontSize: 13,
+                      marginBottom: -1,
+                    }}
+                  >
+                    {m === "students" ? "Students" : "Staff"}
+                  </button>
+                );
+              })}
+            </div>
             <input
               ref={inputRef}
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search by name or student ID…"
+              placeholder={
+                mode === "students"
+                  ? "Search by name or student ID…"
+                  : "Search staff by name or email…"
+              }
               style={{
                 width: "100%",
                 padding: "10px 12px",
@@ -331,12 +422,18 @@ export function StudentFinderModal({
               {searching
                 ? "Searching…"
                 : query.trim().length === 0
-                  ? "Type a name or student ID to look up where they are right now."
-                  : hits.length === 0
-                    ? "No students match that search."
-                    : `${hits.length} match${hits.length === 1 ? "" : "es"}`}
+                  ? mode === "students"
+                    ? "Type a name or student ID to look up where they are right now."
+                    : "Type a staff name or email to see room and extension."
+                  : mode === "students"
+                    ? hits.length === 0
+                      ? "No students match that search."
+                      : `${hits.length} match${hits.length === 1 ? "" : "es"}`
+                    : staffHits.length === 0
+                      ? "No staff match that search."
+                      : `${staffHits.length} match${staffHits.length === 1 ? "" : "es"}`}
             </div>
-            {hits.length > 0 && (
+            {mode === "staff" && staffHits.length > 0 && (
               <ul
                 style={{
                   listStyle: "none",
@@ -347,51 +444,167 @@ export function StudentFinderModal({
                   overflow: "hidden",
                 }}
               >
-                {hits.map((h) => (
-                  <li key={h.studentId}>
-                    <button
-                      type="button"
-                      onClick={() => setSelected(h.studentId)}
+                {staffHits.map((s) => (
+                  <li
+                    key={s.id}
+                    style={{
+                      borderBottom: "1px solid var(--border)",
+                      padding: "10px 12px",
+                      background: "white",
+                      fontSize: 14,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 4,
+                    }}
+                  >
+                    <div
                       style={{
-                        width: "100%",
-                        textAlign: "left",
-                        background: "white",
-                        border: "none",
-                        borderBottom: "1px solid var(--border)",
-                        padding: "10px 12px",
-                        cursor: "pointer",
                         display: "flex",
-                        gap: 12,
+                        gap: 10,
                         alignItems: "baseline",
-                        fontSize: 14,
+                        flexWrap: "wrap",
                       }}
-                      onMouseEnter={(e) =>
-                        (e.currentTarget.style.background = "#f8fafc")
-                      }
-                      onMouseLeave={(e) =>
-                        (e.currentTarget.style.background = "white")
-                      }
                     >
-                      <strong>
-                        {h.lastName}, {h.firstName}
-                      </strong>
-                      <span style={{ color: "var(--muted, #64748b)" }}>
-                        Grade {h.grade}
-                      </span>
+                      <strong>{s.displayName}</strong>
                       <span
                         style={{
                           color: "var(--muted, #64748b)",
-                          marginLeft: "auto",
-                          fontFamily:
-                            "ui-monospace, SFMono-Regular, monospace",
                           fontSize: 12,
                         }}
                       >
-                        {h.studentId}
+                        {s.role}
                       </span>
-                    </button>
+                      <span
+                        style={{
+                          marginLeft: "auto",
+                          color: "var(--muted, #64748b)",
+                          fontSize: 12,
+                        }}
+                      >
+                        {s.email}
+                      </span>
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 14,
+                        flexWrap: "wrap",
+                        fontSize: 13,
+                        color: "#334155",
+                      }}
+                    >
+                      <span>🚪 Room {s.defaultRoom ?? "—"}</span>
+                      <span>📞 Ext {s.workExtension ?? "—"}</span>
+                      {s.cellPhone && <span>📱 {s.cellPhone}</span>}
+                    </div>
                   </li>
                 ))}
+              </ul>
+            )}
+            {mode === "students" && hits.length > 0 && (
+              <ul
+                style={{
+                  listStyle: "none",
+                  padding: 0,
+                  margin: "10px 0 0",
+                  border: "1px solid var(--border)",
+                  borderRadius: 8,
+                  overflow: "hidden",
+                }}
+              >
+                {hits.map((h) => {
+                  const hasLocation =
+                    h.currentRoom ||
+                    h.currentWorkExtension ||
+                    h.currentTeacherName;
+                  return (
+                    <li key={h.studentId}>
+                      <button
+                        type="button"
+                        onClick={() => setSelected(h.studentId)}
+                        style={{
+                          width: "100%",
+                          textAlign: "left",
+                          background: "white",
+                          border: "none",
+                          borderBottom: "1px solid var(--border)",
+                          padding: "10px 12px",
+                          cursor: "pointer",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 4,
+                          fontSize: 14,
+                        }}
+                        onMouseEnter={(e) =>
+                          (e.currentTarget.style.background = "#f8fafc")
+                        }
+                        onMouseLeave={(e) =>
+                          (e.currentTarget.style.background = "white")
+                        }
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 12,
+                            alignItems: "baseline",
+                          }}
+                        >
+                          <strong>
+                            {h.lastName}, {h.firstName}
+                          </strong>
+                          <span style={{ color: "var(--muted, #64748b)" }}>
+                            Grade {h.grade}
+                          </span>
+                          <span
+                            style={{
+                              color: "var(--muted, #64748b)",
+                              marginLeft: "auto",
+                              fontFamily:
+                                "ui-monospace, SFMono-Regular, monospace",
+                              fontSize: 12,
+                            }}
+                          >
+                            {h.localSisId ?? "—"}
+                          </span>
+                        </div>
+                        {hasLocation && (
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: 12,
+                              flexWrap: "wrap",
+                              fontSize: 12,
+                              color: "#334155",
+                            }}
+                          >
+                            {h.currentPeriodName && (
+                              <span
+                                style={{
+                                  background: "var(--success-soft, #dcfce7)",
+                                  color: "#065f46",
+                                  fontWeight: 600,
+                                  padding: "1px 6px",
+                                  borderRadius: 4,
+                                }}
+                              >
+                                NOW · {h.currentPeriodName}
+                              </span>
+                            )}
+                            <span>🚪 Room {h.currentRoom ?? "—"}</span>
+                            <span>
+                              📞 Ext {h.currentWorkExtension ?? "—"}
+                            </span>
+                            {h.currentTeacherName && (
+                              <span style={{ color: "var(--muted, #64748b)" }}>
+                                {h.currentTeacherName}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
@@ -506,6 +719,7 @@ export function StudentFinderModal({
                       <th>Subject</th>
                       <th>Teacher</th>
                       <th style={{ width: "12%" }}>Room</th>
+                      <th style={{ width: "10%" }}>Ext</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -548,7 +762,7 @@ export function StudentFinderModal({
                                 ? `${fmtTime(p.startTime)} – ${fmtTime(p.endTime)}`
                                 : "—"}
                             </td>
-                            <td colSpan={3} style={{ fontStyle: "italic" }}>
+                            <td colSpan={4} style={{ fontStyle: "italic" }}>
                               No scheduled class
                             </td>
                           </tr>
@@ -592,12 +806,23 @@ export function StudentFinderModal({
                           <td>{c.courseName}</td>
                           <td>
                             {c.teacherName}
+                            {/* Cell phone stays inline under the name; the
+                                work extension graduated to its own column
+                                so users can scan it without hunting. */}
                             <PhoneLine
-                              workExtension={c.workExtension}
+                              workExtension={null}
                               cellPhone={c.cellPhone}
                             />
                           </td>
                           <td>{c.room ?? "—"}</td>
+                          <td
+                            style={{
+                              fontFamily:
+                                "ui-monospace, SFMono-Regular, monospace",
+                            }}
+                          >
+                            {c.workExtension ?? "—"}
+                          </td>
                         </tr>
                       ));
                     })}

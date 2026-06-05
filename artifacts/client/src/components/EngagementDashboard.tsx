@@ -22,11 +22,17 @@ import {
 } from "recharts";
 import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, howtoListStyle } from "./HowToUseHelp";
-import InsightsFilterBar, {
+import {
   EMPTY_FILTERS,
   filtersToQuery,
   type InsightsFilterValue,
 } from "./InsightsFilterBar";
+import InsightsPicker, {
+  csvFilename,
+  downloadCsv,
+  extractTopLists,
+  topListsToCsv,
+} from "./InsightsPicker";
 
 type WindowKey = "7" | "15" | "30" | "custom";
 
@@ -70,21 +76,11 @@ interface Props {
   onOpenProfile: (studentId: string) => void;
 }
 
-// Same grade options the watchlist uses, kept in sync visually.
-const GRADE_OPTIONS = [
-  { value: "", label: "All grades" },
-  { value: "K", label: "K" },
-  ...Array.from({ length: 12 }, (_, i) => ({
-    value: String(i + 1),
-    label: `Grade ${i + 1}`,
-  })),
-];
-
 export default function EngagementDashboard({ onOpenProfile }: Props) {
   const [windowKey, setWindowKey] = useState<WindowKey>("30");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
-  const [grade, setGrade] = useState("");
+  const [selectedGrades, setSelectedGrades] = useState<string[]>([]);
   const [filters, setFilters] = useState<InsightsFilterValue>(EMPTY_FILTERS);
   const [data, setData] = useState<EngagementResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -100,10 +96,10 @@ export default function EngagementDashboard({ onOpenProfile }: Props) {
     } else {
       p.set("window", windowKey);
     }
-    if (grade) p.set("grade", grade);
+    if (selectedGrades.length > 0) p.set("grades", selectedGrades.join(","));
     for (const [k, v] of filtersToQuery(filters)) p.set(k, v);
     return p.toString();
-  }, [windowKey, customFrom, customTo, grade, filters]);
+  }, [windowKey, customFrom, customTo, selectedGrades, filters]);
 
   useEffect(() => {
     if (queryString === null) return; // custom range incomplete
@@ -151,19 +147,30 @@ export default function EngagementDashboard({ onOpenProfile }: Props) {
             students out of instruction.
           </p>
         </div>
-        <Filters
+        <WindowChips
           windowKey={windowKey}
           setWindowKey={setWindowKey}
           customFrom={customFrom}
           setCustomFrom={setCustomFrom}
           customTo={customTo}
           setCustomTo={setCustomTo}
-          grade={grade}
-          setGrade={setGrade}
         />
       </div>
 
-      <InsightsFilterBar value={filters} onChange={setFilters} />
+      <InsightsPicker
+        grades={selectedGrades}
+        onGradesChange={setSelectedGrades}
+        filters={filters}
+        onFiltersChange={setFilters}
+        onDownloadCsv={() => {
+          if (!data) return;
+          downloadCsv(
+            csvFilename("engagement", selectedGrades),
+            topListsToCsv(extractTopLists(data)),
+          );
+        }}
+        csvDisabled={!data}
+      />
 
       <HowToUseHelp title="How to use Engagement">
         <HowToSection title="What this dashboard is">
@@ -295,15 +302,13 @@ export default function EngagementDashboard({ onOpenProfile }: Props) {
 
 // ---------- Filter strip ----------------------------------------------------
 
-function Filters({
+function WindowChips({
   windowKey,
   setWindowKey,
   customFrom,
   setCustomFrom,
   customTo,
   setCustomTo,
-  grade,
-  setGrade,
 }: {
   windowKey: WindowKey;
   setWindowKey: (w: WindowKey) => void;
@@ -311,22 +316,9 @@ function Filters({
   setCustomFrom: (s: string) => void;
   customTo: string;
   setCustomTo: (s: string) => void;
-  grade: string;
-  setGrade: (g: string) => void;
 }) {
   return (
     <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
-      <select
-        value={grade}
-        onChange={(e) => setGrade(e.target.value)}
-        style={selectStyle}
-      >
-        {GRADE_OPTIONS.map((g) => (
-          <option key={g.value} value={g.value}>
-            {g.label}
-          </option>
-        ))}
-      </select>
       {(["7", "15", "30", "custom"] as WindowKey[]).map((w) => (
         <button
           key={w}

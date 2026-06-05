@@ -40,6 +40,37 @@ export const studentsTable = pgTable("students", {
   // imports without these columns remain valid.
   race: text("race"),
   ethnicity: text("ethnicity"),
+  // ----- Dismissal mode (Parent Pick-Up Module) ---------------------------
+  // How this student leaves at end-of-day. Drives which dismissal flow
+  // they appear in (curb queue, walker gate, bus list) and the
+  // end-of-day "still on campus" reconciliation tile.
+  // Values: 'car_rider' | 'walker' | 'bus' | 'aftercare' | 'parent_pickup_only'
+  dismissalMode: text("dismissal_mode").notNull().default("car_rider"),
+  // ----- Student photo (single-entry: upload OR camera capture) ----------
+  // Object-storage key under /api/storage/objects/* — bound to the student's
+  // school via bindObjectToSchool, ACL'd staff-only (no parent-portal read).
+  // Nullable: schools without yearbook ingest yet show initials bubbles.
+  photoObjectKey: text("photo_object_key"),
+  // Privacy/consent toggle — when false, all rendering paths show initials
+  // regardless of whether bytes are on disk. Default true matches FERPA
+  // "directory information" treatment; an admin can flip to false on the
+  // student profile page. Bytes are NOT deleted on consent revocation
+  // (schools sometimes flip it back), only render-gated.
+  photoConsent: boolean("photo_consent").notNull().default(true),
+  // District-issued local SIS number (FAST file "Local ID" column / Skyward /
+  // Focus). Nullable because the canonical student_id is the FLEID — this is
+  // just a friendlier display string ("12345") that some district reports
+  // and parent letters reference. Not unique (different districts can
+  // reuse numbers); not indexed unless a future search surface needs it.
+  localSisId: text("local_sis_id"),
+  // When TRUE, this student's benchmark_reteach_log entries are
+  // exposed (read-only) to the linked parent portal account. Default
+  // FALSE because reteach logs are teacher working data — admins
+  // opt-in per student. Schema-level toggle; parent portal
+  // rendering surfaces it in a later phase.
+  reteachLogsParentVisible: boolean("reteach_logs_parent_visible")
+    .notNull()
+    .default(false),
 });
 
 export type StudentRow = typeof studentsTable.$inferSelect;

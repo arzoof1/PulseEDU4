@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { authHeader } from "../lib/authToken";
 
 // =============================================================================
 // usePolling — small wrapper around fetch() for kiosk/signage screens.
@@ -38,7 +39,20 @@ export function usePolling<T>(
     const ctrl = new AbortController();
     inFlight.current = ctrl;
     try {
-      const res = await fetch(url, { signal: ctrl.signal });
+      // Send BOTH the session cookie AND the bearer token if the staff
+      // app has one in sessionStorage. The Replit preview iframe is
+      // cross-origin, so SameSite=Lax cookies don't make it through —
+      // the bearer header is what actually authenticates session-mode
+      // embeds (e.g. the in-app House Rankings page that drops
+      // ?schoolId= and relies on req.schoolId from the signed-in
+      // staffer). Public TV/kiosk usage has no token in sessionStorage,
+      // so authHeader() returns {} and the call still works via the
+      // ?schoolId=N query param.
+      const res = await fetch(url, {
+        signal: ctrl.signal,
+        credentials: "include",
+        headers: authHeader(),
+      });
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }

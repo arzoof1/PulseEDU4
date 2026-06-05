@@ -14,6 +14,7 @@ type SectionKey =
   | "showStaffNotes"
   | "showIss"
   | "showMtss"
+  | "showReteach"
   | "allowWeeklyEmail";
 
 type Settings = Partial<Record<SectionKey, boolean>> & {
@@ -94,6 +95,13 @@ const SECTIONS: SectionDef[] = [
     label: "MTSS plans",
     description:
       "Active MTSS plan tier, goals, and progress notes. Sensitive — off by default.",
+    sensitive: true,
+  },
+  {
+    key: "showReteach",
+    label: "Extra Support — Focused Reteach",
+    description:
+      "Per-benchmark count of 1:1 and small-group reteach moments logged this school year. Teacher notes and strategy are NEVER surfaced — counts + benchmark codes only. Also requires a per-student opt-in on each student's profile. Sensitive — off by default.",
     sensitive: true,
   },
   {

@@ -15,6 +15,10 @@ import {
   sendParentInviteEmail,
 } from "../lib/parentInviteEmail.js";
 import { logger } from "../lib/logger.js";
+import {
+  checkParentAccountQuota,
+  enforceParentAccountQuota,
+} from "../lib/featureLicensing.js";
 
 const router: IRouter = Router();
 
@@ -92,6 +96,7 @@ router.get("/admin/parent-invites", async (req, res) => {
     .select({
       id: studentsTable.id,
       studentId: studentsTable.studentId,
+      localSisId: studentsTable.localSisId,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
       grade: studentsTable.grade,
@@ -113,6 +118,7 @@ router.get("/admin/parent-invites", async (req, res) => {
     resendCount: number;
     lastResentAt: Date | null;
     acceptedParentName: string | null;
+    acceptedLastLoginAt: Date | null;
   };
   // Return ALL invites per student (not just latest) so the admin UI can
   // show every email a student has been invited under — supports the
@@ -132,6 +138,7 @@ router.get("/admin/parent-invites", async (req, res) => {
         resendCount: parentInvitesTable.resendCount,
         lastResentAt: parentInvitesTable.lastResentAt,
         acceptedParentName: parentsTable.displayName,
+        acceptedLastLoginAt: parentsTable.lastLoginAt,
       })
       .from(parentInvitesTable)
       .leftJoin(
@@ -167,6 +174,7 @@ router.get("/admin/parent-invites", async (req, res) => {
           expiresAt: inv.expiresAt,
           acceptedAt: inv.acceptedAt,
           acceptedParentName: inv.acceptedParentName,
+          acceptedLastLoginAt: inv.acceptedLastLoginAt,
           resendCount: inv.resendCount,
           lastResentAt: inv.lastResentAt,
         };
@@ -187,6 +195,11 @@ router.get("/admin/parent-invites", async (req, res) => {
         student: {
           id: s.id,
           studentId: s.studentId,
+          // Local SIS ID (Skyward / Focus) — what the front office
+          // actually uses day-to-day. Surfaced alongside the FLEID
+          // so the Parent Access page can show the more familiar
+          // number; falls back to FLEID when this is null.
+          localSisId: s.localSisId,
           firstName: s.firstName,
           lastName: s.lastName,
           grade: s.grade,
@@ -233,6 +246,12 @@ router.post("/admin/parent-invites/send-one", async (req, res) => {
     return;
   }
   const email = body.email.trim().toLowerCase();
+
+  // Phase 2 licensing — refuse if this would push the school over its
+  // maxParentAccounts quota. Checked BEFORE the dup-invite guard so a
+  // quota-blocked tenant gets the right error message instead of a
+  // misleading 409 about an existing invite.
+  if (!(await enforceParentAccountQuota(req, res, schoolId, 1))) return;
 
   const [student] = await db
     .select({
@@ -366,6 +385,17 @@ router.post("/admin/parent-invites/send", async (req, res) => {
     reason?: string;
   }> = [];
 
+  // Phase 2 licensing — compute the seat budget ONCE at the top of the
+  // batch, then decrement locally per successful insert. We can't call
+  // checkParentAccountQuota inside the loop because the freshly-inserted
+  // pending invites would feed back into the count and mask the actual
+  // remaining headroom (or worse, overshoot if the count query lags
+  // the transaction). When quota is null the bulk send is unlimited.
+  const initialQuota = await checkParentAccountQuota(req, schoolId, 0);
+  const quotaCap = initialQuota.allowed ? initialQuota.quota : initialQuota.quota;
+  let quotaRemaining: number | null =
+    typeof quotaCap === "number" ? Math.max(0, quotaCap - initialQuota.current) : null;
+
   for (const s of students) {
     if (!isValidEmail(s.parentEmail)) {
       results.push({
@@ -406,6 +436,18 @@ router.post("/admin/parent-invites/send", async (req, res) => {
       continue;
     }
 
+    // Seat budget gate. Skip (don't fail) so the batch still returns
+    // partial-success cleanly — the UI shows the quota-blocked rows
+    // separately and the admin can decide whether to raise the cap.
+    if (quotaRemaining !== null && quotaRemaining <= 0) {
+      results.push({
+        studentId: s.id,
+        status: "skipped",
+        reason: "quota_exceeded",
+      });
+      continue;
+    }
+
     const token = newInviteToken();
     const inserted = await db
       .insert(parentInvitesTable)
@@ -433,6 +475,7 @@ router.post("/admin/parent-invites/send", async (req, res) => {
         isResend: false,
       });
       results.push({ studentId: s.id, status: "sent" });
+      if (quotaRemaining !== null) quotaRemaining -= 1;
     } catch (err) {
       // Roll the invite back so the row count matches what actually went out.
       await db

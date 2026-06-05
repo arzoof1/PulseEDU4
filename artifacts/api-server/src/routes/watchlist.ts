@@ -87,7 +87,12 @@ import {
   isAdminOrSuperUser,
   isCaseInvestigator,
 } from "../lib/coreTeam.js";
-import { schoolYearLabelFor } from "../lib/schoolYear.js";
+import { schoolYearLabelFor, getSchoolTimezone } from "../lib/schoolYear.js";
+import {
+  assignWitnessSeqForInteraction,
+  formattedIdForStatement,
+  formattedIdsForStatements,
+} from "../lib/witnessStatementId.js";
 import {
   scheduleConsistencyRun,
   runConsistencyCheck,
@@ -362,6 +367,7 @@ router.get(
     const rows = await db
       .select({
         studentId: studentsTable.studentId,
+        localSisId: studentsTable.localSisId,
         firstName: studentsTable.firstName,
         lastName: studentsTable.lastName,
         grade: studentsTable.grade,
@@ -371,11 +377,11 @@ router.get(
         and(
           eq(studentsTable.schoolId, schoolId),
           or(
-            // Prefix match on first/last/ID — see studentFinder.ts for
-            // the rationale. Substring-anywhere was too noisy.
+            // Prefix match on first/last/local-SIS-ID. FLEID is
+            // server-only and never used as a search key.
             ilike(studentsTable.firstName, `${q}%`),
             ilike(studentsTable.lastName, `${q}%`),
-            ilike(studentsTable.studentId, `${q}%`),
+            ilike(studentsTable.localSisId, `${q}%`),
           ),
           sql`EXISTS (
             SELECT 1
@@ -435,6 +441,7 @@ router.get("/watchlist/orbit", async (req: Request, res: Response) => {
       const nonDirectPct = r.total > 0 ? Math.round((r.nonDirect / r.total) * 100) : 0;
       return {
         studentId: r.studentId,
+        localSisId: s.localSisId ?? null,
         firstName: s.firstName,
         lastName: s.lastName,
         grade: s.grade,
@@ -1285,6 +1292,8 @@ router.get(
             firstName: stu.firstName,
             lastName: stu.lastName,
             grade: stu.grade,
+            photoObjectKey: stu.photoObjectKey,
+            photoConsent: stu.photoConsent,
             primaryRole,
             isCenter: entry.studentId === studentId,
           };
@@ -1406,8 +1415,12 @@ router.post("/watchlist/cases", async (req: Request, res: Response) => {
   }
   // Per-(school, schoolYear) case_number. The label is derived from
   // the open date so cases group cleanly into school years for filing
-  // and reporting; see lib/schoolYear.ts for the label format.
-  const yearLabel = schoolYearLabelFor(new Date());
+  // and reporting; see lib/schoolYear.ts for the label format. The
+  // school's own IANA timezone decides the year boundary so a 9 pm PT
+  // open on June 30 stays in the current year rather than spilling
+  // into next year's bucket via UTC.
+  const tz = await getSchoolTimezone(schoolId);
+  const yearLabel = schoolYearLabelFor(new Date(), tz);
   const [{ next }] = (await db.execute(sql`
     SELECT COALESCE(MAX(case_number), 0) + 1 AS "next"
       FROM interaction_cases
@@ -2215,8 +2228,38 @@ router.get("/watchlist/interactions/:id", async (req: Request, res: Response) =>
         eq(witnessStatementsTable.interactionId, id),
       ),
     );
+  // Resolve the owning case's number + school-year label so we can
+  // hand back a `formattedCaseId` (e.g. "26-27-0042") and per-row
+  // `formattedId` (e.g. "CASE-26-27-0042-WS-03"). Both null when the
+  // interaction hasn't been promoted to a case yet.
+  let formattedCaseId: string | null = null;
+  if (row.caseId != null) {
+    const [c] = await db
+      .select({
+        caseNumber: interactionCasesTable.caseNumber,
+        schoolYearLabel: interactionCasesTable.schoolYearLabel,
+      })
+      .from(interactionCasesTable)
+      .where(
+        and(
+          eq(interactionCasesTable.id, row.caseId),
+          eq(interactionCasesTable.schoolId, schoolId),
+        ),
+      );
+    if (c?.caseNumber != null && c.schoolYearLabel) {
+      formattedCaseId = `${c.schoolYearLabel}-${String(c.caseNumber).padStart(4, "0")}`;
+    }
+  }
+  const formattedIds = await formattedIdsForStatements({
+    schoolId,
+    statements: statements.map((s) => ({
+      id: s.id,
+      interactionId: s.interactionId,
+      wsSeq: s.wsSeq ?? null,
+    })),
+  });
   res.json({
-    interaction: row,
+    interaction: { ...row, formattedCaseId },
     participants: parts.map((p) => {
       const s = students.get(p.studentId);
       return {
@@ -2229,7 +2272,10 @@ router.get("/watchlist/interactions/:id", async (req: Request, res: Response) =>
         notes: p.notes,
       };
     }),
-    statements,
+    statements: statements.map((s) => ({
+      ...s,
+      formattedId: formattedIds.get(s.id) ?? null,
+    })),
   });
 });
 
@@ -2271,23 +2317,53 @@ router.patch("/watchlist/interactions/:id", async (req: Request, res: Response) 
   if (typeof b["status"] === "string" && ["open", "resolved", "dismissed"].includes(b["status"])) {
     patch.status = b["status"];
   }
-  const [row] = await db
-    .update(interactionsTable)
-    .set(patch)
-    .where(and(eq(interactionsTable.id, id), eq(interactionsTable.schoolId, schoolId)))
-    .returning();
+  // When this PATCH changes case attachment, the update + ws_seq
+  // assignment must happen in a single tx that locks the new case
+  // row first. Otherwise a concurrent attach/move can race between
+  // our UPDATE and assignWitnessSeqForInteraction and we'd number
+  // statements against a stale case.
+  const willChangeCase = b["caseId"] !== undefined;
+  const row = await db.transaction(async (tx) => {
+    if (willChangeCase && patch.caseId != null) {
+      // Lock the target case row before mutating the interaction so
+      // any concurrent assign on the same case serializes behind us.
+      await tx.execute(sql`
+        SELECT id FROM interaction_cases
+         WHERE id = ${patch.caseId} AND school_id = ${schoolId}
+         FOR UPDATE
+      `);
+    }
+    const [updated] = await tx
+      .update(interactionsTable)
+      .set(patch)
+      .where(and(eq(interactionsTable.id, id), eq(interactionsTable.schoolId, schoolId)))
+      .returning();
+    if (!updated) return null;
+    if (willChangeCase) {
+      await updateMentionCaseIdForInteraction({
+        schoolId,
+        interactionId: id,
+        newCaseId: updated.caseId ?? null,
+        executor: tx,
+      });
+      if (updated.caseId != null) {
+        // Re-validate inside tx: confirm interaction still belongs to
+        // the case we just locked before assigning seq numbers.
+        const stillAttached = updated.caseId === patch.caseId;
+        if (stillAttached) {
+          await assignWitnessSeqForInteraction(tx, {
+            schoolId,
+            caseId: updated.caseId,
+            interactionId: id,
+          });
+        }
+      }
+    }
+    return updated;
+  });
   if (!row) {
     res.status(404).json({ error: "Not found" });
     return;
-  }
-  // Keep the case_mentions denormalised pointer in sync when the
-  // interaction's case attachment changes (attach / detach / move).
-  if (b["caseId"] !== undefined) {
-    await updateMentionCaseIdForInteraction({
-      schoolId,
-      interactionId: id,
-      newCaseId: row.caseId ?? null,
-    });
   }
   await audit({
     schoolId,
@@ -2469,7 +2545,8 @@ router.post(
         };
       }
 
-      const yearLabel = schoolYearLabelFor(new Date());
+      const tz = await getSchoolTimezone(schoolId);
+      const yearLabel = schoolYearLabelFor(new Date(), tz);
       const [{ next }] = (
         await tx.execute(sql`
           SELECT COALESCE(MAX(case_number), 0) + 1 AS "next"
@@ -2501,18 +2578,30 @@ router.post(
         .set({ caseId: caseRow.id, updatedAt: new Date() })
         .where(and(eq(interactionsTable.id, id), eq(interactionsTable.schoolId, schoolId)));
 
-      return { ok: true, caseRow };
-    });
+      // Stamp human-readable WS sequence numbers on any witness
+      // statements for this interaction now that it's attached to a
+      // case. See lib/witnessStatementId.ts.
+      await assignWitnessSeqForInteraction(tx, {
+        schoolId,
+        caseId: caseRow.id,
+        interactionId: id,
+      });
 
-    if (result.ok) {
-      // Promote just attached this interaction to a new case; re-point
-      // any existing witness-statement mentions at the new case_id.
+      // Re-point any existing witness-statement mentions at the new
+      // case_id. Must run inside this tx so the mention pointer
+      // update participates in the same atomic unit as the case
+      // creation, interaction attach, and ws_seq stamping — otherwise
+      // a rollback would leave the mentions index pointing at a case
+      // that never committed.
       await updateMentionCaseIdForInteraction({
         schoolId,
         interactionId: id,
-        newCaseId: result.caseRow.id,
+        newCaseId: caseRow.id,
+        executor: tx,
       });
-    }
+
+      return { ok: true, caseRow };
+    });
 
     if (!result.ok) {
       res.status(result.status).json({ error: result.error });
@@ -2652,6 +2741,14 @@ router.get("/watchlist/statements", async (req: Request, res: Response) => {
     : rows.filter((r) => r.status !== "completed" && r.status !== "waived");
   const sids = [...new Set(filtered.map((r) => r.studentId))];
   const students = await loadStudents(schoolId, sids);
+  const formattedIds = await formattedIdsForStatements({
+    schoolId,
+    statements: filtered.map((r) => ({
+      id: r.id,
+      interactionId: r.interactionId,
+      wsSeq: r.wsSeq ?? null,
+    })),
+  });
   res.json({
     statements: filtered.map((r) => {
       const s = students.get(r.studentId);
@@ -2661,6 +2758,7 @@ router.get("/watchlist/statements", async (req: Request, res: Response) => {
         lastName: s?.lastName ?? "",
         grade: s?.grade ?? null,
         ageDays: ageDays(r.requestedAt as unknown as Date),
+        formattedId: formattedIds.get(r.id) ?? null,
       };
     }),
   });
@@ -2754,15 +2852,23 @@ router.post("/watchlist/statements/:id/remind", async (req: Request, res: Respon
     res.status(404).json({ error: "Not found" });
     return;
   }
+  const remindedFormattedId = await formattedIdForStatement({
+    schoolId,
+    interactionId: row.interactionId,
+    wsSeq: row.wsSeq ?? null,
+  });
   await audit({
     schoolId,
     entityType: "statement",
     entityId: id,
     action: "reminded",
     staff,
-    payload: { remindCount: row.remindCount },
+    payload: {
+      remindCount: row.remindCount,
+      ...(remindedFormattedId ? { formattedId: remindedFormattedId } : {}),
+    },
   });
-  res.json({ statement: row });
+  res.json({ statement: { ...row, formattedId: remindedFormattedId } });
 });
 
 // Create (or upsert) a witness statement for a student against an incident.
@@ -2855,13 +2961,22 @@ router.post(
       statementId: row.id,
       body: row.body ?? "",
     });
+    const createdFormattedId = await formattedIdForStatement({
+      schoolId,
+      interactionId: id,
+      wsSeq: row.wsSeq ?? null,
+    });
     await audit({
       schoolId,
       entityType: "statement",
       entityId: row.id,
       action: body ? "completed" : "requested",
       staff,
-      payload: { interactionId: id, studentId },
+      payload: {
+        interactionId: id,
+        studentId,
+        ...(createdFormattedId ? { formattedId: createdFormattedId } : {}),
+      },
     });
     if (interaction.caseId) {
       scheduleConsistencyRun({
@@ -2909,16 +3024,24 @@ router.patch("/watchlist/statements/:id", async (req: Request, res: Response) =>
     return;
   }
   await syncWitnessStatementMentions({ schoolId, statementId: id, body });
+  const editedFormattedId = await formattedIdForStatement({
+    schoolId,
+    interactionId: row.interactionId,
+    wsSeq: row.wsSeq ?? null,
+  });
   await audit({
     schoolId,
     entityType: "statement",
     entityId: id,
     action: "edited",
     staff,
-    payload: { length: body.length },
+    payload: {
+      length: body.length,
+      ...(editedFormattedId ? { formattedId: editedFormattedId } : {}),
+    },
   });
   await maybeScheduleForStatement(schoolId, row.interactionId, "new_statement", staff);
-  res.json({ statement: row });
+  res.json({ statement: { ...row, formattedId: editedFormattedId } });
 });
 
 router.post("/watchlist/statements/:id/complete", async (req: Request, res: Response) => {
@@ -2946,9 +3069,21 @@ router.post("/watchlist/statements/:id/complete", async (req: Request, res: Resp
     return;
   }
   await syncWitnessStatementMentions({ schoolId, statementId: id, body });
-  await audit({ schoolId, entityType: "statement", entityId: id, action: "completed", staff });
+  const completedFormattedId = await formattedIdForStatement({
+    schoolId,
+    interactionId: row.interactionId,
+    wsSeq: row.wsSeq ?? null,
+  });
+  await audit({
+    schoolId,
+    entityType: "statement",
+    entityId: id,
+    action: "completed",
+    staff,
+    payload: completedFormattedId ? { formattedId: completedFormattedId } : undefined,
+  });
   await maybeScheduleForStatement(schoolId, row.interactionId, "new_statement", staff);
-  res.json({ statement: row });
+  res.json({ statement: { ...row, formattedId: completedFormattedId } });
 });
 
 // All structured @-mentions on every witness statement linked to this

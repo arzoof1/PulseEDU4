@@ -46,25 +46,44 @@ export default function SchoolWideExpectationsPanel() {
     load();
   }, []);
 
-  // Re-derive the letter rows whenever the acronym changes, preserving
-  // any words the user has already typed for letters that still appear.
+  // Seed letter rows from the acronym only when the row list is empty
+  // (first load with no saved letters). After that, letters and acronym
+  // are independent — schools can repeat a letter (e.g. "B.E.E.S." with
+  // two E rows), use digits, or add extra rows that don't appear in the
+  // acronym at all. This avoids the previous behavior that wiped saved
+  // word rows whenever the admin tweaked the acronym text.
   useEffect(() => {
-    const upper = acronym.trim().toUpperCase();
-    if (!upper) {
-      setLetters([]);
-      return;
-    }
+    if (loading) return;
     setLetters((prev) => {
-      const wordByLetter = new Map<string, string>();
-      for (const row of prev) {
-        if (!wordByLetter.has(row.letter)) wordByLetter.set(row.letter, row.word);
+      if (prev.length > 0) return prev;
+      const upper = acronym.trim().toUpperCase();
+      if (!upper) return prev;
+      return Array.from(upper).map((ch) => ({ letter: ch, word: "" }));
+    });
+  }, [acronym, loading]);
+
+  const addRow = () => {
+    setLetters((prev) => [...prev, { letter: "", word: "" }]);
+  };
+  const removeRow = (idx: number) => {
+    setLetters((prev) => prev.filter((_, i) => i !== idx));
+  };
+  const syncFromAcronym = () => {
+    const upper = acronym.trim().toUpperCase();
+    if (!upper) return;
+    const wordByLetter = new Map<string, string>();
+    for (const row of letters) {
+      if (row.letter && !wordByLetter.has(row.letter)) {
+        wordByLetter.set(row.letter, row.word);
       }
-      return Array.from(upper).map((ch) => ({
+    }
+    setLetters(
+      Array.from(upper).map((ch) => ({
         letter: ch,
         word: wordByLetter.get(ch) ?? "",
-      }));
-    });
-  }, [acronym]);
+      })),
+    );
+  };
 
   const save = async () => {
     setSaving(true);
@@ -97,17 +116,42 @@ export default function SchoolWideExpectationsPanel() {
 
       <label style={{ display: "grid", gap: 4 }}>
         <span style={{ fontSize: "0.85rem", color: "#475569" }}>Acronym</span>
-        <input
-          value={acronym}
-          onChange={(e) => setAcronym(e.target.value.toUpperCase().slice(0, 12))}
-          style={{
-            padding: "0.4rem 0.6rem",
-            borderRadius: 6,
-            border: "1px solid #cbd5e1",
-            width: 180,
-          }}
-          disabled={loading}
-        />
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+          <input
+            value={acronym}
+            onChange={(e) =>
+              setAcronym(e.target.value.toUpperCase().slice(0, 12))
+            }
+            style={{
+              padding: "0.4rem 0.6rem",
+              borderRadius: 6,
+              border: "1px solid #cbd5e1",
+              width: 180,
+            }}
+            disabled={loading}
+          />
+          <button
+            type="button"
+            onClick={syncFromAcronym}
+            disabled={loading || !acronym.trim()}
+            title="Replace the rows below with one row per letter in the acronym (existing words for matching letters are kept)."
+            style={{
+              background: "#f1f5f9",
+              color: "#0f172a",
+              border: "1px solid #cbd5e1",
+              padding: "0.4rem 0.7rem",
+              borderRadius: 6,
+              cursor: "pointer",
+              fontSize: "0.8rem",
+            }}
+          >
+            Rebuild rows from acronym
+          </button>
+        </div>
+        <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
+          Letters and acronym are independent — you can repeat letters,
+          use digits, or add extra rows.
+        </span>
       </label>
 
       <table className="pulse-table" style={{ borderCollapse: "collapse" }}>
@@ -133,20 +177,39 @@ export default function SchoolWideExpectationsPanel() {
             >
               Word
             </th>
+            <th style={{ width: 60 }} />
           </tr>
         </thead>
         <tbody>
           {letters.map((row, idx) => (
-            <tr key={`${row.letter}-${idx}`}>
+            <tr key={idx}>
               <td
                 style={{
                   padding: "0.3rem",
-                  fontWeight: 700,
                   width: 60,
                   textAlign: "center",
                 }}
               >
-                {row.letter}
+                <input
+                  value={row.letter}
+                  onChange={(e) => {
+                    const next = [...letters];
+                    next[idx] = {
+                      ...next[idx],
+                      letter: e.target.value.toUpperCase().slice(0, 2),
+                    };
+                    setLetters(next);
+                  }}
+                  aria-label={`Letter for row ${idx + 1}`}
+                  style={{
+                    padding: "0.3rem",
+                    borderRadius: 4,
+                    border: "1px solid #cbd5e1",
+                    width: 44,
+                    textAlign: "center",
+                    fontWeight: 700,
+                  }}
+                />
               </td>
               <td style={{ padding: "0.3rem" }}>
                 <input
@@ -165,10 +228,47 @@ export default function SchoolWideExpectationsPanel() {
                   }}
                 />
               </td>
+              <td style={{ padding: "0.3rem", textAlign: "center" }}>
+                <button
+                  type="button"
+                  onClick={() => removeRow(idx)}
+                  aria-label={`Remove row ${idx + 1}`}
+                  title="Remove this row"
+                  style={{
+                    background: "transparent",
+                    color: "#b91c1c",
+                    border: "1px solid #fecaca",
+                    padding: "0.15rem 0.45rem",
+                    borderRadius: 4,
+                    cursor: "pointer",
+                    fontSize: "0.8rem",
+                  }}
+                >
+                  ✕
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+      <div>
+        <button
+          type="button"
+          onClick={addRow}
+          disabled={loading}
+          style={{
+            background: "#f1f5f9",
+            color: "#0f172a",
+            border: "1px dashed #94a3b8",
+            padding: "0.3rem 0.7rem",
+            borderRadius: 6,
+            cursor: "pointer",
+            fontSize: "0.8rem",
+          }}
+        >
+          + Add letter
+        </button>
+      </div>
 
       {msg && (
         <div

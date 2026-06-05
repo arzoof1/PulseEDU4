@@ -5,14 +5,28 @@
   "type": "module",
   "scripts": {
     "hello": "tsx ./src/hello.ts",
+    "demo-guide": "tsx ./src/generateDemoGuide.ts",
+    "overview": "tsx ./src/generateOverviewOnePager.ts",
+    "user-guide": "tsx ./src/generateUserGuide.ts",
+    "user-guide-docx": "tsx ./src/generateUserGuideDocx.ts",
+    "workflow-guide": "tsx ./src/generateWorkflowGuide.ts",
+    "seed-pickup-badges": "tsx ./src/seedPickupBadges.ts",
+    "reseed-dsp": "tsx ./src/dspParrottReseed.ts",
+    "fix-dsp-names": "tsx ./src/dspParrottFixNames.ts",
+    "seed-teacher-locations": "tsx ./src/seedTeacherLocations.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "docx": "^9.7.1",
+    "puppeteer": "^25.0.2",
     "tsx": "catalog:"
   },
   "dependencies": {
     "@types/pdfkit": "^0.17.6",
+    "@workspace/db": "workspace:*",
+    "drizzle-orm": "catalog:",
+    "exceljs": "^4.4.0",
     "pdfkit": "^0.18.0"
   }
 }

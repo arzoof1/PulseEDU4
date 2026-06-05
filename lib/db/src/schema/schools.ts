@@ -41,6 +41,12 @@ export const schoolsTable = pgTable(
     latitude: doublePrecision("latitude"),
     longitude: doublePrecision("longitude"),
     active: boolean("active").notNull().default(true),
+    // Feature licensing plan this school is on. NULL = no plan assigned
+    // (effectively "Enterprise / everything on" until SuperUser picks a
+    // plan). Not a real FK at the Drizzle layer because we want the
+    // ensure-schema path to remain idempotent without depending on
+    // creation order — the API handler enforces existence at write time.
+    planId: integer("plan_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

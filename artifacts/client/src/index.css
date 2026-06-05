@@ -230,7 +230,11 @@ strong {
 .app-shell {
   display: grid;
   grid-template-columns: 240px 1fr;
-  grid-template-rows: 64px 1fr;
+  /* Header row stays exactly 64px in the normal single-row case (so the
+     sticky sidebar's `top: 64px` offset keeps aligning), but is allowed to
+     grow if the controls ever wrap to a second line — instead of clipping
+     at a fixed 64px and letting the user pill spill over the content below. */
+  grid-template-rows: minmax(64px, auto) 1fr;
   min-height: 100vh;
 }
 
@@ -384,6 +388,18 @@ strong {
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
+  /* Pin the sidebar below the sticky 64px header so nav items remain
+     reachable on tall pages (Kiosk Setup, Locations, Allowlist, etc.).
+     Without this, the sidebar scrolls away with the page and users
+     have to scroll back to the top just to switch sections. The
+     internal overflow keeps it usable on short viewports where the
+     nav list itself exceeds the visible area. align-self: start is
+     required for sticky to work inside a CSS grid row. */
+  position: sticky;
+  top: 64px;
+  align-self: start;
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
 }
 
 .sidebar .section-label {
@@ -981,6 +997,35 @@ ul[style*="listStyle: none"] li button:hover {
   h3,
   h4 {
     color: #000 !important;
+  }
+}
+
+/* Laptop / narrow-desktop range: keep the header on a single row so the
+   controls never wrap and spill the user pill over the content below.
+   Reclaims width by trimming gaps, shrinking the brand, and dropping the
+   "Show" / "Staff" caption text (the selects stay fully labeled by their
+   options). Does NOT collapse to the mobile stacked layout — the sidebar
+   stays put. Scoped above 800px so it never fights the mobile block. */
+@media (min-width: 801px) and (max-width: 1100px) {
+  .app-header {
+    gap: 0.6rem;
+    padding: 0.5rem 1rem;
+  }
+  .app-header .brand {
+    width: 160px;
+  }
+  .app-header .brand .wordmark {
+    font-size: 1.2rem;
+  }
+  .app-header .header-controls {
+    gap: 0.6rem;
+  }
+  .app-header .header-controls > label {
+    font-size: 0;
+    gap: 0;
+  }
+  .app-header .header-controls > label > select {
+    font-size: 13px;
   }
 }
 
@@ -1689,7 +1734,12 @@ ul[style*="listStyle: none"] li button:hover {
   align-items: flex-end;
   justify-content: center;
   gap: 0.65rem;
-  min-height: 220px;
+  /* Resting bottles sit ~60px LOWER than the shelf so their dark-blue
+     caps are fully visible BELOW the shelf instead of hidden behind
+     it. The winner's `bottle-land` keyframes were shifted by the same
+     60px (rest Y was -120, now -180) so the landed bottle still
+     touches down flush on the shelf surface. */
+  min-height: 280px;
   padding-top: 110px;
   perspective: 800px;
 }
@@ -1780,43 +1830,47 @@ ul[style*="listStyle: none"] li button:hover {
   z-index: 3;
 }
 @keyframes bottle-land {
+  /* All Y values bumped by -60px vs. the prior version because the
+     bottles row was lowered by 60px to expose the caps below the
+     shelf. Final landed Y is now -180px (was -120) so the landed
+     bottle's base still sits flush on the shelf top. */
   /* 0% — at rest, about to flick */
   0% {
     transform: translate(0, 0) rotate(0deg) scale(1);
   }
   /* 35% — mid-air at peak, halfway through the rotation */
   35% {
-    transform: translate(0, -220px) rotate(180deg) scale(1.05);
+    transform: translate(0, -280px) rotate(180deg) scale(1.05);
   }
   /* 60% — descending, rotation completes to upright */
   60% {
-    transform: translate(0, -150px) rotate(360deg) scale(1.02);
+    transform: translate(0, -210px) rotate(360deg) scale(1.02);
   }
   /* 70% — TOUCHDOWN: base hits the table, body squashes (wide & short) */
   70% {
-    transform: translate(0, -118px) rotate(360deg) scaleX(1.12) scaleY(0.86);
+    transform: translate(0, -178px) rotate(360deg) scaleX(1.12) scaleY(0.86);
   }
   /* 76% — recovery from squash, slight rebound stretch */
   76% {
-    transform: translate(0, -124px) rotate(360deg) scaleX(0.97) scaleY(1.03);
+    transform: translate(0, -184px) rotate(360deg) scaleX(0.97) scaleY(1.03);
   }
   /* 82% — wobble LEFT: bottle tips, almost falls. translateX paired with
             rotate keeps the bottle's base on the table (faking a pivot
             at the base instead of the center). */
   82% {
-    transform: translate(-5px, -120px) rotate(351deg) scale(1);
+    transform: translate(-5px, -180px) rotate(351deg) scale(1);
   }
   /* 88% — wobble RIGHT: tips the other way */
   88% {
-    transform: translate(5px, -120px) rotate(369deg) scale(1);
+    transform: translate(5px, -180px) rotate(369deg) scale(1);
   }
   /* 94% — tiny final left tip */
   94% {
-    transform: translate(-1.5px, -120px) rotate(357deg) scale(1);
+    transform: translate(-1.5px, -180px) rotate(357deg) scale(1);
   }
   /* 100% — SETTLED upright on the table, dead still */
   100% {
-    transform: translate(0, -120px) rotate(360deg) scale(1);
+    transform: translate(0, -180px) rotate(360deg) scale(1);
   }
 }
 
@@ -1937,8 +1991,13 @@ ul[style*="listStyle: none"] li button:hover {
   z-index: 1;
 }
 .spotlight-grid-cell {
-  background: rgba(255, 255, 255, 0.04);
-  color: #94a3b8;
+  /* Resting cells are intentionally dim — near-black bg + dark slate
+     text — so the cone overlay (mix-blend-mode: screen) visibly LIFTS
+     the cells under the light and the un-lit cells read as "in
+     shadow". Previously the cells were already bright (#94a3b8 text)
+     so the cone made little visual difference. */
+  background: rgba(255, 255, 255, 0.015);
+  color: #475569;
   padding: 0.6rem 0.4rem;
   text-align: center;
   border-radius: 8px;
@@ -1975,8 +2034,11 @@ ul[style*="listStyle: none"] li button:hover {
 @keyframes spotlight-cell-reveal {
   0%,
   82% {
-    background: rgba(255, 255, 255, 0.04);
-    color: #94a3b8;
+    /* Match the dimmed resting state so the winner cell hides among
+       the others until the spotlight locks on. Keep in sync with
+       `.spotlight-grid-cell` base bg + color. */
+    background: rgba(255, 255, 255, 0.015);
+    color: #475569;
     transform: scale(1);
     box-shadow: none;
   }

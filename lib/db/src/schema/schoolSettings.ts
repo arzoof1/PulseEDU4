@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, boolean, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, real, boolean, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
 
 // Per-school operational settings. As of D4 there is exactly one row per
 // school (enforced by `school_settings_school_id_unique`). Routes
@@ -71,6 +71,29 @@ export const schoolSettingsTable = pgTable(
   staffDirectoryShowCellPhone: boolean("staff_directory_show_cell_phone")
     .notNull()
     .default(false),
+  // Data Importer — manual roster upload toggle. Default OFF because the
+  // expected source of truth for most schools is a Classlink / Clever
+  // OneRoster sync. When false, the Roster card in the Data Importer
+  // wizard is disabled and the server's roster commit endpoint refuses
+  // the upload (defense-in-depth so a stale tab can't bypass the UI).
+  // When true, the wizard exposes the Roster importer, which inserts
+  // new students AND updates existing ones (with COALESCE so blank CSV
+  // cells preserve current values). Updates are snapshotted into
+  // student_import_snapshots so rollback is fully reversible.
+  manualRosterUploadEnabled: boolean("manual_roster_upload_enabled")
+    .notNull()
+    .default(false),
+  // Data Importer — strict house-name matching for the Roster importer.
+  // Default OFF preserves the legacy behavior where a CSV row whose
+  // `house_name` doesn't match any configured house silently falls back
+  // to the smallest-house rotation. When ON, those rows are rejected at
+  // commit time with a per-row error instead of being rebalanced into a
+  // house the admin never picked — appropriate for schools whose SIS
+  // export occasionally typos a house name and would rather block the
+  // row than quietly shuffle a student.
+  strictHouseNameMatch: boolean("strict_house_name_match")
+    .notNull()
+    .default(false),
   // -----------------------------------------------------------------
   // Per-school feature flags (two-tier model).
   //
@@ -119,6 +142,77 @@ export const schoolSettingsTable = pgTable(
   superFeatureDataImports: boolean("super_feature_data_imports").notNull().default(true),
   superFeatureHouses: boolean("super_feature_houses").notNull().default(true),
   superFeatureParentPortal: boolean("super_feature_parent_portal").notNull().default(true),
+  // AST shipped after the original superFeature catalog; added here so
+  // the licensing layer can gate it like every other feature.
+  superFeatureAst: boolean("super_feature_ast").notNull().default(true),
+  // Comp Time (FLSA compensatory time, non-exempt only). Default ON
+  // for the enterprise rollout — the route still hard-blocks staff
+  // whose exempt_status != 'non_exempt' so the flag does NOT broadly
+  // enable comp-time accrual for teachers (they remain on AST).
+  superFeatureCompTime: boolean("super_feature_comp_time")
+    .notNull()
+    .default(true),
+  // -----------------------------------------------------------------
+  // Time Tracking nuances (governs both AST + Comp Time so a school
+  // configures workweek once for the whole "Time Tracking" surface).
+  //
+  // workweekStart  — 'sunday' (default, FLSA canonical) | 'monday'.
+  //                  Comp-time submissions anchor `week_start_date`
+  //                  to this and the route validates the supplied
+  //                  date is a workweek start.
+  // compTimeRequireAuthForm — when true, every earn submission MUST
+  //                           include a signed Authorization to
+  //                           Accrue Comp Time. Default true; admins
+  //                           can disable if their district uses a
+  //                           separate paper process.
+  // compTimeAuthFormObjectKey — object key (in /api/storage/*) for
+  //                           the blank template staff download
+  //                           before signing. NULL = use the built-in
+  //                           generic PDF template.
+  // -----------------------------------------------------------------
+  workweekStart: text("workweek_start").notNull().default("sunday"),
+  compTimeRequireAuthForm: boolean("comp_time_require_auth_form")
+    .notNull()
+    .default(true),
+  compTimeAuthFormObjectKey: text("comp_time_auth_form_object_key"),
+  // FAST Phase 2 — per-benchmark mastery threshold (percentage 0–100).
+  // A student is considered to have mastered a benchmark when their
+  // (points_earned / points_possible) on that benchmark in the selected
+  // window is >= this threshold. Drives the heatmap color buckets and
+  // the bottom-3 tile on Teacher Roster → Benchmarks tab. Configurable
+  // per school so a building can tune the bar with its own data.
+  fastBenchmarkMasteryThreshold: integer("fast_benchmark_mastery_threshold")
+    .notNull()
+    .default(80),
+  // FAST Phase 4 — z-score threshold for flagging outlier teachers on
+  // the admin FAST Benchmarks dashboard. A teacher whose class-avg
+  // mastery on the selected benchmark is more than this many standard
+  // deviations below the school-wide grade mean is flagged. Stored as
+  // a REAL so admins can tighten (1.5) or loosen (0.75) the bar.
+  // Default 1.0 = roughly the bottom 16% of teachers per benchmark.
+  fastOutlierZThreshold: real("fast_outlier_z_threshold")
+    .notNull()
+    .default(1.0),
+  // FAST Phase 5 — minimum number of below-threshold windows (out of
+  // the most recent 3 administered windows for that subject) required
+  // before a (student, benchmark_code) pair surfaces as a Tier 2
+  // auto-suggestion on the MTSS hub. Default 2 mirrors the common
+  // "missed twice in a row" rule of thumb. Mastery threshold itself
+  // reuses `fastBenchmarkMasteryThreshold` above so admins only tune
+  // one number.
+  fastTier2MinWindows: integer("fast_tier2_min_windows")
+    .notNull()
+    .default(2),
+  // FAST Phase 1 (Historical FAST + Algebra I placement review) —
+  // how many PM3 school years (current + prior) the multi-year FAST
+  // trajectory chip renders on Student Profile, Teacher Roster, and
+  // the MTSS plan editor. Imports older than this window remain in
+  // the database — they just don't render. 5-year cap is hard:
+  // FAST launched in FL 22-23; older data uses the FSA scale, which
+  // is not comparable.
+  fastHistoryYearsVisible: integer("fast_history_years_visible")
+    .notNull()
+    .default(3),
   // Advisory pointer to the tier_presets row last applied to this
   // school. The actual flags above are still authoritative — this is
   // purely so the School Plans grid can show "Currently: Pro" badges.
@@ -132,6 +226,75 @@ export const schoolSettingsTable = pgTable(
   schoolWideExpectationAcronym: text("school_wide_expectation_acronym")
     .notNull()
     .default("PRIDE"),
+  // -----------------------------------------------------------------
+  // Parent Pick-Up Module per-school settings.
+  //   pickupCutoffTime — "HH:MM" school-local. After this time the
+  //     Admin Hub "Still on campus" tile becomes visible. Default 15:30.
+  //   pickupTeacherViewScope — controls what /pickup/teacher returns:
+  //     'all_students' (default) shows the full school queue; teachers
+  //     can release anyone (any-staff-can-release matches the school
+  //     reality where a kid in art class needs to be released by the
+  //     art teacher, not their homeroom). 'own_roster' restricts to
+  //     students on the calling teacher's class_sections roster.
+  //     The server enforces this on EVERY release event, so a stale
+  //     client tab can't bypass it.
+  // -----------------------------------------------------------------
+  pickupCutoffTime: text("pickup_cutoff_time").notNull().default("15:30"),
+  pickupTeacherViewScope: text("pickup_teacher_view_scope")
+    .notNull()
+    .default("all_students"),
+  // -----------------------------------------------------------------
+  // "In car" terminal step toggle. When TRUE (default — preserves
+  // existing behavior), curb staff tap "in_car" to remove a student
+  // from the live queue. When FALSE, the workflow ends at
+  // released_to_walk ("walking out") — no curb tap required. The
+  // student's row stays visible on the live queue for
+  // pickupWalkedOutDisplaySeconds after release so road staff can
+  // see who's on the way, then drops from the *display* (the
+  // released_to_walk audit row is preserved forever).
+  // Reconciliation treats released_to_walk as a terminal pickup
+  // signal when this toggle is OFF.
+  // -----------------------------------------------------------------
+  pickupInCarStepEnabled: boolean("pickup_in_car_step_enabled")
+    .notNull()
+    .default(true),
+  pickupWalkedOutDisplaySeconds: integer("pickup_walked_out_display_seconds")
+    .notNull()
+    .default(300),
+  // -----------------------------------------------------------------
+  // Kiosk welcome messages (Phase 3 — "Sign in to class" flow).
+  //   kioskWelcomeTemplate  — default template shown to every student
+  //     after they sign in. Supports {firstName}, {lastName}, {house},
+  //     {grade} placeholders. Length capped at 240 chars by the route.
+  //   kioskWelcomeMessages  — optional per-house override map keyed by
+  //     house id (stringified): { "12": "Welcome home, Phoenix!" }.
+  //     Empty / missing key falls back to kioskWelcomeTemplate.
+  // -----------------------------------------------------------------
+  kioskWelcomeTemplate: text("kiosk_welcome_template")
+    .notNull()
+    .default("Welcome, {firstName}!"),
+  kioskWelcomeMessages: jsonb("kiosk_welcome_messages")
+    .$type<Record<string, string>>()
+    .notNull()
+    .default({}),
+  // Class Composer post-PM banner — per-school dismissal token. Stores
+  // a "<schoolYear>|<window>" string (e.g. "25-26|pm3") that the admin
+  // last dismissed. The Admin Hub banner re-appears automatically when
+  // a NEW window arrives (dismissed token no longer matches current
+  // readiness). NULL = never dismissed. The banner is informational
+  // ("here are suggested groupings — no roster changes") so schools
+  // that don't reshuffle mid-year can hide it without losing the
+  // ability to run Class Composer manually from Insights.
+  classComposerBannerDismissedSy: text("class_composer_banner_dismissed_sy"),
+  // Skill-cluster refresh banner dismissal tokens. Append-only array
+  // of "<schoolYear>|<pmWindow>|skillcluster_refresh" strings. Once
+  // an admin dismisses (e.g.) the 25-26|pm2 banner, that exact token
+  // joins the array and stops showing. A new PM window (pm3) creates
+  // a fresh token and a fresh banner.
+  skillclusterBannerDismissals: jsonb("skillcluster_banner_dismissals")
+    .$type<string[]>()
+    .notNull()
+    .default([]),
   schoolWideExpectationLetters: jsonb("school_wide_expectation_letters")
     .$type<Array<{ letter: string; word: string }>>()
     .notNull()

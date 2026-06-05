@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, DragEvent } from "react";
+import type { CSSProperties, DragEvent, ReactNode } from "react";
+import * as XLSX from "xlsx";
 import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
@@ -22,7 +23,8 @@ type Kind =
   | "rosters"
   | "behavior"
   | "fast_scores"
-  | "fast_prior_year";
+  | "fast_prior_year"
+  | "fast_florida";
 type Scope = "school" | "district";
 
 type PreviewResponse = {
@@ -46,9 +48,30 @@ type PreviewResponse = {
   }>;
   errors: Array<{ row: number; message: string }>;
   readyToCommit: boolean;
+  // FAST Florida only — count of per-benchmark item rows that will be
+  // written to student_fast_item_responses. Surfaced as a "Will import
+  // items" stat on the preview step so admins see the data volume
+  // before commit.
+  totalItems?: number;
   // District-scope preview only.
   perSchool?: Array<{ schoolId: number; schoolName: string; rows: number }>;
   districtSchoolCount?: number;
+  // Roster-scope preview only. Present when one or more CSV rows have
+  // a house_name we couldn't match to this school's houses. Non-blocking
+  // — those rows still commit, falling back to the smallest-house
+  // rotation.
+  unrecognizedHouseNames?: {
+    rowCount: number;
+    distinctCount: number;
+    // Each sample is the unrecognized CSV value plus, when a configured
+    // house name is within a small edit distance, a "did you mean"
+    // suggestion (e.g. "Pheonix" → "Phoenix").
+    samples: Array<{ value: string; suggestion?: string }>;
+    // 'fallback' (default) → row commits with smallest-house rotation.
+    // 'strict' → row is rejected at commit (school_settings
+    // .strict_house_name_match = true).
+    policy?: "strict" | "fallback";
+  };
 };
 
 type ImportTemplate = {
@@ -75,7 +98,13 @@ type ImportJob = {
   totalRows: number;
   successRows: number;
   errorRows: number;
-  errorLog: Array<{ row: number; message: string }>;
+  errorLog: Array<{
+    row: number;
+    message: string;
+    raw?: Record<string, string>;
+    code?: string;
+    bucket?: string;
+  }>;
   mapping: Record<string, string>;
   committedAt: string | null;
   rolledBackAt: string | null;
@@ -521,12 +550,52 @@ const KIND_DEFS: Record<Kind, KindDef> = {
       "Subject 'Reading' is normalized to 'ela' to match Florida FAST exports.",
     ],
   },
+  fast_florida: {
+    label: "Florida FAST (state xlsx — ELA Reading + Math)",
+    // This importer doesn't use the column-mapping flow — the xlsx layout
+    // is known a priori. Empty targets means the mapping step is skipped.
+    targetsFor: () => [],
+    supportsDistrict: false,
+    helpText:
+      "Per-student xlsx export from the Florida FAST state portal. Captures scale score + every per-benchmark item response. Supports ELA Reading and Mathematics; Writing is not yet supported. Pick the school year to back-fill prior years.",
+    description:
+      "Drop in the state's per-student xlsx (the one with ~180 columns: demographics, scale score, achievement level, then 40 repeating Category / Benchmark / Points Earned / Points Possible quadruplets). No column mapping needed — the layout is fixed. The importer auto-detects the subject (ELA Reading or Mathematics) and the PM window (PM1/PM2/PM3) from the file itself. It stamps the school year you choose, lands the scale score in PM1/PM2/PM3 based on the file's Test Reason column, and records every benchmark response for the item-level heatmap. Re-uploading the same PM + school year DELETEs the prior item-response rows for those students before reinserting (idempotent). FAST Writing uses a rubric-scored layout that this importer doesn't yet handle — contact support if you need it prioritized.",
+    columns: [],
+    sampleCsv: "",
+    notes: [
+      "School-scope only. Supports ELA Reading and Mathematics (one subject per file, auto-detected from the scale-score column).",
+      "Pick the school year on the upload step — the current year plus the three preceding years are allowed (for prior-year back-fill).",
+      "Rollback DELETEs every benchmark response stamped with this import job, plus any scale-score row the same job created. PM values written by an earlier job survive.",
+      "12 MB file limit. Split by grade if the state export exceeds it.",
+    ],
+  },
 };
 
 // Headers list "ignore" as a sentinel — when a CSV column isn't in the
 // mapping at all, it's effectively ignored. We surface "ignore" as a
 // menu option so the admin can explicitly drop a noisy column.
 const IGNORE_VALUE = "__ignore__";
+
+// Build the school-year dropdown options for the Florida xlsx
+// importer: current year plus the three preceding years. Returns
+// "YY-YY" strings (e.g. ["25-26", "24-25", "23-24", "22-23"]).
+// School year transitions on Jul 1 to match schoolYearLabelFor on
+// the server (Eastern timezone is acceptable for the client-side
+// fallback — the server re-validates the picked year on submit).
+function floridaSchoolYearOptions(): string[] {
+  const now = new Date();
+  const month = now.getMonth(); // 0-11
+  const year = now.getFullYear();
+  // Year starts in Jul. Before Jul → previous SY is "current".
+  const startYear = month >= 6 ? year : year - 1;
+  const pad = (n: number) => String(n % 100).padStart(2, "0");
+  const out: string[] = [];
+  for (let off = 0; off <= 3; off++) {
+    const s = startYear - off;
+    out.push(`${pad(s)}-${pad(s + 1)}`);
+  }
+  return out;
+}
 
 const dropZoneStyle: CSSProperties = {
   border: "2px dashed var(--border, #2a3447)",
@@ -938,6 +1007,23 @@ export default function DataImports({
   // Upload state
   const [filename, setFilename] = useState<string>("");
   const [csvText, setCsvText] = useState<string>("");
+  // FAST Phase 1 Florida xlsx flow — holds the base64-encoded xlsx
+  // bytes (empty for all other kinds). Separated from csvText so the
+  // CSV path never accidentally sends binary data and vice versa.
+  const [xlsxBase64, setXlsxBase64] = useState<string>("");
+  // School-year label the operator picked for the Florida import.
+  // "YY-YY" (e.g. "25-26"). Default fills in after the first /preview
+  // response — the server tells us the current year so the dropdown
+  // can render relative to today regardless of the client clock.
+  // Default to the current school year so the first Florida preview
+  // call after upload has a valid year — the server re-validates.
+  // Phase-1 Historical FAST work: when true, the operator is
+  // explicitly back-filling a prior school year. Server requires the
+  // file be PM3-only and stamps is_historical=true on every row.
+  const [isHistoricalImport, setIsHistoricalImport] = useState(false);
+  const [selectedSchoolYear, setSelectedSchoolYear] = useState<string>(
+    () => floridaSchoolYearOptions()[0] ?? "",
+  );
   const [dragActive, setDragActive] = useState(false);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [mapping, setMapping] = useState<Record<string, string>>({});
@@ -966,6 +1052,55 @@ export default function DataImports({
   const [templates, setTemplates] = useState<ImportTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [savingTemplate, setSavingTemplate] = useState(false);
+
+  // 5-step wizard state. The step gates which UI block renders inside
+  // the Upload tab; the existing data flow (preview → mapping → commit)
+  // is unchanged. Steps:
+  //   0 — Choose data type (cards; Roster card disabled when the
+  //       per-school manualRosterUploadEnabled toggle is OFF)
+  //   1 — Upload CSV (drop zone)
+  //   2 — Map columns (target dictionary; required cols highlighted)
+  //   3 — Preview (validRows / errorRows / sample / per-school)
+  //   4 — Confirm: type the kind word in caps to enable Commit
+  const [step, setStep] = useState<0 | 1 | 2 | 3 | 4>(0);
+  const [confirmEcho, setConfirmEcho] = useState("");
+  // Per-school gate for the Roster card. Fetched once on mount; the
+  // server enforces the same toggle on /rosters/preview and /commit, so
+  // this is purely a UX hint — a stale value can't cause a bad commit.
+  const [rosterEnabled, setRosterEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const r = await authFetch("/api/school-settings");
+        if (!r.ok) {
+          if (alive) setRosterEnabled(false);
+          return;
+        }
+        const data = (await r.json()) as {
+          manualRosterUploadEnabled?: boolean;
+        };
+        if (alive) setRosterEnabled(!!data.manualRosterUploadEnabled);
+      } catch {
+        if (alive) setRosterEnabled(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+  // Each kind has a single-word "echo" the user must type to commit.
+  // Capital so it's hard to fat-finger past. Mirrors NewCaseWizard's
+  // confirm-step pattern.
+  const KIND_ECHO_WORDS: Record<Kind, string> = {
+    rosters: "ROSTER",
+    assessments: "ASSESSMENTS",
+    behavior: "BEHAVIOR",
+    fast_scores: "FAST",
+    fast_prior_year: "FAST",
+    fast_florida: "FLORIDA",
+  };
+  const echoWord = KIND_ECHO_WORDS[kind];
 
   // Endpoints + target dictionary depend on (kind, effectiveScope).
   // Memoized so the identity is stable across renders.
@@ -1097,26 +1232,106 @@ export default function DataImports({
     previewTokenRef.current++;
     setFilename("");
     setCsvText("");
+    setXlsxBase64("");
     setPreview(null);
     setMapping({});
     setError("");
     setCommitResult(null);
     setPreviewing(false);
+    setStep(0);
+    setConfirmEcho("");
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const handleFile = async (file: File) => {
     setError("");
     setCommitResult(null);
-    if (!/\.csv$/i.test(file.name)) {
-      setError("Please choose a .csv file.");
+    const isXlsx = /\.xlsx$/i.test(file.name);
+    const isXls = /\.xls$/i.test(file.name);
+    const isCsv = /\.csv$/i.test(file.name);
+    if (kind === "fast_florida") {
+      if (!isXlsx && !isXls) {
+        setError(
+          "Please choose a .xlsx or .xls file exported from the Florida FAST portal.",
+        );
+        return;
+      }
+      if (file.size > 12 * 1024 * 1024) {
+        setError("File exceeds the 12 MB limit. Split by grade and try again.");
+        return;
+      }
+      // Server-side parser is exceljs which only reads .xlsx (OOXML).
+      // For .xls (legacy BIFF) we convert client-side to .xlsx bytes
+      // using SheetJS before uploading. Genuine .xlsx files pass
+      // through untouched so we don't risk losing fidelity.
+      let bytes: Uint8Array;
+      if (isXlsx) {
+        bytes = new Uint8Array(await file.arrayBuffer());
+      } else {
+        try {
+          const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+          const out = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+          bytes = new Uint8Array(out as ArrayBuffer);
+        } catch (e) {
+          setError(
+            `Could not convert .xls to .xlsx: ${(e as Error).message}. Re-save the file as .xlsx from Excel and try again.`,
+          );
+          return;
+        }
+      }
+      // Base64 encode in chunks to avoid blowing the call stack on big
+      // arrays (btoa is per-character).
+      let binary = "";
+      const CHUNK = 0x8000;
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode.apply(
+          null,
+          Array.from(bytes.subarray(i, i + CHUNK)),
+        );
+      }
+      const b64 = btoa(binary);
+      setFilename(file.name);
+      setXlsxBase64(b64);
+      setCsvText(""); // not used in this flow but keep it clean
+      await runPreview("", {}, { xlsxBase64: b64 });
+      return;
+    }
+    // Generic importers (assessments / roster / behavior / fast):
+    // accept .csv OR .xlsx/.xls. For Excel formats we parse the first
+    // sheet client-side via SheetJS and convert to CSV text so the
+    // rest of the existing preview/mapping/commit pipeline keeps
+    // working unchanged. Server stays CSV-only.
+    if (!isCsv && !isXlsx && !isXls) {
+      setError("Please choose a .csv, .xlsx, or .xls file.");
       return;
     }
     if (file.size > 10 * 1024 * 1024) {
-      setError("CSV exceeds the 10 MB limit. Split the file and try again.");
+      setError("File exceeds the 10 MB limit. Split the file and try again.");
       return;
     }
-    const text = await file.text();
+    let text: string;
+    if (isCsv) {
+      text = await file.text();
+    } else {
+      try {
+        const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+        const firstSheetName = wb.SheetNames[0];
+        if (!firstSheetName) {
+          setError("The spreadsheet has no sheets.");
+          return;
+        }
+        const sheet = wb.Sheets[firstSheetName];
+        // FS:"," forces a comma delimiter; blankrows:false drops empty
+        // trailing rows; RS:"\n" keeps line endings predictable so the
+        // server's CSV parser doesn't trip on \r\r\n.
+        text = XLSX.utils.sheet_to_csv(sheet, { FS: ",", RS: "\n", blankrows: false });
+      } catch (e) {
+        setError(
+          `Could not read spreadsheet: ${(e as Error).message}. Try saving as CSV and uploading again.`,
+        );
+        return;
+      }
+    }
     setFilename(file.name);
     setCsvText(text);
     await runPreview(text, {});
@@ -1125,7 +1340,14 @@ export default function DataImports({
   const runPreview = async (
     text: string,
     overrideMapping: Record<string, string>,
+    floridaOverride?: { xlsxBase64?: string; schoolYear?: string },
   ) => {
+    // Callers that have just called setXlsxBase64 / setSelectedSchoolYear
+    // can pass the fresh values via `floridaOverride` to avoid a stale-
+    // state race (React batches setState so the next read in this tick
+    // returns the *previous* value).
+    const floridaXlsx = floridaOverride?.xlsxBase64 ?? xlsxBase64;
+    const floridaYear = floridaOverride?.schoolYear ?? selectedSchoolYear;
     // Snapshot the token + scope at call time. After the network round
     // trip we only commit state if (a) no newer preview has been kicked
     // off and (b) the scope hasn't been toggled in flight — otherwise a
@@ -1135,6 +1357,75 @@ export default function DataImports({
     setPreviewing(true);
     setError("");
     try {
+      // FAST Florida path — different body shape, different response
+      // shape. We adapt the response onto the PreviewResponse the wizard
+      // expects (just enough so step 3 can render counts + samples).
+      if (kind === "fast_florida") {
+        const r = await authFetch(endpoints.preview, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            xlsxBase64: floridaXlsx,
+            schoolYear: floridaYear || undefined,
+            filename,
+          }),
+        });
+        if (previewTokenRef.current !== myToken || callScope !== scope) return;
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          setError(j.error ?? `Preview failed (HTTP ${r.status})`);
+          setPreview(null);
+          return;
+        }
+        const data = await r.json();
+        // Adapt — totalRows = #students, validRows = same (each row is
+        // already validated by the parser). sampleRows mirrors the
+        // generic shape minimally.
+        const adapted: PreviewResponse = {
+          headers: [
+            "student_id",
+            "window",
+            "scale_score",
+            "achievement_level",
+          ],
+          autoMapping: {},
+          suggestedMapping: {},
+          unmappedCsvColumns: [],
+          totalRows: data.totalStudents ?? 0,
+          validRows: data.totalStudents ?? 0,
+          errorRows: 0,
+          totalItems: data.totalItems ?? 0,
+          sampleRows: (data.sampleStudents ?? []).map(
+            (s: {
+              studentId: string;
+              window: string;
+              scaleScore: number | null;
+              achievementLevel: string | null;
+            }) => ({
+              studentId: s.studentId,
+              assessmentName:
+                `Florida FAST ${
+                  data.subject === "math" ? "Math" : "ELA"
+                } ${s.window.toUpperCase()}` +
+                (data.gradeLabel ? ` · Grade ${data.gradeLabel}` : ""),
+              score: s.scaleScore,
+              scoreLevel: s.achievementLevel,
+              administeredAt: "",
+              source: "FL FAST",
+            }),
+          ),
+          errors: (data.warnings ?? []).map(
+            (w: { row: number; message: string }) => ({
+              row: w.row,
+              message: w.message,
+            }),
+          ),
+          readyToCommit: !!data.readyToCommit,
+        };
+        setPreview(adapted);
+        setMapping({});
+        return;
+      }
       const r = await authFetch(endpoints.preview, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1175,15 +1466,46 @@ export default function DataImports({
     void runPreview(csvText, next);
   };
 
+  // Final "is this current or historical?" gate for fast_florida.
+  // Fires AFTER the type-echo, BEFORE the network call. The checkbox
+  // on the upload step is easy to miss, and a missed-historical
+  // commit lands as current-year FAST data — silently corrupting
+  // dashboards. This modal forces an explicit pick every single time.
+  const [historicalGate, setHistoricalGate] = useState<null | "ask">(null);
+
   const handleCommit = async () => {
-    if (!preview || !csvText) return;
+    if (!preview) return;
+    if (kind !== "fast_florida" && !csvText) return;
+    if (kind === "fast_florida" && !xlsxBase64) return;
+    // For fast_florida, intercept the first click and require an
+    // explicit current-vs-historical pick. doCommit() below is what
+    // actually performs the upload after the modal resolves.
+    if (kind === "fast_florida") {
+      setHistoricalGate("ask");
+      return;
+    }
+    await doCommit(isHistoricalImport);
+  };
+
+  const doCommit = async (historical: boolean) => {
+    if (!preview) return;
+    setHistoricalGate(null);
+    setIsHistoricalImport(historical);
     setCommitting(true);
     setError("");
     try {
       const r = await authFetch(endpoints.commit, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ csv: csvText, filename, mapping }),
+        body:
+          kind === "fast_florida"
+            ? JSON.stringify({
+                xlsxBase64,
+                schoolYear: selectedSchoolYear || undefined,
+                filename,
+                isHistorical: historical,
+              })
+            : JSON.stringify({ csv: csvText, filename, mapping }),
       });
       const j = await r.json();
       if (!r.ok) {
@@ -1258,6 +1580,64 @@ export default function DataImports({
     resetUpload();
   };
 
+  // Wizard navigation guards. canAdvance() decides whether the Next
+  // button is clickable from the current step.
+  //   0 → 1: kind picked (always; the radio enforces the
+  //          rosterEnabled gate so we can't land on a disabled kind)
+  //   1 → 2: a file has been parsed (preview != null)
+  //   2 → 3: every required column is mapped
+  //   3 → 4: at least one row will import
+  //   4    : commit button takes over (no Next)
+  const canAdvance = (): boolean => {
+    if (step === 0) {
+      if (kind === "rosters" && rosterEnabled === false) return false;
+      return true;
+    }
+    if (step === 1) {
+      if (kind === "fast_florida") {
+        // Need both a parsed preview and a chosen school year.
+        return preview !== null && !!selectedSchoolYear;
+      }
+      return preview !== null;
+    }
+    if (step === 2) {
+      // Florida xlsx skips column mapping entirely.
+      if (kind === "fast_florida") return true;
+      if (!preview) return false;
+      if (missingRequired.length > 0) return false;
+      // Defense against an all-Ignore mapping — at least one column
+      // has to actually map to something.
+      return Object.keys(mapping).length > 0;
+    }
+    if (step === 3) {
+      return !!preview && preview.validRows > 0;
+    }
+    return false;
+  };
+  const goNext = () => {
+    if (!canAdvance()) return;
+    setStep((s) => {
+      // FAST Florida skips the mapping step (1 → 3 directly).
+      if (kind === "fast_florida" && s === 1) return 3;
+      return (Math.min(4, s + 1) as 0 | 1 | 2 | 3 | 4);
+    });
+  };
+  const goBack = () => {
+    setStep((s) => {
+      // Mirror goNext: FAST Florida back from preview goes to upload.
+      if (kind === "fast_florida" && s === 3) return 1;
+      return (Math.max(0, s - 1) as 0 | 1 | 2 | 3 | 4);
+    });
+  };
+
+  const STEP_LABELS = [
+    "Choose data",
+    "Upload",
+    "Map columns",
+    "Preview",
+    "Confirm",
+  ];
+
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
       <h2 style={{ marginTop: 0 }}>Data Imports</h2>
@@ -1303,26 +1683,40 @@ export default function DataImports({
         }}
       >
         <span style={{ fontSize: 13, fontWeight: 600 }}>Data type:</span>
-        {(Object.keys(KIND_DEFS) as Kind[]).map((k) => (
-          <label
-            key={k}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-              fontSize: 13,
-              cursor: "pointer",
-            }}
-          >
-            <input
-              type="radio"
-              name="data-imports-kind"
-              checked={kind === k}
-              onChange={() => handleKindChange(k)}
-            />
-            {KIND_DEFS[k].label}
-          </label>
-        ))}
+        {(Object.keys(KIND_DEFS) as Kind[]).map((k) => {
+          // Roster card is opt-in per school. Server enforces the same
+          // gate on /rosters/preview + /commit, so the disabled state
+          // here is purely a UX hint — a stale tab can't bypass it.
+          const isRoster = k === "rosters";
+          const disabled = isRoster && rosterEnabled === false;
+          return (
+            <label
+              key={k}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                fontSize: 13,
+                cursor: disabled ? "not-allowed" : "pointer",
+                opacity: disabled ? 0.5 : 1,
+              }}
+              title={
+                disabled
+                  ? "Manual roster uploads are disabled for this school. Most schools sync from Classlink or Clever (OneRoster). An admin can enable manual uploads in School Settings → Data & Integrations."
+                  : undefined
+              }
+            >
+              <input
+                type="radio"
+                name="data-imports-kind"
+                checked={kind === k}
+                disabled={disabled}
+                onChange={() => handleKindChange(k)}
+              />
+              {KIND_DEFS[k].label}
+            </label>
+          );
+        })}
         <span
           style={{
             color: "var(--text-subtle)",
@@ -1448,7 +1842,14 @@ export default function DataImports({
                   </>
                 )}
               </div>
-              <div style={{ marginTop: "0.75rem", display: "flex", gap: 8 }}>
+              <div
+                style={{
+                  marginTop: "0.75rem",
+                  display: "flex",
+                  gap: 8,
+                  flexWrap: "wrap",
+                }}
+              >
                 <button
                   type="button"
                   onClick={resetUpload}
@@ -1482,520 +1883,1262 @@ export default function DataImports({
                 >
                   View history
                 </button>
-              </div>
-            </div>
-          ) : !preview ? (
-            <div>
-              <div
-                style={dragActive ? dropZoneActiveStyle : dropZoneStyle}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDragActive(true);
-                }}
-                onDragLeave={() => setDragActive(false)}
-                onDrop={onDrop}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <div style={{ fontSize: 32, marginBottom: "0.5rem" }}>📥</div>
-                <div style={{ fontWeight: 600 }}>
-                  Drop a CSV file here, or click to choose
-                </div>
-                <div
+                {/* Universal undo — every committed job (including FAST,
+                    now that import_job_id is tagged) supports rollback.
+                    Same handler as the History tab; the confirm prompt
+                    inside handleRollback prevents accidental clicks. */}
+                <button
+                  type="button"
+                  onClick={() => handleRollback(commitResult.jobId)}
+                  disabled={rollbackId === commitResult.jobId}
                   style={{
-                    fontSize: 12,
-                    color: "var(--text-subtle)",
-                    marginTop: "0.5rem",
-                  }}
-                >
-                  Up to 10 MB. First row should be column headers.
-                </div>
-                {previewing && (
-                  <div style={{ marginTop: "0.75rem", fontSize: 14 }}>
-                    Parsing…
-                  </div>
-                )}
-              </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".csv,text/csv"
-                style={{ display: "none" }}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) void handleFile(f);
-                }}
-              />
-              {error && (
-                <div
-                  style={{
-                    marginTop: "0.75rem",
-                    padding: "0.75rem",
-                    background: "rgba(239, 68, 68, 0.1)",
+                    padding: "0.5rem 1rem",
                     border: "1px solid #ef4444",
                     borderRadius: 6,
-                    fontSize: 14,
-                  }}
-                >
-                  {error}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.75rem",
-                  marginBottom: "1rem",
-                }}
-              >
-                <span style={{ fontWeight: 600 }}>{filename}</span>
-                <span style={{ color: "var(--text-subtle)", fontSize: 14 }}>
-                  · {preview.totalRows} rows
-                </span>
-                <button
-                  type="button"
-                  onClick={resetUpload}
-                  style={{
-                    marginLeft: "auto",
-                    padding: "0.35rem 0.75rem",
-                    border: "1px solid var(--border, #2a3447)",
-                    borderRadius: 6,
                     background: "transparent",
-                    color: "inherit",
-                    cursor: "pointer",
-                    font: "inherit",
-                    fontSize: 13,
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-
-              <div
-                style={{
-                  display: "flex",
-                  gap: "1rem",
-                  marginBottom: "1rem",
-                  flexWrap: "wrap",
-                }}
-              >
-                <Stat label="Total" value={preview.totalRows} />
-                <Stat label="Will import" value={preview.validRows} accent />
-                <Stat label="Will skip" value={preview.errorRows} warn />
-                {scope === "district" && preview.perSchool && (
-                  <Stat
-                    label="Schools matched"
-                    value={preview.perSchool.length}
-                  />
-                )}
-              </div>
-
-              {scope === "district" &&
-                preview.perSchool &&
-                preview.perSchool.length > 0 && (
-                  <details style={{ marginBottom: "1rem" }}>
-                    <summary
-                      style={{ cursor: "pointer", fontWeight: 600 }}
-                    >
-                      Per-school breakdown — {preview.perSchool.length} school
-                      {preview.perSchool.length === 1 ? "" : "s"} matched
-                      {typeof preview.districtSchoolCount === "number" && (
-                        <span
-                          style={{
-                            color: "var(--text-subtle)",
-                            fontWeight: 400,
-                            marginLeft: 6,
-                          }}
-                        >
-                          (of {preview.districtSchoolCount} in district)
-                        </span>
-                      )}
-                    </summary>
-                    <div style={{ marginTop: "0.5rem", overflowX: "auto" }}>
-                      <table className="pulse-table"
-                        style={{
-                          width: "100%",
-                          borderCollapse: "collapse",
-                          fontSize: 13,
-                        }}
-                      >
-                        <thead>
-                          <tr>
-                            <th
-                              style={{
-                                textAlign: "left",
-                                padding: "0.35rem",
-                                borderBottom:
-                                  "1px solid var(--border, #2a3447)",
-                              }}
-                            >
-                              School
-                            </th>
-                            <th
-                              style={{
-                                textAlign: "right",
-                                padding: "0.35rem",
-                                borderBottom:
-                                  "1px solid var(--border, #2a3447)",
-                              }}
-                            >
-                              Rows
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {preview.perSchool.map((s) => (
-                            <tr key={s.schoolId}>
-                              <td style={{ padding: "0.35rem" }}>
-                                {s.schoolName}
-                              </td>
-                              <td
-                                style={{
-                                  padding: "0.35rem",
-                                  textAlign: "right",
-                                  fontVariantNumeric: "tabular-nums",
-                                }}
-                              >
-                                {s.rows.toLocaleString()}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </details>
-                )}
-
-              <h3 style={{ marginTop: "1.25rem", marginBottom: "0.5rem" }}>
-                Column mapping
-              </h3>
-              <p
-                style={{
-                  marginTop: 0,
-                  fontSize: 13,
-                  color: "var(--text-subtle)",
-                }}
-              >
-                We guessed how each CSV column maps to our fields. Override
-                any row, or set a column to "Ignore" to drop it.
-              </p>
-
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                  marginBottom: "0.75rem",
-                  flexWrap: "wrap",
-                }}
-              >
-                <span style={{ fontSize: 13, fontWeight: 600 }}>
-                  Templates:
-                </span>
-                <select
-                  value=""
-                  onChange={(e) => {
-                    const v = parseInt(e.target.value, 10);
-                    if (Number.isFinite(v) && v > 0) applyTemplate(v);
-                  }}
-                  disabled={templatesLoading || templates.length === 0}
-                  style={{
-                    padding: "0.3rem 0.5rem",
-                    background: "var(--card-bg, #0f172a)",
-                    color: "inherit",
-                    border: "1px solid var(--border, #2a3447)",
-                    borderRadius: 6,
-                    font: "inherit",
-                    fontSize: 13,
-                    minWidth: 200,
-                  }}
-                >
-                  <option value="">
-                    {templatesLoading
-                      ? "Loading…"
-                      : templates.length === 0
-                        ? "No saved templates"
-                        : "Apply a saved template…"}
-                  </option>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name} {t.scope === "district" ? "🏛 District" : ""}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={handleSaveTemplate}
-                  disabled={
-                    savingTemplate || Object.keys(mapping).length === 0
-                  }
-                  style={{
-                    padding: "0.3rem 0.75rem",
-                    border: "1px solid var(--border, #2a3447)",
-                    borderRadius: 6,
-                    background: "transparent",
-                    color: "inherit",
+                    color: "#ef4444",
                     cursor:
-                      savingTemplate || Object.keys(mapping).length === 0
+                      rollbackId === commitResult.jobId
                         ? "not-allowed"
                         : "pointer",
                     font: "inherit",
-                    fontSize: 13,
-                    opacity:
-                      savingTemplate || Object.keys(mapping).length === 0
-                        ? 0.5
-                        : 1,
+                    fontWeight: 600,
+                    opacity: rollbackId === commitResult.jobId ? 0.5 : 1,
+                    marginLeft: "auto",
                   }}
-                  title={
-                    scope === "district"
-                      ? "Saved as a district-wide template (visible to every school in your district)"
-                      : "Saved as a template for your school"
-                  }
+                  title="Roll back this import — every row it added or changed will be reverted."
                 >
-                  {savingTemplate ? "Saving…" : "Save current as template"}
+                  {rollbackId === commitResult.jobId
+                    ? "Rolling back…"
+                    : "Undo this import"}
                 </button>
-                {templates.length > 0 && (
-                  <details style={{ marginLeft: "auto" }}>
-                    <summary
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Stepper bar — five chips mirroring NewCaseWizard.
+                  Read-only; nav is via Back/Next buttons at the bottom
+                  so the user can't skip past required gates. */}
+              <div
+                role="tablist"
+                aria-label="Import wizard steps"
+                style={{
+                  display: "flex",
+                  gap: 6,
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  padding: "0.5rem 0.65rem",
+                  border: "1px solid var(--border, #2a3447)",
+                  borderRadius: 8,
+                  background: "rgba(59, 130, 246, 0.04)",
+                  marginBottom: "0.85rem",
+                }}
+              >
+                {STEP_LABELS.map((label, i) => {
+                  const active = step === i;
+                  const done = step > i;
+                  return (
+                    <div
+                      key={label}
                       style={{
-                        cursor: "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "0.25rem 0.6rem",
+                        borderRadius: 999,
+                        background: active
+                          ? "var(--accent, #3b82f6)"
+                          : done
+                            ? "rgba(16, 185, 129, 0.15)"
+                            : "transparent",
+                        color: active
+                          ? "white"
+                          : done
+                            ? "#10b981"
+                            : "var(--text-subtle)",
+                        border:
+                          active || done
+                            ? "1px solid transparent"
+                            : "1px solid var(--border, #2a3447)",
                         fontSize: 12,
-                        color: "var(--text-subtle)",
+                        fontWeight: active ? 700 : 500,
                       }}
                     >
-                      Manage ({templates.length})
-                    </summary>
-                    <ul
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          width: 18,
+                          height: 18,
+                          borderRadius: "50%",
+                          background: active
+                            ? "rgba(255, 255, 255, 0.25)"
+                            : done
+                              ? "#10b981"
+                              : "var(--border, #2a3447)",
+                          color: active || done ? "white" : "inherit",
+                          fontSize: 11,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {done ? "✓" : i + 1}
+                      </span>
+                      <span>{label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Step 0 — Choose data type. Cards instead of radios so the
+                  Roster card can show a clear disabled affordance + an
+                  inline explainer when the per-school toggle is OFF. */}
+              {step === 0 && (
+                <div>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns:
+                        "repeat(auto-fill, minmax(220px, 1fr))",
+                      gap: "0.6rem",
+                      marginBottom: "0.85rem",
+                    }}
+                  >
+                    {(Object.keys(KIND_DEFS) as Kind[]).map((k) => {
+                      const def = KIND_DEFS[k];
+                      const isRoster = k === "rosters";
+                      const disabled =
+                        isRoster && rosterEnabled === false;
+                      const selected = kind === k;
+                      return (
+                        <button
+                          key={k}
+                          type="button"
+                          onClick={() => {
+                            if (disabled) return;
+                            handleKindChange(k);
+                          }}
+                          disabled={disabled}
+                          style={{
+                            textAlign: "left",
+                            padding: "0.85rem",
+                            borderRadius: 8,
+                            border: selected
+                              ? "2px solid var(--accent, #3b82f6)"
+                              : "1px solid var(--border, #2a3447)",
+                            background: selected
+                              ? "rgba(59, 130, 246, 0.08)"
+                              : "var(--card-bg, #0f172a)",
+                            color: "inherit",
+                            font: "inherit",
+                            cursor: disabled ? "not-allowed" : "pointer",
+                            opacity: disabled ? 0.45 : 1,
+                          }}
+                          title={
+                            disabled
+                              ? "Manual roster uploads are disabled for this school."
+                              : undefined
+                          }
+                        >
+                          <div
+                            style={{
+                              fontWeight: 700,
+                              fontSize: 14,
+                              marginBottom: 4,
+                            }}
+                          >
+                            {def.label}
+                            {disabled && (
+                              <span
+                                style={{
+                                  marginLeft: 6,
+                                  fontSize: 10,
+                                  fontWeight: 700,
+                                  letterSpacing: "0.05em",
+                                  textTransform: "uppercase",
+                                  padding: "0.05rem 0.4rem",
+                                  borderRadius: 999,
+                                  background: "rgba(148, 163, 184, 0.2)",
+                                  color: "var(--text-subtle)",
+                                }}
+                              >
+                                Off
+                              </span>
+                            )}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: 12,
+                              color: "var(--text-subtle)",
+                              lineHeight: 1.4,
+                            }}
+                          >
+                            {def.helpText}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {kind === "rosters" && rosterEnabled === false && (
+                    <div
                       style={{
-                        marginTop: "0.4rem",
-                        paddingLeft: "1.25rem",
+                        padding: "0.75rem",
+                        background: "rgba(245, 158, 11, 0.1)",
+                        border: "1px solid #f59e0b",
+                        borderRadius: 6,
+                        fontSize: 13,
+                        marginBottom: "0.85rem",
+                      }}
+                    >
+                      Manual roster uploads are disabled for this school.
+                      Most schools sync their roster from Classlink or
+                      Clever (OneRoster) so this stays off by default. An
+                      admin can enable it in <strong>School Settings →
+                      Data &amp; Integrations</strong>.
+                    </div>
+                  )}
+                  {canActAsDistrict && kindDef.supportsDistrict && (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.75rem",
+                        padding: "0.6rem 0.75rem",
+                        background: "rgba(59, 130, 246, 0.06)",
+                        border: "1px solid var(--border, #2a3447)",
+                        borderRadius: 8,
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>
+                        Scope:
+                      </span>
+                      <label
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          fontSize: 13,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name="data-imports-scope-step0"
+                          checked={scope === "school"}
+                          onChange={() => handleScopeChange("school")}
+                        />
+                        My school only
+                      </label>
+                      <label
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          fontSize: 13,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name="data-imports-scope-step0"
+                          checked={scope === "district"}
+                          onChange={() => handleScopeChange("district")}
+                        />
+                        District-wide (rows routed by school code)
+                      </label>
+                      {scope === "district" && (
+                        <span
+                          style={{
+                            fontSize: 12,
+                            color: "var(--text-subtle)",
+                            marginLeft: "auto",
+                          }}
+                        >
+                          CSV must include a school_code column matching
+                          each school's state code or ID.
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Step 1 — Upload CSV. Drop zone if no file yet, filename
+                  pill + cancel if a file is already loaded. A small
+                  "Download sample CSV" link sits above the drop zone so
+                  a first-time user can grab a known-good template,
+                  replace the single seeded row with their real data,
+                  and re-upload. */}
+              {step === 1 && (
+                <div>
+                  {(() => {
+                    const SAMPLES: Record<Kind, { file: string; label: string }> = {
+                      assessments: {
+                        file: "pulseedu-assessments-sample.csv",
+                        label: "Sample assessments CSV",
+                      },
+                      rosters: {
+                        file: "pulseedu-roster-sample.csv",
+                        label: "Sample roster CSV",
+                      },
+                      behavior: {
+                        file: "pulseedu-behavior-sample.csv",
+                        label: "Sample behavior notes CSV",
+                      },
+                      fast_scores: {
+                        file: "pulseedu-fast-sample.csv",
+                        label: "Sample FAST scores CSV",
+                      },
+                      fast_prior_year: {
+                        file: "pulseedu-fast-prior-year-sample.csv",
+                        label: "Sample FAST prior-year CSV",
+                      },
+                      // Florida xlsx has no sample we can ship — admins
+                      // supply their own state-portal export. The
+                      // download bar below is conditionally hidden for
+                      // this kind via the `sample` null-check.
+                      fast_florida: null as unknown as {
+                        file: string;
+                        label: string;
+                      },
+                    };
+                    const sample = SAMPLES[kind];
+                    if (!sample) return null;
+                    return (
+                      <div
+                        style={{
+                          marginBottom: "0.75rem",
+                          padding: "0.6rem 0.8rem",
+                          border: "1px dashed var(--border, #2a3447)",
+                          borderRadius: 8,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.6rem",
+                          fontSize: 13,
+                          color: "var(--text-subtle)",
+                        }}
+                      >
+                        <span style={{ fontSize: 16 }}>📄</span>
+                        <div style={{ flex: 1 }}>
+                          New here? Download the {sample.label}, replace
+                          the example row with your own data, save, and
+                          drop it back in below.
+                        </div>
+                        <a
+                          href={`${import.meta.env.BASE_URL}samples/${sample.file}`}
+                          download={sample.file}
+                          style={{
+                            padding: "0.35rem 0.7rem",
+                            border: "1px solid var(--border, #2a3447)",
+                            borderRadius: 6,
+                            textDecoration: "none",
+                            color: "inherit",
+                            fontSize: 13,
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          Download sample
+                        </a>
+                      </div>
+                    );
+                  })()}
+                  {preview ? (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.75rem",
+                        padding: "0.75rem",
+                        border: "1px solid #10b981",
+                        borderRadius: 8,
+                        background: "rgba(16, 185, 129, 0.05)",
+                      }}
+                    >
+                      <span style={{ fontSize: 22 }}>✓</span>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 600 }}>{filename}</div>
+                        <div
+                          style={{
+                            color: "var(--text-subtle)",
+                            fontSize: 13,
+                          }}
+                        >
+                          {preview.totalRows} rows parsed. Click Next to
+                          map columns.
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={resetUpload}
+                        style={{
+                          padding: "0.35rem 0.75rem",
+                          border: "1px solid var(--border, #2a3447)",
+                          borderRadius: 6,
+                          background: "transparent",
+                          color: "inherit",
+                          cursor: "pointer",
+                          font: "inherit",
+                          fontSize: 13,
+                        }}
+                      >
+                        Choose a different file
+                      </button>
+                    </div>
+                  ) : (
+                    <div
+                      style={dragActive ? dropZoneActiveStyle : dropZoneStyle}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setDragActive(true);
+                      }}
+                      onDragLeave={() => setDragActive(false)}
+                      onDrop={onDrop}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      <div style={{ fontSize: 32, marginBottom: "0.5rem" }}>
+                        📥
+                      </div>
+                      <div style={{ fontWeight: 600 }}>
+                        Drop a CSV file here, or click to choose
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: "var(--text-subtle)",
+                          marginTop: "0.5rem",
+                        }}
+                      >
+                        Up to 10 MB. First row should be column headers.
+                      </div>
+                      {previewing && (
+                        <div style={{ marginTop: "0.75rem", fontSize: 14 }}>
+                          Parsing…
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept={
+                      kind === "fast_florida"
+                        ? ".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                        : ".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                    }
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void handleFile(f);
+                    }}
+                  />
+                  {/* Florida xlsx school-year picker. Sits below the
+                      drop zone so it's visible whether or not a file
+                      is already loaded. The current year plus three
+                      prior years are accepted (mirrors the server
+                      validateSchoolYearLabel). */}
+                  {kind === "fast_florida" && (
+                    <div
+                      style={{
+                        marginTop: "0.75rem",
+                        padding: "0.75rem",
+                        border: "1px solid var(--border, #2a3447)",
+                        borderRadius: 8,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.75rem",
                         fontSize: 13,
                       }}
                     >
-                      {templates.map((t) => (
-                        <li key={t.id} style={{ marginBottom: 4 }}>
-                          {t.name}{" "}
-                          <span
-                            style={{
-                              color: "var(--text-subtle)",
-                              fontSize: 11,
-                            }}
-                          >
-                            ({t.scope})
-                          </span>{" "}
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteTemplate(t.id, t.name)}
-                            style={{
-                              padding: "0.1rem 0.4rem",
-                              border: "1px solid #ef4444",
-                              background: "transparent",
-                              color: "#ef4444",
-                              borderRadius: 4,
-                              fontSize: 11,
-                              cursor: "pointer",
-                              marginLeft: 4,
-                            }}
-                          >
-                            Delete
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-                )}
-              </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: "0.5rem",
-                  marginBottom: "1rem",
-                }}
-              >
-                {preview.headers.map((h) => (
+                      <label
+                        htmlFor="fast-florida-school-year"
+                        style={{ fontWeight: 600 }}
+                      >
+                        School year:
+                      </label>
+                      <select
+                        id="fast-florida-school-year"
+                        value={selectedSchoolYear}
+                        onChange={(e) => {
+                          const nextYear = e.target.value;
+                          setSelectedSchoolYear(nextYear);
+                          // Re-preview against the new year — the server
+                          // re-validates the label and the operator
+                          // sees row counts before committing.
+                          if (xlsxBase64)
+                            void runPreview("", {}, {
+                              xlsxBase64,
+                              schoolYear: nextYear,
+                            });
+                        }}
+                        style={{
+                          padding: "0.4rem 0.6rem",
+                          border: "1px solid var(--border, #2a3447)",
+                          borderRadius: 6,
+                          background: "var(--surface)",
+                          color: "inherit",
+                          font: "inherit",
+                          fontSize: 13,
+                        }}
+                      >
+                        <option value="">— pick a year —</option>
+                        {floridaSchoolYearOptions().map((y) => (
+                          <option key={y} value={y}>
+                            20{y.slice(0, 2)}–20{y.slice(3, 5)}
+                          </option>
+                        ))}
+                      </select>
+                      <span style={{ color: "var(--text-subtle)" }}>
+                        Pick the year these scores belong to. Use the
+                        current year for a fresh PM; pick a prior year
+                        to back-fill.
+                      </span>
+                      {/* Historical back-fill toggle. PM3-only is
+                          enforced server-side; the helper text below
+                          explains why. */}
+                      <label
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          marginLeft: "auto",
+                          fontSize: 12,
+                          color: "var(--text-subtle)",
+                        }}
+                        title="Tag this import as historical back-fill. File must contain PM3 scores only. Used for multi-year FAST trajectory + Algebra I placement review."
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isHistoricalImport}
+                          onChange={(e) =>
+                            setIsHistoricalImport(e.target.checked)
+                          }
+                        />
+                        Import as historical (PM3-only back-fill)
+                      </label>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Step 2 — Map columns. Templates bar + per-header
+                  dropdowns + missing-required warning. Gated on having
+                  a preview from step 1. */}
+              {step === 2 && preview && (
+                <div>
+                  <h3 style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+                    Column mapping
+                  </h3>
+                  <p
+                    style={{
+                      marginTop: 0,
+                      fontSize: 13,
+                      color: "var(--text-subtle)",
+                    }}
+                  >
+                    We guessed how each CSV column maps to our fields.
+                    Override any row, or set a column to "Ignore" to drop
+                    it.
+                  </p>
+
                   <div
-                    key={h}
                     style={{
                       display: "flex",
                       alignItems: "center",
                       gap: "0.5rem",
-                      padding: "0.5rem",
-                      border: "1px solid var(--border, #2a3447)",
-                      borderRadius: 6,
+                      marginBottom: "0.75rem",
+                      flexWrap: "wrap",
                     }}
                   >
-                    <span
-                      style={{
-                        fontFamily: "monospace",
-                        fontSize: 13,
-                        flex: 1,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                      }}
-                    >
-                      {h}
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>
+                      Templates:
                     </span>
-                    <span style={{ color: "var(--text-subtle)" }}>→</span>
                     <select
-                      value={mapping[h] ?? IGNORE_VALUE}
-                      onChange={(e) => handleMappingChange(h, e.target.value)}
+                      value=""
+                      onChange={(e) => {
+                        const v = parseInt(e.target.value, 10);
+                        if (Number.isFinite(v) && v > 0) applyTemplate(v);
+                      }}
+                      disabled={
+                        templatesLoading || templates.length === 0
+                      }
                       style={{
-                        flex: 1,
-                        padding: "0.25rem",
+                        padding: "0.3rem 0.5rem",
                         background: "var(--card-bg, #0f172a)",
                         color: "inherit",
                         border: "1px solid var(--border, #2a3447)",
-                        borderRadius: 4,
+                        borderRadius: 6,
                         font: "inherit",
                         fontSize: 13,
+                        minWidth: 200,
                       }}
                     >
-                      <option value={IGNORE_VALUE}>Ignore</option>
-                      {targets.map((t) => (
-                        <option key={t.value} value={t.value}>
-                          {t.label}
-                          {t.required ? " *" : ""}
+                      <option value="">
+                        {templatesLoading
+                          ? "Loading…"
+                          : templates.length === 0
+                            ? "No saved templates"
+                            : "Apply a saved template…"}
+                      </option>
+                      {templates.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}{" "}
+                          {t.scope === "district" ? "🏛 District" : ""}
                         </option>
                       ))}
                     </select>
+                    <button
+                      type="button"
+                      onClick={handleSaveTemplate}
+                      disabled={
+                        savingTemplate ||
+                        Object.keys(mapping).length === 0
+                      }
+                      style={{
+                        padding: "0.3rem 0.75rem",
+                        border: "1px solid var(--border, #2a3447)",
+                        borderRadius: 6,
+                        background: "transparent",
+                        color: "inherit",
+                        cursor:
+                          savingTemplate ||
+                          Object.keys(mapping).length === 0
+                            ? "not-allowed"
+                            : "pointer",
+                        font: "inherit",
+                        fontSize: 13,
+                        opacity:
+                          savingTemplate ||
+                          Object.keys(mapping).length === 0
+                            ? 0.5
+                            : 1,
+                      }}
+                      title={
+                        scope === "district"
+                          ? "Saved as a district-wide template (visible to every school in your district)"
+                          : "Saved as a template for your school"
+                      }
+                    >
+                      {savingTemplate
+                        ? "Saving…"
+                        : "Save current as template"}
+                    </button>
+                    {templates.length > 0 && (
+                      <details style={{ marginLeft: "auto" }}>
+                        <summary
+                          style={{
+                            cursor: "pointer",
+                            fontSize: 12,
+                            color: "var(--text-subtle)",
+                          }}
+                        >
+                          Manage ({templates.length})
+                        </summary>
+                        <ul
+                          style={{
+                            marginTop: "0.4rem",
+                            paddingLeft: "1.25rem",
+                            fontSize: 13,
+                          }}
+                        >
+                          {templates.map((t) => (
+                            <li key={t.id} style={{ marginBottom: 4 }}>
+                              {t.name}{" "}
+                              <span
+                                style={{
+                                  color: "var(--text-subtle)",
+                                  fontSize: 11,
+                                }}
+                              >
+                                ({t.scope})
+                              </span>{" "}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleDeleteTemplate(t.id, t.name)
+                                }
+                                style={{
+                                  padding: "0.1rem 0.4rem",
+                                  border: "1px solid #ef4444",
+                                  background: "transparent",
+                                  color: "#ef4444",
+                                  borderRadius: 4,
+                                  fontSize: 11,
+                                  cursor: "pointer",
+                                  marginLeft: 4,
+                                }}
+                              >
+                                Delete
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
                   </div>
-                ))}
-              </div>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: "0.5rem",
+                      marginBottom: "1rem",
+                    }}
+                  >
+                    {preview.headers.map((h) => (
+                      <div
+                        key={h}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.5rem",
+                          padding: "0.5rem",
+                          border: "1px solid var(--border, #2a3447)",
+                          borderRadius: 6,
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontFamily: "monospace",
+                            fontSize: 13,
+                            flex: 1,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {h}
+                        </span>
+                        <span style={{ color: "var(--text-subtle)" }}>
+                          →
+                        </span>
+                        <select
+                          value={mapping[h] ?? IGNORE_VALUE}
+                          onChange={(e) =>
+                            handleMappingChange(h, e.target.value)
+                          }
+                          style={{
+                            flex: 1,
+                            padding: "0.25rem",
+                            background: "var(--card-bg, #0f172a)",
+                            color: "inherit",
+                            border: "1px solid var(--border, #2a3447)",
+                            borderRadius: 4,
+                            font: "inherit",
+                            fontSize: 13,
+                          }}
+                        >
+                          <option value={IGNORE_VALUE}>Ignore</option>
+                          {targets.map((t) => (
+                            <option key={t.value} value={t.value}>
+                              {t.label}
+                              {t.required ? " *" : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
 
-              {missingRequired.length > 0 && (
-                <div
-                  style={{
-                    padding: "0.75rem",
-                    background: "rgba(245, 158, 11, 0.1)",
-                    border: "1px solid #f59e0b",
-                    borderRadius: 6,
-                    fontSize: 14,
-                    marginBottom: "1rem",
-                  }}
-                >
-                  Missing required fields: {missingRequired.join(", ")}.
-                  Map at least one CSV column to each.
+                  {missingRequired.length > 0 && (
+                    <div
+                      style={{
+                        padding: "0.75rem",
+                        background: "rgba(245, 158, 11, 0.1)",
+                        border: "1px solid #f59e0b",
+                        borderRadius: 6,
+                        fontSize: 14,
+                        marginBottom: "1rem",
+                      }}
+                    >
+                      Missing required fields: {missingRequired.join(", ")}.
+                      Map at least one CSV column to each.
+                    </div>
+                  )}
                 </div>
               )}
 
-              {preview.sampleRows.length > 0 && (
-                <details style={{ marginBottom: "1rem" }}>
-                  <summary
-                    style={{ cursor: "pointer", fontWeight: 600 }}
-                  >
-                    Preview first {preview.sampleRows.length} rows
-                  </summary>
+              {/* Step 3 — Preview counts + sample rows + skipped errors.
+                  This is the last chance to read what's about to land
+                  before the type-echo gate on step 4. */}
+              {step === 3 && preview && (
+                <div>
                   <div
                     style={{
-                      marginTop: "0.5rem",
-                      overflowX: "auto",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.75rem",
+                      marginBottom: "1rem",
+                      flexWrap: "wrap",
                     }}
                   >
-                    <table className="pulse-table"
+                    <span style={{ fontWeight: 600 }}>{filename}</span>
+                    <span
                       style={{
-                        width: "100%",
-                        borderCollapse: "collapse",
-                        fontSize: 13,
+                        color: "var(--text-subtle)",
+                        fontSize: 14,
                       }}
                     >
-                      <thead>
-                        <tr>
-                          {[
-                            "Student",
-                            "Assessment",
-                            "Score",
-                            "Level",
-                            "Date",
-                            "Source",
-                          ].map((h) => (
-                            <th
-                              key={h}
+                      · {preview.totalRows} rows
+                    </span>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "1rem",
+                      marginBottom: "1rem",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <Stat label="Total" value={preview.totalRows} />
+                    <Stat
+                      label="Will import"
+                      value={preview.validRows}
+                      accent
+                    />
+                    <Stat label="Will skip" value={preview.errorRows} warn />
+                    {kind === "fast_florida" &&
+                      typeof preview.totalItems === "number" && (
+                        <Stat
+                          label="Will import items"
+                          value={preview.totalItems}
+                          accent
+                        />
+                      )}
+                    {scope === "district" && preview.perSchool && (
+                      <Stat
+                        label="Schools matched"
+                        value={preview.perSchool.length}
+                      />
+                    )}
+                  </div>
+
+                  {/* Roster-only: non-blocking warning when one or more
+                      house_name cells didn't match a configured house.
+                      Those rows still commit (smallest-house fallback in
+                      insertChunk), but admins deserve a heads-up so they
+                      can fix typos before the data lands rebalanced. */}
+                  {kind === "rosters" && preview.unrecognizedHouseNames && (
+                    <div
+                      style={{
+                        padding: "0.6rem 0.75rem",
+                        background: "rgba(245, 158, 11, 0.08)",
+                        border: "1px solid #f59e0b",
+                        borderRadius: 6,
+                        fontSize: 13,
+                        marginBottom: "1rem",
+                      }}
+                    >
+                      <div style={{ marginBottom: 4 }}>
+                        <strong>
+                          {preview.unrecognizedHouseNames.rowCount} row
+                          {preview.unrecognizedHouseNames.rowCount === 1
+                            ? ""
+                            : "s"}{" "}
+                          had a house name we didn't recognize;
+                        </strong>{" "}
+                        {preview.unrecognizedHouseNames.policy === "strict"
+                          ? "they will be skipped (strict house-name matching is on for this school)."
+                          : "they will use the smallest-house default."}
+                      </div>
+                      <div style={{ color: "var(--text-subtle)" }}>
+                        Unrecognized:{" "}
+                        {preview.unrecognizedHouseNames.samples
+                          .map((s) =>
+                            s.suggestion
+                              ? `"${s.value}" (did you mean "${s.suggestion}"?)`
+                              : `"${s.value}"`,
+                          )
+                          .join(", ")}
+                        {preview.unrecognizedHouseNames.distinctCount >
+                          preview.unrecognizedHouseNames.samples.length && (
+                          <>
+                            {" "}
+                            +{" "}
+                            {preview.unrecognizedHouseNames.distinctCount -
+                              preview.unrecognizedHouseNames.samples
+                                .length}{" "}
+                            more
+                          </>
+                        )}
+                        . Check spelling, or add the house in PBIS Hub →
+                        Houses before committing.
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Roster-only reassurance: upsert semantics mean the
+                      commit will only touch student_ids that appear in
+                      the CSV. Every other row stays untouched. */}
+                  {kind === "rosters" && (
+                    <div
+                      style={{
+                        padding: "0.6rem 0.75rem",
+                        background: "rgba(59, 130, 246, 0.06)",
+                        border: "1px solid #3b82f6",
+                        borderRadius: 6,
+                        fontSize: 13,
+                        marginBottom: "1rem",
+                      }}
+                    >
+                      <strong>Heads up:</strong> Roster commits only touch
+                      student IDs present in this CSV. Existing students
+                      not mentioned will <strong>NOT</strong> be removed
+                      or changed. Blank cells preserve current values
+                      (COALESCE), so partial files are safe.
+                    </div>
+                  )}
+
+                  {scope === "district" &&
+                    preview.perSchool &&
+                    preview.perSchool.length > 0 && (
+                      <details style={{ marginBottom: "1rem" }}>
+                        <summary
+                          style={{ cursor: "pointer", fontWeight: 600 }}
+                        >
+                          Per-school breakdown — {preview.perSchool.length}{" "}
+                          school
+                          {preview.perSchool.length === 1 ? "" : "s"} matched
+                          {typeof preview.districtSchoolCount ===
+                            "number" && (
+                            <span
                               style={{
-                                textAlign: "left",
-                                padding: "0.35rem",
-                                borderBottom:
-                                  "1px solid var(--border, #2a3447)",
+                                color: "var(--text-subtle)",
+                                fontWeight: 400,
+                                marginLeft: 6,
                               }}
                             >
-                              {h}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {preview.sampleRows.map((r, i) => (
-                          <tr key={i}>
-                            <td style={{ padding: "0.35rem" }}>
-                              {r.studentId}
-                            </td>
-                            <td style={{ padding: "0.35rem" }}>
-                              {r.assessmentName}
-                            </td>
-                            <td style={{ padding: "0.35rem" }}>
-                              {r.score ?? "—"}
-                            </td>
-                            <td style={{ padding: "0.35rem" }}>
-                              {r.scoreLevel ?? "—"}
-                            </td>
-                            <td style={{ padding: "0.35rem" }}>
-                              {new Date(r.administeredAt).toLocaleDateString()}
-                            </td>
-                            <td style={{ padding: "0.35rem" }}>
-                              {r.source ?? "—"}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </details>
-              )}
+                              (of {preview.districtSchoolCount} in district)
+                            </span>
+                          )}
+                        </summary>
+                        <div
+                          style={{
+                            marginTop: "0.5rem",
+                            overflowX: "auto",
+                          }}
+                        >
+                          <table
+                            className="pulse-table"
+                            style={{
+                              width: "100%",
+                              borderCollapse: "collapse",
+                              fontSize: 13,
+                            }}
+                          >
+                            <thead>
+                              <tr>
+                                <th
+                                  style={{
+                                    textAlign: "left",
+                                    padding: "0.35rem",
+                                    borderBottom:
+                                      "1px solid var(--border, #2a3447)",
+                                  }}
+                                >
+                                  School
+                                </th>
+                                <th
+                                  style={{
+                                    textAlign: "right",
+                                    padding: "0.35rem",
+                                    borderBottom:
+                                      "1px solid var(--border, #2a3447)",
+                                  }}
+                                >
+                                  Rows
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {preview.perSchool.map((s) => (
+                                <tr key={s.schoolId}>
+                                  <td style={{ padding: "0.35rem" }}>
+                                    {s.schoolName}
+                                  </td>
+                                  <td
+                                    style={{
+                                      padding: "0.35rem",
+                                      textAlign: "right",
+                                      fontVariantNumeric: "tabular-nums",
+                                    }}
+                                  >
+                                    {s.rows.toLocaleString()}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </details>
+                    )}
 
-              {preview.errors.length > 0 && (
-                <details style={{ marginBottom: "1rem" }}>
-                  <summary
-                    style={{
-                      cursor: "pointer",
-                      fontWeight: 600,
-                      color: "#f59e0b",
-                    }}
-                  >
-                    {preview.errorRows} skipped row
-                    {preview.errorRows === 1 ? "" : "s"} — show errors
-                  </summary>
-                  <ul
-                    style={{
-                      marginTop: "0.5rem",
-                      paddingLeft: "1.25rem",
-                      fontSize: 13,
-                    }}
-                  >
-                    {preview.errors.map((e, i) => (
-                      <li key={i}>
-                        Row {e.row}: {e.message}
-                      </li>
-                    ))}
-                    {preview.errorRows > preview.errors.length && (
-                      <li
+                  {preview.sampleRows.length > 0 && (
+                    <details style={{ marginBottom: "1rem" }}>
+                      <summary
+                        style={{ cursor: "pointer", fontWeight: 600 }}
+                      >
+                        Preview first {preview.sampleRows.length} rows
+                      </summary>
+                      <div
                         style={{
-                          color: "var(--text-subtle)",
-                          listStyle: "none",
+                          marginTop: "0.5rem",
+                          overflowX: "auto",
                         }}
                       >
-                        … and {preview.errorRows - preview.errors.length} more.
-                      </li>
-                    )}
-                  </ul>
-                </details>
+                        <table
+                          className="pulse-table"
+                          style={{
+                            width: "100%",
+                            borderCollapse: "collapse",
+                            fontSize: 13,
+                          }}
+                        >
+                          <thead>
+                            <tr>
+                              {[
+                                "Student",
+                                "Assessment",
+                                "Score",
+                                "Level",
+                                "Date",
+                                "Source",
+                              ].map((h) => (
+                                <th
+                                  key={h}
+                                  style={{
+                                    textAlign: "left",
+                                    padding: "0.35rem",
+                                    borderBottom:
+                                      "1px solid var(--border, #2a3447)",
+                                  }}
+                                >
+                                  {h}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {preview.sampleRows.map((r, i) => (
+                              <tr key={i}>
+                                <td style={{ padding: "0.35rem" }}>
+                                  {r.studentId}
+                                </td>
+                                <td style={{ padding: "0.35rem" }}>
+                                  {r.assessmentName}
+                                </td>
+                                <td style={{ padding: "0.35rem" }}>
+                                  {r.score ?? "—"}
+                                </td>
+                                <td style={{ padding: "0.35rem" }}>
+                                  {r.scoreLevel ?? "—"}
+                                </td>
+                                <td style={{ padding: "0.35rem" }}>
+                                  {new Date(
+                                    r.administeredAt,
+                                  ).toLocaleDateString()}
+                                </td>
+                                <td style={{ padding: "0.35rem" }}>
+                                  {r.source ?? "—"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </details>
+                  )}
+
+                  {preview.errors.length > 0 && (
+                    <details style={{ marginBottom: "1rem" }}>
+                      <summary
+                        style={{
+                          cursor: "pointer",
+                          fontWeight: 600,
+                          color: "#f59e0b",
+                        }}
+                      >
+                        {preview.errorRows} skipped row
+                        {preview.errorRows === 1 ? "" : "s"} — show errors
+                      </summary>
+                      <ul
+                        style={{
+                          marginTop: "0.5rem",
+                          paddingLeft: "1.25rem",
+                          fontSize: 13,
+                        }}
+                      >
+                        {preview.errors.map((e, i) => (
+                          <li key={i}>
+                            Row {e.row}: {e.message}
+                          </li>
+                        ))}
+                        {preview.errorRows > preview.errors.length && (
+                          <li
+                            style={{
+                              color: "var(--text-subtle)",
+                              listStyle: "none",
+                            }}
+                          >
+                            … and{" "}
+                            {preview.errorRows - preview.errors.length} more.
+                          </li>
+                        )}
+                      </ul>
+                    </details>
+                  )}
+                </div>
               )}
 
+              {/* Step 4 — Confirm. Type-echo gate before commit, mirrors
+                  NewCaseWizard. The echo word matches the kind family
+                  ("FAST" covers both fast_scores and fast_prior_year). */}
+              {step === 4 && preview && (
+                <div>
+                  <div
+                    style={{
+                      padding: "0.85rem",
+                      border: "1px solid var(--border, #2a3447)",
+                      borderRadius: 8,
+                      marginBottom: "1rem",
+                      background: "var(--card-bg, #0f172a)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontWeight: 700,
+                        fontSize: 15,
+                        marginBottom: 6,
+                      }}
+                    >
+                      Ready to commit
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 13,
+                        color: "var(--text-subtle)",
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      <strong>{kindDef.label}</strong> · {filename} ·{" "}
+                      <strong>{preview.validRows}</strong> row
+                      {preview.validRows === 1 ? "" : "s"} will import
+                      {preview.errorRows > 0 && (
+                        <>
+                          ; <strong>{preview.errorRows}</strong> will be
+                          skipped
+                        </>
+                      )}
+                      .{" "}
+                      {scope === "district"
+                        ? "Rows will be routed to schools by school_code."
+                        : "All rows will land in your school."}
+                    </div>
+                    <div
+                      style={{
+                        marginTop: 8,
+                        fontSize: 12,
+                        color: "var(--text-subtle)",
+                      }}
+                    >
+                      Every commit gets a History entry with one-click
+                      Undo, so a bad import is recoverable.
+                    </div>
+                  </div>
+
+                  <label
+                    style={{
+                      display: "grid",
+                      gap: 6,
+                      marginBottom: "1rem",
+                    }}
+                  >
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>
+                      Type{" "}
+                      <code
+                        style={{
+                          padding: "0.05rem 0.4rem",
+                          background: "rgba(59, 130, 246, 0.15)",
+                          color: "#3b82f6",
+                          borderRadius: 4,
+                          fontFamily: "monospace",
+                          fontSize: 13,
+                        }}
+                      >
+                        {echoWord}
+                      </code>{" "}
+                      to confirm.
+                    </span>
+                    <input
+                      type="text"
+                      value={confirmEcho}
+                      onChange={(e) => setConfirmEcho(e.target.value)}
+                      placeholder={echoWord}
+                      autoComplete="off"
+                      spellCheck={false}
+                      style={{
+                        padding: "0.5rem 0.65rem",
+                        background: "var(--card-bg, #0f172a)",
+                        color: "inherit",
+                        border: "1px solid var(--border, #2a3447)",
+                        borderRadius: 6,
+                        font: "inherit",
+                        fontSize: 14,
+                        fontFamily: "monospace",
+                        letterSpacing: "0.05em",
+                      }}
+                    />
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={handleCommit}
+                    disabled={
+                      committing ||
+                      !preview.readyToCommit ||
+                      preview.validRows === 0 ||
+                      confirmEcho.trim().toUpperCase() !== echoWord
+                    }
+                    style={{
+                      padding: "0.65rem 1.25rem",
+                      border: "1px solid var(--border, #2a3447)",
+                      borderRadius: 6,
+                      background:
+                        committing ||
+                        !preview.readyToCommit ||
+                        confirmEcho.trim().toUpperCase() !== echoWord
+                          ? "var(--border, #2a3447)"
+                          : "var(--accent, #3b82f6)",
+                      color: "white",
+                      font: "inherit",
+                      fontWeight: 600,
+                      cursor:
+                        committing ||
+                        !preview.readyToCommit ||
+                        confirmEcho.trim().toUpperCase() !== echoWord
+                          ? "not-allowed"
+                          : "pointer",
+                      opacity:
+                        committing ||
+                        !preview.readyToCommit ||
+                        confirmEcho.trim().toUpperCase() !== echoWord
+                          ? 0.6
+                          : 1,
+                    }}
+                  >
+                    {committing
+                      ? "Importing…"
+                      : `Commit ${preview.validRows} row${preview.validRows === 1 ? "" : "s"}`}
+                  </button>
+                </div>
+              )}
+
+              {/* Inline error always visible at the bottom of any step
+                  so failed previews / commits show up no matter where
+                  the user is in the wizard. */}
               {error && (
                 <div
                   style={{
-                    marginBottom: "1rem",
+                    marginTop: "1rem",
                     padding: "0.75rem",
                     background: "rgba(239, 68, 68, 0.1)",
                     border: "1px solid #ef4444",
@@ -2007,41 +3150,73 @@ export default function DataImports({
                 </div>
               )}
 
-              <button
-                type="button"
-                onClick={handleCommit}
-                disabled={
-                  committing ||
-                  !preview.readyToCommit ||
-                  preview.validRows === 0
-                }
+              {/* Step nav. Step 4 has its own Commit button so we hide
+                  Next there. Cancel-equivalent is the History tab plus
+                  resetUpload — there's no destructive state to lose. */}
+              <div
                 style={{
-                  padding: "0.65rem 1.25rem",
-                  border: "1px solid var(--border, #2a3447)",
-                  borderRadius: 6,
-                  background:
-                    committing || !preview.readyToCommit
-                      ? "var(--border, #2a3447)"
-                      : "var(--accent, #3b82f6)",
-                  color: "white",
-                  font: "inherit",
-                  fontWeight: 600,
-                  cursor:
-                    committing || !preview.readyToCommit
-                      ? "not-allowed"
-                      : "pointer",
-                  opacity:
-                    committing || !preview.readyToCommit ? 0.6 : 1,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginTop: "1.25rem",
+                  paddingTop: "0.75rem",
+                  borderTop: "1px solid var(--border, #2a3447)",
                 }}
               >
-                {committing
-                  ? "Importing…"
-                  : `Import ${preview.validRows} row${preview.validRows === 1 ? "" : "s"}`}
-              </button>
-            </div>
+                <button
+                  type="button"
+                  onClick={goBack}
+                  disabled={step === 0}
+                  style={{
+                    padding: "0.5rem 1rem",
+                    border: "1px solid var(--border, #2a3447)",
+                    borderRadius: 6,
+                    background: "transparent",
+                    color: "inherit",
+                    cursor: step === 0 ? "not-allowed" : "pointer",
+                    font: "inherit",
+                    opacity: step === 0 ? 0.4 : 1,
+                  }}
+                >
+                  ← Back
+                </button>
+                <span
+                  style={{
+                    fontSize: 12,
+                    color: "var(--text-subtle)",
+                    marginLeft: "auto",
+                  }}
+                >
+                  Step {step + 1} of {STEP_LABELS.length}
+                </span>
+                {step < 4 && (
+                  <button
+                    type="button"
+                    onClick={goNext}
+                    disabled={!canAdvance()}
+                    style={{
+                      padding: "0.5rem 1rem",
+                      border: "1px solid var(--border, #2a3447)",
+                      borderRadius: 6,
+                      background: canAdvance()
+                        ? "var(--accent, #3b82f6)"
+                        : "var(--border, #2a3447)",
+                      color: "white",
+                      cursor: canAdvance() ? "pointer" : "not-allowed",
+                      font: "inherit",
+                      fontWeight: 600,
+                      opacity: canAdvance() ? 1 : 0.6,
+                    }}
+                  >
+                    Next →
+                  </button>
+                )}
+              </div>
+            </>
           )}
         </div>
       )}
+
 
       {tab === "history" && (
         <div style={{ marginTop: "1rem" }}>
@@ -2127,7 +3302,30 @@ export default function DataImports({
                           </span>
                         )}
                       </td>
-                      <td style={{ padding: "0.5rem" }}>{j.kind}</td>
+                      <td style={{ padding: "0.5rem" }}>
+                        {j.kind}
+                        {j.kind === "fast_florida" && j.mapping && (
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: "var(--text-subtle)",
+                              marginTop: 2,
+                            }}
+                          >
+                            {j.mapping.school_year && (
+                              <span>SY {j.mapping.school_year}</span>
+                            )}
+                            {j.mapping.items_total && (
+                              <span> · {j.mapping.items_total} items</span>
+                            )}
+                            {j.mapping.windows_seen && (
+                              <span>
+                                {" "}· {j.mapping.windows_seen.toUpperCase()}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </td>
                       <td style={{ padding: "0.5rem" }}>
                         <span style={statusPillStyle(j.status)}>
                           {j.status.replace("_", " ")}
@@ -2145,6 +3343,8 @@ export default function DataImports({
                             >
                               {j.errorRows}
                             </summary>
+                            {j.kind === "rosters" &&
+                              renderSkippedHousesSection(j)}
                             <ul
                               style={{
                                 margin: "0.25rem 0 0 1rem",
@@ -2199,6 +3399,295 @@ export default function DataImports({
           )}
         </div>
       )}
+      {historicalGate === "ask" && kind === "fast_florida" && preview && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="historical-gate-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setHistoricalGate(null);
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(2, 6, 23, 0.72)",
+            backdropFilter: "blur(6px)",
+            WebkitBackdropFilter: "blur(6px)",
+            zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1.5rem",
+          }}
+        >
+          <div
+            style={{
+              maxWidth: 560,
+              width: "100%",
+              background: "var(--card-bg, #0f172a)",
+              border: "1px solid var(--border, #2a3447)",
+              borderRadius: 12,
+              padding: "1.5rem",
+              boxShadow: "0 25px 50px -12px rgba(0,0,0,0.6)",
+            }}
+          >
+            <div
+              id="historical-gate-title"
+              style={{
+                fontSize: 18,
+                fontWeight: 700,
+                marginBottom: 8,
+              }}
+            >
+              Wait — is this current-year data or a prior-year backfill?
+            </div>
+            <div
+              style={{
+                fontSize: 13,
+                color: "var(--text-subtle)",
+                lineHeight: 1.5,
+                marginBottom: 16,
+              }}
+            >
+              You are about to commit{" "}
+              <strong>{preview.validRows}</strong> FAST rows for school
+              year <strong>{selectedSchoolYear || "(unknown)"}</strong> from{" "}
+              <code>{filename}</code>. Picking the wrong option here
+              silently corrupts dashboards, so we are asking explicitly.
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gap: 10,
+                marginBottom: 14,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => void doCommit(false)}
+                disabled={committing}
+                style={{
+                  padding: "0.85rem 1rem",
+                  border: "1px solid #3b82f6",
+                  borderRadius: 8,
+                  background: "rgba(59, 130, 246, 0.12)",
+                  color: "inherit",
+                  font: "inherit",
+                  textAlign: "left",
+                  cursor: "pointer",
+                }}
+              >
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                  Current-year data
+                </div>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "var(--text-subtle)",
+                  }}
+                >
+                  Lands in PM1/PM2/PM3 dashboards and feeds Class
+                  Composer + Insights for this school year.
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => void doCommit(true)}
+                disabled={committing}
+                style={{
+                  padding: "0.85rem 1rem",
+                  border: "1px solid #f59e0b",
+                  borderRadius: 8,
+                  background: "rgba(245, 158, 11, 0.12)",
+                  color: "inherit",
+                  font: "inherit",
+                  textAlign: "left",
+                  cursor: "pointer",
+                }}
+              >
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                  Historical (prior-year backfill)
+                </div>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "var(--text-subtle)",
+                  }}
+                >
+                  PM3-only. Stamped <code>is_historical=true</code>. Does
+                  not appear in current-year charts; surfaces in the
+                  multi-year FAST history chip.
+                </div>
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setHistoricalGate(null)}
+              disabled={committing}
+              style={{
+                padding: "0.5rem 0.9rem",
+                border: "1px solid var(--border, #2a3447)",
+                borderRadius: 6,
+                background: "transparent",
+                color: "var(--text-subtle)",
+                font: "inherit",
+                fontSize: 13,
+                cursor: "pointer",
+              }}
+            >
+              Cancel — don't commit
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Renders the per-job "Skipped due to unrecognized house" panel under
+// the History tab's errors cell. We group by distinct house name so an
+// admin with 47 skipped rows across 3 typos sees "Hawks: 20", "Falconz:
+// 15", "Phoenex: 12" instead of a flat row list, plus a CSV download
+// that re-emits just those rows with the original headers for quick
+// fix-and-reupload in their SIS.
+// Download the skipped-houses CSV via authFetch + blob so the request
+// carries the bearer token (a bare <a download> would 401 in
+// token-only sessions). Filename hint comes from Content-Disposition
+// the server already sets; we fall back to a deterministic name.
+async function downloadSkippedHousesCsv(job: ImportJob): Promise<void> {
+  try {
+    const res = await authFetch(
+      `/api/data-imports/jobs/${job.id}/skipped-houses.csv`,
+    );
+    if (!res.ok) {
+      alert(`Download failed (${res.status})`);
+      return;
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") ?? "";
+    const m = /filename="?([^"]+)"?/i.exec(cd);
+    const filename = m?.[1] ?? `skipped-houses_job${job.id}.csv`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function renderSkippedHousesSection(job: ImportJob): ReactNode {
+  const skipped = job.errorLog.filter(
+    (e) => e.code === "unrecognized_house" && e.raw,
+  );
+  if (skipped.length === 0) return null;
+  // student_id lives under whatever CSV column the mapping aimed at
+  // student_id. Fall back to common synonyms if the mapping isn't on
+  // the job (shouldn't happen for fresh imports, but defensive).
+  const studentIdCol =
+    Object.entries(job.mapping ?? {}).find(([, t]) => t === "student_id")?.[0] ??
+    null;
+  const byHouse = new Map<
+    string,
+    Array<{ row: number; studentId: string }>
+  >();
+  for (const e of skipped) {
+    const key = e.bucket ?? "(blank)";
+    const sid = studentIdCol
+      ? String(e.raw?.[studentIdCol] ?? "").trim()
+      : "";
+    const arr = byHouse.get(key) ?? [];
+    arr.push({ row: e.row, studentId: sid });
+    byHouse.set(key, arr);
+  }
+  const groups = Array.from(byHouse.entries()).sort(
+    (a, b) => b[1].length - a[1].length,
+  );
+  return (
+    <div
+      style={{
+        margin: "0.5rem 0",
+        padding: "0.5rem 0.75rem",
+        background: "rgba(245, 158, 11, 0.08)",
+        border: "1px solid rgba(245, 158, 11, 0.4)",
+        borderRadius: 4,
+        fontSize: 12,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          marginBottom: 6,
+        }}
+      >
+        <strong style={{ color: "#b45309" }}>
+          Skipped due to unrecognized house ({skipped.length})
+        </strong>
+        <button
+          type="button"
+          onClick={() => downloadSkippedHousesCsv(job)}
+          style={{
+            padding: "0.2rem 0.5rem",
+            border: "1px solid #b45309",
+            borderRadius: 4,
+            color: "#b45309",
+            background: "transparent",
+            font: "inherit",
+            fontSize: 11,
+            fontWeight: 600,
+            cursor: "pointer",
+          }}
+        >
+          Download skipped rows as CSV
+        </button>
+      </div>
+      {groups.map(([house, rows]) => (
+        <details key={house} style={{ marginTop: 4 }}>
+          <summary style={{ cursor: "pointer" }}>
+            <code>{house}</code> — {rows.length} row
+            {rows.length === 1 ? "" : "s"}
+          </summary>
+          <table
+            style={{
+              marginTop: 4,
+              borderCollapse: "collapse",
+              fontSize: 11,
+              fontFamily: "monospace",
+            }}
+          >
+            <thead>
+              <tr style={{ textAlign: "left" }}>
+                <th style={{ padding: "2px 8px 2px 0" }}>Row</th>
+                <th style={{ padding: "2px 8px 2px 0" }}>student_id</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.slice(0, 50).map((r, i) => (
+                <tr key={i}>
+                  <td style={{ padding: "1px 8px 1px 0" }}>{r.row}</td>
+                  <td style={{ padding: "1px 8px 1px 0" }}>
+                    {r.studentId || "—"}
+                  </td>
+                </tr>
+              ))}
+              {rows.length > 50 && (
+                <tr>
+                  <td colSpan={2} style={{ padding: "2px 0", opacity: 0.7 }}>
+                    + {rows.length - 50} more — download CSV for the full list
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </details>
+      ))}
     </div>
   );
 }
@@ -2238,3 +3727,4 @@ function Stat({
     </div>
   );
 }
+

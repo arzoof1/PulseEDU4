@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { authFetch } from "../lib/authToken";
 import AddDisciplineLogModal from "./AddDisciplineLogModal";
+import IssLogDetailDrawer from "./IssLogDetailDrawer";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 interface RecentRow {
@@ -33,6 +34,37 @@ interface AckResp {
   students: AckExpected[];
 }
 
+interface ReconciliationStudent {
+  id: number;
+  studentId: string;
+  firstName: string;
+  lastName: string;
+  grade: number | null;
+  dismissalMode: string | null;
+}
+
+interface ReconciliationResp {
+  asOf: string;
+  // Server-derived from school_settings.pickup_cutoff_time. Older
+  // server builds didn't return this field, so the client falls back
+  // to the historical default below.
+  cutoffTime?: string;
+  byMode: Record<string, ReconciliationStudent[]>;
+}
+
+// Fallback cutoff used only when the server response predates the
+// pickupCutoffTime field. The authoritative value is the school's
+// Settings → Pick-Up cutoff (returned in `cutoffTime` above).
+const RECONCILIATION_CUTOFF_FALLBACK_HHMM = "15:30";
+
+const DISMISSAL_MODE_LABELS: Record<string, string> = {
+  car_rider: "Car riders",
+  walker: "Walkers",
+  bus: "Bus riders",
+  aftercare: "Aftercare",
+  parent_pickup_only: "Parent pick-up only",
+};
+
 const card: CSSProperties = {
   padding: "1rem 1.1rem",
   border: "1px solid var(--border, #e5e7eb)",
@@ -56,17 +88,246 @@ const bigBtn: CSSProperties = {
   textAlign: "left",
 };
 
-export default function AdminHubPage() {
+function nowHHMM(): string {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+// Renders the "Still on campus" reconciliation tile. Hidden until the
+// configured cutoff so it doesn't alarm admins mid-day, and hidden if
+// the queue is empty (no signal). Grouped by dismissal mode so the
+// front office can call the right list of parents.
+function ReconciliationTile({ data }: { data: ReconciliationResp | null }) {
+  if (!data) return null;
+  const cutoff = data.cutoffTime || RECONCILIATION_CUTOFF_FALLBACK_HHMM;
+  const beforeCutoff = nowHHMM() < cutoff;
+  const modeKeys = Object.keys(data.byMode).sort();
+  const total = modeKeys.reduce((n, k) => n + data.byMode[k]!.length, 0);
+  if (beforeCutoff) return null;
+  if (total === 0) {
+    return (
+      <div style={card}>
+        <h3 style={{ marginTop: 0 }}>🚗 Still on campus</h3>
+        <p style={{ color: "var(--text-subtle)", margin: 0 }}>
+          All students have been released as of{" "}
+          {new Date(data.asOf).toLocaleTimeString()}.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div
+      style={{
+        ...card,
+        borderColor: "#fbbf24",
+        background: "#fffbeb",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <h3 style={{ margin: 0 }}>🚗 Still on campus</h3>
+        <span style={{ color: "var(--text-subtle)", fontSize: 13 }}>
+          {total} student{total === 1 ? "" : "s"} not yet released · as of{" "}
+          {new Date(data.asOf).toLocaleTimeString()}
+        </span>
+      </div>
+      <p
+        style={{
+          margin: "6px 0 10px",
+          color: "var(--text-subtle)",
+          fontSize: 12,
+        }}
+      >
+        Anyone with no release event today (in-car, walker-released, or
+        auto-cleared). Grouped by the student's dismissal mode so the
+        front office can call the right list of parents.
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {modeKeys.map((mode) => {
+          const students = data.byMode[mode]!;
+          const label = DISMISSAL_MODE_LABELS[mode] ?? mode;
+          return (
+            <div key={mode}>
+              <div
+                style={{
+                  fontSize: 13,
+                  fontWeight: 700,
+                  marginBottom: 4,
+                  color: "#92400e",
+                }}
+              >
+                {label} · {students.length}
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 6,
+                }}
+              >
+                {students.map((s) => (
+                  <span
+                    key={s.id}
+                    style={{
+                      padding: "3px 8px",
+                      background: "white",
+                      border: "1px solid #fbbf24",
+                      borderRadius: 999,
+                      fontSize: 12,
+                    }}
+                  >
+                    {s.firstName} {s.lastName}
+                    {s.grade !== null && (
+                      <span
+                        style={{
+                          marginLeft: 4,
+                          color: "var(--text-subtle)",
+                          fontSize: 11,
+                        }}
+                      >
+                        Gr {s.grade}
+                      </span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+interface PmReadinessResp {
+  schoolYear: string;
+  window: string;
+  ready: boolean;
+  subjects: { ela: boolean; math: boolean };
+  dismissed: boolean;
+}
+
+// Post-PM nudge banner. Visible only when (a) the school has loaded
+// ELA + Math PM3 for the current SY, AND (b) the admin hasn't already
+// dismissed this window. Dismissal is per SY+window so the banner
+// reappears automatically when a new PM cycle arrives. Wording is
+// deliberately soft — "suggestions" — because Class Composer never
+// writes to the roster; the school chooses whether to act.
+function ClassComposerBanner({
+  data,
+  onLaunch,
+  onDismiss,
+}: {
+  data: PmReadinessResp;
+  onLaunch?: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div
+      style={{
+        ...card,
+        borderColor: "#a7f3d0",
+        background: "#ecfdf5",
+        display: "flex",
+        flexDirection: "column",
+        gap: "0.6rem",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <h3 style={{ margin: 0 }}>📊 PM3 data complete — group suggestions ready</h3>
+        <span style={{ color: "var(--text-subtle)", fontSize: 13 }}>
+          {data.schoolYear} · ELA + Math
+        </span>
+      </div>
+      <p style={{ margin: 0, fontSize: 14 }}>
+        Class Composer can propose intensive groupings for next quarter from
+        your latest FAST data. This is a <strong>read-only suggestion</strong>{" "}
+        — nothing is written to your roster. You decide whether to reshuffle
+        sections.
+      </p>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button
+          type="button"
+          onClick={() => onLaunch?.()}
+          disabled={!onLaunch}
+          style={{
+            padding: "0.5rem 0.9rem",
+            borderRadius: 8,
+            border: "1px solid #059669",
+            background: "#059669",
+            color: "white",
+            fontWeight: 600,
+            cursor: onLaunch ? "pointer" : "not-allowed",
+          }}
+        >
+          View suggested groupings
+        </button>
+        <button
+          type="button"
+          onClick={onDismiss}
+          style={{
+            padding: "0.5rem 0.9rem",
+            borderRadius: 8,
+            border: "1px solid var(--border, #cbd5e1)",
+            background: "white",
+            color: "var(--text, #334155)",
+            cursor: "pointer",
+          }}
+        >
+          Dismiss for this PM cycle
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default function AdminHubPage({
+  onOpenAstQueue,
+  onOpenCompQueue,
+  onOpenClassComposer,
+}: {
+  // Optional deep-link to the AST admin queue. When provided, the AST
+  // pending-count tile becomes clickable. Wired by App.tsx.
+  onOpenAstQueue?: () => void;
+  // Optional deep-link to the Comp Time admin queue. Same pattern as
+  // AST — the tile is silent for non-approvers and shows the pending
+  // count for approvers.
+  onOpenCompQueue?: () => void;
+  // Optional deep-link to Insights → Class Composer. When provided,
+  // the post-PM nudge banner's "View suggested groupings" button
+  // navigates there.
+  onOpenClassComposer?: () => void;
+} = {}) {
   const [recent, setRecent] = useState<RecentRow[] | null>(null);
   const [ack, setAck] = useState<AckResp | null>(null);
+  const [reconciliation, setReconciliation] =
+    useState<ReconciliationResp | null>(null);
+  const [pmReadiness, setPmReadiness] = useState<PmReadinessResp | null>(null);
+  const [skillclusterBanners, setSkillclusterBanners] = useState<Array<{
+    pmWindow: string;
+    token: string;
+    title: string;
+    description: string;
+    subjects: string[];
+  }>>([]);
+  const [astPending, setAstPending] = useState<number | null>(null);
+  const [compPending, setCompPending] = useState<number | null>(null);
   const [showModal, setShowModal] = useState<null | "iss" | "oss">(null);
+  const [issDetail, setIssDetail] = useState<{
+    id: number;
+    studentName: string;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     try {
-      const [r1, r2] = await Promise.all([
+      const [r1, r2, r3, r4, r5, r6, r7] = await Promise.all([
         authFetch("/api/admin-hub/recent?limit=20"),
         authFetch("/api/admin-hub/acknowledgements"),
+        authFetch("/api/pickup/reconciliation"),
+        authFetch("/api/ast/admin-pending-count"),
+        authFetch("/api/comp/admin-pending-count"),
+        authFetch("/api/intensive-groups/pm-readiness"),
+        authFetch("/api/intensive-groups/skillcluster-banners"),
       ]);
       if (!r1.ok) throw new Error(await r1.text());
       if (!r2.ok) throw new Error(await r2.text());
@@ -74,6 +335,53 @@ export default function AdminHubPage() {
       const d2 = (await r2.json()) as AckResp;
       setRecent(d1.rows);
       setAck(d2);
+      // AST count is best-effort. 403 (non-AST-approver staff who can
+      // still use the Admin Hub for ISS/OSS) is silently ignored.
+      if (r4.ok) {
+        const d4 = (await r4.json()) as { total?: number };
+        setAstPending(typeof d4.total === "number" ? d4.total : 0);
+      } else {
+        setAstPending(null);
+      }
+      // Comp Time pending count. Same best-effort treatment as AST
+      // — the route returns { count: 0 } for non-approvers rather
+      // than 403, so r5.ok should virtually always be true.
+      if (r5.ok) {
+        const d5 = (await r5.json()) as { count?: number };
+        setCompPending(typeof d5.count === "number" ? d5.count : 0);
+      } else {
+        setCompPending(null);
+      }
+      // Reconciliation is best-effort; admins without curb access still
+      // see the rest of the hub. (canRunCurb covers admin already, so a
+      // 403 here would only happen on a misconfigured tenant.)
+      if (r3.ok) {
+        setReconciliation((await r3.json()) as ReconciliationResp);
+      } else {
+        setReconciliation(null);
+      }
+      // PM readiness is admin/Core-Team gated server-side; 403 just
+      // means the signed-in staff can't manage groupings, so the
+      // banner stays hidden for them. Any other error: silent.
+      if (r6.ok) {
+        setPmReadiness((await r6.json()) as PmReadinessResp);
+      } else {
+        setPmReadiness(null);
+      }
+      if (r7.ok) {
+        const d7 = (await r7.json()) as {
+          banners: Array<{
+            pmWindow: string;
+            token: string;
+            title: string;
+            description: string;
+            subjects: string[];
+          }>;
+        };
+        setSkillclusterBanners(d7.banners ?? []);
+      } else {
+        setSkillclusterBanners([]);
+      }
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load Admin Hub");
@@ -82,6 +390,14 @@ export default function AdminHubPage() {
 
   useEffect(() => {
     void reload();
+    // Poll every 30s so the "Still on campus" tile shrinks in real
+    // time as the front office runs the curb keypad. 30s matches the
+    // hall-passes polling cadence elsewhere in the app — cheap and
+    // good enough for a dismissal window that lasts ~20 minutes.
+    const id = setInterval(() => {
+      void reload();
+    }, 30_000);
+    return () => clearInterval(id);
   }, [reload]);
 
   const cancelLog = async (kind: "iss" | "oss", id: number) => {
@@ -100,7 +416,7 @@ export default function AdminHubPage() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
       <div>
-        <h1 style={{ marginTop: 0 }}>Admin Hub</h1>
+        <h1 style={{ marginTop: 0 }}>Log ODR</h1>
         <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
           Log ISS or OSS for one or more days. Teachers see soft reminders
           on their roster automatically. Parents see what your school has
@@ -232,6 +548,187 @@ export default function AdminHubPage() {
         </div>
       )}
 
+      {pmReadiness && pmReadiness.ready && !pmReadiness.dismissed && (
+        <ClassComposerBanner
+          data={pmReadiness}
+          onLaunch={onOpenClassComposer}
+          onDismiss={async () => {
+            // Optimistic dismiss — hide immediately; if the POST
+            // fails the next 30s poll will restore the banner.
+            setPmReadiness({ ...pmReadiness, dismissed: true });
+            await authFetch("/api/intensive-groups/pm-readiness/dismiss", {
+              method: "POST",
+            });
+          }}
+        />
+      )}
+
+      {skillclusterBanners.map((b) => (
+        <div
+          key={b.token}
+          style={{
+            ...card,
+            borderColor: b.pmWindow === "pm1" ? "#fcd34d" : "#a7f3d0",
+            background: b.pmWindow === "pm1" ? "#fffbeb" : "#ecfdf5",
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.6rem",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <h3 style={{ margin: 0 }}>
+              {b.pmWindow === "pm1" ? "📋" : "🔄"} {b.title}
+            </h3>
+            <span style={{ color: "var(--text-subtle)", fontSize: 13 }}>
+              {b.subjects.map((s) => s.toUpperCase()).join(" + ")}
+            </span>
+          </div>
+          <p style={{ margin: 0, fontSize: 14 }}>{b.description}</p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => onOpenClassComposer?.()}
+              disabled={!onOpenClassComposer}
+              style={{
+                padding: "0.5rem 0.9rem",
+                borderRadius: 8,
+                border: "1px solid #4338ca",
+                background: "#4338ca",
+                color: "white",
+                fontWeight: 600,
+                cursor: onOpenClassComposer ? "pointer" : "not-allowed",
+              }}
+            >
+              Open Class Composer
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                setSkillclusterBanners((prev) =>
+                  prev.filter((x) => x.token !== b.token),
+                );
+                await authFetch(
+                  "/api/intensive-groups/skillcluster-banners/dismiss",
+                  {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ token: b.token }),
+                  },
+                );
+              }}
+              style={{
+                padding: "0.5rem 0.9rem",
+                borderRadius: 8,
+                border: "1px solid var(--border, #cbd5e1)",
+                background: "white",
+                color: "var(--text, #334155)",
+                cursor: "pointer",
+              }}
+            >
+              Dismiss for this PM cycle
+            </button>
+          </div>
+        </div>
+      ))}
+
+      <ReconciliationTile data={reconciliation} />
+
+      {astPending !== null && (
+        <button
+          type="button"
+          onClick={() => onOpenAstQueue?.()}
+          disabled={!onOpenAstQueue}
+          style={{
+            ...card,
+            textAlign: "left",
+            cursor: onOpenAstQueue ? "pointer" : "default",
+            background: astPending > 0 ? "#fff7ed" : "var(--surface, #fff)",
+            borderColor: astPending > 0 ? "#fed7aa" : "var(--border, #e5e7eb)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
+          <div>
+            <h3 style={{ margin: 0 }}>⏱ AST: {astPending}</h3>
+            <div
+              style={{
+                color: "var(--text-subtle, #64748b)",
+                fontSize: 13,
+                marginTop: 2,
+              }}
+            >
+              {astPending === 0
+                ? "No pending Alternate Schedule Time approvals."
+                : `${astPending} pending Alternate Schedule Time approval${astPending === 1 ? "" : "s"}. Click to review.`}
+            </div>
+          </div>
+          {astPending > 0 && (
+            <span
+              style={{
+                background: "#ea580c",
+                color: "white",
+                borderRadius: 999,
+                padding: "4px 12px",
+                fontWeight: 700,
+                fontSize: 14,
+              }}
+            >
+              {astPending}
+            </span>
+          )}
+        </button>
+      )}
+
+      {compPending !== null && compPending >= 0 && (
+        <button
+          type="button"
+          onClick={() => onOpenCompQueue?.()}
+          disabled={!onOpenCompQueue}
+          style={{
+            ...card,
+            textAlign: "left",
+            cursor: onOpenCompQueue ? "pointer" : "default",
+            background: compPending > 0 ? "#fff7ed" : "var(--surface, #fff)",
+            borderColor: compPending > 0 ? "#fed7aa" : "var(--border, #e5e7eb)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
+          <div>
+            <h3 style={{ margin: 0 }}>⏱ Comp Time: {compPending}</h3>
+            <div
+              style={{
+                color: "var(--text-subtle, #64748b)",
+                fontSize: 13,
+                marginTop: 2,
+              }}
+            >
+              {compPending === 0
+                ? "No pending Comp Time approvals."
+                : `${compPending} pending Comp Time approval${compPending === 1 ? "" : "s"}. Click to review.`}
+            </div>
+          </div>
+          {compPending > 0 && (
+            <span
+              style={{
+                background: "#ea580c",
+                color: "white",
+                borderRadius: 999,
+                padding: "4px 12px",
+                fontWeight: 700,
+                fontSize: 14,
+              }}
+            >
+              {compPending}
+            </span>
+          )}
+        </button>
+      )}
+
       <div style={card}>
         <h3 style={{ marginTop: 0 }}>Recent assignments</h3>
         {recent === null ? (
@@ -245,6 +742,15 @@ export default function AdminHubPage() {
             {recent.map((r) => (
               <div
                 key={`${r.kind}-${r.id}`}
+                onClick={() => {
+                  // Detail drawer is ISS-only for now (the audit-trail
+                  // edit/delete flow only covers ISS assignments).
+                  if (r.kind !== "iss") return;
+                  const name = r.student
+                    ? `${r.student.firstName} ${r.student.lastName}`
+                    : r.studentId;
+                  setIssDetail({ id: r.id, studentName: name });
+                }}
                 style={{
                   display: "grid",
                   gridTemplateColumns: "auto 1fr auto auto",
@@ -254,6 +760,7 @@ export default function AdminHubPage() {
                   border: "1px solid #e5e7eb",
                   borderRadius: 8,
                   opacity: r.cancelledAt ? 0.55 : 1,
+                  cursor: r.kind === "iss" ? "pointer" : "default",
                 }}
               >
                 <span
@@ -299,7 +806,12 @@ export default function AdminHubPage() {
                 {!r.cancelledAt && (
                   <button
                     type="button"
-                    onClick={() => cancelLog(r.kind, r.id)}
+                    onClick={(e) => {
+                      // Stop the row's click handler from also opening
+                      // the detail drawer when the admin clicks Cancel.
+                      e.stopPropagation();
+                      void cancelLog(r.kind, r.id);
+                    }}
                     style={{
                       padding: "3px 8px",
                       fontSize: 12,
@@ -325,6 +837,18 @@ export default function AdminHubPage() {
           onSaved={async () => {
             setShowModal(null);
             await reload();
+          }}
+        />
+      )}
+
+      {issDetail && (
+        <IssLogDetailDrawer
+          logId={issDetail.id}
+          studentName={issDetail.studentName}
+          onClose={() => setIssDetail(null)}
+          onChanged={(opts) => {
+            void reload();
+            if (opts?.deleted) setIssDetail(null);
           }}
         />
       )}

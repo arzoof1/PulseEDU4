@@ -18,18 +18,16 @@ import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowTo
 import {
   ArrowLeft,
   ArrowRight,
-  BookOpen,
-  Calculator,
-  Filter,
   Info,
   TrendingUp,
 } from "lucide-react";
 import { authFetch } from "../lib/authToken";
-import InsightsFilterBar, {
+import {
   EMPTY_FILTERS,
   filtersToQuery,
   type InsightsFilterValue,
 } from "./InsightsFilterBar";
+import InsightsPicker from "./InsightsPicker";
 import BandStudentsDrawer from "./BandStudentsDrawer";
 
 // =============================================================================
@@ -346,6 +344,10 @@ interface TrajStudent {
   grade: number | null;
   pm1: number | null;
   pm3: number | null;
+  programPill?: "ESE" | "504" | null;
+  mtssPill?: "Tier 2+" | "Tier 3" | null;
+  bqEla?: boolean;
+  bqMath?: boolean;
 }
 
 interface TrajectoryStudentsResponse {
@@ -365,25 +367,27 @@ interface Props {
   onOpenProfile: (studentId: string) => void;
 }
 
-const GRADE_OPTIONS: { value: string; label: string }[] = [
-  { value: "", label: "All grades" },
-  { value: "3", label: "Grade 3" },
-  { value: "4", label: "Grade 4" },
-  { value: "5", label: "Grade 5" },
-  { value: "6", label: "Grade 6" },
-  { value: "7", label: "Grade 7" },
-  { value: "8", label: "Grade 8" },
-  { value: "9", label: "Grade 9" },
-  { value: "10", label: "Grade 10" },
-];
+// (Grade + Subject chip definitions live in InsightsPicker.tsx — the
+// trajectory page was the canonical source and is now a consumer.)
 
 // =============================================================================
 // Main component
 // =============================================================================
 
 export default function AcademicsTrajectory({ onOpenProfile }: Props) {
-  const [subject, setSubject] = useState<Subject>("ela");
-  const [grade, setGrade] = useState("");
+  // Multi-select. At least one subject must remain on at all times —
+  // toggling the last active subject off is a no-op so the page is
+  // never in a zero-subject state.
+  const [subjects, setSubjects] = useState<Subject[]>(["ela"]);
+  // Empty set = "all grades". Order is preserved in the query string.
+  const [selectedGrades, setSelectedGrades] = useState<string[]>([]);
+
+  const subjectLabel =
+    subjects.length === 2
+      ? "FAST aReading + aMath"
+      : subjects[0] === "ela"
+      ? "FAST aReading"
+      : "FAST aMath";
   const [filters, setFilters] = useState<InsightsFilterValue>(EMPTY_FILTERS);
   const [drillKey, setDrillKey] = useState<ArchetypeKey | null>(null);
 
@@ -404,10 +408,89 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
 
   function buildQuery(): URLSearchParams {
     const qs = filtersToQuery(filters);
-    qs.set("subject", subject);
-    if (grade) qs.set("grade", grade);
+    qs.set("subjects", subjects.join(","));
+    if (selectedGrades.length > 0) qs.set("grades", selectedGrades.join(","));
     return qs;
   }
+
+  async function downloadCsv() {
+    const qs = buildQuery();
+    // Must go through authFetch so the Bearer token is attached —
+    // a plain <a href> click in the Replit preview iframe loses the
+    // session cookie and the API returns "Sign-in required".
+    const url = `/api/insights/academics/trajectory/export.csv?${qs.toString()}`;
+    try {
+      const res = await authFetch(url);
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        alert(`Download failed (${res.status}): ${body || res.statusText}`);
+        return;
+      }
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      // Filename comes from the server's Content-Disposition; if absent,
+      // synthesize one from current filters.
+      const dispo = res.headers.get("content-disposition") || "";
+      const match = /filename="?([^"]+)"?/i.exec(dispo);
+      const filename =
+        match?.[1] ||
+        `trajectory_${subjects.join("-")}_${
+          selectedGrades.length > 0
+            ? selectedGrades.join("-")
+            : "all-grades"
+        }_${new Date().toISOString().slice(0, 10)}.csv`;
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objUrl);
+    } catch (e) {
+      alert(`Download failed: ${String((e as Error)?.message ?? e)}`);
+    }
+  }
+
+  // Drawer CSV: generate client-side from the already-loaded subset so
+  // we don't need a second server endpoint for the drill-in.
+  function downloadDrawerCsv() {
+    if (!drawerData || drawerData.students.length === 0) return;
+    const esc = (v: string | number | null | undefined): string => {
+      if (v == null) return "";
+      const s = String(v);
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = ["student_id", "student_name", "grade", "pm1", "pm3"];
+    const rows = drawerData.students.map((s) =>
+      [
+        esc(s.studentId),
+        esc(s.studentName),
+        esc(s.grade == null ? "" : s.grade === 0 ? "K" : s.grade),
+        esc(s.pm1 ?? ""),
+        esc(s.pm3 ?? ""),
+      ].join(","),
+    );
+    const csv = [header.join(","), ...rows].join("\r\n") + "\r\n";
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const today = new Date().toISOString().slice(0, 10);
+    const arch = drawerArchetype ?? "students";
+    const sub = drawerSubKey ? `_${drawerSubKey}` : "";
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `trajectory_${subjects.join("-")}_${arch}${sub}_${today}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  const gradeLabel =
+    selectedGrades.length === 0
+      ? "All grades"
+      : selectedGrades.length === 1
+      ? `Grade ${selectedGrades[0]}`
+      : `${selectedGrades.length} grades`;
 
   useEffect(() => {
     let cancelled = false;
@@ -436,13 +519,13 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subject, grade, filters]);
+  }, [subjects, selectedGrades, filters]);
 
   // Switching subject/grade should drop the drill state — counts will
   // shift and the open archetype may end up empty.
   useEffect(() => {
     setDrillKey(null);
-  }, [subject, grade, filters]);
+  }, [subjects, selectedGrades, filters]);
 
   // Dev-only invariants: parent counts must sum to total; sub counts
   // within each parent must sum to that parent's count. If either ever
@@ -552,55 +635,18 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
             </RoleSection>
           </HowToUseHelp>
         </div>
-        <div
-          style={{
-            display: "flex",
-            gap: "0.5rem",
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
-        >
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-              fontSize: 11,
-              fontWeight: 700,
-              color: "#64748b",
-              marginRight: 4,
-            }}
-          >
-            <Filter style={{ width: 14, height: 14 }} />
-            FILTERS
-          </div>
-          <SubjectChip
-            active={subject === "ela"}
-            onClick={() => setSubject("ela")}
-            icon={BookOpen}
-            label="ELA"
-          />
-          <SubjectChip
-            active={subject === "math"}
-            onClick={() => setSubject("math")}
-            icon={Calculator}
-            label="Math"
-          />
-          <select
-            value={grade}
-            onChange={(e) => setGrade(e.target.value)}
-            style={selectStyle}
-          >
-            {GRADE_OPTIONS.map((g) => (
-              <option key={g.value} value={g.value}>
-                {g.label}
-              </option>
-            ))}
-          </select>
-        </div>
       </div>
 
-      <InsightsFilterBar value={filters} onChange={setFilters} />
+      <InsightsPicker
+        subjects={subjects}
+        onSubjectsChange={setSubjects}
+        grades={selectedGrades}
+        onGradesChange={setSelectedGrades}
+        filters={filters}
+        onFiltersChange={setFilters}
+        onDownloadCsv={downloadCsv}
+        csvDisabled={loading || !data || data.total === 0}
+      />
 
       {loading && (
         <p style={{ color: "var(--text-subtle)", marginTop: "1rem" }}>
@@ -647,13 +693,8 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
               </span>
               <span style={{ color: "#94a3b8", margin: "0 4px" }}>·</span>
               <span>
-                {subject === "ela" ? "FAST aReading" : "FAST aMath"}
-                {grade
-                  ? ` · ${
-                      GRADE_OPTIONS.find((g) => g.value === grade)?.label ??
-                      grade
-                    }`
-                  : ""}
+                {subjectLabel}
+                {selectedGrades.length > 0 ? ` · ${gradeLabel}` : ""}
               </span>
             </div>
             <div
@@ -665,7 +706,9 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
               }}
             >
               <Stat
-                label="Total students"
+                label={
+                  subjects.length > 1 ? "Total trajectories" : "Total students"
+                }
                 value={data.total.toLocaleString()}
               />
               <Stat
@@ -753,6 +796,7 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
           setDrawerOpen(false);
           onOpenProfile(id);
         }}
+        onDownloadCsv={downloadDrawerCsv}
       />
     </div>
   );
@@ -992,33 +1036,6 @@ function SubTile({
 // Small UI helpers
 // =============================================================================
 
-function SubjectChip({
-  active,
-  onClick,
-  icon: Icon,
-  label,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold border transition-colors ${
-        active
-          ? "bg-slate-900 text-white border-slate-900"
-          : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"
-      }`}
-    >
-      <Icon className="h-4 w-4" />
-      {label}
-    </button>
-  );
-}
-
 function Stat({
   label,
   value,
@@ -1058,11 +1075,3 @@ function Stat({
   );
 }
 
-const selectStyle: React.CSSProperties = {
-  padding: "0.4rem 0.6rem",
-  border: "1px solid #cbd5e1",
-  borderRadius: 6,
-  background: "white",
-  font: "inherit",
-  fontSize: 13,
-};

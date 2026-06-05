@@ -90,6 +90,7 @@ router.get("/onboarding/status", requireAdmin(), async (req, res) => {
       return {
         key: s.key,
         phase: s.phase,
+        role: s.role,
         label: s.label,
         hint: s.hint,
         route: s.route,
@@ -104,10 +105,18 @@ router.get("/onboarding/status", requireAdmin(), async (req, res) => {
     }),
   );
 
-  const completeCount = steps.filter((s) => s.complete).length;
+  // Weighted progress: complete = 1, partial = 0.5, empty/none = 0.
+  // Partials only count when the manual override isn't set (a manual
+  // tick implies the admin called it done). Rendered as "X / N" or
+  // "X.5 / N" — half-points are the whole point of the rework.
+  const weighted = steps.reduce((acc, s) => {
+    if (s.complete) return acc + 1;
+    if (s.autoStatus === "partial") return acc + 0.5;
+    return acc;
+  }, 0);
   res.json({
     steps,
-    progress: { complete: completeCount, total: steps.length },
+    progress: { complete: weighted, total: steps.length },
   });
 });
 

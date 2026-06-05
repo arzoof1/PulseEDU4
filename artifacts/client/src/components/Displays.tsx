@@ -16,6 +16,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
+import { ControlledItemSlide } from "./DisplayShow";
 
 interface PlaylistRow {
   id: number;
@@ -26,6 +27,7 @@ interface PlaylistRow {
   defaultDurationSeconds: number;
   showPbisHousePage: boolean;
   showActiveHallPasses: boolean;
+  showPickupQueue: boolean;
   showHeartbeat: boolean;
   // Manual on/off kill switch (independent of the time-window
   // `scheduleEnabled`). When false the public URL serves an
@@ -64,6 +66,7 @@ interface PlaylistDetail {
     defaultDurationSeconds: number;
     showPbisHousePage: boolean;
     showActiveHallPasses: boolean;
+    showPickupQueue: boolean;
     showHeartbeat: boolean;
     scheduleEnabled: boolean;
     scheduleStartTime: string | null;
@@ -159,6 +162,7 @@ export default function Displays() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
+  const [remoteId, setRemoteId] = useState<number | null>(null);
 
   async function refreshList() {
     setLoading(true);
@@ -296,6 +300,16 @@ export default function Displays() {
       {showCalendar && (
         <DisplaysCalendarModal onClose={() => setShowCalendar(false)} />
       )}
+      {remoteId !== null && (
+        <RemoteControl
+          playlistId={remoteId}
+          playlistName={
+            playlists.find((p) => p.id === remoteId)?.name ?? "Display"
+          }
+          allPlaylists={playlists}
+          onClose={() => setRemoteId(null)}
+        />
+      )}
 
       {error && (
         <div
@@ -355,6 +369,7 @@ export default function Displays() {
                     {p.defaultDurationSeconds}s default
                     {p.showPbisHousePage ? " · 🏠 House page" : ""}
                     {p.showActiveHallPasses ? " · 🎫 Hall passes" : ""}
+                    {p.showPickupQueue ? " · 🚗 Pick-up queue" : ""}
                     {p.showHeartbeat ? " · 💓 Heartbeat" : ""}
                   </div>
                   <div
@@ -408,9 +423,16 @@ export default function Displays() {
                   {p.active ? "Turn off" : "Turn on"}
                 </button>
               </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
                 <button style={btn} onClick={() => setEditingId(p.id)}>
                   Edit
+                </button>
+                <button
+                  style={btnPrimary}
+                  onClick={() => setRemoteId(p.id)}
+                  title="Drive this display live — step through slides manually, or present a deck or live link across every TV on this playlist."
+                >
+                  📺 Remote / Present
                 </button>
                 <a
                   href={publicUrlFor(p.id)}
@@ -482,6 +504,7 @@ function PlaylistEditor({
     defaultDurationSeconds?: number;
     showPbisHousePage?: boolean;
     showActiveHallPasses?: boolean;
+    showPickupQueue?: boolean;
     showHeartbeat?: boolean;
     scheduleEnabled?: boolean;
     scheduleStartTime?: string | null;
@@ -836,6 +859,25 @@ function PlaylistEditor({
               />
               <span style={{ fontSize: 14 }}>
                 Show Active Hall Passes slide each loop
+              </span>
+            </label>
+            <label
+              style={{ display: "flex", alignItems: "center", gap: 8 }}
+            >
+              <input
+                type="checkbox"
+                checked={detail.playlist.showPickupQueue}
+                onChange={(e) =>
+                  void patchPlaylist({
+                    showPickupQueue: e.currentTarget.checked,
+                  })
+                }
+              />
+              <span style={{ fontSize: 14 }}>
+                Show Parent Pick-Up queue each loop
+                {detail.playlist.ownerStaffId
+                  ? " (filtered to this playlist's owner roster)"
+                  : " (school-wide — no owner set)"}
               </span>
             </label>
             <label
@@ -2449,5 +2491,592 @@ function ScheduleEditor(props: {
         </div>
       )}
     </fieldset>
+  );
+}
+
+// ===================================================================
+// Remote / Present — live remote control for one display.
+//
+// A mobile-friendly panel a presenter opens on a phone or laptop to
+// drive every TV pointed at this playlist's /display/<id> URL, with no
+// URL re-entry on the TVs. Three modes:
+//   - Auto         → hand the wall back to its normal rotation.
+//   - Manual       → step through THIS playlist's items like PowerPoint.
+//   - Presentation → temporarily take over with another deck playlist
+//                    or a single live link (Google Slides / Canva).
+// Every action PUTs the full live state; the TVs poll it every ~2s.
+// ===================================================================
+
+type RemoteMode = "auto" | "manual" | "presentation";
+
+interface RemotePublicItem {
+  id: number;
+  kind: "image" | "video" | "audio" | "pdf" | "url";
+  mimeType: string | null;
+  durationSeconds: number | null;
+  orderIndex: number;
+  mediaUrl: string;
+  url: string | null;
+}
+
+function RemoteControl({
+  playlistId,
+  playlistName,
+  allPlaylists,
+  onClose,
+}: {
+  playlistId: number;
+  playlistName: string;
+  allPlaylists: PlaylistRow[];
+  onClose: () => void;
+}) {
+  const [mode, setMode] = useState<RemoteMode>("auto");
+  const [itemIndex, setItemIndex] = useState(0);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [deckId, setDeckId] = useState<number | null>(null);
+  const [url, setUrl] = useState("");
+  const [urlDraft, setUrlDraft] = useState("");
+
+  const [items, setItems] = useState<RemotePublicItem[]>([]);
+  const [itemsLoading, setItemsLoading] = useState(false);
+  // Measured PDF page counts, keyed by item id (filled by onPdfMeta from
+  // the live preview). Non-PDF items are implicitly 1 page.
+  const [pdfPages, setPdfPages] = useState<Record<number, number>>({});
+
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [initialized, setInitialized] = useState(false);
+
+  // Decks a presenter can take over with: every OTHER playlist at the
+  // school (presenting "this" playlist is just Manual mode).
+  const deckOptions = useMemo(
+    () => allPlaylists.filter((p) => p.id !== playlistId),
+    [allPlaylists, playlistId],
+  );
+
+  // Load the current live state once so reopening the panel resumes
+  // where the wall actually is, rather than snapping back to Auto.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/displays/public/live/${playlistId}`);
+        if (!r.ok) throw new Error();
+        const j = (await r.json()) as {
+          mode: RemoteMode;
+          itemIndex: number;
+          pageIndex: number;
+          presentationPlaylistId: number | null;
+          presentationUrl: string | null;
+        };
+        if (cancelled) return;
+        setMode(j.mode);
+        setItemIndex(j.itemIndex);
+        setPageIndex(j.pageIndex);
+        setDeckId(j.presentationPlaylistId);
+        setUrl(j.presentationUrl ?? "");
+        setUrlDraft(j.presentationUrl ?? "");
+      } catch {
+        // Default to Auto on any load failure.
+      } finally {
+        if (!cancelled) setInitialized(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [playlistId]);
+
+  // Which playlist's items the preview + nav operate on. Manual uses
+  // this display; a deck presentation uses the chosen deck.
+  const sourceId =
+    mode === "manual"
+      ? playlistId
+      : mode === "presentation" && deckId != null
+        ? deckId
+        : null;
+
+  useEffect(() => {
+    if (sourceId == null) {
+      setItems([]);
+      return;
+    }
+    let cancelled = false;
+    setItemsLoading(true);
+    (async () => {
+      try {
+        const r = await fetch(`/api/displays/public/playlists/${sourceId}`);
+        if (!r.ok) throw new Error();
+        const j = (await r.json()) as { items: RemotePublicItem[] };
+        if (!cancelled) setItems(j.items ?? []);
+      } catch {
+        if (!cancelled) setItems([]);
+      } finally {
+        if (!cancelled) setItemsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceId]);
+
+  const clampedItemIndex =
+    items.length > 0 ? Math.max(0, Math.min(itemIndex, items.length - 1)) : 0;
+  const currentItem = items[clampedItemIndex];
+  const currentIsPdf = !!currentItem && currentItem.kind === "pdf";
+  // A PDF's real page count is only known once the preview's onPdfMeta
+  // fires. Until then we must NOT assume 1 page — otherwise pressing Next
+  // on a not-yet-measured multi-page PDF would skip straight to the next
+  // item instead of advancing to page 2.
+  const currentPageKnown =
+    !currentIsPdf || pdfPages[currentItem.id] !== undefined;
+  const currentPageCount =
+    currentIsPdf && currentItem ? pdfPages[currentItem.id] ?? 1 : 1;
+  const clampedPageIndex = Math.max(0, Math.min(pageIndex, currentPageCount - 1));
+
+  // PUT the full live state and adopt it locally on success.
+  async function apply(next: {
+    mode: RemoteMode;
+    itemIndex: number;
+    pageIndex: number;
+    presentationPlaylistId: number | null;
+    presentationUrl: string | null;
+  }) {
+    setSaving(true);
+    setError(null);
+    try {
+      const r = await authFetch(`/api/displays/playlists/${playlistId}/live`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(next),
+      });
+      if (!r.ok) {
+        const j = (await r.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(j?.error || "Failed to update");
+      }
+      setMode(next.mode);
+      setItemIndex(next.itemIndex);
+      setPageIndex(next.pageIndex);
+      setDeckId(next.presentationPlaylistId);
+      setUrl(next.presentationUrl ?? "");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function goAuto() {
+    void apply({
+      mode: "auto",
+      itemIndex: 0,
+      pageIndex: 0,
+      presentationPlaylistId: null,
+      presentationUrl: null,
+    });
+  }
+
+  function goManual() {
+    void apply({
+      mode: "manual",
+      itemIndex: 0,
+      pageIndex: 0,
+      presentationPlaylistId: null,
+      presentationUrl: null,
+    });
+  }
+
+  function presentDeck(id: number) {
+    void apply({
+      mode: "presentation",
+      itemIndex: 0,
+      pageIndex: 0,
+      presentationPlaylistId: id,
+      presentationUrl: null,
+    });
+  }
+
+  function presentUrl() {
+    const trimmed = urlDraft.trim();
+    if (!trimmed) return;
+    void apply({
+      mode: "presentation",
+      itemIndex: 0,
+      pageIndex: 0,
+      presentationPlaylistId: null,
+      presentationUrl: trimmed,
+    });
+  }
+
+  // Position helpers, only meaningful for manual / deck presentation.
+  const presentingUrl = mode === "presentation" && !!url;
+  const canStep = (mode === "manual" || (mode === "presentation" && deckId != null)) && items.length > 0;
+
+  function goFirst() {
+    if (!canStep) return;
+    void apply({
+      mode,
+      itemIndex: 0,
+      pageIndex: 0,
+      presentationPlaylistId: deckId,
+      presentationUrl: null,
+    });
+  }
+
+  function goNext() {
+    if (!canStep) return;
+    // Hold Next until we actually know the current PDF's page count, so we
+    // never skip past unviewed pages.
+    if (!currentPageKnown) return;
+    // Advance within a multi-page PDF first, then to the next item.
+    if (clampedPageIndex + 1 < currentPageCount) {
+      void apply({
+        mode,
+        itemIndex: clampedItemIndex,
+        pageIndex: clampedPageIndex + 1,
+        presentationPlaylistId: deckId,
+        presentationUrl: null,
+      });
+      return;
+    }
+    const nextItem = (clampedItemIndex + 1) % items.length;
+    void apply({
+      mode,
+      itemIndex: nextItem,
+      pageIndex: 0,
+      presentationPlaylistId: deckId,
+      presentationUrl: null,
+    });
+  }
+
+  function goPrev() {
+    if (!canStep) return;
+    // Step back a PDF page first, otherwise to the previous item.
+    if (clampedPageIndex > 0) {
+      void apply({
+        mode,
+        itemIndex: clampedItemIndex,
+        pageIndex: clampedPageIndex - 1,
+        presentationPlaylistId: deckId,
+        presentationUrl: null,
+      });
+      return;
+    }
+    const prevItem = (clampedItemIndex - 1 + items.length) % items.length;
+    void apply({
+      mode,
+      itemIndex: prevItem,
+      pageIndex: 0,
+      presentationPlaylistId: deckId,
+      presentationUrl: null,
+    });
+  }
+
+  const tabBtn = (active: boolean): CSSProperties => ({
+    ...btn,
+    flex: 1,
+    fontWeight: 600,
+    background: active ? "#2563eb" : "white",
+    color: active ? "white" : "#111827",
+    borderColor: active ? "#2563eb" : "#d1d5db",
+  });
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 70,
+        padding: 16,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: "white",
+          borderRadius: 12,
+          width: "min(96vw, 560px)",
+          maxHeight: "92vh",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "0 16px 48px rgba(0,0,0,0.35)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "14px 18px",
+            borderBottom: "1px solid #e5e7eb",
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 17, fontWeight: 700 }}>Remote / Present</div>
+            <div
+              style={{
+                fontSize: 12,
+                color: "#6b7280",
+                marginTop: 2,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+              title={playlistName}
+            >
+              Driving: {playlistName}
+            </div>
+          </div>
+          <button style={btn} onClick={onClose}>
+            Close
+          </button>
+        </div>
+
+        <div style={{ padding: 18, overflowY: "auto" }}>
+          {!initialized ? (
+            <div style={{ color: "#6b7280" }}>Loading…</div>
+          ) : (
+            <>
+              <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                <button style={tabBtn(mode === "auto")} onClick={goAuto} disabled={saving}>
+                  Auto
+                </button>
+                <button
+                  style={tabBtn(mode === "manual")}
+                  onClick={goManual}
+                  disabled={saving}
+                >
+                  Manual
+                </button>
+                <button
+                  style={tabBtn(mode === "presentation")}
+                  onClick={() => {
+                    // Switching to the presentation tab doesn't take over
+                    // on its own — the presenter picks a deck or link below.
+                    setMode("presentation");
+                  }}
+                  disabled={saving}
+                >
+                  Present
+                </button>
+              </div>
+
+              {error && (
+                <div
+                  style={{
+                    background: "#fef2f2",
+                    border: "1px solid #fecaca",
+                    color: "#b91c1c",
+                    borderRadius: 8,
+                    padding: 8,
+                    marginBottom: 12,
+                    fontSize: 13,
+                  }}
+                >
+                  {error}
+                </div>
+              )}
+
+              {mode === "auto" && (
+                <div style={{ fontSize: 14, color: "#374151", lineHeight: 1.5 }}>
+                  This display is running its normal rotation (scheduled items,
+                  House page, hall passes, etc.). Switch to{" "}
+                  <strong>Manual</strong> to click through this playlist
+                  yourself, or <strong>Present</strong> to take over with a deck
+                  or a live link. Every TV on this playlist follows along —
+                  nothing to re-type on the TVs.
+                </div>
+              )}
+
+              {mode === "presentation" && (
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+                    Present a deck
+                  </div>
+                  {deckOptions.length === 0 ? (
+                    <div style={{ fontSize: 13, color: "#6b7280" }}>
+                      No other playlists to present. Create a deck playlist
+                      (upload slides as images or a PDF) to use this.
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {deckOptions.map((d) => (
+                        <button
+                          key={d.id}
+                          style={{
+                            ...btn,
+                            background: deckId === d.id ? "#dbeafe" : "white",
+                            borderColor: deckId === d.id ? "#2563eb" : "#d1d5db",
+                            fontWeight: deckId === d.id ? 700 : 400,
+                          }}
+                          onClick={() => presentDeck(d.id)}
+                          disabled={saving}
+                        >
+                          {d.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <div
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      margin: "14px 0 6px",
+                    }}
+                  >
+                    …or present a live link
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input
+                      type="url"
+                      value={urlDraft}
+                      onChange={(e) => setUrlDraft(e.target.value)}
+                      placeholder="https://docs.google.com/…/present"
+                      style={{ ...inputStyle, flex: 1 }}
+                    />
+                    <button
+                      style={btnPrimary}
+                      onClick={presentUrl}
+                      disabled={saving || !urlDraft.trim()}
+                    >
+                      Go
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 11, color: "#6b7280", marginTop: 6 }}>
+                    Use a Google Slides / Canva "present" or "published" link.
+                    Some sites block embedding; if it stays blank, upload the
+                    slides as a deck playlist instead.
+                  </div>
+                </div>
+              )}
+
+              {/* Live preview */}
+              {(mode === "manual" ||
+                (mode === "presentation" && (deckId != null || presentingUrl))) && (
+                <div style={{ marginTop: 4, marginBottom: 12 }}>
+                  <div
+                    style={{
+                      position: "relative",
+                      width: "100%",
+                      aspectRatio: "16 / 9",
+                      background: "black",
+                      borderRadius: 10,
+                      overflow: "hidden",
+                      border: "1px solid #e5e7eb",
+                    }}
+                  >
+                    {presentingUrl ? (
+                      <iframe
+                        src={url}
+                        title="Presentation preview"
+                        sandbox="allow-scripts allow-forms allow-popups allow-same-origin"
+                        referrerPolicy="no-referrer"
+                        style={{ width: "100%", height: "100%", border: 0, background: "white" }}
+                      />
+                    ) : itemsLoading ? (
+                      <div
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          color: "#9ca3af",
+                        }}
+                      >
+                        Loading…
+                      </div>
+                    ) : currentItem ? (
+                      <ControlledItemSlide
+                        item={currentItem}
+                        pageIndex={clampedPageIndex}
+                        onPdfMeta={(n) =>
+                          setPdfPages((prev) =>
+                            prev[currentItem.id] === n
+                              ? prev
+                              : { ...prev, [currentItem.id]: n },
+                          )
+                        }
+                        key={`${currentItem.id}`}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          color: "#9ca3af",
+                        }}
+                      >
+                        Nothing to show yet
+                      </div>
+                    )}
+                  </div>
+
+                  {!presentingUrl && canStep && (
+                    <>
+                      <div
+                        style={{
+                          textAlign: "center",
+                          fontSize: 13,
+                          color: "#374151",
+                          margin: "10px 0",
+                        }}
+                      >
+                        Slide {clampedItemIndex + 1} of {items.length}
+                        {currentPageCount > 1
+                          ? ` · page ${clampedPageIndex + 1} of ${currentPageCount}`
+                          : ""}
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          style={{ ...btn, flex: 1 }}
+                          onClick={goFirst}
+                          disabled={saving}
+                        >
+                          ⏮ First
+                        </button>
+                        <button
+                          style={{ ...btn, flex: 1 }}
+                          onClick={goPrev}
+                          disabled={saving}
+                        >
+                          ◀ Prev
+                        </button>
+                        <button
+                          style={{ ...btnPrimary, flex: 2 }}
+                          onClick={goNext}
+                          disabled={saving || !currentPageKnown}
+                        >
+                          {currentPageKnown ? "Next ▶" : "Loading…"}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {mode !== "auto" && (
+                <button
+                  style={{ ...btnDanger, width: "100%", marginTop: 6 }}
+                  onClick={goAuto}
+                  disabled={saving}
+                >
+                  End session — back to Auto
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

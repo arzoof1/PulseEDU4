@@ -1,7 +1,8 @@
 import { Router, type IRouter } from "express";
-import { db, tardiesTable, staffTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { db, tardiesTable, staffTable, studentsTable } from "@workspace/db";
+import { and, eq, inArray } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+import { resolveStudentIdInput } from "../lib/studentIdResolver.js";
 
 const router: IRouter = Router();
 
@@ -12,7 +13,29 @@ router.get("/tardies", async (req, res) => {
     .select()
     .from(tardiesTable)
     .where(eq(tardiesTable.schoolId, schoolId));
-  res.json(rows);
+  // Enrich each tardy with the student's local_sis_id so the UI can
+  // render it as the student-facing credential. FLEID stays in
+  // studentId for internal joins.
+  const sids = Array.from(new Set(rows.map((r) => r.studentId)));
+  const localBySid = new Map<string, string | null>();
+  if (sids.length > 0) {
+    const stu = await db
+      .select({
+        studentId: studentsTable.studentId,
+        localSisId: studentsTable.localSisId,
+      })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          inArray(studentsTable.studentId, sids),
+        ),
+      );
+    for (const s of stu) localBySid.set(s.studentId, s.localSisId);
+  }
+  res.json(
+    rows.map((r) => ({ ...r, localSisId: localBySid.get(r.studentId) ?? null })),
+  );
 });
 
 router.post("/tardies", async (req, res) => {
@@ -54,6 +77,16 @@ router.post("/tardies", async (req, res) => {
     return;
   }
 
+  // Accept either FLEID or local SIS ID — translate the latter to
+  // the canonical FLEID before insert so the rest of the system
+  // (FAST joins, parent portal, audit logs) keeps working.
+  const resolved = await resolveStudentIdInput(schoolId, studentId);
+  if (!resolved) {
+    res.status(404).json({ error: `No student with ID "${studentId}"` });
+    return;
+  }
+  const canonicalStudentId = resolved;
+
   // "intervention" is a first-class entry type written by the
   // CheckInOutModal when a teacher logs a classroom intervention. Without
   // it here the row would silently land as "tardy" and disappear from the
@@ -84,7 +117,7 @@ router.post("/tardies", async (req, res) => {
     .insert(tardiesTable)
     .values({
       schoolId,
-      studentId,
+      studentId: canonicalStudentId,
       teacherName,
       period,
       reason: typeof reason === "string" ? reason : "",

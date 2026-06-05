@@ -5,7 +5,7 @@ import {
   type Response,
   type NextFunction,
 } from "express";
-import { db, staffTable } from "@workspace/db";
+import { db, staffTable, housesTable, schoolsTable } from "@workspace/db";
 import { and, eq, asc, inArray, sql } from "drizzle-orm";
 import { staffIdFromBearerToken } from "../lib/staffBearerAuth.js";
 import { bcryptHash } from "../lib/bcrypt.js";
@@ -13,6 +13,7 @@ import {
   getDistrictIdForSchool,
   getSchoolIdsForDistrict,
 } from "../lib/scope";
+import { generateAndHashTempPassword } from "../lib/tempPassword";
 
 const router: IRouter = Router();
 
@@ -68,6 +69,10 @@ const ROLE_FLAGS = [
   "isSocialWorker",
   "isSchoolPsychologist",
   "isGuidanceCounselor",
+  "isNonExemptRole",
+  "isFrontOffice",
+  "isSro",
+  "isGuardian",
 ] as const;
 type RoleFlag = (typeof ROLE_FLAGS)[number];
 
@@ -94,6 +99,9 @@ const CAP_FLAGS = [
   "capStaffRoles",
   "capManageRoles",
   "capManageDisplays",
+  "capCarRiderMonitor",
+  "capManageDismissal",
+  "capTourNotify",
 ] as const;
 type CapFlag = (typeof CAP_FLAGS)[number];
 
@@ -129,6 +137,11 @@ const STAFF_SELECT = {
   isSocialWorker: staffTable.isSocialWorker,
   isSchoolPsychologist: staffTable.isSchoolPsychologist,
   isGuidanceCounselor: staffTable.isGuidanceCounselor,
+  isNonExemptRole: staffTable.isNonExemptRole,
+  isFrontOffice: staffTable.isFrontOffice,
+  isSro: staffTable.isSro,
+  isGuardian: staffTable.isGuardian,
+  exemptStatus: staffTable.exemptStatus,
   capHallPasses: staffTable.capHallPasses,
   capTardies: staffTable.capTardies,
   capStudentActivity: staffTable.capStudentActivity,
@@ -151,9 +164,113 @@ const STAFF_SELECT = {
   capStaffRoles: staffTable.capStaffRoles,
   capManageRoles: staffTable.capManageRoles,
   capManageDisplays: staffTable.capManageDisplays,
+  capCarRiderMonitor: staffTable.capCarRiderMonitor,
+  capManageDismissal: staffTable.capManageDismissal,
+  capTourNotify: staffTable.capTourNotify,
   defaultRoom: staffTable.defaultRoom,
+  houseId: staffTable.houseId,
+  department: staffTable.department,
   schoolId: staffTable.schoolId,
 } as const;
+
+// Fixed set of academic departments offered in the Staff & Roles dropdown
+// and accepted by the patch endpoint. Kept in sync with the client list.
+const DEPARTMENTS = [
+  "ELA",
+  "Math",
+  "Science",
+  "Social Studies",
+  "CTE",
+  "Elective",
+  "Other",
+] as const;
+
+// Best-effort department guess from a display name that carries a subject
+// suffix (e.g. "Jane Doe - ELA G6" -> "ELA"). Returns "" when nothing maps,
+// so the export shows a blank the admin can fill in via the dropdown.
+function deriveDepartmentFromName(displayName: string): string {
+  const idx = displayName.lastIndexOf(" - ");
+  if (idx === -1) return "";
+  const subject = displayName.slice(idx + 3).toLowerCase();
+  const has = (...needles: string[]) =>
+    needles.some((n) => subject.includes(n));
+  if (has("ela", "english", "reading", "lang arts", "language arts", "writing"))
+    return "ELA";
+  if (has("math", "algebra", "geometry", "calculus", "stats")) return "Math";
+  if (has("science", "biology", "chemistry", "physics", "anatomy", "earth"))
+    return "Science";
+  if (
+    has(
+      "social studies",
+      "history",
+      "civics",
+      "government",
+      "geography",
+      "economics",
+    )
+  )
+    return "Social Studies";
+  if (has("cte", "career", "technical", "computer", "coding", "business"))
+    return "CTE";
+  if (
+    has(
+      "elective",
+      "art",
+      "music",
+      "band",
+      "chorus",
+      "pe",
+      "physical ed",
+      "health",
+      "drama",
+      "theatre",
+      "theater",
+      "spanish",
+      "french",
+      "world lang",
+    )
+  )
+    return "Elective";
+  return "";
+}
+
+// Human-readable role labels from the boolean role flags, most-senior first.
+// Returns "Teacher" when no role flag is set (the baseline).
+function roleLabelsFor(s: StaffRow): string {
+  const labels: string[] = [];
+  if (s.isSuperUser) labels.push("SuperUser");
+  if (s.isDistrictAdmin) labels.push("District Admin");
+  if (s.isAdmin) labels.push("Admin");
+  if (s.isCounselor) labels.push("Counselor");
+  if (s.isGuidanceCounselor) labels.push("Guidance Counselor");
+  if (s.isDean) labels.push("Dean");
+  if (s.isBehaviorSpecialist) labels.push("Behavior Specialist");
+  if (s.isMtssCoordinator) labels.push("MTSS Coordinator");
+  if (s.isEseCoordinator) labels.push("ESE Coordinator");
+  if (s.isPbisCoordinator) labels.push("PBIS Coordinator");
+  if (s.isSchoolPsychologist) labels.push("School Psychologist");
+  if (s.isSocialWorker) labels.push("Social Worker");
+  if (s.isIssTeacher) labels.push("ISS Teacher");
+  if (s.isFrontOffice) labels.push("Front Office");
+  if (s.isSro) labels.push("SRO");
+  if (s.isGuardian) labels.push("Guardian/Monitor");
+  if (s.isNonExemptRole) labels.push("Non-Exempt Staff");
+  return labels.length > 0 ? labels.join("; ") : "Teacher";
+}
+
+// CSV cell escaping. Two jobs:
+//   1. Neutralize spreadsheet formula injection — a cell beginning with
+//      =, +, -, @, or a tab/CR can execute when opened in Excel/Sheets, and
+//      these fields (name, email, default room, external id) are
+//      user-controlled. Prefix such values with a single quote. Matches the
+//      pattern in routes/ticketing.ts.
+//   2. RFC-4180 quoting — wrap in quotes and double any inner quotes when the
+//      value contains a quote, comma, or newline.
+function csvCell(value: unknown): string {
+  let str = value === null || value === undefined ? "" : String(value);
+  if (/^[=+\-@\t\r]/.test(str)) str = `'${str}`;
+  return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
 
 // List staff with full role + capability flags. SuperUsers see every school
 // in their own district (the role is district-wide, not cross-district —
@@ -189,6 +306,121 @@ router.get(
   },
 );
 
+// Export the full staff roster as a CSV (opens in Excel). Same scoping as the
+// list endpoint: SuperUsers get their whole district, everyone else their own
+// school. Cell phone is admin-gated (admin / district admin / super only).
+router.get(
+  "/admin/staff/export.csv",
+  requireAdminOrSuper(),
+  async (req: Request, res: Response) => {
+    const actor = (req as Request & { staff: StaffRow }).staff;
+    const canSeeCell =
+      actor.isAdmin || actor.isDistrictAdmin || actor.isSuperUser;
+
+    let rows: StaffRow[];
+    if (actor.isSuperUser) {
+      const districtId = await getDistrictIdForSchool(actor.schoolId);
+      const districtSchoolIds =
+        districtId !== null ? await getSchoolIdsForDistrict(districtId) : [];
+      rows =
+        districtSchoolIds.length === 0
+          ? []
+          : await db
+              .select()
+              .from(staffTable)
+              .where(inArray(staffTable.schoolId, districtSchoolIds))
+              .orderBy(asc(staffTable.displayName));
+    } else {
+      rows = await db
+        .select()
+        .from(staffTable)
+        .where(eq(staffTable.schoolId, actor.schoolId))
+        .orderBy(asc(staffTable.displayName));
+    }
+
+    // Resolve school + house names in two small lookups (avoids a join).
+    const schoolIds = [...new Set(rows.map((r) => r.schoolId))];
+    const houseIds = [
+      ...new Set(rows.map((r) => r.houseId).filter((h): h is number => !!h)),
+    ];
+    const schoolNames = new Map<number, string>();
+    if (schoolIds.length > 0) {
+      const srows = await db
+        .select({ id: schoolsTable.id, name: schoolsTable.name })
+        .from(schoolsTable)
+        .where(inArray(schoolsTable.id, schoolIds));
+      for (const s of srows) schoolNames.set(s.id, s.name);
+    }
+    const houseNames = new Map<number, string>();
+    if (houseIds.length > 0) {
+      const hrows = await db
+        .select({ id: housesTable.id, name: housesTable.name })
+        .from(housesTable)
+        .where(inArray(housesTable.id, houseIds));
+      for (const h of hrows) houseNames.set(h.id, h.name);
+    }
+
+    const header = [
+      "Name",
+      "Email",
+      "Role",
+      "Department",
+      "School",
+      "Status",
+      "Work extension",
+      "Cell phone",
+      "Default room",
+      "PBIS house",
+      "Exempt status",
+      "SIS / External ID",
+      "Date added",
+    ];
+    const lines = [header.map(csvCell).join(",")];
+    for (const s of rows) {
+      const department =
+        (s.department && s.department.trim()) ||
+        deriveDepartmentFromName(s.displayName);
+      const exempt =
+        s.exemptStatus === "exempt"
+          ? "Exempt"
+          : s.exemptStatus === "non_exempt"
+            ? "Non-exempt"
+            : "";
+      const dateAdded = s.createdAt
+        ? new Date(s.createdAt).toISOString().slice(0, 10)
+        : "";
+      lines.push(
+        [
+          s.displayName,
+          s.email,
+          roleLabelsFor(s),
+          department,
+          schoolNames.get(s.schoolId) ?? "",
+          s.active ? "Active" : "Inactive",
+          s.workExtension ?? "",
+          canSeeCell ? (s.cellPhone ?? "") : "",
+          s.defaultRoom ?? "",
+          s.houseId ? (houseNames.get(s.houseId) ?? "") : "",
+          exempt,
+          s.externalId ?? "",
+          dateAdded,
+        ]
+          .map(csvCell)
+          .join(","),
+      );
+    }
+    // BOM so Excel reads UTF-8 names correctly; CRLF line endings for Excel.
+    const csv = "\uFEFF" + lines.join("\r\n") + "\r\n";
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="staff-roster-${stamp}.csv"`,
+    );
+    res.send(csv);
+  },
+);
+
 // Update any subset of role/capability flags + active for one staff member.
 router.patch(
   "/admin/staff/:id",
@@ -212,6 +444,71 @@ router.patch(
         res.status(400).json({ error: "defaultRoom must be a string or null" });
         return;
       }
+    }
+    // houseId: nullable FK to houses.id. Null clears it. Server-side
+    // same-school validation happens AFTER we look up `target` (a few
+    // lines below) — that's the only place we know the target's
+    // school_id. We do NOT trust the UI ("picker only loads its school's
+    // houses") as the security boundary, since a direct API call could
+    // bypass it.
+    if ("houseId" in body) {
+      const v = body.houseId;
+      if (v === null) {
+        updates.houseId = null;
+      } else if (typeof v === "number" && Number.isInteger(v) && v > 0) {
+        updates.houseId = v;
+      } else {
+        res
+          .status(400)
+          .json({ error: "houseId must be a positive integer or null" });
+        return;
+      }
+    }
+    // exemptStatus: nullable text ('exempt' | 'non_exempt' | null). Admins
+    // toggle this independently of the Non-Exempt role preset — some
+    // non-exempt staff hold other roles. The Non-Exempt preset additionally
+    // auto-flips this below if the field wasn't explicitly set in the same
+    // request, so applying the preset "just works" for Comp Time accrual.
+    if ("exemptStatus" in body) {
+      const v = body.exemptStatus;
+      if (v === null || (typeof v === "string" && v.trim() === "")) {
+        updates.exemptStatus = null;
+      } else if (
+        typeof v === "string" &&
+        (v === "exempt" || v === "non_exempt")
+      ) {
+        updates.exemptStatus = v;
+      } else {
+        res.status(400).json({
+          error: "exemptStatus must be 'exempt', 'non_exempt', or null",
+        });
+        return;
+      }
+    }
+    // department: nullable text constrained to the known DEPARTMENTS set.
+    // Empty string clears it (NULL).
+    if ("department" in body) {
+      const v = body.department;
+      if (v === null || (typeof v === "string" && v.trim() === "")) {
+        updates.department = null;
+      } else if (
+        typeof v === "string" &&
+        (DEPARTMENTS as readonly string[]).includes(v.trim())
+      ) {
+        updates.department = v.trim();
+      } else {
+        res.status(400).json({
+          error: `department must be one of: ${DEPARTMENTS.join(", ")}, or empty`,
+        });
+        return;
+      }
+    }
+    // Auto-flip exempt_status when the Non-Exempt role preset is applied.
+    // Only fires when the field wasn't explicitly set in the same request,
+    // so an admin can still override (e.g. apply the role bundle but keep
+    // them marked 'exempt' for some unusual reason).
+    if (updates.isNonExemptRole === true && !("exemptStatus" in body)) {
+      updates.exemptStatus = "non_exempt";
     }
     if (Object.keys(updates).length === 0) {
       res.status(400).json({ error: "No valid fields in request body" });
@@ -320,6 +617,33 @@ router.patch(
     if (!target) {
       res.status(404).json({ error: "Staff not found" });
       return;
+    }
+
+    // Cross-tenant guard: a non-null houseId must belong to the same
+    // school as the target staff member. Without this, an admin (or
+    // any direct API caller) could attach School A's staff to School
+    // B's house, silently corrupting multi-tenant data. The check fires
+    // only when houseId is being set to a non-null value.
+    if (
+      "houseId" in updates &&
+      typeof updates.houseId === "number"
+    ) {
+      const [house] = await db
+        .select({ id: housesTable.id })
+        .from(housesTable)
+        .where(
+          and(
+            eq(housesTable.id, updates.houseId),
+            eq(housesTable.schoolId, target.schoolId),
+          ),
+        );
+      if (!house) {
+        res.status(400).json({
+          error:
+            "House does not exist or belongs to a different school than this staff member.",
+        });
+        return;
+      }
     }
 
     const [updated] = await db
@@ -543,6 +867,109 @@ router.post(
       .where(eq(staffTable.id, targetId));
 
     res.json({ ok: true });
+  },
+);
+
+// Admin / SuperUser regenerates a CSPRNG temp password for another staff
+// member and gets it back ONCE in the response — same shape as the
+// "we created your first admin" panel from the onboard-district wizard.
+// Use case: staff member lost their temp password before first sign-in,
+// or admin needs to "reinvite" a new hire who never logged in. We don't
+// have an email-invite table yet (see Open work in replit.md); until
+// then this read-it-once-and-paste-it-to-the-user flow is the smallest
+// path to ship the punch-list item without growing a new schema.
+//
+// Reuses every gate from POST /admin/staff/:id/password above:
+//   - Admin/SuperUser only (not cap_staff_roles).
+//   - Non-self (self must use /auth/change-password).
+//   - Same-school for non-SuperUser, district-scoped for SuperUser.
+//   - Cannot reset SuperUser/District-Admin unless caller is SuperUser.
+//   - Cannot reset inactive accounts.
+router.post(
+  "/admin/staff/:id/reset-temp-password",
+  requireAdminOrSuper(),
+  async (req: Request, res: Response) => {
+    const actor = (req as Request & { staff: StaffRow }).staff;
+    if (!actor.isAdmin && !actor.isSuperUser) {
+      res
+        .status(403)
+        .json({ error: "Only Admin or SuperUser can reset passwords." });
+      return;
+    }
+
+    const targetId = Number(req.params.id);
+    if (!Number.isFinite(targetId)) {
+      res.status(400).json({ error: "Invalid staff id" });
+      return;
+    }
+
+    if (targetId === actor.id) {
+      res.status(409).json({
+        error: "Use Change Password to update your own password.",
+      });
+      return;
+    }
+
+    const actorDistrictSchoolIds = actor.isSuperUser
+      ? await (async () => {
+          const did = await getDistrictIdForSchool(actor.schoolId);
+          return did !== null ? await getSchoolIdsForDistrict(did) : [];
+        })()
+      : null;
+
+    const [target] = await db
+      .select()
+      .from(staffTable)
+      .where(
+        actor.isSuperUser
+          ? and(
+              eq(staffTable.id, targetId),
+              actorDistrictSchoolIds && actorDistrictSchoolIds.length > 0
+                ? inArray(staffTable.schoolId, actorDistrictSchoolIds)
+                : sql`false`,
+            )
+          : and(
+              eq(staffTable.id, targetId),
+              eq(staffTable.schoolId, actor.schoolId),
+            ),
+      );
+    if (!target) {
+      res.status(404).json({ error: "Staff not found" });
+      return;
+    }
+
+    if (!target.active) {
+      res.status(409).json({
+        error: "Reactivate this account before resetting its password.",
+      });
+      return;
+    }
+
+    if (target.isSuperUser && !actor.isSuperUser) {
+      res
+        .status(403)
+        .json({ error: "Only a SuperUser can reset a SuperUser's password." });
+      return;
+    }
+    if (target.isDistrictAdmin && !actor.isSuperUser) {
+      res.status(403).json({
+        error: "Only a SuperUser can reset a District Admin's password.",
+      });
+      return;
+    }
+
+    const { tempPassword, passwordHash } = await generateAndHashTempPassword();
+    await db
+      .update(staffTable)
+      .set({ passwordHash })
+      .where(eq(staffTable.id, targetId));
+
+    res.json({
+      ok: true,
+      tempPassword,
+      displayName: target.displayName,
+      email: target.email,
+    });
   },
 );
 

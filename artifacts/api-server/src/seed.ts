@@ -48,12 +48,14 @@ import {
   cameraRegistryTable,
   caseOutcomeTypesTable,
   DEFAULT_CASE_OUTCOMES,
+  studentRetentionsTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
-import { eq, sql, and, inArray, isNull } from "drizzle-orm";
+import { eq, sql, and, inArray, isNull, asc, desc } from "drizzle-orm";
 import { logger } from "./lib/logger";
 import { fetchWeatherForLocation } from "./lib/weatherFetcher";
-import { schoolYearLabelFor } from "./lib/schoolYear.js";
+import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./lib/schoolYear.js";
+import benchmarkDeliveriesSeedJson from "./seedData/benchmarkDeliveriesSeed.json" with { type: "json" };
 
 // =============================================================================
 // MULTI-SCHOOL SEED
@@ -239,6 +241,30 @@ function pick<T>(rng: () => number, arr: T[]): T {
 // seedTenancy: idempotent. Districts + schools.
 // -----------------------------------------------------------------------------
 export async function seedTenancy() {
+  // Additive district-branding columns (School Tours). Direct ALTERs to
+  // avoid drizzle-kit's interactive rename prompts; safe to re-run. These
+  // MUST run before the district insert below, because the drizzle schema
+  // now references these columns and the generated INSERT would otherwise
+  // fail on a DB that predates them.
+  await db.execute(
+    sql`ALTER TABLE districts ADD COLUMN IF NOT EXISTS logo_object_key TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE districts ADD COLUMN IF NOT EXISTS tagline TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE districts ADD COLUMN IF NOT EXISTS brand_hero_top BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE districts ADD COLUMN IF NOT EXISTS brand_documents BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE districts ADD COLUMN IF NOT EXISTS brand_footer BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE districts ADD COLUMN IF NOT EXISTS brand_watermark BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+
   for (const d of DISTRICTS) {
     await db
       .insert(districtsTable)
@@ -279,11 +305,15 @@ export async function seedTenancy() {
 // rename targets). Safe to re-run on every boot.
 // -----------------------------------------------------------------------------
 const HOUSE_DEFAULTS = [
-  { name: "Falcon",  color: "#3b82f6", motto: "Sharp eyes. Steady wings." },
-  { name: "Phoenix", color: "#ef4444", motto: "Rise every day."           },
-  { name: "Stag",    color: "#10b981", motto: "Stand tall. Stand together." },
-  { name: "Wolf",    color: "#8b5cf6", motto: "One pack."                  },
+  { name: "Falcon",  color: "#3b82f6", motto: "Sharp eyes. Steady wings.",   iconKey: "Bird"   },
+  { name: "Phoenix", color: "#ef4444", motto: "Rise every day.",             iconKey: "Flame"  },
+  { name: "Stag",    color: "#10b981", motto: "Stand tall. Stand together.", iconKey: "Crown"  },
+  { name: "Wolf",    color: "#8b5cf6", motto: "One pack.",                   iconKey: "Shield" },
 ];
+
+// Round-robin pool used to backfill iconKey for any pre-existing houses
+// (created before this column existed) that admins haven't customised.
+const HOUSE_ICON_POOL = ["Crown", "Shield", "Flame", "Star", "Bird", "Sparkles"];
 
 export async function ensureHousesSchema() {
   await db.execute(sql`
@@ -302,11 +332,75 @@ export async function ensureHousesSchema() {
   await db.execute(
     sql`CREATE UNIQUE INDEX IF NOT EXISTS houses_school_name_unique ON houses (school_id, name)`,
   );
+  // Additive evolution: icon_key was added after the initial schema. ALTER
+  // TABLE ... IF NOT EXISTS keeps re-runs cheap and avoids drizzle-kit's
+  // interactive rename prompt (per the project gotchas note).
+  await db.execute(
+    sql`ALTER TABLE houses ADD COLUMN IF NOT EXISTS icon_key TEXT`,
+  );
   // students.house_id is added separately because it's an ALTER on an
   // existing table. IF NOT EXISTS keeps re-runs harmless.
   await db.execute(
     sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS house_id INTEGER`,
   );
+  // staff.house_id — teachers/staff can belong to a house too (printed on
+  // their kiosk activation card and any future "your house" surfaces).
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS house_id INTEGER`,
+  );
+  // staff.department — optional academic department (admin-set via the
+  // Staff & Roles dropdown), surfaced in the staff CSV export.
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS department TEXT`,
+  );
+  // student_house_changes — append-only audit of every house move.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS student_house_changes (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_db_id INTEGER NOT NULL,
+      from_house_id INTEGER,
+      to_house_id INTEGER,
+      reason TEXT NOT NULL,
+      changed_by_staff_id INTEGER NOT NULL,
+      source TEXT NOT NULL DEFAULT 'manual',
+      sort_job_id INTEGER,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS student_house_changes_by_school
+      ON student_house_changes (school_id, changed_at)
+  `);
+  // Drop the legacy NOT NULL on to_house_id so admin "clear back to
+  // unassigned" moves can be audited too. Safe on tables created
+  // before this column was nullable.
+  await db.execute(
+    sql`ALTER TABLE student_house_changes ALTER COLUMN to_house_id DROP NOT NULL`,
+  );
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS student_house_changes_by_student
+      ON student_house_changes (student_db_id)
+  `);
+  // student_house_sort_jobs — snapshot per bulk sort for 24h undo.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS student_house_sort_jobs (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      committed_by_staff_id INTEGER NOT NULL,
+      committed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      include_assigned INTEGER NOT NULL DEFAULT 0,
+      keep_siblings INTEGER NOT NULL DEFAULT 0,
+      affected_count INTEGER NOT NULL DEFAULT 0,
+      snapshot JSONB NOT NULL DEFAULT '[]'::jsonb,
+      undone_at TIMESTAMPTZ,
+      undone_by_staff_id INTEGER
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS student_house_sort_jobs_by_school
+      ON student_house_sort_jobs (school_id, committed_at)
+  `);
 }
 
 export async function seedHousesIfEmpty() {
@@ -328,6 +422,7 @@ export async function seedHousesIfEmpty() {
             name: h.name,
             color: h.color,
             motto: h.motto,
+            iconKey: h.iconKey,
             createdAt: new Date().toISOString(),
           })),
         )
@@ -337,6 +432,30 @@ export async function seedHousesIfEmpty() {
         { schoolId: school.id, count: created.length },
         "[seed] houses seeded",
       );
+    } else {
+      // Backfill iconKey for pre-existing houses created before this column
+      // existed. Round-robin from the icon pool, ordered by id so the same
+      // house always gets the same icon across re-runs.
+      const missing = houseRows.filter((h) => !h.iconKey);
+      if (missing.length > 0) {
+        const ordered = [...missing].sort((a, b) => a.id - b.id);
+        for (let i = 0; i < ordered.length; i++) {
+          const iconKey = HOUSE_ICON_POOL[i % HOUSE_ICON_POOL.length];
+          await db
+            .update(housesTable)
+            .set({ iconKey })
+            .where(eq(housesTable.id, ordered[i].id));
+        }
+        logger.info(
+          { schoolId: school.id, backfilled: ordered.length },
+          "[seed] houses iconKey backfilled",
+        );
+        // Refresh local copy so downstream logic sees the iconKey if it cares.
+        houseRows = await db
+          .select()
+          .from(housesTable)
+          .where(eq(housesTable.schoolId, school.id));
+      }
     }
 
     // 2. Round-robin assign students that don't yet have a house.
@@ -444,6 +563,12 @@ export async function ensureMtssPlansSchema() {
   );
   await db.execute(
     sql`ALTER TABLE student_mtss_plans ADD COLUMN IF NOT EXISTS tier3_goal_slots INTEGER NOT NULL DEFAULT 2`,
+  );
+  // FAST Phase 3 — benchmark linkage. Read path lights an "MTSS"
+  // pill on student-profile benchmark rows; Phase 5 will add the
+  // writer in the plan editor. Nullable / additive — safe on prod.
+  await db.execute(
+    sql`ALTER TABLE student_mtss_plans ADD COLUMN IF NOT EXISTS fast_benchmark_code TEXT`,
   );
   // ---- tier3_goals — version-on-edit goal storage for Tier 3 plans.
   await db.execute(sql`
@@ -864,6 +989,63 @@ export async function ensureSchoolSettingsFeatureFlagsSchema() {
       `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tier_preset_id INTEGER`,
     ),
   );
+  // FAST Phase 2 — per-benchmark mastery threshold (percent, default 80).
+  // Drives the Teacher Roster → Benchmarks heatmap color buckets and
+  // the bottom-3 tile. Configurable per school.
+  await db.execute(
+    sql.raw(
+      `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS fast_benchmark_mastery_threshold INTEGER NOT NULL DEFAULT 80`,
+    ),
+  );
+  // FAST Phase 4 — outlier z-score threshold for the admin FAST
+  // Benchmarks dashboard. REAL DEFAULT 1.0 = teachers more than 1
+  // stdev below the school-wide grade mean for the selected
+  // benchmark get flagged. Idempotent ALTER stays harmless across
+  // restarts and deploys.
+  await db.execute(
+    sql.raw(
+      `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS fast_outlier_z_threshold REAL NOT NULL DEFAULT 1.0`,
+    ),
+  );
+  // FAST Phase 5 — minimum number of below-threshold windows (out of
+  // the most recent 3) required for a student×benchmark pair to surface
+  // as a Tier 2 auto-suggestion on the MTSS hub. Default 2 mirrors the
+  // common "two consecutive misses" rule of thumb. Threshold (% mastery)
+  // reuses the existing `fast_benchmark_mastery_threshold` column so
+  // admins only tune one number.
+  await db.execute(
+    sql.raw(
+      `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS fast_tier2_min_windows INTEGER NOT NULL DEFAULT 2`,
+    ),
+  );
+  // FAST Phase 5 — dismissals ledger for the MTSS Tier 2 auto-suggest
+  // tile. One row per (school, student, benchmark, school_year);
+  // dismissals auto-expire when the school year rolls.
+  await db.execute(
+    sql.raw(
+      `CREATE TABLE IF NOT EXISTS mtss_fast_suggestion_dismissals (
+         id SERIAL PRIMARY KEY,
+         school_id INTEGER NOT NULL,
+         student_id TEXT NOT NULL,
+         benchmark_code TEXT NOT NULL,
+         school_year TEXT NOT NULL,
+         dismissed_by_staff_id INTEGER,
+         dismissed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+       )`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `CREATE UNIQUE INDEX IF NOT EXISTS mtss_fast_suggestion_dismissals_unique
+         ON mtss_fast_suggestion_dismissals (school_id, student_id, benchmark_code, school_year)`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `CREATE INDEX IF NOT EXISTS mtss_fast_suggestion_dismissals_school_idx
+         ON mtss_fast_suggestion_dismissals (school_id, school_year)`,
+    ),
+  );
   // Manual on/off kill switch for an entire display URL (separate from
   // the time-window `schedule_enabled`). Defaults TRUE so existing
   // displays keep playing without any admin action. When FALSE the
@@ -1064,7 +1246,7 @@ export async function ensureAdminHubSchema() {
     sql`CREATE INDEX IF NOT EXISTS oss_log_days_by_school_day ON oss_log_days(school_id, day)`,
   );
 
-  // ---- discipline_reasons (school-managed list) ----
+  // ---- discipline_reasons (school + district scopes) ----
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS discipline_reasons (
       id SERIAL PRIMARY KEY,
@@ -1075,8 +1257,57 @@ export async function ensureAdminHubSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  // Add district_id (district-scoped master list) and allow school_id
+  // to be NULL when a row is a district master entry. Existing rows
+  // keep their school_id and remain school-scoped.
   await db.execute(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS discipline_reasons_school_label_uq ON discipline_reasons(school_id, label)`,
+    sql`ALTER TABLE discipline_reasons ADD COLUMN IF NOT EXISTS district_id INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE discipline_reasons ALTER COLUMN school_id DROP NOT NULL`,
+  );
+  // Replace the old (school_id, label) global unique with two partials
+  // — one per scope.
+  await db.execute(
+    sql`DROP INDEX IF EXISTS discipline_reasons_school_label_uq`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS discipline_reasons_school_label_uq
+        ON discipline_reasons(school_id, label)
+        WHERE school_id IS NOT NULL`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS discipline_reasons_district_label_uq
+        ON discipline_reasons(district_id, label)
+        WHERE district_id IS NOT NULL`,
+  );
+  // Exactly one of (school_id, district_id) must be set. Guards against
+  // a row that is both (or neither) — shouldn't happen via the API but
+  // we want the database to refuse it either way.
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'discipline_reasons_scope_xor_chk'
+      ) THEN
+        ALTER TABLE discipline_reasons
+          ADD CONSTRAINT discipline_reasons_scope_xor_chk
+          CHECK ((school_id IS NULL) <> (district_id IS NULL));
+      END IF;
+    END$$;
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS discipline_reasons_by_district
+        ON discipline_reasons(district_id) WHERE district_id IS NOT NULL`,
+  );
+
+  // ---- iss_admin_logs / oss_logs: day_count (admin-entered, for reports) ----
+  await db.execute(
+    sql`ALTER TABLE iss_admin_logs ADD COLUMN IF NOT EXISTS day_count INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE oss_logs ADD COLUMN IF NOT EXISTS day_count INTEGER`,
   );
 
   // ---- school_closed_days (no-school calendar) ----
@@ -1132,6 +1363,28 @@ export async function ensureAdminHubSchema() {
   `);
   await db.execute(
     sql`CREATE UNIQUE INDEX IF NOT EXISTS student_emergency_contact_slot_uq ON student_emergency_contacts(school_id, student_id, slot)`,
+  );
+
+  // ---- iss_admin_log_audit (append-only audit trail for ISS edits) ----
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS iss_admin_log_audit (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      admin_log_id INTEGER NOT NULL,
+      actor_staff_id INTEGER NOT NULL,
+      actor_display_name TEXT NOT NULL,
+      action TEXT NOT NULL,
+      before_json JSONB,
+      after_json JSONB,
+      edit_reason TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS iss_admin_log_audit_by_log ON iss_admin_log_audit(admin_log_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS iss_admin_log_audit_by_school ON iss_admin_log_audit(school_id)`,
   );
 }
 
@@ -1206,16 +1459,22 @@ export async function ensureWatchlistSchema() {
   // when the old unique index is still present, so subsequent boots
   // do nothing.
   await db.execute(sql`ALTER TABLE interaction_cases ADD COLUMN IF NOT EXISTS school_year_label TEXT`);
+  // TZ-aware school-year backfill. Casts opened_at to America/New_York
+  // before extracting month/year so cases opened in the late-evening
+  // boundary window (e.g. 9pm PT on June 30 = July 1 UTC) land in
+  // the correct school year. Matches schoolYearLabelFor's default TZ
+  // in artifacts/api-server/src/lib/schoolYear.ts. When a real cross-
+  // TZ tenant onboards, swap this constant for a per-school IANA col.
   await db.execute(sql`
     UPDATE interaction_cases
        SET school_year_label = CASE
-         WHEN EXTRACT(MONTH FROM opened_at) >= 7
-           THEN LPAD((EXTRACT(YEAR FROM opened_at)::INT % 100)::TEXT, 2, '0')
+         WHEN EXTRACT(MONTH FROM (opened_at AT TIME ZONE 'America/New_York')) >= 7
+           THEN LPAD((EXTRACT(YEAR FROM (opened_at AT TIME ZONE 'America/New_York'))::INT % 100)::TEXT, 2, '0')
                 || '-'
-                || LPAD(((EXTRACT(YEAR FROM opened_at)::INT + 1) % 100)::TEXT, 2, '0')
-         ELSE LPAD(((EXTRACT(YEAR FROM opened_at)::INT - 1) % 100)::TEXT, 2, '0')
+                || LPAD(((EXTRACT(YEAR FROM (opened_at AT TIME ZONE 'America/New_York'))::INT + 1) % 100)::TEXT, 2, '0')
+         ELSE LPAD(((EXTRACT(YEAR FROM (opened_at AT TIME ZONE 'America/New_York'))::INT - 1) % 100)::TEXT, 2, '0')
                 || '-'
-                || LPAD((EXTRACT(YEAR FROM opened_at)::INT % 100)::TEXT, 2, '0')
+                || LPAD((EXTRACT(YEAR FROM (opened_at AT TIME ZONE 'America/New_York'))::INT % 100)::TEXT, 2, '0')
        END
      WHERE school_year_label IS NULL OR school_year_label = ''
   `);
@@ -1290,6 +1549,10 @@ export async function ensureWatchlistSchema() {
   `);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS witness_statements_school_idx ON witness_statements(school_id)`);
   await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS witness_statements_interaction_student_idx ON witness_statements(interaction_id, student_id)`);
+  // Per-case sequence number for human-readable witness statement IDs
+  // (CASE-26-27-0042-WS-03). Assigned at promote-to-case / attach time.
+  // NULL while the statement's interaction is still loose.
+  await db.execute(sql`ALTER TABLE witness_statements ADD COLUMN IF NOT EXISTS ws_seq INTEGER`);
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS interaction_audit_log (
@@ -1952,8 +2215,109 @@ export async function ensureFastScoresSchema() {
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS student_fast_scores_school_idx ON student_fast_scores (school_id)`,
   );
+  // ---------------------------------------------------------------------------
+  // FAST Phase 1 (Florida xlsx parser): widen the upsert key to include
+  // school_year so admins can backfill prior PM windows without
+  // clobbering current-year rows.
+  //
+  // 1. Add the school_year TEXT column (default '' for legacy rows).
+  // 2. Backfill legacy rows to the current school-year label so the
+  //    new unique index has a sane partition. Done once — the WHERE
+  //    school_year = '' guard makes subsequent boots a no-op.
+  // 3. Drop the old (school_id, student_id, subject) unique index and
+  //    create the wider one. Drizzle-kit would prompt to "rename" —
+  //    direct SQL sidesteps that.
+  // ---------------------------------------------------------------------------
   await db.execute(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS student_fast_scores_student_subject_unique ON student_fast_scores (school_id, student_id, subject)`,
+    sql`ALTER TABLE student_fast_scores ADD COLUMN IF NOT EXISTS school_year TEXT NOT NULL DEFAULT ''`,
+  );
+  const currentYearLabel = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+  await db.execute(
+    sql`UPDATE student_fast_scores SET school_year = ${currentYearLabel} WHERE school_year = ''`,
+  );
+  await db.execute(
+    sql`DROP INDEX IF EXISTS student_fast_scores_student_subject_unique`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS student_fast_scores_student_subject_year_unique ON student_fast_scores (school_id, student_id, subject, school_year)`,
+  );
+  // Historical FAST + Algebra I placement review (Phase 1). The
+  // is_historical flag distinguishes prior-year backfill rows from
+  // current-PM rows for the trajectory chip + the Placement Review
+  // report. Defaults to FALSE so the FAST score schema stays
+  // backwards-compatible (every legacy row reads as non-historical).
+  await db.execute(
+    sql`ALTER TABLE student_fast_scores ADD COLUMN IF NOT EXISTS is_historical BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE student_fast_scores ADD COLUMN IF NOT EXISTS imported_as_historical_at TIMESTAMPTZ`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// algebra_placement_overrides — audit row per (school, student, school_year)
+// for the new Algebra I Placement Review report. Idempotent CREATE TABLE
+// + UNIQUE INDEX so a fresh tenant boots cleanly.
+// ---------------------------------------------------------------------------
+export async function ensureAlgebraPlacementOverridesSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS algebra_placement_overrides (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      school_year TEXT NOT NULL,
+      decision TEXT NOT NULL DEFAULT 'regular_8th',
+      justification TEXT NOT NULL,
+      opt_out_file_object_key TEXT,
+      decided_by_staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS algebra_placement_overrides_unique ON algebra_placement_overrides (school_id, student_id, school_year)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS algebra_placement_overrides_school_year_idx ON algebra_placement_overrides (school_id, school_year)`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// FAST Phase 1: per-item benchmark response storage for the Florida
+// xlsx parser. One row per (student × administration × benchmark).
+// Indexed for the two read patterns: per-student profile drill-down and
+// per-benchmark heatmap.
+// ---------------------------------------------------------------------------
+export async function ensureFastItemResponsesSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS student_fast_item_responses (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      school_year TEXT NOT NULL,
+      "window" TEXT NOT NULL,
+      administered_at TIMESTAMPTZ,
+      category TEXT,
+      benchmark_code TEXT NOT NULL,
+      points_earned INTEGER,
+      points_possible INTEGER,
+      item_seq INTEGER NOT NULL,
+      import_job_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS student_fast_item_responses_school_idx ON student_fast_item_responses (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS student_fast_item_responses_student_idx ON student_fast_item_responses (school_id, student_id, subject, school_year)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS student_fast_item_responses_benchmark_idx ON student_fast_item_responses (school_id, benchmark_code, school_year)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS student_fast_item_responses_job_idx ON student_fast_item_responses (import_job_id)`,
   );
 }
 
@@ -2008,8 +2372,346 @@ function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
 }
 
+// benchmark_reteach_log — per-student × per-benchmark reteach moments
+// captured from the Teacher Roster → Benchmarks heatmap. Idempotent
+// CREATE TABLE IF NOT EXISTS + ALTER for the per-student parent-
+// visibility opt-in column on students.
+export async function ensureBenchmarkReteachLogSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS benchmark_reteach_log (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      benchmark_code TEXT NOT NULL,
+      teacher_staff_id INTEGER NOT NULL,
+      format TEXT NOT NULL,
+      group_session_id TEXT,
+      strategy TEXT,
+      minutes INTEGER,
+      note TEXT,
+      school_year TEXT NOT NULL,
+      pm_window_at_log TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      deleted_at TIMESTAMPTZ,
+      deleted_by_staff_id INTEGER
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS benchmark_reteach_log_school_idx ON benchmark_reteach_log (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS benchmark_reteach_log_cell_idx ON benchmark_reteach_log (school_id, student_id, benchmark_code)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS benchmark_reteach_log_teacher_idx ON benchmark_reteach_log (school_id, teacher_staff_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS benchmark_reteach_log_session_idx ON benchmark_reteach_log (group_session_id)`,
+  );
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS reteach_logs_parent_visible BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+}
+
+// School Tours — public brag page + lead pipeline. Idempotent CREATE TABLE
+// IF NOT EXISTS at boot (same pattern as the rest of the module schemas).
+export async function ensureToursSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS tour_pages (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      published BOOLEAN NOT NULL DEFAULT FALSE,
+      headline TEXT NOT NULL DEFAULT 'Come See Our School',
+      subheadline TEXT NOT NULL DEFAULT '',
+      intro TEXT NOT NULL DEFAULT '',
+      sections JSONB NOT NULL DEFAULT '[]'::jsonb,
+      programs JSONB NOT NULL DEFAULT '[]'::jsonb,
+      electives JSONB NOT NULL DEFAULT '[]'::jsonb,
+      proud_of JSONB NOT NULL DEFAULT '[]'::jsonb,
+      photos JSONB NOT NULL DEFAULT '[]'::jsonb,
+      cta_text TEXT NOT NULL DEFAULT 'Request Your Tour',
+      accent_color TEXT NOT NULL DEFAULT '#0ea5a4',
+      header_text_color TEXT NOT NULL DEFAULT '#ffffff',
+      contact_email TEXT,
+      contact_phone TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS tour_pages_school_id_unique ON tour_pages (school_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS tour_requests (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      family_name TEXT NOT NULL,
+      phone TEXT NOT NULL,
+      email TEXT,
+      children JSONB NOT NULL DEFAULT '[]'::jsonb,
+      interests TEXT NOT NULL DEFAULT '',
+      source TEXT,
+      preferred_language TEXT NOT NULL DEFAULT 'en',
+      status TEXT NOT NULL DEFAULT 'new',
+      outcome TEXT,
+      outcome_reason TEXT,
+      assigned_staff_id INTEGER,
+      tour_scheduled_at TIMESTAMPTZ,
+      first_contacted_at TIMESTAMPTZ,
+      survey_token TEXT NOT NULL,
+      survey_submitted_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS tour_requests_survey_token_unique ON tour_requests (survey_token)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS tour_requests_school_status_idx ON tour_requests (school_id, status)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS tour_request_events (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      tour_request_id INTEGER NOT NULL,
+      staff_id INTEGER,
+      event_type TEXT NOT NULL,
+      channel TEXT,
+      body TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS tour_request_events_request_idx ON tour_request_events (tour_request_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS tour_surveys (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      tour_request_id INTEGER NOT NULL,
+      rating INTEGER,
+      liked TEXT NOT NULL DEFAULT '',
+      questions TEXT NOT NULL DEFAULT '',
+      comments TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS tour_surveys_request_unique ON tour_surveys (tour_request_id)`,
+  );
+
+  // Notify-group capability on staff (assignable in Staff & Roles).
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS cap_tour_notify BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+
+  // Photo/flyer uploads + layout toggle (additive).
+  await db.execute(
+    sql`ALTER TABLE tour_pages ADD COLUMN IF NOT EXISTS text_placement TEXT NOT NULL DEFAULT 'top'`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_pages ADD COLUMN IF NOT EXISTS flyers JSONB NOT NULL DEFAULT '[]'::jsonb`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_pages ADD COLUMN IF NOT EXISTS header_text_color TEXT NOT NULL DEFAULT '#ffffff'`,
+  );
+
+  // Tour checkpoints (admin-configured stops) + family selections (additive).
+  await db.execute(
+    sql`ALTER TABLE tour_pages ADD COLUMN IF NOT EXISTS checkpoints JSONB NOT NULL DEFAULT '[]'::jsonb`,
+  );
+  // Machine-translation cache for the public brag page (additive). Keyed by
+  // target language; regenerated when source content changes.
+  await db.execute(
+    sql`ALTER TABLE tour_pages ADD COLUMN IF NOT EXISTS translations JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS interest_selections JSONB NOT NULL DEFAULT '[]'::jsonb`,
+  );
+}
+
+// -----------------------------------------------------------------------------
+// DISPLAY LIVE CONTROL: per-playlist remote-control state for digital signage.
+// One row per playlist (playlist_id is the PK). The public /display/<id> cycler
+// polls this so a presenter can manually advance slides / run a presentation
+// session across every TV on that playlist without re-entering any URLs.
+// Idempotent CREATE TABLE IF NOT EXISTS at boot (same pattern as houses / MTSS).
+// -----------------------------------------------------------------------------
+export async function ensureDisplayLiveControlSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS display_live_control (
+      playlist_id INTEGER PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      mode TEXT NOT NULL DEFAULT 'auto',
+      item_index INTEGER NOT NULL DEFAULT 0,
+      page_index INTEGER NOT NULL DEFAULT 0,
+      presentation_playlist_id INTEGER,
+      presentation_url TEXT,
+      revision INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_by_staff_id INTEGER
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS display_live_control_school_idx ON display_live_control (school_id)`,
+  );
+}
+
+// -----------------------------------------------------------------------------
+// EVENT TICKETING (Phase 1): free-ticket events (8th-grade promotion,
+// graduation). Five additive tables — events, per-student grants (with email
+// delivery status), individual QR tickets (unguessable token, first-scan-wins),
+// an append-only scan audit, and no-login volunteer "scanner link" tokens
+// (only the SHA-256 hash is stored, like kiosk_activations). All idempotent
+// CREATE TABLE IF NOT EXISTS at boot.
+// -----------------------------------------------------------------------------
+export async function ensureTicketingSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ticket_events (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      event_date TEXT,
+      start_time TEXT,
+      location TEXT,
+      capacity INTEGER,
+      status TEXT NOT NULL DEFAULT 'draft',
+      event_day_only BOOLEAN NOT NULL DEFAULT FALSE,
+      created_by_staff_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS ticket_events_by_school ON ticket_events (school_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ticket_grants (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      event_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      quota INTEGER NOT NULL DEFAULT 0,
+      guardian_email TEXT,
+      guardian_name TEXT,
+      email_status TEXT NOT NULL DEFAULT 'pending',
+      email_sent_at TIMESTAMPTZ,
+      email_to TEXT,
+      email_error TEXT,
+      printed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS ticket_grants_event_student_unique ON ticket_grants (school_id, event_id, student_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS ticket_grants_by_event ON ticket_grants (school_id, event_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS tickets (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      event_id INTEGER NOT NULL,
+      grant_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      token TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'valid',
+      used_at TIMESTAMPTZ,
+      used_gate TEXT,
+      used_by_staff_id INTEGER,
+      used_via TEXT,
+      void_reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS tickets_token_unique ON tickets (school_id, token)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS tickets_by_event ON tickets (school_id, event_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS tickets_by_grant ON tickets (grant_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ticket_scan_events (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      event_id INTEGER NOT NULL,
+      ticket_id INTEGER,
+      token_scanned TEXT NOT NULL,
+      result TEXT NOT NULL,
+      gate_label TEXT,
+      scanned_by_staff_id INTEGER,
+      scanner_link_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS ticket_scan_events_by_event_date ON ticket_scan_events (school_id, event_id, created_at)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS ticket_scan_events_by_ticket ON ticket_scan_events (ticket_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ticket_scanner_links (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      event_id INTEGER NOT NULL,
+      label TEXT NOT NULL,
+      token_hash TEXT NOT NULL,
+      gate_label TEXT,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_by_staff_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      deactivated_at TIMESTAMPTZ
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS ticket_scanner_links_hash_unique ON ticket_scanner_links (token_hash)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS ticket_scanner_links_by_event ON ticket_scanner_links (school_id, event_id)`,
+  );
+}
+
+// Staff self-service password reset (mirrors parent_password_resets).
+// Additive CREATE TABLE IF NOT EXISTS per project convention.
+export async function ensureStaffPasswordResetsSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS staff_password_resets (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL,
+      token TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      requested_ip TEXT
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS staff_password_resets_token_unique ON staff_password_resets (token)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS staff_password_resets_by_staff ON staff_password_resets (staff_id)`,
+  );
+}
+
 export async function seedFastScoresIfEmpty() {
   await ensureFastScoresSchema();
+  await ensureBenchmarkReteachLogSchema();
   await ensureSchoolSettingsFeatureFlagsSchema();
   await ensureAdminHubSchema();
   await ensureTierPresetsSchema();
@@ -2022,6 +2724,15 @@ export async function seedFastScoresIfEmpty() {
   await ensureCaseConsistencySchema();
   await ensureCaseFootageRequestsSchema();
   await ensureCaseOutcomeCatalogSchema();
+  await ensureAlgebraPlacementOverridesSchema();
+  await ensureToursSchema();
+  await ensureDisplayLiveControlSchema();
+  await ensureTicketingSchema();
+  // FAST history visibility window (Phase 1 of Historical FAST work).
+  // Default 3 years, hard-capped 2..5 by the route validator.
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS fast_history_years_visible INTEGER NOT NULL DEFAULT 3`,
+  );
   const schools = await db.select().from(schoolsTable);
   for (const school of schools) {
     const [{ c }] = (await db.execute(
@@ -3016,6 +3727,45 @@ export async function seedPbisCatalogIfEmpty() {
 }
 
 // -----------------------------------------------------------------------------
+// ensureSpotlightPbisReason: idempotently makes sure every school has a
+// "Class Participation (Spotlight)" reason in pbis_reasons. Spotlight's
+// "Correct!" flow files awards under this reason so admins can see in
+// reports how many points came from Spotlight vs Hall Pass vs other
+// channels. Runs at boot AFTER the catalog seed, so even hand-curated
+// schools get this row added without disturbing their existing reasons.
+// -----------------------------------------------------------------------------
+export const SPOTLIGHT_PBIS_REASON_NAME = "Class Participation (Spotlight)";
+
+export async function ensureSpotlightPbisReason() {
+  const schools = await db.select().from(schoolsTable);
+  for (const school of schools) {
+    const [existing] = await db
+      .select({ id: pbisReasonsTable.id })
+      .from(pbisReasonsTable)
+      .where(
+        and(
+          eq(pbisReasonsTable.schoolId, school.id),
+          eq(pbisReasonsTable.name, SPOTLIGHT_PBIS_REASON_NAME),
+        ),
+      );
+    if (existing) continue;
+    await db.insert(pbisReasonsTable).values({
+      schoolId: school.id,
+      name: SPOTLIGHT_PBIS_REASON_NAME,
+      category: "Effort",
+      defaultPoints: 5,
+      polarity: "positive",
+      sortOrder: 100,
+      ownerScope: "school",
+    });
+    logger.info(
+      { schoolId: school.id },
+      "[seed] spotlight pbis reason ensured",
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
 // seedSeparationReasonTagsIfEmpty: per-school starter catalog of "do not
 // pair" tags for the Separation Suggestions feature. The Behavior
 // Specialist curates this list going forward, but every new school needs a
@@ -3677,6 +4427,13 @@ export async function seedIfEmpty() {
     CREATE UNIQUE INDEX IF NOT EXISTS bell_schedules_school_default_idx
     ON bell_schedules (school_id) WHERE is_default = true
   `);
+  // Per-period "counts toward parent on-time streak" toggle. Defaults
+  // TRUE so existing schedules keep behaving (every period counted)
+  // until a Core Team member opts a period out (e.g. lunch, passing).
+  await db.execute(sql`
+    ALTER TABLE bell_schedule_periods
+    ADD COLUMN IF NOT EXISTS included_in_on_time_streak BOOLEAN NOT NULL DEFAULT TRUE
+  `);
 
   // ---- Marker check that survives a partial / crashed prior seed.
   // Earlier versions used "is school_accommodations empty?" — that
@@ -4331,6 +5088,19 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
       )
     ).rows as { c: number }[];
     if (c > 0) continue;
+    // Belt-and-suspenders: a prior boot may have inserted demo
+    // interaction_cases rows then crashed before any interactions
+    // landed. Without this second guard, the cases insert below
+    // re-fires and trips the (school_id, school_year_label,
+    // case_number) unique index, throwing and aborting every
+    // remaining schema ALTER downstream (notably
+    // class_composer_banner_dismissed_sy at line 5225).
+    const [{ cc }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS cc FROM interaction_cases WHERE school_id = ${school.id}`,
+      )
+    ).rows as { cc: number }[];
+    if (cc > 0) continue;
 
     const studentRows = await db
       .select({
@@ -4400,7 +5170,7 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
       caseInserts.push({
         schoolId: school.id,
         caseNumber: i + 1,
-        schoolYearLabel: schoolYearLabelFor(new Date()),
+        schoolYearLabel: schoolYearLabelFor(new Date(), school.timezone),
         title: WL_CASE_TITLES[i] ?? `Case ${i + 1}`,
         status: i === 0 ? "escalated" : i === numCases - 1 ? "monitoring" : "open",
         leadStaffId: lead.id,
@@ -4457,6 +5227,7 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
       daysAgo: number;
       caseId: number | null;
       summary: string;
+      detail?: string;
       withWitnessFor?: { studentId: string }[];
     }) {
       const log = pick(rng, loggerPool);
@@ -4469,7 +5240,7 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
         severity: opts.severity,
         location: pick(rng, WL_LOCATIONS),
         summary: opts.summary,
-        detail: "",
+        detail: opts.detail ?? "",
         caseId: opts.caseId,
         loggedByStaffId: log.id,
         loggedByName: log.displayName,
@@ -4573,6 +5344,86 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
     // data now stays focused on the case-anchored incidents above. If
     // a future demo needs loose behavior data again, re-add a small
     // (e.g. 5–10 incident) cap rather than per-student counts.
+
+    // ---- "Spotlight" anchors. See seedWatchlistSpotlightsIfMissing()
+    // below for the rationale; this in-line block runs on the fresh
+    // seed path so brand-new schools land with the spotlight cluster
+    // already present. The standalone function handles backfill for
+    // schools that were seeded before this change. Both paths use
+    // the same `detail = 'spotlight-seed'` marker so they don't
+    // double up.
+    if (high.length >= 2 && insertedCases.length > 0) {
+      const spotlightCount = Math.min(3, high.length);
+      const spotlights = high.slice(0, spotlightCount);
+      // Roughly +12, +9, +6 extra incidents — produces a clear size
+      // hierarchy on the network view rather than three identical
+      // big spheres.
+      const EXTRA_PER_SPOTLIGHT = [12, 9, 6];
+      // Mate pool = everyone in the picked watchlist except the
+      // spotlight kid themselves. Heavy on med/low so the spotlight
+      // doesn't drag every other high anchor up to the same size.
+      const matePoolBase = [...med, ...low];
+      for (let s = 0; s < spotlights.length; s++) {
+        const star = spotlights[s];
+        const extras = EXTRA_PER_SPOTLIGHT[s] ?? 6;
+        // The star usually appears on one of the existing cases
+        // (so the spotlight kid is a recognizable case anchor in
+        // the case detail view), but ~30% of incidents are loose
+        // so the network shows a healthy mix of case-attached and
+        // floating activity around them.
+        const homeCase =
+          insertedCases[s % insertedCases.length] ?? insertedCases[0];
+        for (let i = 0; i < extras; i++) {
+          const attachToCase = rng() > 0.3;
+          // 1–2 mates per spotlight incident; rotate so different
+          // peers light up around the star instead of one sidekick
+          // hogging all the edges.
+          const mateCount = 1 + (i % 2);
+          const mates: { studentId: string; role: string }[] = [];
+          const seenMates = new Set<string>([star.studentId]);
+          let guard = 0;
+          while (mates.length < mateCount && guard < 12) {
+            guard++;
+            const cand = pick(rng, matePoolBase);
+            if (!cand || seenMates.has(cand.studentId)) continue;
+            seenMates.add(cand.studentId);
+            mates.push({
+              studentId: cand.studentId,
+              role: pick(rng, [...WL_ROLES_LOW]),
+            });
+          }
+          // Severity skewed toward 2–4 (the everyday range); leave
+          // the 5s for the case-anchored spine above.
+          const sev = 2 + Math.floor(rng() * 3);
+          pushIncident({
+            anchor: { studentId: star.studentId },
+            anchorRole: pick(rng, [...WL_ROLES_HIGH]),
+            coStudents: mates,
+            severity: sev,
+            kind: pick(
+              rng,
+              [...WL_KINDS].filter((k) => k !== "peripheral_note"),
+            ),
+            // Spread across days 1..25 so they all land inside the
+            // default 30-day network window.
+            daysAgo: 1 + Math.floor(rng() * 24),
+            caseId: attachToCase ? homeCase.id : null,
+            summary: `${star.firstName} ${star.lastName.charAt(0)}. — ${pick(
+              rng,
+              [
+                "repeat hallway disruption",
+                "verbal altercation in cafeteria",
+                "ongoing peer conflict; staff redirected",
+                "minor physical contact during transition",
+                "off-task behavior escalating to refusal",
+              ],
+            )}.`,
+            detail: "spotlight-seed",
+          });
+        }
+      }
+    }
+
     void high;
     void med;
     void low;
@@ -4714,4 +5565,2226 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
       "[seed] watchlist seeded",
     );
   }
+}
+
+// -----------------------------------------------------------------------------
+// ensureDataImporterRollbackSchema
+//
+// Three additive changes that unlock universal rollback for the Data
+// Importer:
+//   1. student_fast_scores.import_job_id (column add) — lets the FAST
+//      importer tag every upserted row with the job that wrote it, so
+//      rollback can DELETE WHERE import_job_id = :id.
+//   2. student_import_snapshots (table create) — per-row "before"
+//      snapshot for the roster importer's update path. Roster updates
+//      capture prior column values here; rollback restores them.
+//   3. school_settings.manual_roster_upload_enabled (column add) — the
+//      per-school toggle that gates the Roster card in the wizard.
+//      Default FALSE because most schools sync rosters from Classlink /
+//      Clever (OneRoster) and a manual upload would conflict.
+//
+// All three follow the project convention of additive ALTER TABLE …
+// IF NOT EXISTS / CREATE TABLE … IF NOT EXISTS at boot, sidestepping
+// drizzle-kit's interactive rename prompt.
+// -----------------------------------------------------------------------------
+export async function ensureDataImporterRollbackSchema(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE student_fast_scores ADD COLUMN IF NOT EXISTS import_job_id INTEGER`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS student_import_snapshots (
+      id SERIAL PRIMARY KEY,
+      import_job_id INTEGER NOT NULL,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      was_insert BOOLEAN NOT NULL,
+      prior_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS student_import_snapshots_job_idx
+      ON student_import_snapshots (import_job_id)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS student_import_snapshots_school_idx
+      ON student_import_snapshots (school_id)
+  `);
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS manual_roster_upload_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS strict_house_name_match BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  // Class Composer post-PM banner dismissal token ("<sy>|<window>"),
+  // nullable. See schoolSettings.ts comment for semantics.
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS class_composer_banner_dismissed_sy TEXT`,
+  );
+}
+
+// -----------------------------------------------------------------------------
+// ensureClassComposerSkillClusterSchema
+//
+// Skill-cluster mode add-ons (additive to the existing
+// class_composer_plan_groups table + new audit table).
+//   * focus_standards JSONB on plan_groups — the N benchmark codes
+//     teachers will work on; null on legacy intensive/regular/cusp groups.
+//   * class_composer_plan_group_refreshes — append-only audit log
+//     of refresh / dismiss / suggest_schedule actions per group.
+//   * skillcluster_banner_dismissals JSONB on school_settings — array
+//     of per-window dismissal tokens "<sy>|<window>|skillcluster_refresh"
+//     so PM1/PM2/PM3 banners can each be dismissed independently and
+//     reappear when a new window arrives.
+// -----------------------------------------------------------------------------
+export async function ensureClassComposerSkillClusterSchema(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE class_composer_plan_groups ADD COLUMN IF NOT EXISTS focus_standards JSONB`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS class_composer_plan_group_refreshes (
+      id SERIAL PRIMARY KEY,
+      plan_id INTEGER NOT NULL,
+      plan_group_id INTEGER NOT NULL,
+      school_id INTEGER NOT NULL,
+      school_year TEXT NOT NULL,
+      pm_window TEXT NOT NULL,
+      action TEXT NOT NULL,
+      prior_focus JSONB,
+      new_focus JSONB,
+      drift_summary JSONB,
+      staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS class_composer_plan_group_refreshes_group_idx
+      ON class_composer_plan_group_refreshes (plan_group_id)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS class_composer_plan_group_refreshes_school_idx
+      ON class_composer_plan_group_refreshes (school_id)
+  `);
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS skillcluster_banner_dismissals JSONB NOT NULL DEFAULT '[]'::jsonb`,
+  );
+}
+
+// -----------------------------------------------------------------------------
+// ensureStudentRetentionsSchema / seedStudentRetentionsIfEmpty
+//
+// Roster "R-in-a-circle" indicator. ~5% of each school's students get a
+// retention record at a grade between 1 and 8. Then a per-teacher pass
+// adds extra retentions until every teacher with a roster has at least
+// 2 retained students. The 5% is a floor — the per-teacher rule may push
+// it higher in small schools.
+//
+// Per-school skip: if the school already has any retention rows, the
+// whole school is skipped so reseeds don't double up.
+// -----------------------------------------------------------------------------
+export async function ensureStudentRetentionsSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS student_retentions (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      grade_level INTEGER NOT NULL,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_by_staff_id INTEGER,
+      created_by_name TEXT
+    )
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS student_retentions_unique
+      ON student_retentions (school_id, student_id, grade_level)
+  `);
+}
+
+export async function seedStudentRetentionsIfEmpty(): Promise<void> {
+  await ensureStudentRetentionsSchema();
+  const schools = await db.select().from(schoolsTable);
+  for (const school of schools) {
+    const [{ c }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM student_retentions WHERE school_id = ${school.id}`,
+      )
+    ).rows as { c: number }[];
+    if (c > 0) continue;
+
+    const allStudents = await db
+      .select({
+        studentId: studentsTable.studentId,
+        grade: studentsTable.grade,
+      })
+      .from(studentsTable)
+      .where(eq(studentsTable.schoolId, school.id));
+    if (allStudents.length === 0) continue;
+
+    // Roster (studentId -> teacherStaffId[]). One row per (student, section).
+    const rosterRows = await db
+      .select({
+        studentId: sectionRosterTable.studentId,
+        teacherStaffId: classSectionsTable.teacherStaffId,
+      })
+      .from(sectionRosterTable)
+      .innerJoin(
+        classSectionsTable,
+        eq(sectionRosterTable.sectionId, classSectionsTable.id),
+      )
+      .where(eq(sectionRosterTable.schoolId, school.id));
+
+    const teachersByStudent = new Map<string, Set<number>>();
+    const studentsByTeacher = new Map<number, string[]>();
+    for (const r of rosterRows) {
+      let s = teachersByStudent.get(r.studentId);
+      if (!s) {
+        s = new Set<number>();
+        teachersByStudent.set(r.studentId, s);
+      }
+      s.add(r.teacherStaffId);
+      const list = studentsByTeacher.get(r.teacherStaffId) ?? [];
+      list.push(r.studentId);
+      studentsByTeacher.set(r.teacherStaffId, list);
+    }
+
+    const rng = makeRng(0xfedcba + school.id * 7541);
+    const studentInfo = new Map<string, number>(
+      allStudents.map((s) => [s.studentId, s.grade]),
+    );
+    const chosen = new Set<string>();
+    const retainedGrades = new Map<string, number[]>();
+    const retainedCountByTeacher = new Map<number, number>();
+
+    function pickRetentionGrade(currentGrade: number): number {
+      // Prefer retention grades < currentGrade so the data is plausible
+      // (you can't have repeated 5th if you're currently in 3rd). Cap at
+      // 8 per the spec. If the student is too young, fall back to 1.
+      const maxG = Math.min(8, Math.max(1, currentGrade - 1));
+      if (maxG <= 1) return 1;
+      return 1 + Math.floor(rng() * maxG);
+    }
+
+    function addRetention(studentId: string): boolean {
+      if (chosen.has(studentId)) return false;
+      const grade = studentInfo.get(studentId);
+      if (grade === undefined) return false;
+      const rGrade = pickRetentionGrade(grade);
+      chosen.add(studentId);
+      retainedGrades.set(studentId, [rGrade]);
+      const teachers = teachersByStudent.get(studentId);
+      if (teachers) {
+        for (const tid of teachers) {
+          retainedCountByTeacher.set(
+            tid,
+            (retainedCountByTeacher.get(tid) ?? 0) + 1,
+          );
+        }
+      }
+      return true;
+    }
+
+    // Step 1: ~5% baseline, random.
+    const targetCount = Math.max(1, Math.round(allStudents.length * 0.05));
+    const shuffled = [...allStudents]
+      .map((s) => ({ s, k: rng() }))
+      .sort((a, b) => a.k - b.k)
+      .map((x) => x.s);
+    for (const s of shuffled) {
+      if (chosen.size >= targetCount) break;
+      addRetention(s.studentId);
+    }
+
+    // Step 2: per-teacher minimum of 2. Iterate teachers; for any teacher
+    // with < 2 retained students, retain additional kids from their
+    // roster until the count hits 2 (or the roster is exhausted).
+    for (const [teacherId, roster] of studentsByTeacher) {
+      let cnt = retainedCountByTeacher.get(teacherId) ?? 0;
+      if (cnt >= 2) continue;
+      // Shuffle this teacher's roster for variety.
+      const r = [...roster].map((sid) => ({ sid, k: rng() }))
+        .sort((a, b) => a.k - b.k)
+        .map((x) => x.sid);
+      for (const sid of r) {
+        if (cnt >= 2) break;
+        if (addRetention(sid)) {
+          cnt = retainedCountByTeacher.get(teacherId) ?? cnt;
+        }
+      }
+    }
+
+    // Step 3: ~10% of retained students get a SECOND retention (different
+    // grade) so the hover popover sometimes shows multi-grade history.
+    for (const sid of [...chosen]) {
+      if (rng() >= 0.1) continue;
+      const grade = studentInfo.get(sid);
+      if (grade === undefined) continue;
+      const list = retainedGrades.get(sid) ?? [];
+      const existing = new Set(list);
+      // Try a few times to find a different valid grade.
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const g = pickRetentionGrade(grade);
+        if (!existing.has(g)) {
+          list.push(g);
+          retainedGrades.set(sid, list);
+          break;
+        }
+      }
+    }
+
+    if (chosen.size === 0) continue;
+
+    type RetentionInsert = typeof studentRetentionsTable.$inferInsert;
+    const inserts: RetentionInsert[] = [];
+    for (const [sid, grades] of retainedGrades) {
+      for (const g of grades) {
+        inserts.push({
+          schoolId: school.id,
+          studentId: sid,
+          gradeLevel: g,
+          createdByName: "Demo Seed",
+        });
+      }
+    }
+    await db.insert(studentRetentionsTable).values(inserts);
+    logger.info(
+      {
+        schoolId: school.id,
+        students: chosen.size,
+        rows: inserts.length,
+        teachers: studentsByTeacher.size,
+      },
+      "[seed] student retentions seeded",
+    );
+  }
+}
+
+// seedWatchlistSpotlightsIfMissing: backfill for already-seeded schools.
+//
+// The base watchlist seed gives every "high concern" student roughly the
+// same handful of incidents, so the Schoolwide Behavior Network's Full
+// School Web ends up as a wall of equal-sized spheres. The intent of
+// that view was to surface 2–3 students whose involvement clearly
+// dominates — the kids you'd notice from across the room. This pass
+// adds extra incidents to the top 3 most-active anchors per school so
+// their spheres become visibly larger than the rest.
+//
+// Idempotent via a marker on `interactions.detail = 'spotlight-seed'`.
+// Skips any school that already has a spotlight row, so it's safe to
+// run on every boot. Newly seeded schools get spotlights from the
+// inline block inside seedWatchlistIfEmpty (same marker), so there's
+// no double-up.
+export async function seedWatchlistSpotlightsIfMissing(): Promise<void> {
+  const schools = await db.select().from(schoolsTable);
+  for (const school of schools) {
+    // Skip if already spotlighted.
+    const [{ c: alreadyHas }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c
+            FROM interactions
+            WHERE school_id = ${school.id}
+              AND detail = 'spotlight-seed'
+            LIMIT 1`,
+      )
+    ).rows as { c: number }[];
+    if (alreadyHas > 0) continue;
+
+    // Need a base seed to backfill against. Pick the top 3 students by
+    // existing case-attached participant count — those are the ones
+    // already cast as case anchors, so making them stand out matches
+    // the demo's existing narrative.
+    const topRows = (
+      await db.execute(sql`
+        SELECT p.student_id AS "studentId", COUNT(*)::int AS c
+        FROM interaction_participants p
+        JOIN interactions i ON i.id = p.interaction_id AND i.school_id = p.school_id
+        WHERE p.school_id = ${school.id}
+          AND i.case_id IS NOT NULL
+          AND p.role IN ('target', 'instigator', 'direct')
+        GROUP BY p.student_id
+        ORDER BY c DESC
+        LIMIT 3
+      `)
+    ).rows as { studentId: string; c: number }[];
+    if (topRows.length < 2) continue;
+
+    // Mate pool: any other student who's already touched a case
+    // interaction in this school. Keeps the spotlight cluster
+    // connected to the existing graph instead of drifting off.
+    const mateRows = (
+      await db.execute(sql`
+        SELECT DISTINCT p.student_id AS "studentId"
+        FROM interaction_participants p
+        JOIN interactions i ON i.id = p.interaction_id AND i.school_id = p.school_id
+        WHERE p.school_id = ${school.id}
+          AND i.case_id IS NOT NULL
+      `)
+    ).rows as { studentId: string }[];
+    const spotlightIds = new Set(topRows.map((r) => r.studentId));
+    const matePool = mateRows
+      .map((r) => r.studentId)
+      .filter((id) => !spotlightIds.has(id));
+    if (matePool.length === 0) continue;
+
+    // Reuse the existing demo cases as "home" cases for ~70% of the
+    // extras; the remaining 30% are loose so the Loose / no case
+    // cluster gets some movement around the spotlight kid too.
+    const caseRows = (
+      await db.execute(sql`
+        SELECT id FROM interaction_cases
+        WHERE school_id = ${school.id}
+        ORDER BY id ASC
+        LIMIT 12
+      `)
+    ).rows as { id: number }[];
+    if (caseRows.length === 0) continue;
+
+    // Pick a logger the same way the base seed does (any admin /
+    // counselor / behavior staff). Falls back to any staff row.
+    const staffRows = await db
+      .select({
+        id: staffTable.id,
+        displayName: staffTable.displayName,
+        isBehaviorSpecialist: staffTable.isBehaviorSpecialist,
+        isMtssCoordinator: staffTable.isMtssCoordinator,
+        isCounselor: staffTable.isCounselor,
+        isAdmin: staffTable.isAdmin,
+        isDean: staffTable.isDean,
+      })
+      .from(staffTable)
+      .where(eq(staffTable.schoolId, school.id));
+    if (staffRows.length === 0) continue;
+    const loggerPool = staffRows.filter(
+      (s) =>
+        s.isBehaviorSpecialist ||
+        s.isMtssCoordinator ||
+        s.isCounselor ||
+        s.isDean ||
+        s.isAdmin,
+    );
+    const loggers = loggerPool.length > 0 ? loggerPool : staffRows;
+
+    // Pull the spotlight students' display names so the summary text
+    // reads naturally on the case timeline.
+    const studentNameRows = await db
+      .select({
+        studentId: studentsTable.studentId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+      })
+      .from(studentsTable)
+      .where(eq(studentsTable.schoolId, school.id));
+    const nameById = new Map(
+      studentNameRows.map((s) => [s.studentId, s] as const),
+    );
+
+    const rng = makeRng(0x2900a1 + school.id * 1297);
+    // Same hierarchy as the inline path: +12 / +9 / +6 extras.
+    const EXTRAS = [12, 9, 6];
+
+    type IncidentInsert = typeof interactionsTable.$inferInsert;
+    type ParticipantInsert = typeof interactionParticipantsTable.$inferInsert;
+    const incidents: IncidentInsert[] = [];
+    const stagedParticipants: {
+      idx: number;
+      row: Omit<ParticipantInsert, "interactionId">;
+    }[] = [];
+
+    for (let s = 0; s < topRows.length; s++) {
+      const star = topRows[s];
+      const starName = nameById.get(star.studentId);
+      if (!starName) continue;
+      const extras = EXTRAS[s] ?? 6;
+      const homeCase = caseRows[s % caseRows.length];
+      for (let i = 0; i < extras; i++) {
+        const log = pick(rng, loggers);
+        const attachToCase = rng() > 0.3;
+        const sev = 2 + Math.floor(rng() * 3);
+        const idx = incidents.length;
+        incidents.push({
+          schoolId: school.id,
+          occurredDate: ymdDaysAgo(1 + Math.floor(rng() * 24)),
+          kind: pick(
+            rng,
+            [...WL_KINDS].filter((k) => k !== "peripheral_note"),
+          ),
+          severity: sev,
+          location: pick(rng, [...WL_LOCATIONS]),
+          summary: `${starName.firstName} ${starName.lastName.charAt(
+            0,
+          )}. — ${pick(rng, [
+            "repeat hallway disruption",
+            "verbal altercation in cafeteria",
+            "ongoing peer conflict; staff redirected",
+            "minor physical contact during transition",
+            "off-task behavior escalating to refusal",
+          ])}.`,
+          detail: "spotlight-seed",
+          caseId: attachToCase ? homeCase.id : null,
+          loggedByStaffId: log.id,
+          loggedByName: log.displayName,
+          status: "open",
+        });
+        stagedParticipants.push({
+          idx,
+          row: {
+            schoolId: school.id,
+            studentId: star.studentId,
+            role: pick(rng, [...WL_ROLES_HIGH]),
+            notes: "",
+          },
+        });
+        // 1–2 mates per incident, no duplicates within an incident.
+        const mateCount = 1 + (i % 2);
+        const seen = new Set<string>([star.studentId]);
+        let guard = 0;
+        let added = 0;
+        while (added < mateCount && guard < 12) {
+          guard++;
+          const mid = pick(rng, matePool);
+          if (!mid || seen.has(mid)) continue;
+          seen.add(mid);
+          stagedParticipants.push({
+            idx,
+            row: {
+              schoolId: school.id,
+              studentId: mid,
+              role: pick(rng, [...WL_ROLES_LOW]),
+              notes: "",
+            },
+          });
+          added++;
+        }
+      }
+    }
+
+    if (incidents.length === 0) continue;
+    const inserted = await chunkedInsertReturning<{ id: number }>(
+      interactionsTable,
+      incidents,
+      500,
+    );
+    const participantRows: ParticipantInsert[] = stagedParticipants.map((p) => ({
+      ...p.row,
+      interactionId: inserted[p.idx].id,
+    }));
+    // Dedupe in case a mate landed twice via the random guard.
+    const seenKey = new Set<string>();
+    const deduped: ParticipantInsert[] = [];
+    for (const r of participantRows) {
+      const k = `${r.interactionId}:${r.studentId}`;
+      if (seenKey.has(k)) continue;
+      seenKey.add(k);
+      deduped.push(r);
+    }
+    for (let i = 0; i < deduped.length; i += 500) {
+      await db
+        .insert(interactionParticipantsTable)
+        .values(deduped.slice(i, i + 500));
+    }
+
+    logger.info(
+      {
+        schoolId: school.id,
+        spotlightCount: topRows.length,
+        incidentsAdded: incidents.length,
+      },
+      "[seed] watchlist spotlights backfilled",
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ensurePickupSchema — Parent Pick-Up Module
+//
+// Adds the dismissal_mode column to students, the cap_car_rider_monitor
+// flag to staff, the show_pickup_queue toggle to display_playlists, and
+// creates the two new tables (student_pickup_authorizations + the
+// pickup_queue_events audit log). All ALTERs are IF NOT EXISTS so re-runs
+// are no-ops; the partial unique index on (school_id, pickup_number)
+// WHERE active is created explicitly because Drizzle's type-level helper
+// can't model partial indexes.
+// ---------------------------------------------------------------------------
+export async function ensurePickupSchema(): Promise<void> {
+  await db.execute(sql`
+    ALTER TABLE students
+      ADD COLUMN IF NOT EXISTS dismissal_mode TEXT NOT NULL DEFAULT 'car_rider'
+  `);
+  await db.execute(sql`
+    ALTER TABLE staff
+      ADD COLUMN IF NOT EXISTS cap_car_rider_monitor BOOLEAN NOT NULL DEFAULT false
+  `);
+  await db.execute(sql`
+    ALTER TABLE display_playlists
+      ADD COLUMN IF NOT EXISTS show_pickup_queue BOOLEAN NOT NULL DEFAULT false
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS student_pickup_authorizations (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      parent_id INTEGER,
+      guardian_label TEXT NOT NULL,
+      pickup_number TEXT NOT NULL,
+      restricted_from BOOLEAN NOT NULL DEFAULT false,
+      active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      deactivated_at TIMESTAMPTZ
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_auth_number_per_school ON student_pickup_authorizations(school_id, pickup_number)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_auth_by_student ON student_pickup_authorizations(student_id)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_auth_by_parent ON student_pickup_authorizations(parent_id)`);
+  // Partial unique: only the ACTIVE rows must have a unique number per
+  // school. Retired numbers can be reused for a new tag without conflict.
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS pickup_auth_active_number_unique ON student_pickup_authorizations(school_id, pickup_number) WHERE active`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pickup_queue_events (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      pickup_authorization_id INTEGER,
+      actor_staff_id INTEGER NOT NULL,
+      actor_display_name TEXT NOT NULL,
+      action TEXT NOT NULL,
+      note TEXT,
+      occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_events_by_school_date ON pickup_queue_events(school_id, occurred_at)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_events_by_student ON pickup_queue_events(student_id)`);
+
+  // School-settings additions for the Pick-Up settings card.
+  await db.execute(sql`
+    ALTER TABLE school_settings
+      ADD COLUMN IF NOT EXISTS pickup_cutoff_time TEXT NOT NULL DEFAULT '15:30'
+  `);
+  await db.execute(sql`
+    ALTER TABLE school_settings
+      ADD COLUMN IF NOT EXISTS pickup_teacher_view_scope TEXT NOT NULL DEFAULT 'all_students'
+  `);
+  // "In car" terminal step toggle + display-window for "walking out"
+  // rows when the toggle is OFF. Additive — defaults preserve the
+  // existing curb-tap-required workflow for every school.
+  await db.execute(sql`
+    ALTER TABLE school_settings
+      ADD COLUMN IF NOT EXISTS pickup_in_car_step_enabled BOOLEAN NOT NULL DEFAULT TRUE
+  `);
+  await db.execute(sql`
+    ALTER TABLE school_settings
+      ADD COLUMN IF NOT EXISTS pickup_walked_out_display_seconds INTEGER NOT NULL DEFAULT 300
+  `);
+}
+
+// ---------------------------------------------------------------------------
+// AST (Alternate Schedule Time) schema. HCTA-contract earn/use bank with
+// quarter-hour increments and a per-staff append-only ledger. See
+// lib/db/src/schema/staffAst.ts for the state machine. Idempotent on every
+// boot.
+// ---------------------------------------------------------------------------
+export async function ensureAstSchema(): Promise<void> {
+  await db.execute(sql`
+    ALTER TABLE staff
+      ADD COLUMN IF NOT EXISTS can_approve_ast BOOLEAN NOT NULL DEFAULT false
+  `);
+  // Backfill: anyone already flagged as an admin tier (school admin /
+  // district admin / super user) gets approver rights for free. This is
+  // a one-time idempotent set — admins demoted later don't lose AST
+  // approval automatically (intentional: a building can decide its own
+  // approver list independent of the admin role).
+  await db.execute(sql`
+    UPDATE staff
+       SET can_approve_ast = true
+     WHERE can_approve_ast = false
+       AND (is_admin OR is_district_admin OR is_super_user)
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS staff_ast_requests (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      staff_id INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'pending_preapproval',
+      event_date TEXT,
+      reason TEXT,
+      quarter_hours_requested INTEGER NOT NULL,
+      quarter_hours_actual INTEGER,
+      use_start_at TIMESTAMPTZ,
+      use_end_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      preapproved_at TIMESTAMPTZ,
+      preapproved_by_staff_id INTEGER,
+      preapproval_note TEXT,
+      completion_submitted_at TIMESTAMPTZ,
+      completion_note TEXT,
+      confirmed_at TIMESTAMPTZ,
+      confirmed_by_staff_id INTEGER,
+      confirm_note TEXT,
+      denied_at TIMESTAMPTZ,
+      denied_by_staff_id INTEGER,
+      deny_note TEXT,
+      cancelled_at TIMESTAMPTZ,
+      cancel_note TEXT,
+      staff_acknowledged_at TIMESTAMPTZ
+    )
+  `);
+  // Additive: older deployments missed staff_acknowledged_at.
+  await db.execute(sql`
+    ALTER TABLE staff_ast_requests
+      ADD COLUMN IF NOT EXISTS staff_acknowledged_at TIMESTAMPTZ
+  `);
+  // Additive: AST category — set by admin at pre-approval time, never
+  // by staff. Constrained to the AST_CATEGORIES enum at the app layer
+  // (no CHECK constraint so the enum can evolve without a schema
+  // migration). NULL → "Uncategorized" in the dashboard.
+  await db.execute(sql`
+    ALTER TABLE staff_ast_requests
+      ADD COLUMN IF NOT EXISTS category TEXT
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS staff_ast_requests_school_staff_idx ON staff_ast_requests(school_id, staff_id)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS staff_ast_requests_school_state_idx ON staff_ast_requests(school_id, state)`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS staff_ast_ledger (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      staff_id INTEGER NOT NULL,
+      delta_quarter_hours INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      request_id INTEGER,
+      note TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_by_staff_id INTEGER
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS staff_ast_ledger_school_staff_idx ON staff_ast_ledger(school_id, staff_id)`);
+}
+
+// -----------------------------------------------------------------------------
+// Feature licensing schema (Plans + per-school Overrides).
+// Idempotent. Layered on top of the existing super_feature_* flags on
+// school_settings — assigning a plan / applying overrides writes through
+// to those booleans, so the runtime gating path is unchanged.
+// Also seeds a default "enterprise" plan with every feature enabled and
+// auto-assigns it to any school whose plan_id is still NULL, so existing
+// tenants keep working after this rolls out.
+// -----------------------------------------------------------------------------
+// Two-phase migration: the column adds + plans table CREATE must happen
+// BEFORE seedTenancy (which inserts into schools via Drizzle, with a
+// schema definition that now includes plan_id). The backfill UPDATE
+// runs AFTER seedTenancy so it has rows to update. Both phases are
+// idempotent.
+export async function ensureFeaturePlansColumns() {
+  await db.execute(
+    sql`ALTER TABLE schools ADD COLUMN IF NOT EXISTS plan_id INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS super_feature_ast BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
+  // Comp Time (FLSA) — additive column adds. Default ON for the
+  // enterprise rollout; the route still hard-blocks staff whose
+  // exempt_status != 'non_exempt' so teachers stay on AST.
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS super_feature_comp_time BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS workweek_start TEXT NOT NULL DEFAULT 'sunday'`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS comp_time_require_auth_form BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS comp_time_auth_form_object_key TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS exempt_status TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS can_approve_comp_time BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS comp_time_paid_out_at TIMESTAMPTZ`,
+  );
+  // Four new descriptive role flags. Additive, idempotent.
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS is_non_exempt_role BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS is_front_office BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS is_sro BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS is_guardian BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  // Backfill: any admin tier (school admin / district admin / super
+  // user) gets canApproveCompTime so the rollout doesn't break.
+  // Principals + Assistant Principals carry isAdmin, so this also
+  // auto-elects them per spec.
+  await db.execute(sql`
+    UPDATE staff
+       SET can_approve_comp_time = true
+     WHERE can_approve_comp_time = false
+       AND (is_admin = true OR is_district_admin = true OR is_super_user = true)
+  `);
+  // Comp Time tables. Additive, idempotent.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS staff_comp_requests (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      staff_id INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'pending_preapproval',
+      week_start_date TEXT,
+      reason TEXT,
+      hours_worked_qh INTEGER,
+      computed_credit_qh INTEGER,
+      quarter_hours_requested INTEGER NOT NULL,
+      quarter_hours_actual INTEGER,
+      use_start_at TIMESTAMPTZ,
+      use_end_at TIMESTAMPTZ,
+      auth_form_object_key TEXT,
+      timesheet_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+      prior_supervisor_approval_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      preapproved_at TIMESTAMPTZ,
+      preapproved_by_staff_id INTEGER,
+      preapproval_note TEXT,
+      completion_submitted_at TIMESTAMPTZ,
+      completion_note TEXT,
+      confirmed_at TIMESTAMPTZ,
+      confirmed_by_staff_id INTEGER,
+      confirm_note TEXT,
+      denied_at TIMESTAMPTZ,
+      denied_by_staff_id INTEGER,
+      deny_note TEXT,
+      cancelled_at TIMESTAMPTZ,
+      cancel_note TEXT,
+      staff_acknowledged_at TIMESTAMPTZ
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS staff_comp_requests_school_staff_idx ON staff_comp_requests(school_id, staff_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS staff_comp_requests_school_state_idx ON staff_comp_requests(school_id, state)`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS staff_comp_ledger (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      staff_id INTEGER NOT NULL,
+      delta_quarter_hours INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      request_id INTEGER,
+      note TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_by_staff_id INTEGER
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS staff_comp_ledger_school_staff_idx ON staff_comp_ledger(school_id, staff_id)`,
+  );
+}
+
+export async function ensureFeaturePlansSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS plans (
+      id SERIAL PRIMARY KEY,
+      key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      description TEXT,
+      features JSONB NOT NULL,
+      quotas JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS plans_key_unique ON plans(key)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS school_feature_overrides (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      feature_key TEXT NOT NULL,
+      enabled BOOLEAN NOT NULL,
+      show_upsell BOOLEAN NOT NULL DEFAULT FALSE,
+      quotas JSONB NOT NULL DEFAULT '{}'::jsonb,
+      expires_at TIMESTAMPTZ,
+      reason TEXT,
+      granted_by_staff_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS school_feature_overrides_school_feature_unique ON school_feature_overrides(school_id, feature_key)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS school_feature_overrides_school_idx ON school_feature_overrides(school_id)`,
+  );
+
+  // Phase 2: licensing audit log. Append-only. Drives the expired-
+  // override sweep's idempotency via a partial unique index on
+  // override_id (one sweep audit row per override, ever).
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS feature_licensing_audit_log (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      override_id INTEGER,
+      feature_key TEXT,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      actor_staff_id INTEGER,
+      actor_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS feature_licensing_audit_school_idx ON feature_licensing_audit_log(school_id, created_at)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS feature_licensing_audit_expired_sweep_unique ON feature_licensing_audit_log(override_id) WHERE action = 'override_expired_sweep'`,
+  );
+
+  // (Column adds for schools.plan_id + school_settings.super_feature_ast
+  // happen earlier via ensureFeaturePlansColumns, before seedTenancy.)
+
+  // Seed the default "enterprise" plan (everything on, no quotas).
+  // The keys here match FEATURE_KEYS in
+  // artifacts/api-server/src/lib/featureLicensing.ts — keep in sync.
+  const enterpriseFeatures = {
+    familyComm: true,
+    pbis: true,
+    schoolStore: true,
+    accommodations: true,
+    logIntervention: true,
+    requestPullout: true,
+    hallPasses: true,
+    tardyPass: true,
+    mtssPlans: true,
+    behaviorSpecialist: true,
+    issDashboard: true,
+    displays: true,
+    bellSchedule: true,
+    earlyWarning: true,
+    academics: true,
+    dataImports: true,
+    houses: true,
+    parentPortal: true,
+    ast: true,
+    compTime: true,
+  };
+  await db.execute(sql`
+    INSERT INTO plans (key, label, description, features, quotas)
+    VALUES (
+      'enterprise',
+      'Enterprise',
+      'All PulseEDU features. Default plan assigned to every school on rollout.',
+      ${JSON.stringify(enterpriseFeatures)}::jsonb,
+      '{}'::jsonb
+    )
+    ON CONFLICT (key) DO NOTHING
+  `);
+
+  // Backfill: any school still on plan_id IS NULL gets the enterprise
+  // plan so the runtime behavior is unchanged after this migration.
+  await db.execute(sql`
+    UPDATE schools
+    SET plan_id = (SELECT id FROM plans WHERE key = 'enterprise')
+    WHERE plan_id IS NULL
+  `);
+}
+
+// -----------------------------------------------------------------------------
+// Hall pass kiosk activation cards (Phase 1).
+//
+// Adds the per-teacher enrollment-token table and the provenance /
+// sub-flow columns on kiosk_activations. All additive + idempotent.
+// -----------------------------------------------------------------------------
+export async function ensureKioskCardsSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS kiosk_enroll_tokens (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      staff_id INTEGER NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      pin_hash TEXT,
+      label TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_by_staff_id INTEGER,
+      rotated_at TIMESTAMPTZ,
+      revoked_at TIMESTAMPTZ,
+      revoked_by_staff_id INTEGER,
+      last_used_at TIMESTAMPTZ
+    )
+  `);
+  // At most one live enrollment token per teacher per school.
+  // "Reissue card" must revoke-then-insert in a single transaction so
+  // this partial index never sees two live rows for the same teacher.
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS kiosk_enroll_tokens_one_live_per_staff ON kiosk_enroll_tokens(school_id, staff_id) WHERE revoked_at IS NULL`,
+  );
+
+  // Provenance / sub-flow columns on kiosk_activations. The new columns
+  // are all NULL-tolerant so legacy rows (password-activated kiosks)
+  // remain valid without backfill.
+  await db.execute(
+    sql`ALTER TABLE kiosk_activations ADD COLUMN IF NOT EXISTS enroll_token_id INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE kiosk_activations ADD COLUMN IF NOT EXISTS activated_by_staff_id INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE kiosk_activations ADD COLUMN IF NOT EXISTS proxy_for_staff_id INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE kiosk_activations ADD COLUMN IF NOT EXISTS session_kind TEXT`,
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Kiosk "Sign in to class" + per-school welcome messages (Phase 3).
+//
+// Adds two columns to school_settings (default template + per-house
+// override JSON map) and creates the class_signins append-only ledger.
+// All additive + idempotent — safe to call on every boot.
+// -----------------------------------------------------------------------------
+export async function ensureKioskWelcomeSchema(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS kiosk_welcome_template TEXT NOT NULL DEFAULT 'Welcome, {firstName}!'`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS kiosk_welcome_messages JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS class_signins (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      kiosk_activation_id INTEGER,
+      signed_in_by_staff_id INTEGER,
+      signed_in_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS class_signins_school_day_idx ON class_signins(school_id, signed_in_at)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS class_signins_student_idx ON class_signins(school_id, student_id, signed_in_at)`,
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Badge print event audit ledger (Phase 4 — badge reissue audit).
+//
+// One row per student per batch when an admin generates a badges PDF.
+// Lets admins spot lost-badge / reissue patterns and provides a
+// chain-of-custody for the printed credential.
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// Schools.timezone bootstrap (per-school IANA timezone).
+//
+// The schema TS file declares `timezone TEXT NOT NULL DEFAULT 'America/New_York'`,
+// but production DBs onboarded before May 2026 won't have the column yet
+// — add it idempotently via ALTER. Threaded through `getSchoolTimezone()`
+// and used by the case-number year-label flow, AST lapse cron, and kiosk
+// sign-in roll-call so a non-Eastern tenant computes day boundaries
+// correctly.
+// -----------------------------------------------------------------------------
+export async function ensureSchoolsTimezoneColumn(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE schools ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'America/New_York'`,
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Student photo columns bootstrap (Packet B).
+//
+// `photo_object_key TEXT NULL` — object-storage key bound to the student's
+// school via bindObjectToSchool. Null on legacy rows / schools without a
+// yearbook ingest yet (renders the initials bubble).
+// `photo_consent BOOLEAN NOT NULL DEFAULT true` — render gate. False
+// suppresses the photo everywhere even when bytes are on disk; bytes are
+// not deleted so the toggle is reversible.
+// Schema TS declares both; the ALTERs handle DBs onboarded before May 2026.
+// -----------------------------------------------------------------------------
+export async function ensureStudentPhotoColumns(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS photo_object_key TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS photo_consent BOOLEAN NOT NULL DEFAULT true`,
+  );
+  // District-issued local SIS number (FAST file "Local ID"). Nullable;
+  // canonical student_id is still the FLEID. Additive ALTER per the
+  // "non-interactive schema change" convention.
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS local_sis_id TEXT`,
+  );
+}
+
+// Backfill local_sis_id for every student that is currently NULL.
+// Derivation: strip the leading "FL" prefix and any subsequent leading
+// zeros from the FLEID — "FL000008101387" → "8101387". This is the
+// numeric portion FL districts use as the local SIS identifier on
+// printed badges and parent-facing materials. Idempotent: only fills
+// NULLs, so re-runs are a cheap UPDATE...WHERE NULL no-op once filled.
+// FLEID remains the canonical internal identifier; this is purely the
+// student-facing credential surface.
+export async function ensureStudentLocalSisIdBackfill(): Promise<void> {
+  await db.execute(sql`
+    UPDATE students
+       SET local_sis_id = REGEXP_REPLACE(
+             REGEXP_REPLACE(student_id, '^FL', ''),
+             '^0+',
+             ''
+           )
+     WHERE local_sis_id IS NULL
+       AND student_id IS NOT NULL
+       AND student_id <> ''
+  `);
+}
+
+// -----------------------------------------------------------------------------
+// Per-student accommodations backfill.
+//
+// Why: the bulk multi-school seeder (seedMultiSchoolIfEmpty) was the only
+// path that ever wrote rows into student_accommodations. Once any school
+// has a school_accommodations catalog row, the bulk seeder short-circuits
+// — so production tenants that onboarded after the initial seed (or any
+// student inserted later via a roster import) end up with the ESE / 504 /
+// ELL pill rendering but no per-student accommodations behind it. The
+// Teacher Roster "Programs" hover therefore opens to an empty list.
+//
+// This backfill walks every school and, for each student whose
+// demographic flag is set but who has zero ACTIVE (removedAt IS NULL)
+// student_accommodations rows, assigns 2–4 category-matched
+// accommodations drawn from MASTER_ACCS. Catalog rows are upserted into
+// school_accommodations first via ON CONFLICT DO NOTHING on the
+// (school_id, name) unique index so this is safe to run on schools that
+// already have a partial or fully populated catalog.
+//
+// Idempotent: students that already have any active assignment are
+// skipped. Re-running on a fully-backfilled tenant performs one cheap
+// COUNT + the catalog upserts (also no-ops).
+// -----------------------------------------------------------------------------
+export async function ensureStudentAccommodationsBackfill(): Promise<void> {
+  // 1. Per school, ensure the catalog rows exist.
+  const schools = await db
+    .select({ id: schoolsTable.id })
+    .from(schoolsTable);
+  for (const school of schools) {
+    for (const a of MASTER_ACCS) {
+      await db.execute(sql`
+        INSERT INTO school_accommodations (school_id, name, category, active)
+        VALUES (${school.id}, ${a.name}, ${a.category}, true)
+        ON CONFLICT ON CONSTRAINT school_accommodations_school_id_name_unique
+        DO NOTHING
+      `);
+    }
+
+    // 2. Find students with at least one program flag set but no active
+    // accommodations. We do this in one query per school.
+    const orphanRows = (await db.execute(sql`
+      SELECT s.student_id, s.ese, s.is_504, s.ell
+        FROM students s
+       WHERE s.school_id = ${school.id}
+         AND (s.ese = true OR s.is_504 = true OR s.ell = true)
+         AND NOT EXISTS (
+               SELECT 1
+                 FROM student_accommodations sa
+                WHERE sa.school_id = s.school_id
+                  AND sa.student_id = s.student_id
+                  AND sa.removed_at IS NULL
+             )
+    `)).rows as Array<{
+      student_id: string;
+      ese: boolean;
+      is_504: boolean;
+      ell: boolean;
+    }>;
+    if (orphanRows.length === 0) continue;
+
+    // 3. Load the school's catalog and bucket by category.
+    const catalog = await db
+      .select()
+      .from(schoolAccommodationsTable)
+      .where(eq(schoolAccommodationsTable.schoolId, school.id));
+    const iepIds = catalog.filter((c) => c.category === "IEP").map((c) => c.id);
+    const sec504Ids = catalog.filter((c) => c.category === "504").map((c) => c.id);
+    const ellIds = catalog.filter((c) => c.category === "ELL").map((c) => c.id);
+
+    // Pick an admin/SuperUser/teacher (in that order) to attribute the
+    // backfill assignments to so the audit trail isn't NULL.
+    const [attributable] = await db
+      .select({ id: staffTable.id })
+      .from(staffTable)
+      .where(
+        and(
+          eq(staffTable.schoolId, school.id),
+          eq(staffTable.active, true),
+        ),
+      )
+      .orderBy(
+        desc(staffTable.isSuperUser),
+        desc(staffTable.isAdmin),
+        asc(staffTable.id),
+      )
+      .limit(1);
+    const assignedById = attributable?.id ?? null;
+
+    // 4. Deterministic per-school RNG so a reseed produces the same set.
+    const rng = makeRng(0xacc0 + school.id * 7919);
+    type AssignInsert = typeof studentAccommodationsTable.$inferInsert;
+    const rows: AssignInsert[] = [];
+    for (const s of orphanRows) {
+      // Pool from the student's actual flags. ESE → IEP catalog, etc.
+      // Students with multiple flags draw from a merged pool.
+      const pool: number[] = [];
+      if (s.ese) pool.push(...iepIds);
+      if (s.is_504) pool.push(...sec504Ids);
+      if (s.ell) pool.push(...ellIds);
+      if (pool.length === 0) continue;
+      const count = Math.min(2 + Math.floor(rng() * 3), pool.length); // 2..4
+      const chosen = shuffle(rng, pool).slice(0, count);
+      for (const accId of chosen) {
+        rows.push({
+          schoolId: school.id,
+          studentId: s.student_id,
+          accommodationId: accId,
+          assignedByStaffId: assignedById,
+        });
+      }
+    }
+    if (rows.length > 0) {
+      await chunkedInsert(studentAccommodationsTable, rows, 1000);
+      logger.info(
+        {
+          schoolId: school.id,
+          students: orphanRows.length,
+          assignments: rows.length,
+        },
+        "[seed] accommodations backfill",
+      );
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// ensureLocationAllowedDestinationsBackfill
+//
+// The bulk seed populates `location_allowed_destinations` only for freshly
+// created schools (full origin×destination cross product). Schools onboarded
+// before that block existed — including school 1 (Parrott) — have an empty
+// LAD table, which leaves the kiosk's destination picker blank because
+// `destinationOptions` intersects the school's destinations with the
+// allowed-pair set for the kiosk's origin room.
+//
+// This idempotent backfill: for every school that has locations but zero
+// rows in LAD, inserts the full origin×destination cross product. A school
+// with even one existing pair is left alone (admins may have intentionally
+// pruned the matrix).
+// -----------------------------------------------------------------------------
+export async function ensureLocationAllowedDestinationsBackfill(): Promise<void> {
+  const schools = await db.select({ id: schoolsTable.id }).from(schoolsTable);
+  for (const school of schools) {
+    const [{ c: existing }] = (await db.execute(sql`
+      SELECT COUNT(*)::int AS c
+        FROM location_allowed_destinations
+       WHERE school_id = ${school.id}
+    `)).rows as Array<{ c: number }>;
+    if (existing > 0) continue;
+
+    const locs = await db
+      .select()
+      .from(locationsTable)
+      .where(eq(locationsTable.schoolId, school.id));
+    const origins = locs.filter((l) => l.isOrigin && l.active);
+    const dests = locs.filter((l) => l.isDestination && l.active);
+    if (origins.length === 0 || dests.length === 0) continue;
+
+    const rows: {
+      schoolId: number;
+      originLocationId: number;
+      destinationLocationId: number;
+    }[] = [];
+    for (const o of origins) {
+      for (const d of dests) {
+        rows.push({
+          schoolId: school.id,
+          originLocationId: o.id,
+          destinationLocationId: d.id,
+        });
+      }
+    }
+    if (rows.length > 0) {
+      await db.insert(locationAllowedDestinationsTable).values(rows);
+      logger.info(
+        { schoolId: school.id, pairs: rows.length },
+        "[seed] LAD backfill",
+      );
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// ensureBenchmarkDeliveriesSchema
+//
+// Creates school_benchmarks (per-school standards catalog) and
+// benchmark_deliveries (teacher-owned instructional log) idempotently.
+// See lib/db/src/schema/{schoolBenchmarks,benchmarkDeliveries}.ts.
+// -----------------------------------------------------------------------------
+export async function ensureBenchmarkDeliveriesSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS school_benchmarks (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      subject TEXT NOT NULL,
+      code TEXT NOT NULL,
+      category TEXT,
+      label TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      source TEXT NOT NULL DEFAULT 'local',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS school_benchmarks_school_subject_idx
+      ON school_benchmarks(school_id, subject)
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS school_benchmarks_school_subject_code_unique
+      ON school_benchmarks(school_id, subject, code)
+  `);
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS benchmark_deliveries (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      teacher_staff_id INTEGER NOT NULL,
+      subject TEXT NOT NULL,
+      benchmark_code TEXT NOT NULL,
+      delivered_on DATE NOT NULL,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS benchmark_deliveries_teacher_idx
+      ON benchmark_deliveries(school_id, teacher_staff_id, subject)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS benchmark_deliveries_benchmark_idx
+      ON benchmark_deliveries(school_id, subject, benchmark_code)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS benchmark_deliveries_school_date_idx
+      ON benchmark_deliveries(school_id, delivered_on)
+  `);
+}
+
+// -----------------------------------------------------------------------------
+// ensureSchoolBenchmarksCatalogBackfill
+//
+// For every school, derive distinct (subject, benchmark_code, category)
+// triples from student_fast_item_responses and upsert into
+// school_benchmarks (source='fast'). This is what makes the
+// Instruction Log dropdown and the Instructional Coverage dashboard
+// usable for ELA + Math out of the box without admins typing anything.
+//
+// Idempotent — uses ON CONFLICT DO NOTHING on the (school, subject,
+// code) unique constraint so re-runs are no-ops. Locally-added or
+// CSV-imported rows (source != 'fast') are never touched.
+// -----------------------------------------------------------------------------
+export async function ensureSchoolBenchmarksCatalogBackfill(): Promise<void> {
+  await db.execute(sql`
+    INSERT INTO school_benchmarks (school_id, subject, code, category, source)
+    SELECT school_id, subject, benchmark_code, MAX(category), 'fast'
+      FROM student_fast_item_responses
+     GROUP BY school_id, subject, benchmark_code
+    ON CONFLICT (school_id, subject, code) DO NOTHING
+  `);
+}
+
+export async function ensureBadgePrintEventsSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS badge_print_events (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      printed_by_staff_id INTEGER,
+      size TEXT NOT NULL,
+      reason TEXT,
+      batch_size INTEGER NOT NULL DEFAULT 1,
+      printed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS badge_print_events_school_printed_at_idx ON badge_print_events(school_id, printed_at)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS badge_print_events_student_idx ON badge_print_events(school_id, student_id, printed_at)`,
+  );
+}
+
+// =============================================================================
+// ONE-SHOT: backfill benchmark_deliveries on the live demo school (school_id=1
+// = D. S. Parrott Middle School). These rows were entered in the dev DB by
+// accident and need to land in prod for the demo. Idempotent: if any
+// benchmark_deliveries row already exists for school_id=1, this is a no-op.
+// Safe to leave in seed.ts; can be deleted after the next prod boot.
+// =============================================================================
+
+interface BenchmarkDeliverySeedRow {
+  t: string; // "__chris__" or staff.email
+  s: string; // subject
+  c: string; // benchmark_code
+  d: string; // YYYY-MM-DD
+  n: string | null; // notes
+}
+
+const DEMO_TEACHER_SEEDS: Array<{ email: string; displayName: string }> = [
+  { email: "marcus.hayes.ela@dsparrott.test",    displayName: "Marcus Hayes ELA" },
+  { email: "sarah.chen.ela@dsparrott.test",      displayName: "Sarah Chen ELA" },
+  { email: "david.rodriguez.ela@dsparrott.test", displayName: "David Rodriguez ELA" },
+  { email: "jennifer.park.ela@dsparrott.test",   displayName: "Jennifer Park ELA" },
+  { email: "brian.walsh.ela@dsparrott.test",     displayName: "Brian Walsh ELA" },
+  { email: "aisha.johnson.ela@dsparrott.test",   displayName: "Aisha Johnson ELA" },
+  { email: "linda.foster.math@dsparrott.test",   displayName: "Linda Foster Math" },
+  { email: "priya.patel.math@dsparrott.test",    displayName: "Priya Patel Math" },
+  { email: "james.obrien.math@dsparrott.test",   displayName: "James OBrien Math" },
+  { email: "kenji.tanaka.math@dsparrott.test",   displayName: "Kenji Tanaka Math" },
+  { email: "maria.sanchez.math@dsparrott.test",  displayName: "Maria Sanchez Math" },
+  { email: "tyrone.williams.math@dsparrott.test", displayName: "Tyrone Williams Math" },
+];
+
+export async function seedBenchmarkDeliveriesOnce(): Promise<void> {
+  const SCHOOL_ID = 1;
+
+  const existing = await db.execute<{ n: number }>(
+    sql`SELECT COUNT(*)::int AS n FROM benchmark_deliveries WHERE school_id = ${SCHOOL_ID}`,
+  );
+  const existingCount = Number(existing.rows[0]?.n ?? 0);
+  if (existingCount > 0) {
+    return; // idempotent no-op
+  }
+
+  // 1) Upsert the 12 demo teachers (no-op if any already exist by email).
+  for (const t of DEMO_TEACHER_SEEDS) {
+    await db.execute(sql`
+      INSERT INTO staff (email, password_hash, display_name, school_id, active, is_admin)
+      VALUES (${t.email}, '!disabled!', ${t.displayName}, ${SCHOOL_ID}, true, false)
+      ON CONFLICT (email) DO NOTHING
+    `);
+  }
+
+  // 2) Build email/display_name → staff.id map for this school.
+  const staffRows = await db.execute<{ id: number; email: string; display_name: string }>(sql`
+    SELECT id, email, display_name FROM staff WHERE school_id = ${SCHOOL_ID}
+  `);
+  const idByEmail = new Map<string, number>();
+  let chrisId: number | null = null;
+  for (const r of staffRows.rows) {
+    if (r.email) idByEmail.set(r.email, r.id);
+    if (r.display_name === "Chris Clifford") chrisId = r.id;
+  }
+
+  const rows = benchmarkDeliveriesSeedJson as BenchmarkDeliverySeedRow[];
+  let inserted = 0;
+  let skipped = 0;
+  const BATCH = 100;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const slice = rows.slice(i, i + BATCH);
+    const values = slice
+      .map((r) => {
+        const teacherId = r.t === "__chris__" ? chrisId : (idByEmail.get(r.t) ?? null);
+        if (teacherId == null) {
+          skipped++;
+          return null;
+        }
+        const notesSql = r.n === null
+          ? sql`NULL`
+          : sql`${r.n}`;
+        return sql`(${SCHOOL_ID}, ${teacherId}, ${r.s}, ${r.c}, ${r.d}::date, ${notesSql})`;
+      })
+      .filter((v): v is ReturnType<typeof sql> => v !== null);
+    if (values.length === 0) continue;
+    await db.execute(sql`
+      INSERT INTO benchmark_deliveries
+        (school_id, teacher_staff_id, subject, benchmark_code, delivered_on, notes)
+      VALUES ${sql.join(values, sql`, `)}
+    `);
+    inserted += values.length;
+  }
+  logger.info(
+    { inserted, skipped, total: rows.length },
+    "[seed] benchmark_deliveries one-shot backfill complete",
+  );
+}
+
+// One-shot: rewrite every demo staff email to match their display name on the
+// @pulsedemo.com domain, and reset their password to the demo password. Scope
+// is exactly the @hcsb.k12.fl.us accounts EXCEPT the two real superusers
+// (chris.clifford@ and brandon.wright@), who are left fully untouched. The
+// third superuser (brandon.wright2@hcsd.k12.fl.us) is on a different domain
+// and so is naturally outside the @hcsb scope. Touches ONLY staff.email and
+// staff.password_hash — no names, students, passes, or PBIS data. Idempotent
+// via a one-shot marker row, and atomic via a transaction (two-phase rename
+// so we never trip the unique(email) constraint mid-flight). Runs once per
+// environment on boot — safe to leave in place; a second boot is a cheap
+// marker lookup. Delete after it has run in production if desired.
+const DEMO_EMAIL_PASSWORD = "PulseDemo26";
+const DEMO_EMAIL_DOMAIN = "pulsedemo.com";
+const DEMO_EMAIL_MARKER = "match_demo_emails_pulsedemo_v1";
+const DEMO_EMAIL_KEEP = new Set([
+  "chris.clifford@hcsb.k12.fl.us",
+  "brandon.wright@hcsb.k12.fl.us",
+]);
+
+// "Kathleen Taylor - ELA G6" -> "kathleen.taylor"; "M. Brown" -> "m.brown".
+// Strips the " - Subject Grade" suffix and any "(...)" note, lowercases, and
+// keeps only a-z per token. Returns null if no usable token remains.
+function deriveEmailLocalPart(displayName: string): string | null {
+  let s = displayName;
+  const dashIdx = s.indexOf(" - ");
+  if (dashIdx >= 0) s = s.slice(0, dashIdx);
+  s = s.replace(/\([^)]*\)/g, " ");
+  const tokens = s
+    .split(/\s+/)
+    .map((t) => t.toLowerCase().replace(/[^a-z]/g, ""))
+    .filter(Boolean);
+  if (tokens.length === 0) return null;
+  const first = tokens[0]!;
+  const last = tokens[tokens.length - 1]!;
+  return tokens.length === 1 ? first : `${first}.${last}`;
+}
+
+export async function matchDemoEmailsToNamesOnce(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS app_one_shot_markers (
+      name text PRIMARY KEY,
+      ran_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  const marker = await db.execute<{ name: string }>(
+    sql`SELECT name FROM app_one_shot_markers WHERE name = ${DEMO_EMAIL_MARKER}`,
+  );
+  if (marker.rows.length > 0) return; // already applied in this environment
+
+  // Reserve every email that is NOT being changed so we never collide with a
+  // kept account or a different-domain account.
+  const allRows = await db.execute<{
+    id: number;
+    email: string | null;
+    display_name: string;
+  }>(sql`SELECT id, email, display_name FROM staff ORDER BY id`);
+
+  const reserved = new Set<string>();
+  type Target = { id: number; newEmail: string };
+  const targets: Target[] = [];
+  const pending: Array<{ id: number; displayName: string }> = [];
+
+  for (const r of allRows.rows) {
+    const email = (r.email ?? "").toLowerCase();
+    const isTarget =
+      email.endsWith("@hcsb.k12.fl.us") && !DEMO_EMAIL_KEEP.has(email);
+    if (isTarget) {
+      pending.push({ id: r.id, displayName: r.display_name });
+    } else if (email) {
+      reserved.add(email);
+    }
+  }
+
+  let skipped = 0;
+  for (const p of pending) {
+    const local = deriveEmailLocalPart(p.displayName);
+    if (!local) {
+      skipped++;
+      continue;
+    }
+    let candidate = `${local}@${DEMO_EMAIL_DOMAIN}`;
+    let n = 1;
+    while (reserved.has(candidate)) {
+      n++;
+      candidate = `${local}${n}@${DEMO_EMAIL_DOMAIN}`;
+    }
+    reserved.add(candidate);
+    targets.push({ id: p.id, newEmail: candidate });
+  }
+
+  // Fail fast on any in-scope account whose display name yields no usable
+  // email — abort WITHOUT writing the marker so a later boot can retry once
+  // the data is corrected, rather than silently leaving a partial backfill.
+  if (skipped > 0) {
+    throw new Error(
+      `[seed] demo email backfill aborted: ${skipped} in-scope staff have non-derivable display names`,
+    );
+  }
+
+  if (targets.length === 0) {
+    await db.execute(
+      sql`INSERT INTO app_one_shot_markers (name) VALUES (${DEMO_EMAIL_MARKER}) ON CONFLICT DO NOTHING`,
+    );
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(DEMO_EMAIL_PASSWORD, 10);
+
+  await db.transaction(async (tx) => {
+    // Phase 1: park every target on a unique throwaway email so the final
+    // assignment can't transiently collide with another target's old email.
+    for (const t of targets) {
+      await tx.execute(
+        sql`UPDATE staff SET email = ${`__demo_pending_${t.id}@pulsedemo.invalid`} WHERE id = ${t.id}`,
+      );
+    }
+    // Phase 2: set the real derived email + demo password.
+    for (const t of targets) {
+      await tx.execute(
+        sql`UPDATE staff SET email = ${t.newEmail}, password_hash = ${passwordHash} WHERE id = ${t.id}`,
+      );
+    }
+    await tx.execute(
+      sql`INSERT INTO app_one_shot_markers (name) VALUES (${DEMO_EMAIL_MARKER}) ON CONFLICT DO NOTHING`,
+    );
+  });
+
+  logger.info(
+    { updated: targets.length, skipped },
+    "[seed] demo email/password one-shot backfill complete",
+  );
+}
+
+// One-shot SuperUser password recovery. The sole SuperUser was locked out of
+// the live app (forgotten password — there is no failed-attempt lockout, and
+// the account is active). Agent DB tools are read-only against prod, so we
+// reset the password via a boot one-shot that runs once per environment on
+// Publish. We write a pre-computed bcrypt hash (see RECOVER_SU_PASSWORD_HASH
+// below) directly to staff.password_hash — the secret-based variant did not
+// propagate to the published deployment, so it stayed dormant in prod. Target
+// is matched by exact email AND is_super_user so we can never reset the wrong
+// account; active is forced true defensively. Idempotent via a marker row.
+// SAFE TO DELETE (function + boot call + hash constant) once the SuperUser
+// confirms they are back in.
+const RECOVER_SU_EMAIL = "chris.clifford@hcsb.k12.fl.us";
+const RECOVER_SU_MARKER = "recover_superuser_password_v5";
+// Pre-computed bcrypt hash (cost 10) of a KNOWN temporary password handed to
+// the SuperUser directly ("PulseAccess-4827"). Baked in deliberately: the
+// secret-based reset never propagated to the published deployment, and the
+// prior baked hash depended on the SuperUser recalling exactly what they typed
+// into the secret prompt. Using a hash of a password we explicitly tell them
+// removes all guesswork. This is NOT a plaintext credential in code — it is a
+// one-way hash. SAFE TO DELETE (this constant + function + boot call) once the
+// SuperUser confirms they are back in AND has changed their password in-app.
+const RECOVER_SU_PASSWORD_HASH =
+  "$2b$10$Y5kyUcQ7n5Fy5Co7XdE3ZuBN7OEendbVrxkbcbv0yve/2u9e6.KzG";
+
+export async function recoverSuperUserPasswordOnce(): Promise<void> {
+  if (!RECOVER_SU_PASSWORD_HASH) return;
+
+  // TEMP DIAGNOSTIC (remove with the rest of recovery). Persists what THIS
+  // running process sees to a recover_diag table (deployment logs were not
+  // surfacing the equivalent log line). Runs the EXACT login path inside the
+  // prod runtime — same normalization, same exact-email lookup, same
+  // bcryptjs.compare against a KNOWN temp password — so we can tell, via SQL we
+  // can read, whether the deployed process can authenticate the account that
+  // admin tooling shows as correct. login keeps returning 401 in prod even
+  // though admin tooling shows the right hash + active=true.
+  try {
+    const RECOVER_DIAG_TEMP_PW = "PulseAccess-4827";
+    const normalizedEmail = RECOVER_SU_EMAIL.trim().toLowerCase();
+    const lookup = await db.execute<{
+      id: number;
+      active: boolean | null;
+      password_hash: string | null;
+      email: string;
+    }>(sql`
+      SELECT id, active, password_hash, email
+      FROM staff
+      WHERE email = ${normalizedEmail}
+      ORDER BY id
+    `);
+    const first = lookup.rows[0];
+    const bcryptCompare = first?.password_hash
+      ? await bcrypt.compare(RECOVER_DIAG_TEMP_PW, first.password_hash)
+      : null;
+    const meta = await db.execute<{ db: string }>(
+      sql`SELECT current_database() AS db`,
+    );
+    const info = {
+      db: meta.rows[0]?.db ?? null,
+      normalizedEmail,
+      rowCount: lookup.rows.length,
+      firstId: first?.id ?? null,
+      firstActive: first?.active ?? null,
+      hashHead: first?.password_hash?.slice(0, 12) ?? null,
+      hashLen: first?.password_hash?.length ?? null,
+      sqlEqualsEmbedded: first?.password_hash === RECOVER_SU_PASSWORD_HASH,
+      bcryptCompareTemp: bcryptCompare,
+      marker: RECOVER_SU_MARKER,
+    };
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS recover_diag (
+        id serial PRIMARY KEY,
+        at timestamptz NOT NULL DEFAULT now(),
+        info jsonb NOT NULL
+      )
+    `);
+    await db.execute(
+      sql`INSERT INTO recover_diag (info) VALUES (${JSON.stringify(info)}::jsonb)`,
+    );
+    logger.warn({ info }, "[recover-diag] deployed process self-test");
+  } catch (err) {
+    logger.warn({ err }, "[recover-diag] diagnostic self-test failed");
+  }
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS app_one_shot_markers (
+      name text PRIMARY KEY,
+      ran_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  const marker = await db.execute<{ name: string }>(
+    sql`SELECT name FROM app_one_shot_markers WHERE name = ${RECOVER_SU_MARKER}`,
+  );
+  if (marker.rows.length > 0) return; // already applied in this environment
+
+  const target = await db.execute<{ id: number }>(sql`
+    SELECT id FROM staff
+    WHERE lower(email) = lower(${RECOVER_SU_EMAIL}) AND is_super_user = true
+  `);
+  // Require EXACTLY one matching SuperUser. On zero/ambiguous match we log and
+  // return WITHOUT writing the marker, so a transient data issue can't
+  // permanently strand recovery — the next boot/Publish retries. We only burn
+  // the marker after a confirmed successful update.
+  if (target.rows.length !== 1) {
+    logger.warn(
+      { email: RECOVER_SU_EMAIL, matched: target.rows.length },
+      "[seed] superuser recovery: expected exactly one SuperUser match; skipping (will retry next boot)",
+    );
+    return;
+  }
+
+  const targetId = target.rows[0].id;
+  await db.transaction(async (tx) => {
+    await tx.execute(
+      sql`UPDATE staff SET password_hash = ${RECOVER_SU_PASSWORD_HASH}, active = true WHERE id = ${targetId}`,
+    );
+    await tx.execute(
+      sql`INSERT INTO app_one_shot_markers (name) VALUES (${RECOVER_SU_MARKER}) ON CONFLICT DO NOTHING`,
+    );
+  });
+
+  logger.info(
+    { updated: targetId },
+    "[seed] superuser password recovery one-shot complete",
+  );
+}
+
+// Ensure a ready-to-hand-out demo ADMIN login on the Parrott demo school
+// (school_id = 1). Prospective admins from other schools use this to explore
+// the FULL admin experience on fake data — they can create and log
+// interventions, hall passes, PBIS, accommodations, etc. without ever touching
+// a real school's data. is_admin grants implicit access to every admin route
+// gate; the cap_* flags below are set true as well so the client surfaces all
+// the management buttons. Self-healing: ON CONFLICT (email) keeps the role,
+// school, password, and active flag correct on every boot, so the handout
+// credentials stay predictable even if the account is poked at. Runs per
+// environment — dev on a workflow restart, prod on Publish.
+const DEMO_ADMIN_EMAIL = "admin@pulsedemo.com";
+const DEMO_ADMIN_PASSWORD = "PulseDemo26";
+const DEMO_ADMIN_SCHOOL_ID = 1;
+// Belt-and-suspenders: the demo school is school_id 1 in this deployment (the
+// same convention the other Parrott one-shots use), but because this routine
+// creates an account with KNOWN credentials, we additionally require the school
+// at that id to actually be the named demo school before doing anything. If id 1
+// is ever something else, we refuse rather than inject a known admin login into
+// a real tenant.
+const DEMO_ADMIN_SCHOOL_NAME = "D. S. Parrott Middle School";
+const DEMO_ADMIN_DISPLAY_NAME = "Demo Admin";
+
+export async function ensureDemoAdminAccountOnce(): Promise<void> {
+  const school = await db.execute<{ id: number }>(sql`
+    SELECT id FROM schools
+    WHERE id = ${DEMO_ADMIN_SCHOOL_ID} AND name = ${DEMO_ADMIN_SCHOOL_NAME}
+  `);
+  if (school.rows.length === 0) {
+    logger.warn(
+      { schoolId: DEMO_ADMIN_SCHOOL_ID, expectedName: DEMO_ADMIN_SCHOOL_NAME },
+      "[seed] skipping demo admin account — demo school not found at expected id (refusing to inject a known admin into a real tenant)",
+    );
+    return;
+  }
+  const passwordHash = await bcrypt.hash(DEMO_ADMIN_PASSWORD, 10);
+  await db.execute(sql`
+    INSERT INTO staff (
+      school_id, email, password_hash, display_name,
+      is_admin, active,
+      cap_pbis_manage, cap_accommodation_manage, cap_intervention_manage,
+      cap_hall_passes_view_all, cap_staff_roles, cap_manage_roles,
+      cap_manage_locations, cap_manage_displays, cap_iss_dashboard,
+      cap_pullouts_verify, cap_pullouts_review, cap_manage_dismissal
+    ) VALUES (
+      ${DEMO_ADMIN_SCHOOL_ID}, ${DEMO_ADMIN_EMAIL}, ${passwordHash}, ${DEMO_ADMIN_DISPLAY_NAME},
+      true, true,
+      true, true, true,
+      true, true, true,
+      true, true, true,
+      true, true, true
+    )
+    ON CONFLICT (email) DO UPDATE SET
+      school_id = EXCLUDED.school_id,
+      password_hash = EXCLUDED.password_hash,
+      display_name = EXCLUDED.display_name,
+      is_admin = true,
+      active = true
+  `);
+  logger.info(
+    { email: DEMO_ADMIN_EMAIL, schoolId: DEMO_ADMIN_SCHOOL_ID },
+    "[seed] demo admin account ensured",
+  );
+}
+
+// Remap fictional demo-teacher deliveries onto the real Parrott teacher roster,
+// matched by grade. Idempotent: no-op once the fictional staff own zero rows.
+export async function remapBenchmarkDeliveriesToRealTeachersOnce(): Promise<void> {
+  const SCHOOL_ID = 1;
+  const REMAP: Array<[string, string]> = [
+    ["Marcus Hayes ELA",     "David Wright - ELA G6"],
+    ["Sarah Chen ELA",       "Carol Young - ELA G6"],
+    ["David Rodriguez ELA",  "Kimberly King - ELA G7"],
+    ["Jennifer Park ELA",    "Mark Rivera - ELA G7"],
+    ["Brian Walsh ELA",      "Susan Adams - ELA G8"],
+    ["Aisha Johnson ELA",    "Sandra Clark - ELA G8"],
+    ["Linda Foster Math",    "Heather Martinez - Math G6"],
+    ["Priya Patel Math",     "Steven Brown - Math G6"],
+    ["James OBrien Math",    "Kevin Young - Math G7"],
+    ["Kenji Tanaka Math",    "David Walker - Math G7"],
+    ["Maria Sanchez Math",   "Jason Baker - Math G8"],
+    ["Tyrone Williams Math", "Patricia Scott - Math G8"],
+  ];
+
+  const staffRows = await db.execute<{ id: number; display_name: string }>(sql`
+    SELECT id, display_name FROM staff WHERE school_id = ${SCHOOL_ID}
+  `);
+  const idByName = new Map<string, number>();
+  for (const r of staffRows.rows) idByName.set(r.display_name, r.id);
+
+  const fictionalIds = REMAP.map(([from]) => idByName.get(from)).filter(
+    (v): v is number => typeof v === "number",
+  );
+  if (fictionalIds.length === 0) return;
+
+  const owned = await db.execute<{ n: number }>(sql`
+    SELECT COUNT(*)::int AS n FROM benchmark_deliveries
+     WHERE school_id = ${SCHOOL_ID}
+       AND teacher_staff_id IN (${sql.join(fictionalIds.map((i) => sql`${i}`), sql`, `)})
+  `);
+  if (Number(owned.rows[0]?.n ?? 0) === 0) return;
+
+  let updated = 0;
+  for (const [fromName, toName] of REMAP) {
+    const fromId = idByName.get(fromName);
+    const toId = idByName.get(toName);
+    if (fromId == null || toId == null) continue;
+    const r = await db.execute<{ id: number }>(sql`
+      UPDATE benchmark_deliveries
+         SET teacher_staff_id = ${toId}
+       WHERE school_id = ${SCHOOL_ID}
+         AND teacher_staff_id = ${fromId}
+      RETURNING id
+    `);
+    updated += r.rows.length;
+  }
+  logger.info({ updated }, "[seed] benchmark_deliveries remapped to real teachers");
+}
+
+// One-shot: give every Parrott (school_id=1) student a clean 7-period schedule
+// (one teacher per period) so the tardy-pass flow (and any other code that
+// joins through section_roster) has a section to land on. Idempotent: skips
+// once every active student already has exactly 7 distinct period enrollments.
+export async function fillStudentSchedulesAtParrottOnce(): Promise<void> {
+  const SCHOOL_ID = 1;
+
+  // Per-grade ordered subject layout: index i = period i+1.
+  // Course names match existing class_sections.course_name verbatim.
+  const SUBJECT_LAYOUT: Record<number, string[]> = {
+    6: [
+      "ELA — Grade 6", "Math — Grade 6", "Science — Grade 6",
+      "Social Studies — Grade 6", "PE", "Art", "Music",
+    ],
+    7: [
+      "ELA — Grade 7", "Math — Grade 7", "Science — Grade 7",
+      "Social Studies — Grade 7", "PE", "Art", "Music",
+    ],
+    8: [
+      "ELA — Grade 8", "Math — Grade 8", "Science — Grade 8",
+      "Social Studies — Grade 8", "PE", "Art", "Music",
+    ],
+  };
+
+  // Collect the teacher pool for each course (any teacher who already owns a
+  // section of that course at school 1 is eligible).
+  const teacherRows = await db.execute<{
+    course_name: string;
+    teacher_staff_id: number;
+  }>(sql`
+    SELECT DISTINCT course_name, teacher_staff_id
+      FROM class_sections
+     WHERE school_id = ${SCHOOL_ID} AND is_planning = false
+  `);
+  const teachersByCourse = new Map<string, number[]>();
+  for (const r of teacherRows.rows) {
+    const arr = teachersByCourse.get(r.course_name) ?? [];
+    if (!arr.includes(r.teacher_staff_id)) arr.push(r.teacher_staff_id);
+    teachersByCourse.set(r.course_name, arr);
+  }
+  for (const [, ids] of teachersByCourse) ids.sort((a, b) => a - b);
+
+  // Ensure a section exists for every (period, course, teacher) we need.
+  // The unique index is (teacher_staff_id, period), so a teacher gets ONE
+  // section per period. If they already teach that period some other course
+  // we keep that section and skip — we'll just not assign students to it.
+  const sectionIdByKey = new Map<string, number>(); // `${period}|${teacher}` -> sectionId
+  for (const grade of [6, 7, 8] as const) {
+    const layout = SUBJECT_LAYOUT[grade];
+    for (let i = 0; i < 7; i++) {
+      const period = i + 1;
+      const course = layout[i];
+      const pool = teachersByCourse.get(course) ?? [];
+      for (const teacherId of pool) {
+        const ins = await db.execute<{ id: number }>(sql`
+          INSERT INTO class_sections
+            (school_id, teacher_staff_id, period, course_name, is_planning)
+          VALUES (${SCHOOL_ID}, ${teacherId}, ${period}, ${course}, false)
+          ON CONFLICT (teacher_staff_id, period) DO NOTHING
+          RETURNING id
+        `);
+        let sid: number | null = ins.rows[0]?.id ?? null;
+        if (sid == null) {
+          const found = await db.execute<{ id: number; course_name: string }>(sql`
+            SELECT id, course_name FROM class_sections
+             WHERE school_id = ${SCHOOL_ID}
+               AND teacher_staff_id = ${teacherId}
+               AND period = ${period}
+             LIMIT 1
+          `);
+          if (found.rows[0]?.course_name === course) {
+            sid = found.rows[0].id;
+          }
+        }
+        if (sid != null) sectionIdByKey.set(`${period}|${teacherId}`, sid);
+      }
+    }
+  }
+
+  // Pull students keyed for round-robin.
+  const students = await db.execute<{ student_id: string; grade: string }>(sql`
+    SELECT student_id, grade FROM students
+     WHERE school_id = ${SCHOOL_ID}
+     ORDER BY student_id
+  `);
+  if (students.rows.length === 0) return;
+
+  // Idempotency check: if every student already has exactly 7 periods, bail.
+  const cov = await db.execute<{ ok: number; total: number }>(sql`
+    WITH per AS (
+      SELECT sr.student_id, COUNT(DISTINCT cs.period) AS pc
+        FROM section_roster sr
+        JOIN class_sections cs ON cs.id = sr.section_id
+       WHERE sr.school_id = ${SCHOOL_ID}
+       GROUP BY sr.student_id
+    )
+    SELECT
+      (SELECT COUNT(*) FROM per WHERE pc = 7)::int AS ok,
+      (SELECT COUNT(*) FROM students WHERE school_id = ${SCHOOL_ID})::int AS total
+  `);
+  if (
+    cov.rows[0] &&
+    cov.rows[0].ok === cov.rows[0].total &&
+    cov.rows[0].total > 0
+  ) {
+    return;
+  }
+
+  let perStudentInserts = 0;
+  let perStudentDeletes = 0;
+  const byGradeIdx: Record<number, number> = { 6: 0, 7: 0, 8: 0 };
+  for (const s of students.rows) {
+    const grade = Number(s.grade);
+    if (!SUBJECT_LAYOUT[grade]) continue;
+    const idx = byGradeIdx[grade]++;
+    const layout = SUBJECT_LAYOUT[grade];
+
+    // Wipe and rewrite this student's enrollments for school 1 so they end up
+    // with exactly 7 sections (one per period 1..7).
+    const del = await db.execute(sql`
+      DELETE FROM section_roster
+       WHERE school_id = ${SCHOOL_ID} AND student_id = ${s.student_id}
+    `);
+    perStudentDeletes += (del.rowCount ?? 0);
+
+    const targetSectionIds: number[] = [];
+    for (let i = 0; i < 7; i++) {
+      const period = i + 1;
+      const course = layout[i];
+      const pool = teachersByCourse.get(course) ?? [];
+      if (pool.length === 0) continue;
+      const teacherId = pool[idx % pool.length];
+      const sid = sectionIdByKey.get(`${period}|${teacherId}`);
+      if (sid != null) targetSectionIds.push(sid);
+    }
+    if (targetSectionIds.length === 0) continue;
+    const values = targetSectionIds.map(
+      (sid) => sql`(${SCHOOL_ID}, ${sid}, ${s.student_id})`,
+    );
+    await db.execute(sql`
+      INSERT INTO section_roster (school_id, section_id, student_id)
+      VALUES ${sql.join(values, sql`, `)}
+      ON CONFLICT ON CONSTRAINT section_roster_section_student_unique DO NOTHING
+    `);
+    perStudentInserts += targetSectionIds.length;
+  }
+
+  logger.info(
+    { students: students.rows.length, perStudentInserts, perStudentDeletes },
+    "[seed] Parrott student schedules filled (7 periods each)",
+  );
+}
+
+// One-shot: rebalance Parrott (school_id=1) IEP/504/ELL flags to a realistic
+// ~25% combined coverage — ~15% IEP, ~5% 504, ~5% ELL. Buckets are mutually
+// exclusive (a student lands in at most one). Assignment is deterministic by
+// sorted student_id so students-per-bucket aligns with the schedule
+// round-robin, spreading flagged kids evenly across sections. Idempotent:
+// skips when current rates are already within ±1pp of target.
+export async function rebalanceFlagsAtParrottOnce(): Promise<void> {
+  const SCHOOL_ID = 1;
+  const TARGET_IEP_PCT = 0.15;
+  const TARGET_504_PCT = 0.05;
+  const TARGET_ELL_PCT = 0.05;
+  const TOL_PP = 0.01;
+
+  const cur = await db.execute<{
+    total: number; iep: number; p504: number; ell: number;
+  }>(sql`
+    SELECT COUNT(*)::int AS total,
+           SUM(CASE WHEN ese THEN 1 ELSE 0 END)::int AS iep,
+           SUM(CASE WHEN is_504 THEN 1 ELSE 0 END)::int AS p504,
+           SUM(CASE WHEN ell THEN 1 ELSE 0 END)::int AS ell
+      FROM students WHERE school_id = ${SCHOOL_ID}
+  `);
+  const stats = cur.rows[0];
+  if (!stats || stats.total === 0) return;
+  const inTol = (
+    Math.abs(stats.iep / stats.total - TARGET_IEP_PCT) <= TOL_PP &&
+    Math.abs(stats.p504 / stats.total - TARGET_504_PCT) <= TOL_PP &&
+    Math.abs(stats.ell / stats.total - TARGET_ELL_PCT) <= TOL_PP
+  );
+  if (inTol) return;
+
+  const ids = await db.execute<{ student_id: string }>(sql`
+    SELECT student_id FROM students WHERE school_id = ${SCHOOL_ID}
+    ORDER BY student_id
+  `);
+  const total = ids.rows.length;
+  const nIep  = Math.round(total * TARGET_IEP_PCT);
+  const n504  = Math.round(total * TARGET_504_PCT);
+  const nEll  = Math.round(total * TARGET_ELL_PCT);
+
+  // Buckets are contiguous slices of the sorted student_id list. Since the
+  // schedule round-robin also keys off sorted student_id, slicing this way
+  // naturally distributes flagged kids across both teachers of every section.
+  const iepIds  = ids.rows.slice(0, nIep).map((r) => r.student_id);
+  const p504Ids = ids.rows.slice(nIep, nIep + n504).map((r) => r.student_id);
+  const ellIds  = ids.rows.slice(nIep + n504, nIep + n504 + nEll).map((r) => r.student_id);
+
+  // Clear all flags first, then set the target buckets.
+  await db.execute(sql`
+    UPDATE students SET ese = false, is_504 = false, ell = false
+     WHERE school_id = ${SCHOOL_ID}
+  `);
+
+  async function setFlag(column: "ese" | "is_504" | "ell", studentIds: string[]) {
+    if (studentIds.length === 0) return;
+    const BATCH = 200;
+    for (let i = 0; i < studentIds.length; i += BATCH) {
+      const slice = studentIds.slice(i, i + BATCH);
+      const list = sql.join(slice.map((s) => sql`${s}`), sql`, `);
+      if (column === "ese") {
+        await db.execute(sql`
+          UPDATE students SET ese = true
+           WHERE school_id = ${SCHOOL_ID} AND student_id IN (${list})
+        `);
+      } else if (column === "is_504") {
+        await db.execute(sql`
+          UPDATE students SET is_504 = true
+           WHERE school_id = ${SCHOOL_ID} AND student_id IN (${list})
+        `);
+      } else {
+        await db.execute(sql`
+          UPDATE students SET ell = true
+           WHERE school_id = ${SCHOOL_ID} AND student_id IN (${list})
+        `);
+      }
+    }
+  }
+
+  await setFlag("ese", iepIds);
+  await setFlag("is_504", p504Ids);
+  await setFlag("ell", ellIds);
+
+  logger.info(
+    { total, iep: nIep, p504: n504, ell: nEll },
+    "[seed] Parrott flags rebalanced to target distribution",
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Class Composer "Master Plans" schema. Idempotent CREATE TABLE IF NOT EXISTS
+// at boot per the project gotchas note (drizzle-kit push can't apply this
+// non-interactively in this repo).
+// -----------------------------------------------------------------------------
+export async function ensureClassComposerPlansSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS class_composer_plans (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      school_year TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      grade INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      public_id TEXT NOT NULL,
+      created_by_staff_id INTEGER NOT NULL,
+      finalized_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS class_composer_plans_school_idx ON class_composer_plans (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS class_composer_plans_school_subject_grade_idx ON class_composer_plans (school_id, subject, grade, school_year)`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS class_composer_plan_groups (
+      id SERIAL PRIMARY KEY,
+      plan_id INTEGER NOT NULL,
+      school_id INTEGER NOT NULL,
+      group_index INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      recipe JSONB NOT NULL,
+      student_ids TEXT[] NOT NULL DEFAULT '{}',
+      seats_per_section INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS class_composer_plan_groups_plan_idx ON class_composer_plan_groups (plan_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS class_composer_plan_groups_school_idx ON class_composer_plan_groups (school_id)`,
+  );
+}
+
+// School Grade Estimated Calculator (Phase 1). Four tables: append-only
+// calculated runs, hand-entered prior-year history, the three manual
+// component inputs (Science / Social Studies / Acceleration), and Survey
+// 2/3 upload placeholders. Additive + idempotent (mirrors the rest of the
+// boot ensure* pattern; drizzle push hangs on interactive prompts).
+export async function ensureSchoolGradeSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS school_grade_runs (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      school_year TEXT NOT NULL,
+      pm_window TEXT NOT NULL,
+      school_type TEXT NOT NULL DEFAULT 'middle',
+      status TEXT NOT NULL DEFAULT 'estimated',
+      detail JSONB NOT NULL,
+      total_points INTEGER NOT NULL,
+      total_possible INTEGER NOT NULL,
+      percent INTEGER NOT NULL,
+      letter TEXT NOT NULL,
+      created_by_staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS school_grade_runs_school_idx ON school_grade_runs (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS school_grade_runs_school_year_window_idx ON school_grade_runs (school_id, school_year, pm_window)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS school_grade_history (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      year_label TEXT NOT NULL,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      school_type TEXT NOT NULL DEFAULT 'middle',
+      ela_ach INTEGER,
+      math_ach INTEGER,
+      sci_ach INTEGER,
+      ss_ach INTEGER,
+      ela_lg INTEGER,
+      math_lg INTEGER,
+      ela_lg_l25 INTEGER,
+      math_lg_l25 INTEGER,
+      accel INTEGER,
+      total_override INTEGER,
+      letter_override TEXT,
+      created_by_staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS school_grade_history_school_idx ON school_grade_history (school_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS school_grade_manual_inputs (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      school_year TEXT NOT NULL,
+      pm_window TEXT NOT NULL,
+      science INTEGER,
+      social_studies INTEGER,
+      acceleration INTEGER,
+      updated_by_staff_id INTEGER NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS school_grade_manual_inputs_school_year_window_unique ON school_grade_manual_inputs (school_id, school_year, pm_window)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS school_grade_surveys (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      school_year TEXT NOT NULL,
+      survey TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      byte_size INTEGER NOT NULL DEFAULT 0,
+      raw_csv TEXT,
+      row_count INTEGER,
+      status TEXT NOT NULL DEFAULT 'uploaded',
+      uploaded_by_staff_id INTEGER NOT NULL,
+      uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS school_grade_surveys_school_year_survey_unique ON school_grade_surveys (school_id, school_year, survey)`,
+  );
 }

@@ -24,8 +24,15 @@ import {
   studentMtssPlansTable,
   ossLogsTable,
   ossLogDaysTable,
+  studentRetentionsTable,
+  studentAttendanceDayTable,
+  bellSchedulesTable,
+  bellSchedulePeriodsTable,
+  benchmarkReteachLogTable,
+  housesTable,
 } from "@workspace/db";
 import { and, eq, desc, isNull, sql, gte, lt } from "drizzle-orm";
+import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./schoolYear.js";
 
 // Returns the YYYY-MM-DD bounds of the current school year. The cutover
 // is Aug 1 — anything before that rolls back to the previous Aug 1 so a
@@ -47,6 +54,9 @@ export interface ParentSnapshot {
     firstName: string;
     lastName: string;
     grade: number;
+    // Grades the student was retained in, ascending. Empty when none.
+    // Drives the "R" indicator on the parent portal student card.
+    retainedGrades: number[];
   };
   sectionsAvailable: {
     recognition: boolean;
@@ -61,6 +71,12 @@ export interface ParentSnapshot {
     iss: boolean;
     mtss: boolean;
     oss: boolean;
+    // Reteach activity rollup. Gated by BOTH the school-wide
+    // `showReteach` flag AND per-student
+    // `students.reteach_logs_parent_visible`. Teacher notes /
+    // strategy are never included in the payload — only counts +
+    // benchmark codes.
+    reteach: boolean;
   };
   pbis: {
     total: number;
@@ -92,6 +108,32 @@ export interface ParentSnapshot {
   attendance: {
     tardiesThisWeek: number;
     checkInsThisWeek: number;
+    // Aggregated attendance %. `null` when the window has zero logged
+    // school days for the student (avoids showing a meaningless "0%").
+    // `present` counts attendance_day rows with status='present' OR
+    // 'tardy' (tardy still counts as in-attendance, matching FLDOE
+    // reporting). `total` is every logged day in the window.
+    pct: {
+      ytd: { presentDays: number; totalDays: number; pct: number } | null;
+      last30: { presentDays: number; totalDays: number; pct: number } | null;
+    };
+    // Period-level on-time streak. "On-time" = student was present
+    // that day AND not marked tardy for that counted period (counted =
+    // included_in_on_time_streak=true on the school's default bell
+    // schedule). Absent days (excused or unexcused) are skipped — they
+    // neither add to nor reset the streak. A tardy in any counted
+    // period resets `current` to 0; `longestYtd` is the longest run
+    // inside this school year. `pctYtd` is on-time counted periods /
+    // total counted periods the student was present for (null when
+    // the denominator is 0). The whole block is `null` when the school
+    // hasn't configured a default bell schedule yet — required setup,
+    // hides the tiles entirely on the parent surface.
+    onTimeStreak: {
+      current: number;
+      longestYtd: number;
+      pctYtd: number | null;
+      countedPeriods: number;
+    } | null;
     recent: Array<{
       id: number;
       entryType: string;
@@ -146,6 +188,37 @@ export interface ParentSnapshot {
       notes: string | null;
     }>;
   };
+  // Reteach activity for this school year. Empty array when the
+  // section is gated off or simply has no rows. Each entry is one
+  // benchmark code with counts of 1:1 and small-group reteach
+  // moments. Strategy / notes / teacher attribution are NEVER
+  // included — counts + benchmark codes only.
+  reteach: {
+    items: Array<{
+      benchmarkCode: string;
+      oneOnOne: number;
+      smallGroup: number;
+      total: number;
+      lastAt: string;
+    }>;
+  };
+  // PBIS house affiliation. Null when the student isn't assigned to a
+  // house (or the school doesn't run houses). Gated under the same
+  // `recognition` flag as PBIS points since house standing is the
+  // school-wide PBIS rollup. `totalPoints` is the sum of all active
+  // (non-voided) PBIS points across every member of the house in the
+  // current school — same calculation as the houses signage and the
+  // staff-facing Houses panel, so the number a parent sees matches
+  // what the kids see on the hallway TVs.
+  house: {
+    id: number;
+    name: string;
+    color: string;
+    motto: string | null;
+    iconKey: string | null;
+    iconObjectKey: string | null;
+    totalPoints: number;
+  } | null;
 }
 
 export type SnapshotResult =
@@ -188,6 +261,21 @@ export async function buildParentSnapshot(
     .where(eq(studentsTable.id, studentId));
   if (!student)
     return { ok: false, status: 404, error: "Student not found" };
+
+  // Retention indicator (R-in-circle on the parent portal student card).
+  // Cheap query — at most a handful of rows per student.
+  const retentionRows = await db
+    .select({ gradeLevel: studentRetentionsTable.gradeLevel })
+    .from(studentRetentionsTable)
+    .where(
+      and(
+        eq(studentRetentionsTable.schoolId, student.schoolId),
+        eq(studentRetentionsTable.studentId, student.studentId),
+      ),
+    );
+  const retainedGradesForStudent = retentionRows
+    .map((r) => r.gradeLevel)
+    .sort((a, b) => a - b);
 
   const [parent] = await db
     .select({ displayName: parentsTable.displayName, email: parentsTable.email })
@@ -236,6 +324,13 @@ export async function buildParentSnapshot(
     iss: gate(settingsRow?.showIss, false, prefsRow?.showIss),
     mtss: gate(settingsRow?.showMtss, false, prefsRow?.showMtss),
     oss: gate(settingsRow?.showOss, false, prefsRow?.showOss),
+    // Reteach requires school flag AND parent pref AND per-student
+    // opt-in. Per-student flag defaults FALSE so a school flipping
+    // showReteach on doesn't accidentally expose students whose
+    // admins haven't approved visibility.
+    reteach:
+      gate(settingsRow?.showReteach, false, prefsRow?.showReteach) &&
+      Boolean(student.reteachLogsParentVisible),
   };
 
   // ----- PBIS -----
@@ -336,6 +431,176 @@ export async function buildParentSnapshot(
       isWithinDays(r.createdAt, 7),
   ).length;
 
+  // ----- Attendance % + on-time streak -----
+  // Uses studentAttendanceDayTable as the source of truth for daily
+  // status. Rows are typically inserted by the SIS importer with one
+  // of {present, tardy, excused, unexcused}; missing rows (e.g.
+  // weekends, school-closed days) are not present in the table at
+  // all so they neither help nor hurt the denominator. We pull only
+  // the current school year (Aug 1 → next Aug 1) so the SUM is
+  // bounded; the last-30 window is then derived in-memory by date
+  // string comparison.
+  const { startIso: syStartIso, endExclusiveIso: syEndIso } = schoolYearBounds();
+  // YYYY-MM-DD for "30 days ago" in server-local time. We compare as
+  // strings against attendance_day.day (also a YYYY-MM-DD date). Build
+  // the string from local Date getters — do NOT use toISOString(),
+  // which serializes in UTC and silently shifts the cutoff by a day
+  // near midnight depending on server timezone.
+  const thirtyAgo = new Date();
+  thirtyAgo.setDate(thirtyAgo.getDate() - 30);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const thirtyAgoIso = `${thirtyAgo.getFullYear()}-${pad(thirtyAgo.getMonth() + 1)}-${pad(thirtyAgo.getDate())}`;
+
+  const attendanceDayRows = sectionsAvailable.attendance
+    ? await db
+        .select({
+          day: studentAttendanceDayTable.day,
+          status: studentAttendanceDayTable.status,
+        })
+        .from(studentAttendanceDayTable)
+        .where(
+          and(
+            eq(studentAttendanceDayTable.schoolId, student.schoolId),
+            eq(studentAttendanceDayTable.studentId, student.studentId),
+            gte(studentAttendanceDayTable.day, syStartIso),
+            lt(studentAttendanceDayTable.day, syEndIso),
+          ),
+        )
+        .orderBy(studentAttendanceDayTable.day)
+    : [];
+
+  function pctBucket(rows: typeof attendanceDayRows) {
+    if (rows.length === 0) return null;
+    const present = rows.filter(
+      (r) => r.status === "present" || r.status === "tardy",
+    ).length;
+    return {
+      presentDays: present,
+      totalDays: rows.length,
+      // One decimal, e.g. 96.4. Clamp to [0, 100] for paranoia.
+      pct: Math.max(0, Math.min(100, Math.round((present / rows.length) * 1000) / 10)),
+    };
+  }
+  const ytdRows = attendanceDayRows; // already bounded by query
+  const last30Rows = attendanceDayRows.filter((r) => r.day >= thirtyAgoIso);
+  const attendancePct = {
+    ytd: pctBucket(ytdRows),
+    last30: pctBucket(last30Rows),
+  };
+
+  // ----- Period-level on-time streak -----
+  // Pulls the school's default bell schedule (required setup; the
+  // snapshot exposes `null` when missing so the parent UI hides the
+  // tiles entirely). Then walks YTD attendance days in date order:
+  //   - excused / unexcused absences: skip (don't add, don't reset)
+  //   - present / tardy day: for each counted period in periodNumber
+  //     order, check the tardies table for a (day, period) match. A
+  //     match resets the streak to 0; no match increments it.
+  // We also tally on-time vs total counted periods to produce
+  // `pctYtd` (the year-to-date on-time percentage).
+  let onTimeStreak: ParentSnapshot["attendance"]["onTimeStreak"] = null;
+  if (sectionsAvailable.attendance) {
+    // First confirm the school has a default active bell schedule at
+    // all. The spec says the whole block is null ONLY when no default
+    // schedule exists; "default schedule present but all periods opted
+    // out" still returns a non-null (zero-filled) block so the UI can
+    // distinguish "school hasn't set this up" from "school set it up
+    // but nothing counts toward the streak right now."
+    const [defaultSchedule] = await db
+      .select({ id: bellSchedulesTable.id })
+      .from(bellSchedulesTable)
+      .where(
+        and(
+          eq(bellSchedulesTable.schoolId, student.schoolId),
+          eq(bellSchedulesTable.isDefault, true),
+          eq(bellSchedulesTable.active, true),
+        ),
+      );
+
+    if (defaultSchedule) {
+      const countedPeriods = await db
+        .select({
+          periodNumber: bellSchedulePeriodsTable.periodNumber,
+        })
+        .from(bellSchedulePeriodsTable)
+        .where(
+          and(
+            eq(bellSchedulePeriodsTable.scheduleId, defaultSchedule.id),
+            eq(bellSchedulePeriodsTable.includedInOnTimeStreak, true),
+          ),
+        )
+        .orderBy(bellSchedulePeriodsTable.periodNumber);
+
+      // Pull YTD tardies for the student. We query the tardies table
+      // directly (the existing `tardyRows` is capped at 50, too narrow
+      // for a year-long streak scan).
+      const ytdTardies =
+        countedPeriods.length > 0
+          ? await db
+              .select({
+                createdAt: tardiesTable.createdAt,
+                period: tardiesTable.period,
+              })
+              .from(tardiesTable)
+              .where(
+                and(
+                  eq(tardiesTable.schoolId, student.schoolId),
+                  eq(tardiesTable.studentId, student.studentId),
+                  eq(tardiesTable.entryType, "tardy"),
+                  // tardies.createdAt is TEXT (ISO); lexicographic
+                  // comparison against YYYY-MM-DD works because ISO sorts.
+                  gte(tardiesTable.createdAt, syStartIso),
+                  lt(tardiesTable.createdAt, syEndIso),
+                ),
+              )
+          : [];
+      const tardySet = new Set<string>();
+      for (const t of ytdTardies) {
+        // tardies.period varies across SISes ("3", "03", "P3"). Extract
+        // digits and parse as a number so the comparison against
+        // schedule period numbers is canonical (matches "1" / "01" /
+        // "P1" all to period 1).
+        const m = t.period.match(/\d+/);
+        if (!m) continue;
+        const periodNum = Number(m[0]);
+        if (!Number.isFinite(periodNum)) continue;
+        const day = t.createdAt.slice(0, 10);
+        tardySet.add(`${day}|${periodNum}`);
+      }
+
+      let run = 0;
+      let longest = 0;
+      let onTimeCount = 0;
+      let totalCount = 0;
+      for (const r of attendanceDayRows) {
+        if (r.status === "excused" || r.status === "unexcused") continue;
+        for (const cp of countedPeriods) {
+          totalCount += 1;
+          // `cp.periodNumber` is already a number; coerced to string by
+          // template literal, matching the numeric form we put in
+          // `tardySet`.
+          const key = `${r.day}|${cp.periodNumber}`;
+          if (tardySet.has(key)) {
+            run = 0;
+          } else {
+            run += 1;
+            onTimeCount += 1;
+            if (run > longest) longest = run;
+          }
+        }
+      }
+      onTimeStreak = {
+        current: run,
+        longestYtd: longest,
+        pctYtd:
+          totalCount > 0
+            ? Math.max(0, Math.min(100, Math.round((onTimeCount / totalCount) * 1000) / 10))
+            : null,
+        countedPeriods: totalCount,
+      };
+    }
+  }
+
   // ----- Accommodations -----
   let accommodations: Array<{ id: number; name: string; category: string }> = [];
   if (sectionsAvailable.accommodations) {
@@ -394,6 +659,13 @@ export async function buildParentSnapshot(
           and(
             eq(studentFastScoresTable.schoolId, student.schoolId),
             eq(studentFastScoresTable.studentId, student.studentId),
+            // FAST Phase 1: filter to current SY — parent snapshot
+            // is intended for current-year data; prior-year backfill
+            // rows should not surface in the parent portal.
+            eq(
+              studentFastScoresTable.schoolYear,
+              schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+            ),
           ),
         )
     : [];
@@ -498,6 +770,112 @@ export async function buildParentSnapshot(
     }));
   }
 
+  // ----- Reteach activity (parent-safe rollup) -----
+  // Strict whitelist of fields. Strategy / note / teacher_staff_id are
+  // intentionally EXCLUDED from the SELECT so they can never leak into
+  // the parent payload even on a refactor mistake. Soft-deleted rows
+  // are excluded. Scoped to current school year by created_at.
+  let reteachItems: ParentSnapshot["reteach"]["items"] = [];
+  if (sectionsAvailable.reteach) {
+    const { startIso, endExclusiveIso } = schoolYearBounds();
+    const rows = await db
+      .select({
+        benchmarkCode: benchmarkReteachLogTable.benchmarkCode,
+        format: benchmarkReteachLogTable.format,
+        createdAt: benchmarkReteachLogTable.createdAt,
+      })
+      .from(benchmarkReteachLogTable)
+      .where(
+        and(
+          eq(benchmarkReteachLogTable.schoolId, student.schoolId),
+          eq(benchmarkReteachLogTable.studentId, student.studentId),
+          isNull(benchmarkReteachLogTable.deletedAt),
+          sql`${benchmarkReteachLogTable.createdAt} >= ${startIso}`,
+          sql`${benchmarkReteachLogTable.createdAt} < ${endExclusiveIso}`,
+        ),
+      );
+    const byCode = new Map<
+      string,
+      { oneOnOne: number; smallGroup: number; lastAt: string }
+    >();
+    for (const r of rows) {
+      const code = r.benchmarkCode;
+      const at =
+        r.createdAt instanceof Date ? r.createdAt.toISOString() : String(r.createdAt);
+      const cur = byCode.get(code) ?? {
+        oneOnOne: 0,
+        smallGroup: 0,
+        lastAt: at,
+      };
+      if (r.format === "one_on_one") cur.oneOnOne += 1;
+      else if (r.format === "small_group") cur.smallGroup += 1;
+      if (at > cur.lastAt) cur.lastAt = at;
+      byCode.set(code, cur);
+    }
+    reteachItems = [...byCode.entries()]
+      .map(([benchmarkCode, v]) => ({
+        benchmarkCode,
+        oneOnOne: v.oneOnOne,
+        smallGroup: v.smallGroup,
+        total: v.oneOnOne + v.smallGroup,
+        lastAt: v.lastAt,
+      }))
+      .sort((a, b) => b.total - a.total || (a.benchmarkCode < b.benchmarkCode ? -1 : 1));
+  }
+
+  // ----- House affiliation (PBIS) -----
+  // Gated under `recognition` because house standings are the school-
+  // wide PBIS rollup; if a parent has hidden recognition (or the
+  // school disabled it) we suppress house too rather than leaking the
+  // PBIS competition through a side door. Two cheap queries when the
+  // student actually has a houseId: one to fetch the house row, one to
+  // sum the house's all-time active points (same calc as the staff
+  // Houses panel — sum across every PBIS entry whose student belongs
+  // to the same house in this school, excluding voided rows).
+  let housePayload: ParentSnapshot["house"] = null;
+  if (sectionsAvailable.recognition && student.houseId !== null) {
+    const [houseRow] = await db
+      .select()
+      .from(housesTable)
+      .where(
+        and(
+          eq(housesTable.id, student.houseId),
+          eq(housesTable.schoolId, student.schoolId),
+        ),
+      );
+    if (houseRow) {
+      // Sum points across all students in this house. We join through
+      // students so we can scope by (school_id, house_id) without
+      // trusting pbis_entries to carry a house_id of its own.
+      const [{ points } = { points: 0 }] = await db
+        .select({
+          points: sql<number>`COALESCE(SUM(${pbisEntriesTable.points}), 0)::int`,
+        })
+        .from(pbisEntriesTable)
+        .innerJoin(
+          studentsTable,
+          eq(pbisEntriesTable.studentId, studentsTable.studentId),
+        )
+        .where(
+          and(
+            eq(pbisEntriesTable.schoolId, student.schoolId),
+            eq(studentsTable.schoolId, student.schoolId),
+            eq(studentsTable.houseId, houseRow.id),
+            isNull(pbisEntriesTable.voidedAt),
+          ),
+        );
+      housePayload = {
+        id: houseRow.id,
+        name: houseRow.name,
+        color: houseRow.color,
+        motto: houseRow.motto,
+        iconKey: houseRow.iconKey,
+        iconObjectKey: houseRow.iconObjectKey,
+        totalPoints: points ?? 0,
+      };
+    }
+  }
+
   return {
     ok: true,
     data: {
@@ -511,6 +889,7 @@ export async function buildParentSnapshot(
         firstName: student.firstName,
         lastName: student.lastName,
         grade: student.grade,
+        retainedGrades: retainedGradesForStudent,
       },
       sectionsAvailable,
       pbis: {
@@ -543,6 +922,8 @@ export async function buildParentSnapshot(
       attendance: {
         tardiesThisWeek: tardyThisWeek,
         checkInsThisWeek: checkInThisWeek,
+        pct: attendancePct,
+        onTimeStreak,
         recent: tardyRows.slice(0, 10).map((r) => ({
           id: r.id,
           entryType: r.entryType,
@@ -576,6 +957,8 @@ export async function buildParentSnapshot(
         })),
       },
       oss: { daysThisYear: ossDaysThisYear, recent: ossRecent },
+      reteach: { items: reteachItems },
+      house: housePayload,
     },
   };
 }

@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, schoolSettingsTable, staffTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+import { bindObjectToSchool } from "./storage.js";
 
 const router: IRouter = Router();
 
@@ -116,6 +117,18 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     issCapacityBehavior,
     finderShowAbsentBanner,
     staffDirectoryShowCellPhone,
+    manualRosterUploadEnabled,
+    strictHouseNameMatch,
+    pickupCutoffTime,
+    pickupTeacherViewScope,
+    pickupInCarStepEnabled,
+    pickupWalkedOutDisplaySeconds,
+    kioskWelcomeTemplate,
+    kioskWelcomeMessages,
+    workweekStart,
+    compTimeRequireAuthForm,
+    compTimeAuthFormObjectKey,
+    fastHistoryYearsVisible,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -238,6 +251,17 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       2,
       20,
       "pbisColdPeriodMultiple",
+    ),
+    // FAST history visibility (Phase 1 of Historical FAST work).
+    // 2..5 — minimum 2 so the trajectory chip always has at least
+    // a prior year to compare against; 5 cap matches the FAST launch
+    // (FL 22-23). Older imports stay dormant.
+    intRange(
+      "fastHistoryYearsVisible",
+      fastHistoryYearsVisible,
+      2,
+      5,
+      "fastHistoryYearsVisible",
     ),
   ]) {
     if (err) {
@@ -399,6 +423,24 @@ router.put("/school-settings", async (req, res): Promise<void> => {
   }
   // Staff Directory cell-phone visibility toggle. School-wide policy —
   // any settings-manager can flip it. Boolean only.
+  if (manualRosterUploadEnabled !== undefined) {
+    if (typeof manualRosterUploadEnabled !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "manualRosterUploadEnabled must be a boolean" });
+      return;
+    }
+    updates.manualRosterUploadEnabled = manualRosterUploadEnabled;
+  }
+  if (strictHouseNameMatch !== undefined) {
+    if (typeof strictHouseNameMatch !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "strictHouseNameMatch must be a boolean" });
+      return;
+    }
+    updates.strictHouseNameMatch = strictHouseNameMatch;
+  }
   if (staffDirectoryShowCellPhone !== undefined) {
     if (typeof staffDirectoryShowCellPhone !== "boolean") {
       res
@@ -408,6 +450,64 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     }
     updates.staffDirectoryShowCellPhone = staffDirectoryShowCellPhone;
   }
+  // Pick-Up cutoff time: "HH:MM" 24h, validated lexically. Used by the
+  // Admin Hub "Still on campus" reconciliation tile and (eventually)
+  // QR signed-token expiry. Any settings-manager can flip it.
+  if (pickupCutoffTime !== undefined) {
+    if (
+      typeof pickupCutoffTime !== "string" ||
+      !/^([01]\d|2[0-3]):[0-5]\d$/.test(pickupCutoffTime)
+    ) {
+      res
+        .status(400)
+        .json({ error: "pickupCutoffTime must be HH:MM (24h)" });
+      return;
+    }
+    updates.pickupCutoffTime = pickupCutoffTime;
+  }
+  // Pick-Up teacher-view scope: controls what /pickup/teacher returns
+  // and what releases that page is allowed to write.
+  if (pickupTeacherViewScope !== undefined) {
+    if (
+      pickupTeacherViewScope !== "all_students" &&
+      pickupTeacherViewScope !== "own_roster"
+    ) {
+      res.status(400).json({
+        error:
+          "pickupTeacherViewScope must be 'all_students' or 'own_roster'",
+      });
+      return;
+    }
+    updates.pickupTeacherViewScope = pickupTeacherViewScope;
+  }
+  // "In car" terminal step toggle. When false, walking_out becomes the
+  // terminal staff action and rows drop from the live display after
+  // pickupWalkedOutDisplaySeconds. The release event itself is kept
+  // in the audit log forever.
+  if (pickupInCarStepEnabled !== undefined) {
+    if (typeof pickupInCarStepEnabled !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "pickupInCarStepEnabled must be a boolean" });
+      return;
+    }
+    updates.pickupInCarStepEnabled = pickupInCarStepEnabled;
+  }
+  if (pickupWalkedOutDisplaySeconds !== undefined) {
+    if (
+      typeof pickupWalkedOutDisplaySeconds !== "number" ||
+      !Number.isInteger(pickupWalkedOutDisplaySeconds) ||
+      pickupWalkedOutDisplaySeconds < 60 ||
+      pickupWalkedOutDisplaySeconds > 1800
+    ) {
+      res.status(400).json({
+        error:
+          "pickupWalkedOutDisplaySeconds must be an integer between 60 and 1800",
+      });
+      return;
+    }
+    updates.pickupWalkedOutDisplaySeconds = pickupWalkedOutDisplaySeconds;
+  }
   if (issCapacityBehavior !== undefined) {
     if (issCapacityBehavior !== "soft" && issCapacityBehavior !== "hard") {
       res
@@ -416,6 +516,69 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.issCapacityBehavior = issCapacityBehavior;
+  }
+
+  // -----------------------------------------------------------------
+  // Kiosk welcome template + per-house overrides (Phase 3).
+  // Length-capped to prevent runaway storage / signage layouts; any
+  // settings-manager can edit (same gate as the rest of this PUT).
+  // -----------------------------------------------------------------
+  if (kioskWelcomeTemplate !== undefined) {
+    if (typeof kioskWelcomeTemplate !== "string") {
+      res
+        .status(400)
+        .json({ error: "kioskWelcomeTemplate must be a string" });
+      return;
+    }
+    // Hard-reject overlong templates instead of silently truncating so
+    // the editor surfaces the issue (truncation hid mistakes in the
+    // per-house preview).
+    if (kioskWelcomeTemplate.length > 240) {
+      res.status(400).json({
+        error: "kioskWelcomeTemplate must be 240 characters or fewer",
+      });
+      return;
+    }
+    const cleaned = kioskWelcomeTemplate.trim();
+    updates.kioskWelcomeTemplate =
+      cleaned.length === 0 ? "Welcome, {firstName}!" : cleaned;
+  }
+  if (kioskWelcomeMessages !== undefined) {
+    if (
+      kioskWelcomeMessages === null ||
+      typeof kioskWelcomeMessages !== "object" ||
+      Array.isArray(kioskWelcomeMessages)
+    ) {
+      if (kioskWelcomeMessages === null) {
+        updates.kioskWelcomeMessages = {};
+      } else {
+        res.status(400).json({
+          error: "kioskWelcomeMessages must be an object or null",
+        });
+        return;
+      }
+    } else {
+      const sanitized: Record<string, string> = {};
+      for (const [k, v] of Object.entries(
+        kioskWelcomeMessages as Record<string, unknown>,
+      )) {
+        if (typeof v !== "string") continue;
+        // Same hard-reject as the default template — surface mistakes
+        // rather than silently truncating per-house overrides.
+        if (v.length > 240) {
+          res.status(400).json({
+            error: `kioskWelcomeMessages[${k}] must be 240 characters or fewer`,
+          });
+          return;
+        }
+        const cleaned = v.trim();
+        if (cleaned.length === 0) continue;
+        // House id key is stringified integer; ignore anything else.
+        if (!/^\d+$/.test(k)) continue;
+        sanitized[k] = cleaned;
+      }
+      updates.kioskWelcomeMessages = sanitized;
+    }
   }
 
   // -----------------------------------------------------------------
@@ -525,6 +688,84 @@ router.put("/school-settings", async (req, res): Promise<void> => {
         }
       }
     }
+  }
+
+  // Time Tracking settings (shared by AST + Comp Time). Admin only —
+  // these are policy controls that govern FLSA-relevant overtime
+  // accrual for the whole school. Non-admin role changes here are
+  // rejected even though the other settings on this PUT are typically
+  // unrestricted (their UI is gated client-side).
+  if (
+    workweekStart !== undefined ||
+    compTimeRequireAuthForm !== undefined ||
+    compTimeAuthFormObjectKey !== undefined
+  ) {
+    const staffId = req.staffId;
+    let meRow: typeof staffTable.$inferSelect | undefined;
+    if (staffId) {
+      [meRow] = await db
+        .select()
+        .from(staffTable)
+        .where(eq(staffTable.id, staffId));
+    }
+    const isPolicyAdmin = Boolean(
+      meRow?.active &&
+        (meRow.isAdmin || meRow.isDistrictAdmin || meRow.isSuperUser),
+    );
+    if (!isPolicyAdmin) {
+      res.status(403).json({
+        error: "forbidden",
+        message: "Only admins can change Time Tracking policy settings.",
+      });
+      return;
+    }
+  }
+  if (workweekStart !== undefined) {
+    if (workweekStart !== "sunday" && workweekStart !== "monday") {
+      res
+        .status(400)
+        .json({ error: "workweekStart must be 'sunday' or 'monday'" });
+      return;
+    }
+    updates.workweekStart = workweekStart;
+  }
+  if (compTimeRequireAuthForm !== undefined) {
+    if (typeof compTimeRequireAuthForm !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "compTimeRequireAuthForm must be boolean" });
+      return;
+    }
+    updates.compTimeRequireAuthForm = compTimeRequireAuthForm;
+  }
+  if (compTimeAuthFormObjectKey !== undefined) {
+    if (
+      compTimeAuthFormObjectKey !== null &&
+      typeof compTimeAuthFormObjectKey !== "string"
+    ) {
+      res.status(400).json({
+        error: "compTimeAuthFormObjectKey must be a string or null",
+      });
+      return;
+    }
+    if (compTimeAuthFormObjectKey) {
+      // Bind the freshly-uploaded object to this school's ACL so the
+      // PDF can only be served to staff of this school and can't be
+      // a spoofed cross-tenant path.
+      const bound = await bindObjectToSchool(
+        compTimeAuthFormObjectKey,
+        schoolId,
+      );
+      if (!bound) {
+        res.status(400).json({
+          error: "compTimeAuthFormObjectKey_invalid",
+          message:
+            "Uploaded template could not be verified. Please re-upload.",
+        });
+        return;
+      }
+    }
+    updates.compTimeAuthFormObjectKey = compTimeAuthFormObjectKey || null;
   }
 
   if (Object.keys(updates).length === 0) {

@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2625" height="3375" viewBox="0 0 2625 3375" role="img" aria-label="PulseEDU flyer back - feature catalog">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#eef2f7"/>
+    </linearGradient>
+    <linearGradient id="wm" x1="0" y1="0" x2="1" y2="1" gradientTransform="rotate(40 0.5 0.5)">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="55%" stop-color="#0e7490"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <style>
+      .f{font-family:'Helvetica Neue',Arial,'DejaVu Sans',sans-serif;}
+      .cat{font-weight:800;font-size:50px;letter-spacing:-1px;fill:url(#wm);}
+      .feat{font-weight:700;font-size:38px;fill:#0f172a;}
+      .desc{font-weight:500;font-size:33px;fill:#5b6b7e;}
+    </style>
+  </defs>
+
+  <rect width="2625" height="3375" fill="url(#bg)"/>
+
+  <!-- header -->
+  <rect x="200" y="170" width="118" height="118" rx="26" fill="url(#wm)"/>
+  <text x="259" y="256" text-anchor="middle" class="f" font-weight="900" font-style="italic" font-size="66" letter-spacing="-4" fill="#ffffff">PE</text>
+  <text x="345" y="248" class="f" font-weight="800" font-size="66" letter-spacing="-2" fill="url(#wm)">Pulse<tspan font-weight="900" font-style="italic">EDU</tspan></text>
+  <text x="200" y="370" class="f" font-weight="800" font-size="78" letter-spacing="-2" fill="#0f172a">Everything in the platform</text>
+  <rect x="200" y="410" width="2225" height="3" fill="#e2e8f0"/>
+
+  <!-- LEFT COLUMN x=200..1280 -->
+  <g class="f">
+    <!-- Operations & Signage -->
+    <text x="200" y="540" class="cat">Operations &amp; Signage</text>
+    <text x="200" y="610" class="feat">Display Management</text>
+    <text x="200" y="654" class="desc">Per-school digital signage playlists.</text>
+    <text x="200" y="724" class="feat">Live Remote Control</text>
+    <text x="200" y="768" class="desc">Drive every TV PowerPoint-style.</text>
+    <text x="200" y="838" class="feat">Hall Pass Queue</text>
+    <text x="200" y="882" class="desc">Period-aware line for student passes.</text>
+    <text x="200" y="952" class="feat">Bell Schedules</text>
+    <text x="200" y="996" class="desc">Configurable per-school day timing.</text>
+    <text x="200" y="1066" class="feat">Parent Pickup Queue</text>
+    <text x="200" y="1110" class="desc">Curb keypad, walker gate, reconcile.</text>
+    <text x="200" y="1180" class="feat">Event Ticketing</text>
+    <text x="200" y="1224" class="desc">Free QR tickets, scanning, capacity.</text>
+
+    <!-- Behavior & Recognition -->
+    <text x="200" y="1370" class="cat">Behavior &amp; Recognition</text>
+    <text x="200" y="1440" class="feat">PBIS Hub &amp; Store</text>
+    <text x="200" y="1484" class="desc">Points, recognition, reward catalogs.</text>
+    <text x="200" y="1554" class="feat">Spotlight</text>
+    <text x="200" y="1598" class="desc">Fair, tiered student point rewards.</text>
+
+    <!-- Family & Enrollment -->
+    <text x="200" y="1744" class="cat">Family &amp; Enrollment</text>
+    <text x="200" y="1814" class="feat">Parent Portal</text>
+    <text x="200" y="1858" class="desc">Secure HeartBEAT data for families.</text>
+    <text x="200" y="1928" class="feat">School Tours</text>
+    <text x="200" y="1972" class="desc">Enrollment CRM — schedule, track, follow up.</text>
+  </g>
+
+  <!-- RIGHT COLUMN x=1345..2425 -->
+  <g class="f">
+    <!-- Student Support & Safety -->
+    <text x="1345" y="540" class="cat">Student Support &amp; Safety</text>
+    <text x="1345" y="610" class="feat">Safety Plans</text>
+    <text x="1345" y="654" class="desc">Per-student behavioral checklists.</text>
+    <text x="1345" y="724" class="feat">MTSS Intervention Plans</text>
+    <text x="1345" y="768" class="desc">Tier 2/3 goals &amp; progress monitoring.</text>
+    <text x="1345" y="838" class="feat">BIP Reporting</text>
+    <text x="1345" y="882" class="desc">Behavior intervention plan reporting.</text>
+
+    <!-- Insights & Data -->
+    <text x="1345" y="1028" class="cat">Insights &amp; Data</text>
+    <text x="1345" y="1098" class="feat">Insights Dashboards</text>
+    <text x="1345" y="1142" class="desc">Engagement, behavior, equity, EWS.</text>
+    <text x="1345" y="1212" class="feat">Teacher Roster</text>
+    <text x="1345" y="1256" class="desc">FAST scores, program flags, safety.</text>
+    <text x="1345" y="1326" class="feat">Intensive Group Insights</text>
+    <text x="1345" y="1370" class="desc">Class Composer &amp; section profiles.</text>
+    <text x="1345" y="1440" class="feat">Multi-year FAST History</text>
+    <text x="1345" y="1484" class="desc">Longitudinal score trajectories.</text>
+    <text x="1345" y="1554" class="feat">Data Importer</text>
+    <text x="1345" y="1598" class="desc">CSV uploads with preview &amp; rollback.</text>
+
+    <!-- Administration -->
+    <text x="1345" y="1744" class="cat">Administration</text>
+    <text x="1345" y="1814" class="feat">AST &amp; Comp Time Tracking</text>
+    <text x="1345" y="1858" class="desc">Digital ledger of accrued comp time.</text>
+    <text x="1345" y="1928" class="feat">Feature Licensing</text>
+    <text x="1345" y="1972" class="desc">Per-school module &amp; seat controls.</text>
+    <text x="1345" y="2042" class="feat">Multi-Tenancy</text>
+    <text x="1345" y="2086" class="desc">School-scoped data isolation built in.</text>
+  </g>
+
+  <!-- closing callout -->
+  <g class="f">
+    <rect x="200" y="2320" width="2225" height="500" rx="34" fill="#ffffff" stroke="#e2e8f0" stroke-width="3"/>
+    <rect x="200" y="2320" width="18" height="500" rx="9" fill="url(#wm)"/>
+    <text x="290" y="2470" font-weight="800" font-size="64" letter-spacing="-1" fill="#0f172a">Built multi-tenant for districts</text>
+    <text x="290" y="2545" font-weight="500" font-size="40" fill="#5b6b7e">Every feature is school-scoped, secure, and rolls out campus by campus.</text>
+    <g font-weight="700" font-size="40" fill="#0f172a">
+      <circle cx="312" cy="2645" r="11" fill="url(#wm)"/>
+      <text x="350" y="2660">One login for staff</text>
+      <circle cx="942" cy="2645" r="11" fill="url(#wm)"/>
+      <text x="980" y="2660">Secure family portal</text>
+      <circle cx="1640" cy="2645" r="11" fill="url(#wm)"/>
+      <text x="1678" y="2660">District-wide insights</text>
+    </g>
+    <text x="290" y="2760" font-weight="600" font-size="38" fill="#0e7490">Available modules can be licensed per school.</text>
+  </g>
+
+  <!-- bottom band -->
+  <rect x="0" y="3030" width="2625" height="345" fill="#0d1a2e"/>
+  <text x="200" y="3170" class="f" font-weight="800" font-size="62" letter-spacing="-1" fill="url(#wm)">Pulse<tspan font-weight="900" font-style="italic">EDU</tspan></text>
+  <text x="200" y="3245" class="f" font-weight="500" font-size="40" fill="#9fb3c8">The heartbeat of school operations</text>
+  <text x="2425" y="3210" text-anchor="end" class="f" font-weight="700" font-size="48" letter-spacing="2" fill="#cbd5e1">pulsekinetics.us</text>
+  <path d="M200 3300 H560 L580 3300 L596 3276 L610 3334 L626 3250 L642 3346 L658 3276 L674 3300 H2425"
+        fill="none" stroke="#ef4444" stroke-width="4" stroke-opacity="0.85" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

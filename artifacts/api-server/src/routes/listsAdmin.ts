@@ -23,7 +23,7 @@ import {
   trustedAdultInterventionsTable,
   staffTable,
 } from "@workspace/db";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
@@ -371,7 +371,7 @@ router.post("/pbis-reasons/reorder", async (req, res) => {
     .where(
       and(
         eq(pbisReasonsTable.schoolId, schoolId),
-        sql`${pbisReasonsTable.id} = ANY(${ids})`,
+        inArray(pbisReasonsTable.id, ids),
       ),
     );
   if (owned.length !== ids.length) {

@@ -39,6 +39,13 @@ export const parentsTable = pgTable(
       .notNull()
       .defaultNow(),
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+    // Optional TOTP second factor. NULL = not enrolled. When set, parent
+    // must supply a 6-digit code at login + at password-reset finalization.
+    // Stored as the base32 secret (otplib format); rotated only via the
+    // disable/re-enroll flow. Email-link reset is still the primary
+    // recovery path, so TOTP loss = use reset link.
+    totpSecret: text("totp_secret"),
+    totpEnabledAt: timestamp("totp_enabled_at", { withTimezone: true }),
   },
   (t) => ({
     // Email is unique per school (allows the same parent address to be
@@ -129,6 +136,41 @@ export const parentInvitesTable = pgTable(
 export type ParentInviteRow = typeof parentInvitesTable.$inferSelect;
 
 // -----------------------------------------------------------------------------
+// parent_password_resets — one row per "I forgot my password" request.
+// Token is a 64-char URL-safe random string emailed to the parent. Tokens
+// have a 1-hour TTL (short on purpose — possession of the inbox IS the
+// second factor, so we don't want stale links lying around). Marked
+// `used_at` on consumption so the same link can't be replayed.
+//
+// We do NOT delete rows on consumption — keeping the history lets us
+// debug "I clicked the link twice" support calls and could feed a future
+// abuse-rate-limit query.
+// -----------------------------------------------------------------------------
+export const parentPasswordResetsTable = pgTable(
+  "parent_password_resets",
+  {
+    id: serial("id").primaryKey(),
+    parentId: integer("parent_id").notNull(),
+    token: text("token").notNull().unique(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    // Optional: requester IP for abuse forensics. Stored as text (handles
+    // both v4 and v6) — not indexed because we only ever read it during
+    // post-hoc investigation.
+    requestedIp: text("requested_ip"),
+  },
+  (t) => ({
+    byParent: index("parent_password_resets_by_parent").on(t.parentId),
+  }),
+);
+
+export type ParentPasswordResetRow =
+  typeof parentPasswordResetsTable.$inferSelect;
+
+// -----------------------------------------------------------------------------
 // school_heartbeat_settings — admin layer of the toggle system. One row per
 // school. Each `show_*` flag controls whether that section is even AVAILABLE
 // to parents at this school. A parent can never override "false" to "true";
@@ -159,6 +201,14 @@ export const schoolHeartbeatSettingsTable = pgTable(
     // day count this year. Reasons are gated separately by showOssReason.
     showOss: boolean("show_oss").notNull().default(false),
     showOssReason: boolean("show_oss_reason").notNull().default(false),
+    // Reteach activity (benchmark_reteach_log rollup) section in the
+    // parent portal. Off by default — schools opt in via Heartbeat
+    // Settings. When ON parents see, per benchmark code, the count of
+    // 1:1 and small-group reteach moments their child received this
+    // school year. Teacher notes / strategy are NEVER surfaced —
+    // counts + benchmark codes only. Per-student visibility is also
+    // gated by `students.reteach_logs_parent_visible`.
+    showReteach: boolean("show_reteach").notNull().default(false),
     // When true, the school allows parents to opt in to the weekly Sunday
     // PDF email. When false, we hide that toggle on the parent side.
     allowWeeklyEmail: boolean("allow_weekly_email").notNull().default(true),
@@ -199,6 +249,8 @@ export const parentHeartbeatPrefsTable = pgTable(
     showMtss: boolean("show_mtss"),
     // Per-parent OSS toggle. Null = inherit school's showOss flag.
     showOss: boolean("show_oss"),
+    // Per-parent reteach toggle. Null = inherit school's showReteach flag.
+    showReteach: boolean("show_reteach"),
     // Weekly email opt-in (independent per student so a parent can subscribe
     // for one kid but not another).
     weeklyEmailEnabled: boolean("weekly_email_enabled").notNull().default(false),

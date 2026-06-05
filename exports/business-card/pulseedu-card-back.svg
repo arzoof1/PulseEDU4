@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1125" height="675" viewBox="0 0 1125 675" role="img" aria-label="PulseEDU business card back">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#eef2f7"/>
+    </linearGradient>
+    <linearGradient id="wm" x1="0" y1="0" x2="1" y2="1" gradientTransform="rotate(40 0.5 0.5)">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="55%" stop-color="#0e7490"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <filter id="tileglow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="2.4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .f{font-family:'Helvetica Neue',Arial,'DejaVu Sans',sans-serif;}
+    </style>
+  </defs>
+
+  <rect width="1125" height="675" fill="url(#bg)"/>
+
+  <!-- header: monogram tile + wordmark -->
+  <g>
+    <rect x="80" y="76" width="132" height="132" rx="30" fill="url(#wm)"/>
+    <text x="146" y="170" text-anchor="middle" class="f" font-weight="900" font-style="italic" font-size="74" letter-spacing="-4" fill="#ffffff">PE</text>
+    <path d="M100 184 H132 L138 178 L142 190 L146 166 L150 200 L154 178 L158 184 H192"
+          fill="none" stroke="#f87171" stroke-opacity="0.95" stroke-width="3.4"
+          stroke-linecap="round" stroke-linejoin="round" filter="url(#tileglow)"/>
+
+    <text x="242" y="138" class="f" font-weight="800" font-size="58" letter-spacing="-2" fill="url(#wm)">Pulse<tspan font-weight="900" font-style="italic">EDU</tspan></text>
+    <text x="245" y="182" class="f" font-weight="600" font-size="23" letter-spacing="1.5" fill="#64748b">School operations · Student support · Insights</text>
+  </g>
+
+  <!-- divider -->
+  <rect x="80" y="262" width="965" height="2" rx="1" fill="#e2e8f0"/>
+
+  <!-- contact block -->
+  <g>
+    <text x="80" y="350" class="f" font-weight="800" font-size="42" letter-spacing="-1" fill="#0f172a">Your Name</text>
+    <text x="82" y="392" class="f" font-weight="600" font-size="25" letter-spacing="0.5" fill="#475569">Title / Role</text>
+
+    <!-- rows -->
+    <g font-size="25" font-weight="600" class="f" fill="#1e293b">
+      <circle cx="92" cy="462" r="6" fill="url(#wm)"/>
+      <text x="118" y="470">hello@pulsekinetics.us</text>
+
+      <circle cx="92" cy="512" r="6" fill="url(#wm)"/>
+      <text x="118" y="520">(555) 010-0100</text>
+
+      <circle cx="92" cy="562" r="6" fill="url(#wm)"/>
+      <text x="118" y="570">pulsekinetics.us</text>
+    </g>
+  </g>
+
+  <!-- bottom EKG accent -->
+  <path d="M80 632 H560 L574 632 L586 620 L596 648 L608 596 L620 660 L632 620 L644 632 H1045"
+        fill="none" stroke="url(#wm)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -23,8 +23,11 @@ import {
   studentMtssPlansTable,
   staffTable,
   studentsTable,
+  studentFastItemResponsesTable,
+  schoolSettingsTable,
+  mtssFastSuggestionDismissalsTable,
 } from "@workspace/db";
-import { and, eq, inArray, sql, asc } from "drizzle-orm";
+import { and, eq, inArray, sql, asc, isNull } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import {
   effectiveTeacherIdsForPlan,
@@ -32,6 +35,8 @@ import {
   loadScheduleTeacherIdsForStudents,
   parseCsvIds,
 } from "../lib/effectiveTeachers.js";
+import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
+import { loadFastHistory, pickHistory } from "../lib/fastHistory.js";
 
 const router: IRouter = Router();
 
@@ -273,6 +278,7 @@ router.get("/mtss-plans", async (req, res) => {
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
       grade: studentsTable.grade,
+      localSisId: studentsTable.localSisId,
     })
     .from(studentMtssPlansTable)
     .leftJoin(
@@ -333,6 +339,7 @@ router.get("/mtss-plans", async (req, res) => {
         studentName:
           r.firstName && r.lastName ? `${r.firstName} ${r.lastName}` : null,
         studentGrade: r.grade ?? null,
+        studentLocalSisId: r.localSisId ?? null,
         effectiveTeacherIds: effective,
         effectiveTeachers: effective.map((id) => ({
           staffId: id,
@@ -364,6 +371,7 @@ router.post("/mtss-plans", async (req, res) => {
     excludedTeacherIds,
     additionalInterventionistIds,
     assignedTeacherIds, // legacy/manual list — only honored when auto=false
+    fastBenchmarkCode,
   } = req.body ?? {};
 
   const cleanStudentId =
@@ -474,6 +482,10 @@ router.post("/mtss-plans", async (req, res) => {
       excludedTeacherIds: excludedCsv,
       additionalInterventionistIds: additionalCsv,
       assignedTeacherIds: assignedCsv,
+      fastBenchmarkCode:
+        typeof fastBenchmarkCode === "string" && fastBenchmarkCode.trim()
+          ? fastBenchmarkCode.trim().slice(0, 64)
+          : null,
     })
     .returning();
 
@@ -520,9 +532,18 @@ router.patch("/mtss-plans/:id", async (req, res) => {
     excludedTeacherIds,
     additionalInterventionistIds,
     assignedTeacherIds, // legacy/manual list — only honored when auto=false
+    fastBenchmarkCode,
   } = req.body ?? {};
 
   const updates: Partial<typeof studentMtssPlansTable.$inferInsert> = {};
+
+  if (fastBenchmarkCode !== undefined) {
+    if (fastBenchmarkCode === null || fastBenchmarkCode === "") {
+      updates.fastBenchmarkCode = null;
+    } else if (typeof fastBenchmarkCode === "string") {
+      updates.fastBenchmarkCode = fastBenchmarkCode.trim().slice(0, 64) || null;
+    }
+  }
 
   if (typeof title === "string" && title.trim()) {
     updates.title = title.trim().slice(0, 200);
@@ -682,6 +703,486 @@ router.delete("/mtss-plans/:id", async (req, res) => {
     return;
   }
   res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------
+// FAST Phase 5 — Tier 2 auto-suggestions
+//
+// GET  /api/mtss-plans/fast-suggestions
+//   For each (student, benchmarkCode) in the school whose mastery
+//   percent is below the school's mastery threshold in at least
+//   `fast_tier2_min_windows` of the most-recent 3 FAST windows (per
+//   subject), return a suggestion row with per-window pcts and a
+//   prefill payload for the PlanModal. Excludes:
+//     - pairs whose student×benchmark already has an active MTSS plan
+//       with a matching fast_benchmark_code
+//     - pairs already dismissed in the current school year
+//
+// POST /api/mtss-plans/fast-suggestions/dismiss
+//   Body: { studentId, benchmarkCode }. Inserts an idempotent
+//   dismissal row keyed to the current school year. Returns
+//   { ok, dismissedAt }.
+// ---------------------------------------------------------------
+
+const FAST_SUBJECTS = ["ela", "math", "algebra1", "geometry"] as const;
+
+// Map a Florida FAST category label (state-printed, e.g. "Reading Prose
+// and Poetry") to a short strategy descriptor we use in the prefilled
+// plan title. Best-effort — falls back to the raw category label when
+// no rule fires. Casing-insensitive prefix match keeps it resilient to
+// minor formatting drift between subjects.
+export function strategyCategoryForBenchmark(
+  category: string | null,
+  benchmarkCode: string,
+): string {
+  const c = (category ?? "").toLowerCase();
+  // Math: derive from the benchmark code's strand prefix BEFORE
+  // falling back to the category label. Florida's grade 6+ Math
+  // category "Geometric Reasoning, Data Analysis, and Probability"
+  // bundles GR.* and DP.* benchmarks under a single label, so the
+  // category text alone cannot tell geometry from data — only the
+  // code can. Strands used by Florida B.E.S.T. math standards:
+  //   NSO = Number Sense & Operations
+  //   FR  = Fractions (K-5)
+  //   AR  = Algebraic Reasoning
+  //   M   = Measurement (K-5)
+  //   GR  = Geometric Reasoning
+  //   DP  = Data Analysis & Probability
+  const mathStrand = /^MA\.[^.]+\.([A-Z]+)\./i.exec(benchmarkCode);
+  if (mathStrand) {
+    const strand = mathStrand[1].toUpperCase();
+    if (strand === "NSO") return "Math — Numbers & Operations";
+    if (strand === "FR") return "Math — Fractions";
+    if (strand === "AR") return "Math — Algebraic Reasoning";
+    if (strand === "M") return "Math — Measurement";
+    if (strand === "GR") return "Math — Geometry & Measurement";
+    if (strand === "DP") return "Math — Data & Statistics";
+  }
+  if (c.includes("reading prose")) return "Reading Comprehension";
+  if (c.includes("reading informational")) return "Reading Comprehension";
+  if (c.includes("across genres")) return "Reading Comprehension";
+  if (c.includes("vocabulary")) return "Vocabulary";
+  if (c.includes("foundational")) return "Reading Foundations";
+  // Grade 7 Math: "Proportional Reasoning and Relationships".
+  if (c.includes("proportional")) return "Math — Ratios & Proportions";
+  // Grade 8 Math: "Linear Relationships, Data Analysis and Functions" —
+  // matches "linear" before the generic "data" branch.
+  if (c.includes("linear")) return "Math — Linear Relationships & Functions";
+  if (c.includes("number sense") || c.includes("number and operations"))
+    return "Math — Numbers & Operations";
+  if (c.includes("algebraic") || c.includes("algebra"))
+    return "Math — Algebraic Reasoning";
+  if (c.includes("geometric") || c.includes("geometry"))
+    return "Math — Geometry & Measurement";
+  if (c.includes("data") || c.includes("statistic") || c.includes("probability"))
+    return "Math — Data & Statistics";
+  if (category && category.trim()) return category.trim();
+  // Last resort: derive from benchmark code prefix.
+  if (/^ELA\./i.test(benchmarkCode)) return "Reading";
+  if (/^MA\./i.test(benchmarkCode) || /^MATH\./i.test(benchmarkCode))
+    return "Math";
+  return "Academic";
+}
+
+router.get("/mtss-plans/fast-suggestions", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requireCoreTeam(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+
+  // ---- Settings: mastery threshold + min-windows ----
+  const [settings] = await db
+    .select()
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
+  const thresholdPct = settings?.fastBenchmarkMasteryThreshold ?? 80;
+  // Clamp to [1..3] defensively — the suggestions endpoint only ever
+  // inspects 3 windows, so a higher value would silently produce
+  // zero suggestions and a lower value bypasses the "missed twice"
+  // intent of the feature.
+  const minWindows = Math.min(
+    3,
+    Math.max(1, settings?.fastTier2MinWindows ?? 2),
+  );
+
+  // ---- Resolve last 3 windows per subject for this school ----
+  const tupleRows = await db
+    .selectDistinct({
+      subject: studentFastItemResponsesTable.subject,
+      schoolYear: studentFastItemResponsesTable.schoolYear,
+      window: studentFastItemResponsesTable.window,
+    })
+    .from(studentFastItemResponsesTable)
+    .where(eq(studentFastItemResponsesTable.schoolId, schoolId));
+
+  // Order by (schoolYear DESC, window DESC) within each subject, take 3.
+  const recentBySubject = new Map<
+    string,
+    Array<{ schoolYear: string; window: string }>
+  >();
+  for (const t of tupleRows) {
+    if (!FAST_SUBJECTS.includes(t.subject as (typeof FAST_SUBJECTS)[number])) {
+      continue;
+    }
+    const arr = recentBySubject.get(t.subject) ?? [];
+    arr.push({ schoolYear: t.schoolYear, window: t.window });
+    recentBySubject.set(t.subject, arr);
+  }
+  for (const [subject, arr] of recentBySubject) {
+    arr.sort((a, b) => {
+      if (a.schoolYear !== b.schoolYear) {
+        return b.schoolYear.localeCompare(a.schoolYear);
+      }
+      return b.window.localeCompare(a.window);
+    });
+    recentBySubject.set(subject, arr.slice(0, 3));
+  }
+
+  // Flat list of (subject, schoolYear, window) we care about — used
+  // to build a single WHERE clause below. Bail early if there's no
+  // FAST data on file yet.
+  const allTuples: Array<{
+    subject: string;
+    schoolYear: string;
+    window: string;
+  }> = [];
+  for (const [subject, arr] of recentBySubject) {
+    for (const w of arr) {
+      allTuples.push({ subject, schoolYear: w.schoolYear, window: w.window });
+    }
+  }
+  if (allTuples.length === 0) {
+    res.json({
+      thresholdPct,
+      minWindows,
+      suggestions: [],
+    });
+    return;
+  }
+
+  // ---- Pull every item response in those windows for this school ----
+  const tupleClause = sql.join(
+    allTuples.map(
+      (t) =>
+        sql`(${studentFastItemResponsesTable.subject} = ${t.subject} AND ${studentFastItemResponsesTable.schoolYear} = ${t.schoolYear} AND ${studentFastItemResponsesTable.window} = ${t.window})`,
+    ),
+    sql` OR `,
+  );
+
+  const rows = await db
+    .select({
+      studentId: studentFastItemResponsesTable.studentId,
+      subject: studentFastItemResponsesTable.subject,
+      schoolYear: studentFastItemResponsesTable.schoolYear,
+      window: studentFastItemResponsesTable.window,
+      category: studentFastItemResponsesTable.category,
+      benchmarkCode: studentFastItemResponsesTable.benchmarkCode,
+      pointsEarned: studentFastItemResponsesTable.pointsEarned,
+      pointsPossible: studentFastItemResponsesTable.pointsPossible,
+    })
+    .from(studentFastItemResponsesTable)
+    .where(
+      and(
+        eq(studentFastItemResponsesTable.schoolId, schoolId),
+        sql`(${tupleClause})`,
+      ),
+    );
+
+  // ---- Aggregate (student, benchmark, window) → mastery pct ----
+  // Many items per (student, benchmark, window) — sum then divide.
+  type Agg = {
+    studentId: string;
+    benchmarkCode: string;
+    subject: string;
+    category: string | null;
+    perWindow: Map<string, { earned: number; possible: number }>;
+  };
+  const byPair = new Map<string, Agg>();
+  for (const r of rows) {
+    if (r.pointsPossible == null || r.pointsPossible <= 0) continue;
+    const key = `${r.studentId}|${r.benchmarkCode}`;
+    let agg = byPair.get(key);
+    if (!agg) {
+      agg = {
+        studentId: r.studentId,
+        benchmarkCode: r.benchmarkCode,
+        subject: r.subject,
+        category: r.category,
+        perWindow: new Map(),
+      };
+      byPair.set(key, agg);
+    }
+    // Record category from first row that has one.
+    if (!agg.category && r.category) agg.category = r.category;
+    const wkey = `${r.schoolYear}|${r.window}`;
+    const slot = agg.perWindow.get(wkey) ?? { earned: 0, possible: 0 };
+    slot.earned += r.pointsEarned ?? 0;
+    slot.possible += r.pointsPossible;
+    agg.perWindow.set(wkey, slot);
+  }
+
+  // ---- Exclusions: active plans + dismissals ----
+  const activePlans = await db
+    .select({
+      studentId: studentMtssPlansTable.studentId,
+      fastBenchmarkCode: studentMtssPlansTable.fastBenchmarkCode,
+    })
+    .from(studentMtssPlansTable)
+    .where(
+      and(
+        eq(studentMtssPlansTable.schoolId, schoolId),
+        isNull(studentMtssPlansTable.closedAt),
+      ),
+    );
+  const activePairs = new Set<string>();
+  for (const p of activePlans) {
+    if (p.fastBenchmarkCode) {
+      activePairs.add(`${p.studentId}|${p.fastBenchmarkCode}`);
+    }
+  }
+
+  const currentSchoolYear = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+  const dismissals = await db
+    .select({
+      studentId: mtssFastSuggestionDismissalsTable.studentId,
+      benchmarkCode: mtssFastSuggestionDismissalsTable.benchmarkCode,
+    })
+    .from(mtssFastSuggestionDismissalsTable)
+    .where(
+      and(
+        eq(mtssFastSuggestionDismissalsTable.schoolId, schoolId),
+        eq(mtssFastSuggestionDismissalsTable.schoolYear, currentSchoolYear),
+      ),
+    );
+  const dismissedPairs = new Set<string>(
+    dismissals.map((d) => `${d.studentId}|${d.benchmarkCode}`),
+  );
+
+  // ---- Build suggestion list ----
+  type WindowPct = {
+    schoolYear: string;
+    window: string;
+    masteryPct: number;
+    below: boolean;
+  };
+  type Suggestion = {
+    studentId: string;
+    studentName: string | null;
+    studentGrade: number | null;
+    subject: string;
+    benchmarkCode: string;
+    benchmarkCategory: string | null;
+    suggestedStrategyCategory: string;
+    suggestedTitle: string;
+    suggestedGoal: string;
+    windows: WindowPct[];
+    belowCount: number;
+    // Most-recent prior-year PM3 for this student+subject (from the
+    // FL Florida historical importer). Null when no historical row.
+    priorYearPm3: { schoolYear: string; pm3: number } | null;
+  };
+
+  const studentIdsNeeded = new Set<string>();
+  const provisional: Suggestion[] = [];
+
+  for (const agg of byPair.values()) {
+    const key = `${agg.studentId}|${agg.benchmarkCode}`;
+    if (activePairs.has(key)) continue;
+    if (dismissedPairs.has(key)) continue;
+
+    const subjectWindows = recentBySubject.get(agg.subject) ?? [];
+    const windows: WindowPct[] = subjectWindows.map((w) => {
+      const slot = agg.perWindow.get(`${w.schoolYear}|${w.window}`);
+      if (!slot || slot.possible <= 0) {
+        return {
+          schoolYear: w.schoolYear,
+          window: w.window,
+          masteryPct: -1, // sentinel = not administered
+          below: false,
+        };
+      }
+      // Compare on the raw ratio against the threshold so a student
+      // sitting at 79.5% still counts as "below 80" — only the displayed
+      // pct is rounded. (Rounding the comparison side previously let
+      // borderline cases sneak past qualification.)
+      const ratioPct = (slot.earned / slot.possible) * 100;
+      return {
+        schoolYear: w.schoolYear,
+        window: w.window,
+        masteryPct: Math.round(ratioPct),
+        below: ratioPct < thresholdPct,
+      };
+    });
+    const belowCount = windows.filter((w) => w.below).length;
+    if (belowCount < minWindows) continue;
+
+    const strategy = strategyCategoryForBenchmark(
+      agg.category,
+      agg.benchmarkCode,
+    );
+    // Pull the most recent administered pct (windows are sorted
+    // newest-first) so the prefilled goal cites where the student is
+    // starting from — meaningfully better progress-monitoring copy
+    // than a bare "improve to N%".
+    const latestPct = windows.find((w) => w.masteryPct >= 0)?.masteryPct;
+    const latestSnippet =
+      latestPct != null ? `currently ${latestPct}%` : "currently below mastery";
+    // The FAST item-response feed gives us a `category` label (the
+    // state-printed reporting category, e.g. "Reading Prose and
+    // Poetry") but no full benchmark statement text — Florida's
+    // benchmark catalog isn't ingested in this codebase. We surface
+    // category prominently so the goal reads as a real statement
+    // rather than a bare code, and tag the strategy approach in the
+    // same sentence so Tier 2 plans created from suggestions document
+    // the "why" inline (the plan schema has no separate
+    // strategy_category column at Tier 2 — that lives on Tier 3).
+    const benchmarkPhrase = agg.category
+      ? `${agg.benchmarkCode} (${agg.category})`
+      : `${agg.benchmarkCode}`;
+    provisional.push({
+      studentId: agg.studentId,
+      studentName: null,
+      studentGrade: null,
+      subject: agg.subject,
+      benchmarkCode: agg.benchmarkCode,
+      benchmarkCategory: agg.category,
+      suggestedStrategyCategory: strategy,
+      suggestedTitle: `Tier 2 — ${strategy} (${agg.benchmarkCode})`,
+      suggestedGoal:
+        `Student is ${latestSnippet} on FAST benchmark ${benchmarkPhrase}, ` +
+        `below the ${thresholdPct}% mastery bar in ${belowCount} of the ` +
+        `last 3 windows. Goal: reach ${thresholdPct}% or higher on this ` +
+        `benchmark by the next FAST window through targeted ${strategy} ` +
+        `instruction and weekly progress monitoring.`,
+      windows,
+      belowCount,
+      priorYearPm3: null,
+    });
+    studentIdsNeeded.add(agg.studentId);
+  }
+
+  // ---- Resolve student names ----
+  let nameById = new Map<string, { name: string; grade: number | null }>();
+  if (studentIdsNeeded.size > 0) {
+    const studentRows = await db
+      .select({
+        studentId: studentsTable.studentId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+      })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          inArray(studentsTable.studentId, Array.from(studentIdsNeeded)),
+        ),
+      );
+    nameById = new Map(
+      studentRows.map((s) => [
+        s.studentId,
+        {
+          name: `${s.firstName} ${s.lastName}`,
+          grade: s.grade ?? null,
+        },
+      ]),
+    );
+  }
+  for (const s of provisional) {
+    const meta = nameById.get(s.studentId);
+    if (meta) {
+      s.studentName = meta.name;
+      s.studentGrade = meta.grade;
+    }
+  }
+
+  // Attach most-recent prior-year PM3 per (student, subject) from the
+  // FL Florida historical importer. Single batched load keyed by every
+  // suggested student. Empty map when no historical data.
+  if (provisional.length > 0) {
+    const historyMap = await loadFastHistory({
+      schoolId,
+      studentIds: Array.from(studentIdsNeeded),
+    });
+    for (const s of provisional) {
+      const hist = pickHistory(historyMap, s.studentId, s.subject);
+      if (hist.length > 0) {
+        s.priorYearPm3 = {
+          schoolYear: hist[0].schoolYear,
+          pm3: hist[0].pm3,
+        };
+      }
+    }
+  }
+
+  // Sort: most-below first, then by student name for stable display.
+  provisional.sort((a, b) => {
+    if (b.belowCount !== a.belowCount) return b.belowCount - a.belowCount;
+    const an = a.studentName ?? a.studentId;
+    const bn = b.studentName ?? b.studentId;
+    return an.localeCompare(bn);
+  });
+
+  res.json({
+    thresholdPct,
+    minWindows,
+    schoolYear: currentSchoolYear,
+    suggestions: provisional,
+  });
+});
+
+router.post("/mtss-plans/fast-suggestions/dismiss", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requireCoreTeam(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+
+  const { studentId, benchmarkCode } = req.body ?? {};
+  const cleanStudent =
+    typeof studentId === "string" ? studentId.trim() : "";
+  const cleanCode =
+    typeof benchmarkCode === "string" ? benchmarkCode.trim() : "";
+  if (!cleanStudent || !cleanCode) {
+    res
+      .status(400)
+      .json({ error: "studentId and benchmarkCode are required" });
+    return;
+  }
+
+  // Confirm the student lives in this school (cross-tenant defense).
+  const [student] = await db
+    .select({ id: studentsTable.id })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.studentId, cleanStudent),
+        eq(studentsTable.schoolId, schoolId),
+      ),
+    );
+  if (!student) {
+    res.status(404).json({ error: "Student not found in this school" });
+    return;
+  }
+
+  const currentSchoolYear = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+
+  // Idempotent insert — unique index on
+  // (school_id, student_id, benchmark_code, school_year) collapses
+  // duplicate dismiss clicks.
+  await db
+    .insert(mtssFastSuggestionDismissalsTable)
+    .values({
+      schoolId,
+      studentId: cleanStudent,
+      benchmarkCode: cleanCode.slice(0, 64),
+      schoolYear: currentSchoolYear,
+      dismissedByStaffId: staff.id,
+    })
+    .onConflictDoNothing();
+
+  res.json({ ok: true, schoolYear: currentSchoolYear });
 });
 
 export default router;

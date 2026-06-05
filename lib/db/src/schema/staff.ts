@@ -76,6 +76,26 @@ export const staffTable = pgTable("staff", {
   isGuidanceCounselor: boolean("is_guidance_counselor")
     .notNull()
     .default(false),
+  // Non-Exempt role: a descriptive role flag distinct from
+  // `exemptStatus`. Assigning the role via the preset bundle also
+  // flips exemptStatus to 'non_exempt' so Comp Time accrues, but
+  // admins can independently mark anyone non-exempt without applying
+  // this role (some non-exempt staff hold other roles). When true,
+  // the sidebar collapses to Hall Pass + Tardy Pass + Comp Time —
+  // these are the only three surfaces this role uses.
+  isNonExemptRole: boolean("is_non_exempt_role").notNull().default(false),
+  // Front Office: clerical staff who run the front desk. Same view as
+  // a teacher, plus AST (submit only), Watchlists, Accommodations.
+  // Explicitly excludes Request Pullout (pullouts are a teacher
+  // referral). Confidential Secretary keeps its own approver rights
+  // — this role does NOT grant approval.
+  isFrontOffice: boolean("is_front_office").notNull().default(false),
+  // School Resource Officer — sworn officer assigned to the school.
+  // Currently identical to teacher view; broken out so reports and
+  // future surfaces (incident logs, etc) can target it cleanly.
+  isSro: boolean("is_sro").notNull().default(false),
+  // Guardian / hall monitor / security aide. Same as teacher today.
+  isGuardian: boolean("is_guardian").notNull().default(false),
 
   // ---- Per-page capability flags ----
   // Pages everyone uses by default — defaulted true so new staff land with
@@ -116,6 +136,65 @@ export const staffTable = pgTable("staff", {
   capManageDisplays: boolean("cap_manage_displays")
     .notNull()
     .default(false),
+  // Parent Pick-Up Module — grants access to the curb keypad and the
+  // walker gate page. Granted by admins to paraprofessionals or
+  // front-office assistants who run the dismissal line. Admins have
+  // implicit access (route gates check admin OR this flag) so admins
+  // don't need this flag set.
+  capCarRiderMonitor: boolean("cap_car_rider_monitor")
+    .notNull()
+    .default(false),
+  // Parent Pick-Up Module — grants the holder permission to set a
+  // student's dismissal mode (car_rider / walker / bus / aftercare /
+  // parent_pickup_only). Until this cap landed, only `isAdmin` could
+  // change it, which forced a real front-office clerk to either get
+  // the full admin role or send the change up the chain. Admins
+  // retain implicit access via the route gate (admin OR this flag),
+  // so admins do not need this flag set.
+  capManageDismissal: boolean("cap_manage_dismissal")
+    .notNull()
+    .default(false),
+  // AST (Alternate Schedule Time) per HCTA contract. Grants the holder
+  // permission to pre-approve / confirm / deny earn requests and approve /
+  // deny use requests. Backfilled true for any admin tier (school admin /
+  // district admin / super user) at boot so the rollout doesn't break
+  // existing workflows; admins can extend it to a confidential secretary
+  // or anyone else who needs to sign off without taking on the rest of
+  // the admin role. Route gates check admin OR this flag.
+  canApproveAst: boolean("can_approve_ast").notNull().default(false),
+
+  // School Tours — when true, this staff member is on the notify group for
+  // new tour-request leads (big admin banner + email + the AWS SMS stub).
+  // Admin / Core Team / counselor / confidential secretary already qualify
+  // via the `canManageTours` route gate; this flag lets an admin add anyone
+  // else (e.g. a front-office tour coordinator) to the alert audience and
+  // the lead pipeline without granting the rest of the admin surface.
+  capTourNotify: boolean("cap_tour_notify").notNull().default(false),
+
+  // Comp Time (FLSA compensatory time) per-staff capabilities. Mirrors
+  // the AST gate above so the role-management UI can sit them side by
+  // side under "Time Tracking."
+  //
+  // exemptStatus  — required for staff to see / submit comp-time
+  //                 requests. 'non_exempt' enables the bank; 'exempt'
+  //                 (and NULL) hard-blocks at the route with a copy
+  //                 that points teachers at AST.
+  // canApproveCompTime — explicit per-staff approver flag. Backfilled
+  //                 TRUE for admin tier at boot. Principals + Assistant
+  //                 Principals are auto-elected by the seed; admins
+  //                 can extend to a confidential secretary / HR clerk
+  //                 the same way they do for AST.
+  exemptStatus: text("exempt_status"),
+  canApproveCompTime: boolean("can_approve_comp_time")
+    .notNull()
+    .default(false),
+  // Stamped when an admin marks the staff member as paid-out (flipped
+  // to exempt OR separated). The payout writes a negative ledger row
+  // zeroing the balance; this column is the human-readable "yes, the
+  // last check went out" marker on Staff & Roles.
+  compTimePaidOutAt: timestamp("comp_time_paid_out_at", {
+    withTimezone: true,
+  }),
 
   // Optional home/default classroom for this staff member. Stored as
   // free text (the location name) so historical records remain intact if
@@ -123,6 +202,11 @@ export const staffTable = pgTable("staff", {
   // value to pre-fill the origin room so teachers don't have to pick it
   // every time.
   defaultRoom: text("default_room"),
+  // Optional PBIS house affiliation for the staff member. FK to houses.id
+  // (no DB-level constraint — same convention as students.house_id). Used
+  // on the kiosk activation card and any future "your house" UX. Nullable
+  // so existing staff rows and non-house schools stay valid.
+  houseId: integer("house_id"),
 
   // Staff Directory phone numbers, surfaced in the Finder ("Where is
   // this teacher right now?") and on student-finder schedule rows.
@@ -138,6 +222,13 @@ export const staffTable = pgTable("staff", {
   //   to see it.
   workExtension: text("work_extension"),
   cellPhone: text("cell_phone"),
+
+  // Optional academic department, set by an admin on Staff & Roles via a
+  // fixed dropdown (ELA / Math / Science / Social Studies / CTE / Elective /
+  // Other) and surfaced in the staff CSV export. Nullable — most staff
+  // (non-teaching, or unclassified) leave it blank. Stored as free text but
+  // the API constrains writes to the known set.
+  department: text("department"),
 
   externalId: text("external_id"),
   ssoProvider: text("sso_provider"),

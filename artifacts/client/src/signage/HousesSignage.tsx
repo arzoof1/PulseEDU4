@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Activity, Trophy, Filter, Users, Sparkles, Star } from "lucide-react";
 import { usePolling, schoolIdFromUrl } from "./usePolling";
 
@@ -39,6 +39,10 @@ interface PulseEventLite {
   what: string;
   points: number | null;
   createdAt: string;
+  // House of the awarded student — only present (non-null) for positive
+  // PBIS events. Drives the rise-and-deliver sequencer on the bar that
+  // matches this id.
+  houseId: number | null;
 }
 
 interface EventsPayload {
@@ -80,45 +84,37 @@ function gradientFromColor(hex: string): string {
 }
 
 // =============================================================================
-// FeaturedPopup — celebratory card pinned inside the leading house's bar.
+// CELEBRATION SEQUENCER — choreographed rise-and-deliver per award.
 // -----------------------------------------------------------------------------
-// Spec: when multiple awards arrive at once we queue them and hold each one
-// for ~5 seconds before swapping to the next. Resets cleanly when the queue
-// shrinks (e.g. when the underlying poll returns fewer recent positives).
+// One award at a time. Each new positive-PBIS event runs through three
+// phases on its house's bar:
+//
+//   1. RISE   (RISE_MS)   — animation climbs the bar. Tile is hidden.
+//   2. SHOW   (HOLD_MS)   — animation done; celebration tile is "delivered"
+//                           at the top of the bar.
+//   3. GAP    (GAP_MS)    — bar goes quiet; nothing on screen. Then the
+//                           next queued event plays. This blank beat makes
+//                           it unambiguous that the NEXT card is a new
+//                           award, not a continuation of the previous one.
+//
+// Only ONE bar is ever active at a time, on the entire screen.
 // =============================================================================
-const FEATURED_HOLD_MS = 5_000;
+const RISE_MS = 1_300;
+const HOLD_MS = 5_000;
+const GAP_MS = 6_000;
 
 function FeaturedPopup({
-  events,
+  event,
   barPct,
 }: {
-  events: PulseEventLite[];
-  // Height (in %) of the leading house's bar fill. We use this to keep the
-  // popup visually attached to the TOP of the bar rather than the top of
-  // the frame — otherwise the popup floats in empty space when the leader's
+  event: PulseEventLite;
+  // Height (in %) of the host bar's fill. We use this to keep the
+  // popup visually attached to the TOP of the bar rather than the top
+  // of the frame — otherwise the popup floats in empty space when the
   // bar is short (early in a school year, or first day after rollout).
   barPct: number;
 }) {
-  const [idx, setIdx] = useState(0);
-
-  useEffect(() => {
-    // Snap back to the head of the queue whenever the underlying list
-    // changes — that way "newest first" stays true even if the previously-
-    // featured event scrolled off after a poll.
-    setIdx(0);
-  }, [events.map((e) => e.id).join("|")]);
-
-  useEffect(() => {
-    if (events.length <= 1) return;
-    const t = window.setInterval(() => {
-      setIdx((i) => (i + 1) % events.length);
-    }, FEATURED_HOLD_MS);
-    return () => window.clearInterval(t);
-  }, [events.length]);
-
-  if (events.length === 0) return null;
-  const e = events[idx % events.length];
-
+  const e = event;
   // Bar fill top edge in % from frame top. We sit the popup ~12px below
   // that edge so it visually overlaps the top of the colored bar. If the
   // bar is very tall the popup must still leave room for the points label
@@ -157,20 +153,138 @@ function FeaturedPopup({
   );
 }
 
-export default function HousesSignage() {
-  const schoolId = schoolIdFromUrl();
-  const validSchool = Number.isFinite(schoolId) && schoolId > 0;
+// `schoolId` prop:
+//  - omitted (default): legacy TV/kiosk behavior — read schoolId from the
+//    URL query string. The screen runs unauthenticated so the explicit
+//    schoolId is required.
+//  - "session": in-app authenticated render. Drop schoolId from the URL
+//    and let the API fall back to the logged-in user's school. This is
+//    how the in-app "House Rankings" nav item embeds the same screen.
+interface HousesSignageProps {
+  schoolId?: number | "session";
+}
 
-  const houses = usePolling<HousesPayload>(
-    validSchool ? `/api/houses?schoolId=${schoolId}&windowDays=7` : null,
-    30_000,
-  );
-  // Polled separately from /houses so the action feed and featured-popup
-  // queue refresh independently of the leaderboard math.
-  const events = usePolling<EventsPayload>(
-    validSchool ? `/api/pulse/events?schoolId=${schoolId}&windowMinutes=120&limit=24` : null,
-    30_000,
-  );
+export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageProps = {}) {
+  const urlSchoolId = schoolIdFromUrl();
+  const sessionMode = schoolIdProp === "session";
+  const schoolId =
+    typeof schoolIdProp === "number" ? schoolIdProp : urlSchoolId;
+  const validSchool = sessionMode || (Number.isFinite(schoolId) && schoolId > 0);
+
+  // Build the API URL with schoolId omitted in session mode so the server
+  // falls back to req.schoolId from the cookie session — avoids leaking
+  // the current schoolId into a query param the user could tamper with.
+  const housesUrl = validSchool
+    ? sessionMode
+      ? `/api/houses?windowDays=7`
+      : `/api/houses?schoolId=${schoolId}&windowDays=7`
+    : null;
+  const eventsUrl = validSchool
+    ? sessionMode
+      ? `/api/pulse/events?windowMinutes=120&limit=24`
+      : `/api/pulse/events?schoolId=${schoolId}&windowMinutes=120&limit=24`
+    : null;
+
+  const houses = usePolling<HousesPayload>(housesUrl, 15_000);
+  // Polled aggressively (5s) so a fresh PBIS award — Spotlight or
+  // anywhere else — reaches the signage and jumps to the front of
+  // the queue within seconds, not half a minute.
+  const events = usePolling<EventsPayload>(eventsUrl, 5_000);
+
+  // ---------------------------------------------------------------------------
+  // SEQUENCER — one award at a time, choreographed.
+  // ---------------------------------------------------------------------------
+  // On first successful events poll we snapshot every existing event id as
+  // "already seen" so historical events don't replay when the screen loads.
+  // From then on, any new positive-PBIS event with a known houseId is
+  // pushed onto `pendingRef`. A driver effect drains the queue in order:
+  //
+  //   idle → rising (RISE_MS) → showing (HOLD_MS) → idle (GAP_MS) → next
+  //
+  // Only one event is ever active. While idle, every bar is quiet.
+  const seenIdsRef = useRef<Set<string>>(new Set());
+  const seededRef = useRef(false);
+  const pendingRef = useRef<PulseEventLite[]>([]);
+  // True while a rise→show→gap sequence is in flight. Prevents the driver
+  // effect from starting a second sequence on top of the first.
+  const runningRef = useRef(false);
+  const [active, setActive] = useState<{
+    event: PulseEventLite;
+    phase: "rising" | "showing";
+  } | null>(null);
+  // Bump on every new-event detection AND at the end of each sequence so
+  // the driver effect wakes up to pick the next event.
+  const [enqueueTick, setEnqueueTick] = useState(0);
+
+  useEffect(() => {
+    const list = events.data?.events ?? [];
+    // Threshold for the first-poll seed: events older than this are
+    // considered "history" and silently marked as seen so they don't
+    // flood the screen on page load. Events newer than this are treated
+    // as fresh and run through the celebration sequence — that way an
+    // award you just made (e.g. via Spotlight) right before opening the
+    // signage tab still gets celebrated.
+    const FRESH_CUTOFF_MS = 60_000;
+    const cutoff = Date.now() - FRESH_CUTOFF_MS;
+
+    // Newest events arrive first from the API; we want them played
+    // NEWEST FIRST as well — a freshly-awarded student should jump to
+    // the front of the queue, ahead of anything still pending.
+    const fresh: PulseEventLite[] = [];
+    for (const e of list) {
+      if (seenIdsRef.current.has(e.id)) continue;
+      // On first poll, history events get marked seen but skipped.
+      if (!seededRef.current) {
+        const t = new Date(e.createdAt).getTime();
+        if (!Number.isFinite(t) || t < cutoff) {
+          seenIdsRef.current.add(e.id);
+          continue;
+        }
+      }
+      seenIdsRef.current.add(e.id);
+      if (
+        e.kind === "positive" &&
+        e.source === "pbis" &&
+        (e.points ?? 0) > 0 &&
+        e.houseId != null
+      ) {
+        fresh.push(e);
+      }
+    }
+    seededRef.current = true;
+    if (fresh.length === 0) return;
+    // Prepend so the newest events play next — anything already queued
+    // from a prior poll gets pushed back behind them.
+    pendingRef.current.unshift(...fresh);
+    setEnqueueTick((t) => t + 1);
+  }, [events.data]);
+
+  useEffect(() => {
+    // Single driver. Re-entrant safe via runningRef — re-firing while a
+    // sequence is playing is a no-op. We deliberately do NOT return a
+    // cleanup that cancels timers: tearing down mid-sequence would cancel
+    // the phase transition and the celebration tile would never get
+    // rendered. The signage screen is a long-lived display, so accepting
+    // a tiny shutdown leak is the right trade.
+    if (runningRef.current) return;
+    const next = pendingRef.current.shift();
+    if (!next) return;
+    runningRef.current = true;
+    setActive({ event: next, phase: "rising" });
+    window.setTimeout(() => {
+      // Rise complete — deliver the celebration tile.
+      setActive({ event: next, phase: "showing" });
+      window.setTimeout(() => {
+        // Hold complete — clear the tile, then wait out the gap before
+        // releasing the lock so the next event can play.
+        setActive(null);
+        window.setTimeout(() => {
+          runningRef.current = false;
+          setEnqueueTick((t) => t + 1);
+        }, GAP_MS);
+      }, HOLD_MS);
+    }, RISE_MS);
+  }, [enqueueTick]);
 
   if (!validSchool) {
     return <ScreenError message="No schoolId in the URL." />;
@@ -206,14 +320,40 @@ export default function HousesSignage() {
   const recentForFeed = allEvents
     .filter((e) => typeof e.points === "number" && e.points !== 0)
     .slice(0, 6);
-  // Featured popup queue = positive PBIS only — that's the celebratory
-  // moment we want to broadcast on the leading bar.
-  const featuredQueue = allEvents
-    .filter((e) => e.kind === "positive" && e.source === "pbis" && (e.points ?? 0) > 0)
-    .slice(0, 8);
-
   return (
     <div className="min-h-screen w-full bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white overflow-hidden relative">
+      {/* In-bar "heartbeat" pulse: a soft glow blip that rises from the
+          bottom of a house's vertical bar to the top whenever that
+          house gains points. Replayed by remounting the node on a
+          counter-bound key. Kept under 1s so back-to-back awards stack
+          visually without queuing. */}
+      <style>{`
+        /* Dramatic rising "heartbeat": starts as a small spark anchored
+           to the bottom of the bar, then climbs and inflates as it rises,
+           culminating right under the name/points label at the top. The
+           transform-origin is bottom-center so scaling grows outward and
+           upward from the source point, giving a flame/plume shape. */
+        @keyframes housePulseRise {
+          0%   { transform: translateY(0%)    scale(0.10); opacity: 0; }
+          12%  { transform: translateY(-8%)   scale(0.18); opacity: 1; }
+          55%  { transform: translateY(-55%)  scale(0.55); opacity: 1; }
+          85%  { transform: translateY(-92%)  scale(1.05); opacity: 0.95; }
+          100% { transform: translateY(-100%) scale(1.30); opacity: 0; }
+        }
+        /* Arrival burst — a bright halo that blooms behind the name/points
+           label exactly when the rising spark reaches the top. Times its
+           peak around 80% so it overlaps the climax of the rise. */
+        @keyframes housePulseBurst {
+          0%, 55% { opacity: 0; transform: scale(0.45); }
+          78%     { opacity: 1; transform: scale(1.25); }
+          100%    { opacity: 0; transform: scale(2.00); }
+        }
+        @keyframes houseBarFlash {
+          0%   { box-shadow: 0 0  50px -10px var(--bar-glow); }
+          45%  { box-shadow: 0 0 130px  20px var(--bar-glow); }
+          100% { box-shadow: 0 0  50px -10px var(--bar-glow); }
+        }
+      `}</style>
       <div
         className="absolute inset-0 opacity-[0.04] pointer-events-none"
         style={{ backgroundImage: "radial-gradient(circle at 1px 1px, white 1px, transparent 0)", backgroundSize: "24px 24px" }}
@@ -337,6 +477,12 @@ export default function HousesSignage() {
               const posPct = meterTotal > 0 ? (h.positiveCount / meterTotal) * 100 : 50;
               const negPct = 100 - posPct;
               const isLeader = leader?.id === h.id;
+              // Sequencer hooks: only the bar matching the active event
+              // animates, and only during its rising phase. Everything
+              // else stays quiet.
+              const isRising = active?.phase === "rising" && active.event.houseId === h.id;
+              const isShowing = active?.phase === "showing" && active.event.houseId === h.id;
+              const sequenceKey = active?.event.id ?? "idle";
               return (
                 <div key={h.id} className="relative h-full flex flex-col">
                   {/* Frame */}
@@ -347,7 +493,14 @@ export default function HousesSignage() {
                         height: `${pct}%`,
                         background: gradientFromColor(h.color),
                         boxShadow: `0 0 50px -10px ${h.color}b3`,
+                        // CSS var consumed by the houseBarFlash keyframe so the
+                        // glow tint matches the house color without inlining
+                        // the hex into the animation.
+                        ["--bar-glow" as string]: `${h.color}cc`,
+                        // Flash only while the spark is rising on THIS bar.
+                        animation: isRising ? "houseBarFlash 1300ms ease-out" : undefined,
                       }}
+                      key={`bar-${h.id}-${sequenceKey}-${isRising ? "rise" : "idle"}`}
                     >
                       <div className="absolute inset-x-0 top-2 text-center text-sm font-black text-white drop-shadow tabular-nums">
                         {h.totalPoints.toLocaleString()}
@@ -361,9 +514,47 @@ export default function HousesSignage() {
                           {h.weekPoints} pts this week
                         </div>
                       )}
+                      {/* RISING SPARK — only renders during the rising
+                          phase of THIS bar's active event. Keyed on the
+                          event id so each celebration replays cleanly. */}
+                      {isRising && (
+                        <div
+                          key={`pulse-rise-${h.id}-${sequenceKey}`}
+                          className="pointer-events-none absolute left-1/2 bottom-0 z-10"
+                          style={{
+                            width: "100%",
+                            height: "100%",
+                            marginLeft: "-50%",
+                            transformOrigin: "center bottom",
+                            background: `radial-gradient(ellipse 35% 55% at 50% 100%, #ffffff 0%, ${h.color} 35%, ${h.color}66 60%, transparent 80%)`,
+                            filter: `drop-shadow(0 0 24px ${h.color}) drop-shadow(0 0 48px #ffffff80)`,
+                            animation: `housePulseRise ${RISE_MS}ms cubic-bezier(0.25, 0.8, 0.3, 1) forwards`,
+                            mixBlendMode: "screen",
+                          }}
+                        />
+                      )}
+                      {/* ARRIVAL BURST — halo that blooms behind the
+                          name/points label as the spark reaches the top.
+                          Times out with the rise so the tile gets
+                          "delivered" into a clean frame. */}
+                      {isRising && (
+                        <div
+                          key={`pulse-burst-${h.id}-${sequenceKey}`}
+                          className="pointer-events-none absolute inset-x-0 top-0 h-28 z-10"
+                          style={{
+                            background: `radial-gradient(ellipse 60% 80% at 50% 25%, #ffffff 0%, ${h.color} 35%, transparent 75%)`,
+                            filter: `drop-shadow(0 0 32px #ffffff)`,
+                            animation: `housePulseBurst ${RISE_MS}ms ease-out forwards`,
+                            mixBlendMode: "screen",
+                          }}
+                        />
+                      )}
                     </div>
-                    {/* Featured popup rotates 5s per item — only on the leading bar */}
-                    {isLeader && <FeaturedPopup events={featuredQueue} barPct={pct} />}
+                    {/* Celebration tile — delivered after the rise
+                        completes, on the awarded bar only. */}
+                    {isShowing && active && (
+                      <FeaturedPopup event={active.event} barPct={pct} />
+                    )}
                   </div>
 
                   {/* Label + member count */}
@@ -424,6 +615,53 @@ export default function HousesSignage() {
         </div>
         <div className="font-semibold">PulseEDU · School Operations</div>
       </footer>
+      <DemoFireButton />
     </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// DemoFireButton — small bottom-right control that POSTs to the demo
+// heartbeat fire endpoint. Bypasses cadence + bell-window so the operator
+// can demo the in-bar pulse + action-feed on demand. The server gates the
+// endpoint behind isDemoHeartbeatEnabled() so this is a no-op in prod.
+// -----------------------------------------------------------------------------
+function DemoFireButton() {
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState<null | "ok" | "skip" | "err">(null);
+  async function fire() {
+    if (busy) return;
+    setBusy(true);
+    setFlash(null);
+    try {
+      const r = await fetch("/api/demo-heartbeat/fire", { method: "POST" });
+      if (!r.ok) {
+        setFlash("err");
+      } else {
+        const data = (await r.json()) as { fired: boolean };
+        setFlash(data.fired ? "ok" : "skip");
+      }
+    } catch {
+      setFlash("err");
+    } finally {
+      setBusy(false);
+      window.setTimeout(() => setFlash(null), 2500);
+    }
+  }
+  const label =
+    flash === "ok" ? "Fired ✓" :
+    flash === "skip" ? "Skipped (cooldown)" :
+    flash === "err" ? "Failed" :
+    busy ? "Firing…" : "Fire heartbeat";
+  return (
+    <button
+      type="button"
+      onClick={fire}
+      disabled={busy}
+      title="Force one demo PBIS award now (bypasses cadence + school hours)"
+      className="fixed bottom-3 right-4 z-50 text-[11px] font-medium px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white border border-white/15 backdrop-blur-sm transition-colors disabled:opacity-50"
+    >
+      {label}
+    </button>
   );
 }

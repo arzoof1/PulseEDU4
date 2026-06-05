@@ -59,7 +59,7 @@ Serve the client and proxy `/api` on the same host when possible so the browser 
 
 ## Product
 
-- **Display Management**: Per-school playlists for digital signage TVs, supporting image, video, audio, and PDF items. Includes scheduling, PBIS house standings, active hall pass displays, and Heartbeat signage.
+- **Display Management**: Per-school playlists for digital signage TVs, supporting image, video, audio, and PDF items. Includes scheduling, PBIS house standings, active hall pass displays, and Heartbeat signage. **Live Remote Control**: a presenter can drive every TV on a playlist PowerPoint-style without re-entering any URL — TVs keep their `/display/:id` URL and poll a tiny public live-control endpoint (~2s). Per-playlist state (`display_live_control` table) with three modes: `auto` (timed cycling), `manual` (step this playlist's items, timers off), `presentation` (take the same TVs over with a chosen deck playlist OR ad-hoc live URL like Google Slides/Canva, then "End session" reverts to Auto). Position is `{itemIndex, pageIndex}` + monotonic `revision`; PDFs are page-controllable. Mobile-friendly "Remote / Present" panel per playlist card. WebRTC screen mirroring deferred. (Full detail in `docs/shipped.md`.)
 - **Safety Plans**: Per-student behavioral/physical safety checklists with library items, audit logs, and role-based access (Guidance Counselor/Core Team for editing, all staff for viewing). Integrated into student rosters and profiles.
 - **PBIS Hub & Store**: PBIS point tracking, student recognition, and two reward catalogs (Classroom Store, School Store). School Store is school-wide and read-only for teachers, with full edit controls for admins/PBIS coordinators.
 - **MTSS Intervention Plans**: Tier 2/3 intervention plan tracking for students, including goal setting, weekly progress monitoring, strategy categories, and completion reports. Features a tier-aware launcher and bell notification system.
@@ -67,6 +67,12 @@ Serve the client and proxy `/api` on the same host when possible so the browser 
 - **Insights Dashboards**: Suite of analytics dashboards (Engagement, Behavior, Academics, SEB/SEL, Equity, Early Warning) providing aggregate data, trends, and top-N lists. Features grade/window filters, demographic disaggregation, and drill-down to student profiles.
 - **Teacher Roster**: Comprehensive view for teachers of their students, including FAST scores, ESE/504/ELL program flags, and safety plan indicators. Core Team members can view any teacher's roster.
 - **Data Importer**: Generic importer for assessments, rosters, and behavior data, supporting CSV uploads with template mapping, preview, commit, and rollback functionality.
+- **Intensive Group Insights**: Read-only Class Composer (Insights → Class Composer, admin/Core Team) proposing intensive-group sections from FAST item-level weakness (4 modes incl. Skill-cluster) — deterministic groups with a dominant skill focus, cohesion %, print + CSV. Plus a Group Insights tab on Teacher Roster for intensive-flagged sections (course-name heuristic) showing section profile, recommended focus standards, sub-groupings, and PM-window drift. Skyward/RosterOne stays the source of truth — never writes to `section_roster`/`class_sections`. Admin Hub PM3-complete nudge banner + matching onboarding step. (Full detail in `docs/shipped.md`.)
+- **School Tours (Enrollment Leads)**: Per-school public bilingual (EN/ES) "brag page" (`/tour/:schoolId`, admin-editable) — admin free text auto-machine-translated EN→ES on toggle (server-side via the Anthropic integration `lib/tourTranslate.ts`; cached on a `translations` jsonb column on `tour_pages` keyed by lang + `sourceHash`, regenerated on admin edit; public GET takes `?lang=es`, falls back to English on failure; only ES wired today) — with a "Request Your Tour" form feeding a sales-style lead pipeline (New→Contacted→Scheduled→Toured→Closed, outcome Enrolled/Deciding/Chose-elsewhere) with assignable owners, append-only event timeline, response-time/overdue clock, family auto-ack, email + in-app notify (tour-notify audience via `capTourNotify`) + alert banner, and an outcome→enrollment conversion report. Brag-sheet + post-tour PDFs (QR → post-tour survey `/tour/survey/:token`); lead-drawer PDFs **download to disk** (see Gotchas — opening/printing in a tab breaks in the preview iframe). School-uploaded labeled flyers (multiple supported, one per program; rendered at the TOP of the public page as full inline documents — full-width images / inline PDF viewer with mobile fallback — each with an Open + Download action) + photos (swipeable carousel pinned to the BOTTOM) + per-school text placement (intro top vs. just-above-gallery) & header font color, all via object storage (tenant-private, streamed by index on unauthenticated public routes; legacy http(s) photo URLs still render). District-level branding (logo + tagline) is set ONCE by a SuperUser and inherited identically by every school (schools can't change it), with four independent placement toggles — hero-top (ON), documents (ON), footer (OFF), watermark (OFF); logo streams by ACL-bypass and the PDFs embed it only when the documents toggle is on. SMS stubbed via env-gated AWS SNS helper (`lib/sms.ts`). Admin-configured per-school **Tour Checkpoints** (label + staff-only location/talking-points/minutes; keys minted server-side by `sanitizeCheckpoints`, stored `checkpoints` jsonb on `tour_pages`) surface as checkboxes on the public Request-a-Tour form ("What would you like to see on your tour?", EN/ES) — the free-text box stays as optional "Anything else?". Family picks store as `interest_selections` jsonb on `tour_requests` (validated against current page keys); the lead drawer shows them as chips and a both-in-one **Tour Roadmap PDF** (`GET /tours/requests/:id/roadmap.pdf`, `lib/tourRoadmapPdf.ts`) prints prep info up top + the selected stops as a staff check-off checklist with note lines (downloads to disk). The **Brag-sheet PDF** also lists the selected checkpoint labels (structured) above the free-text "anything else" note. A family-facing **Tour Note Catcher PDF** (`GET /tours/requests/:id/note-catcher.pdf`, `lib/tourNoteCatcherPdf.ts`) gives families general tour info + a labelled note area (ruled lines) per selected stop for follow-up questions — label only, never the staff-only location/talking-points. Module uses `authFetch` directly (not OpenAPI codegen). (Full detail in `docs/shipped.md`.)
+- **Parent Pick-Up Module**: Curb keypad (`/pickup/curb`, phone-first entry + sibling roll-up scoped to authorizations, restricted-tag override), walker gate (`/pickup/walkers`, bell-window enforced), admin authorization issuer (bulk assign, lost-tag reissue, guardian splits, single + batch QR tag PDFs, capacity warning), classroom signage tile, and Admin Hub "Still on campus" reconciliation tile. Role gate `canManagePickup` (`lib/coreTeam.ts`) admits admin + Core Team + counselor + front-office + confidential secretary; teachers excluded. Append-only audit in `pickup_queue_events`. (Full detail in `docs/shipped.md`.)
+- **Event Ticketing (Phase 1)**: Schools create FREE-ticket events (8th-grade promotion, graduation), allocate a per-student quota by grade (with per-student overrides + excludes), and email each student's guardian their QR tickets (**a separate email per student** — siblings get one email each). Five tables (`ticket_events`, `ticket_grants` with email-status snapshot, `tickets` with unguessable base64url token + `seq X of N` + status valid/used/void, append-only `ticket_scan_events` audit, no-login `ticket_scanner_links`). Delivery is **all three**: inline QR in the email body + a printable PDF attachment + Parent Portal view/download — each carries the responsibility verbiage (scanning permanently uses a ticket; the guardian owns not over-sharing). Scanning is **both** the staff app (logged-in, `/scan` in-app) and a **no-login volunteer "scanner link"** (token-scoped); first scan admits, rescans show "already used", with atomic first-scan-wins (SQL conditional update so concurrent scans can't double-admit). Capacity cap with live "X of Y admitted" + near-full warning; manual name lookup fallback. No-guardian-email students get **both** a printable office handout AND a "couldn't send" report; the front office can print **any** family's tickets on demand regardless of email status (download-to-disk per the PDF/iframe gotcha). Admin module under Settings (tile `event-tickets`, group `family-signage`); role gate `canManageTickets` (`lib/coreTeam.ts`) admits admin + Core Team + counselor + front-office. Shared verbiage + short-code in `lib/ticketCopy.ts`. Gate scanner has a "Clear · ready for next" button (release last result on demand) + a read-only **Scan history** admin audit view (`GET /ticketing/events/:id/scan-history`, result/gate filters, CSV export). Phase 2 room left for paid (Stripe), reserved seating, transfer tracking, waitlists. (Full detail in `docs/shipped.md`.)
+
+- **School Grade Estimated Calculator (Phase 1)**: Admin/Core-Team tool (Settings tile `school-grade`, gate `canManageSchoolGrade` in `lib/coreTeam.ts` = admin + Core Team) that estimates the Florida MS school grade per PM window. 9 components ×100 = 900 pts; bands A 64-100/B 57-63/C 44-56/D 34-43/F 0-33 (all 5 school-type band sets stored in `lib/schoolGrade.ts`). Six FAST components auto-computed from `student_fast_scores` (`lib/schoolGradeEngine.ts`): ELA/Math Achievement (% Level 3+), ELA/Math Learning Gains, ELA/Math LG Lowest-25%. **LG prior-year evidence comes from `loadFastHistory` historical PM3 — the same source as the Teacher Roster green-check — NEVER `priorYearScore` (the two surfaces must agree).** At PM1/PM2 the LG components are PROJECTIONS (`projectLearningGain`, status `projected`); at PM3 they use the strict PM3-to-PM3 rule (`decideLearningGain`). Three manual components (Science Gr8, Civics/SS Gr7, Acceleration) entered per window. Grade total excludes null components from both numerator and denominator. Year-over-year history table (hand-entered, `school_grade_history`; PUT patches only sent fields), Celebrate/Weakness/Focus/Growth panels, % tested + 95% participation warning, survey-upload placeholders, CSV export. Module uses `authFetch` directly (not OpenAPI codegen). Additive schema via idempotent CREATE TABLE IF NOT EXISTS at boot (`ensureSchoolGradeSchema`). Shared LG helper extracted to `lib/learningGains.ts` (also used by Teacher Roster). Selecting PM3 surfaces a "PM3 result uploads" card requesting Civics/Science/Algebra I/Geometry result files (stored as placeholders in `school_grade_surveys` via the `UPLOAD_KINDS` union — `pm3_*` kinds; not yet parsed). **Phase 2** (deferred): PM3 matched-survey cohort, parsing those uploads into the calc, acceleration compute.
 
 ## User preferences
 
@@ -83,73 +89,132 @@ _Populate as you build_
 
 ## Future work
 
+### Recently shipped
+
+Archived to `docs/shipped.md` (most-recent first; reference only, no
+remaining action). When you ship something new, add a bullet to the top
+of `docs/shipped.md`.
+
+### Open work
+
+- **LG subject-band promotions (Algebra I etc.).** Phase 1 +
+  Phase 2 of the LG green-check are SHIPPED. Phase 2 extended
+  the `learningGain` branch in `buildSubjectBlock`
+  (`routes/teacherRoster.ts`) to credit within-level moves in
+  L1/L2 by sub-tier, e.g. 1.1 → 1.2, 1.2 → 1.3, or 2.1 → 2.2.
+  Same/lower sub-tier = no check. Sub-tier comes from
+  `placeOnChart` in `lib/fastCutScores.ts`: L1 is split into
+  thirds (1.1/1.2/1.3), L2 currently only into halves (2.1/2.2).
+  If FLDOE confirms a Level-2 Upper third, extend the L2 ranges
+  in `fastCutScores.ts` and the LG branch picks it up for free.
+  Still open: subject-band promotions (Algebra I etc.) remain
+  uncredited — out of scope until the FL importer captures
+  prior course code.
+
+- **Historical FAST data + Algebra I placement review.**
+  Phase 1 (~1.5 wk): extend the existing FAST importer with a
+  "prior school year" toggle (PM3-only, score + level + grade,
+  no strand). Add `fast_results.is_historical` + new
+  `algebra_placement_overrides` table. Per-school
+  `fast_history_years_visible` setting (default 3, min 2,
+  max 5 — 5 cap because FAST only launched in FL 22-23; older
+  data would be FSA on a different scale). Imports older than
+  the visible window stay dormant, never deleted. (Multi-year
+  FAST history chip on student profile + teacher roster + MTSS
+  plan editor — SHIPPED, see `lib/fastHistory.ts`.) Add
+  "Algebra I Placement Review"
+  admin report (admin + Core Team + Counselor view; admin +
+  Counselor override) listing every current L3+ 7th-grader with
+  their multi-year PM3 trajectory + a "Move to Regular 8th
+  Math" override modal requiring justification + parent-opt-out
+  checkbox + optional opt-out PDF upload (reuses object
+  storage). All overrides audit-logged. Report exports as CSV +
+  printable PDF (reuses Class Composer PDF infra). Class
+  Composer gets a `trajectoryFilter` param so cusp recipes can
+  optionally fold in first-time L3s.
+  Phase 2 (later, after schools have 2–3 yrs of data
+  accumulating naturally): longitudinal teacher / school
+  dashboards — year-over-year cohort growth per teacher, cohort-
+  following views, multi-year subgroup equity trends. Surface as
+  a "Multi-year" toggle on existing Insights pages, not new
+  pages. Teacher-level rollups admin-only by default, framed as
+  "growth context" not evaluation, never exposed to parent
+  portal or teacher-facing views without explicit admin enable.
+  Gracefully tag rollups attributed to deleted/transferred staff
+  as "former staff member" rather than dropping the data.
+  Pays off in: Algebra placement defensibility, MTSS tier exit
+  decisions, 3rd-grade retention good-cause portfolios, gifted
+  referral flags, summer-school seat targeting, ELL post-exit
+  monitoring, IEP annual review prep.
+
 - **AI Consistency Check — onboarding step + admin telemetry tile.**
-  Phase 3 shipped the runtime feature (header pill, side panel,
-  per-row dot, dismiss-with-justification, "What the AI saw"
-  drawer). Two follow-ups remain from the original session plan:
-  - Add a "Review Consistency Check guardrails" step in the
-    Behavior & PBIS onboarding phase. This is server-side step
-    registration in `artifacts/api-server/src/lib/onboardingSteps.ts`
-    plus an "I understand" school setting marker. Informational
-    only — closes by acknowledging that Core Team is the only
-    audience and that dismissals are persistent suppressions.
-  - Add a Settings tile "Consistency Check — this month" with
-    a small ConsistencyTelemetryPage showing runs, open findings,
-    dismissed findings, and total tokens spent. Backed by a new
-    `GET /api/watchlist/consistency-telemetry` aggregate route
-    (admin-gated). Cheap COUNT/SUM over the runs + findings tables
-    grouped by current month.
+  (1) Register a "Review Consistency Check guardrails" step in
+  `lib/onboardingSteps.ts` (Behavior & PBIS phase) with an
+  "I understand" school-setting marker — informational only,
+  Core Team is the sole audience. (2) Add Settings tile
+  "Consistency Check — this month" backed by
+  `GET /api/watchlist/consistency-telemetry` (admin-gated;
+  cheap COUNT/SUM grouped by current month over runs + findings).
 
-- **School-local timezone for case-number school-year derivation.**
-  Today `schoolYearLabelFor(new Date())` (server) and the seed
-  migration's `EXTRACT(MONTH FROM opened_at)` both use server-local
-  time. Single-TZ deployments are fine, but the moment a cross-TZ
-  tenant is onboarded a case opened late on June 30 in Pacific time
-  will be stamped `26-27` instead of `25-26` (and similarly the year
-  portion at the Dec/Jan boundary). Fix by either (a) adding a
-  per-school IANA timezone column and threading it into the helper +
-  migration, or (b) explicitly forcing one canonical TZ
-  (`AT TIME ZONE 'America/New_York'`) and documenting it. Schedule
-  before onboarding the first non-Eastern school.
+- **School-local timezone — per-school IANA column.** Canonical
+  `America/New_York` (`DEFAULT_SCHOOL_TZ` in `lib/schoolYear.ts`)
+  is used by `schoolYearLabelFor`, seed case backfill, AST
+  insights, and the lapse cron. Before onboarding the first
+  non-Eastern school, swap the constant for a per-school IANA
+  column and thread it through all four callers.
 
-- **Refresh Core Team "How this works" / directions copy after the 4-phase
-  case enhancement suite ships.** Each new feature (mention tagging,
-  video evidence panel, AI consistency check, Case Insights dashboard)
-  needs its blurb added to the Core Team-facing help/directions panels
-  so a new admin onboarding mid-year understands what each affordance
-  does and where the admin-only gating starts/stops. Do this as a single
-  pass after Phase 4 — writing it piecemeal per phase invites drift.
+- **Refresh Core Team "How this works" copy after Phase 4 case
+  enhancements ship.** Tagging, video evidence panel, AI consistency
+  check, and Case Insights dashboard each need a blurb in the Core
+  Team-facing help/directions panels. Do as a single pass after
+  Phase 4 — piecemeal edits drift.
 
-- **Witness statement chronological numbering (raise at end of 4-phase case enhancement rollout).**
-  Today witness statements are addressable only by internal DB id. Admins
-  asked for a human-readable identifier they can write on a printed copy
-  or quote to a parent/officer when the original is requested later.
-  Recommended approach: per-case sequence rather than a global counter —
-  format `CASE-{year}-{caseNumber}-WS-{seq}` (e.g. `CASE-2026-0042-WS-03`).
-  - Assign `ws_seq INT` on the witness_statements row at the moment the
-    owning interaction is attached to a case (promote-to-case OR PATCH
-    interaction caseId). Statements on still-loose interactions stay
-    un-numbered until promotion, which matches investigative reality.
-  - Composite unique index `(school_id, case_id, ws_seq)`. Sequence is
-    derived as `MAX(ws_seq) + 1` within the case under the same `FOR
-    UPDATE` lock the promote/attach flow already takes, so two concurrent
-    attaches can't collide.
-  - Surface the formatted ID in: PlayerDrawer header, Case Detail
-    statements list, witness statement PDF/print, and the audit log
-    payload. Make it copy-on-click.
-  - Backfill existing already-attached statements once at deploy time
-    using `created_at ASC` order within each case.
-  - A separate global statement number (`WS-2026-04412`) was considered
-    and rejected: admins look up by case first, and a global counter
-    duplicates the cross-reference work case# already does.
+- **Pickup module — small follow-ups.** (1) 5-digit expansion path:
+  4-digit range (1001–9999, 8999 slots/school) is plenty until a
+  tenant exceeds ~7200 active tags (80% warn). When that fires, bump
+  `NUMBER_RANGE_MAX` in `routes/pickup.ts` to 99999, narrow the PDF
+  tag font, accept 4-or-5-digit input on the curb keypad. Schema
+  already TEXT — no migration. (2) Open design question: in-app
+  chime when a car is "added to line." Leaning visual-only since
+  high-volume schools (30 cars/min) would have overlapping chimes.
 
-- **Admin Hub ISS log: view detail + edit/delete with audit guardrails**
-  Click into a row in the Admin Hub recent feed to see the full assignment.
-  - **Delete entire assignment**: only allowed if **no day has been served yet** (no `iss_attendance_day` rows for that `admin_log_id` show any served signal — present periods, marked-served, or rolled-from). Audit retention for partially-served assignments is intentional.
-  - **Trim the tail**: even on a partially-served assignment, the user should be able to remove **future** day rows (and **today's** row only while it has not yet been served — i.e. `present_periods` is empty AND `marked_served = false`). Already-served past days are immutable.
-  - **Edit reason / notes / dates**: future days can be re-dated; past served days cannot. Reason and notes are editable on any non-cancelled assignment, with the change recorded in an audit trail.
-  - **Required "reason for edit"**: every edit/trim/delete prompts the user for a short justification ("why are you changing this?") that is stored on the audit row. This is the column auditors will read first to understand whether a change was a typo correction, a legitimate behavior update, or something that needs follow-up. Should be required (non-empty, min ~5 chars), not optional.
-  - Needs a server-side audit log table for who/when/what/why changed before shipping (columns at minimum: `admin_log_id`, `actor_staff_id`, `actor_display_name`, `action` enum [`edit_reason` | `edit_notes` | `edit_dates` | `trim_days` | `delete_assignment`], `before_json`, `after_json`, `edit_reason TEXT NOT NULL`, `created_at`).
+- **Student Photos — prerequisite for walker verification + useful
+  app-wide.** Today walker page renders placeholders. Storage:
+  re-use `/api/storage/*` via `bindObjectToSchool`, new
+  `students.photo_object_key TEXT NULLABLE` column, school-scoped
+  staff-only ACL (no parent-portal exposure). Two ingestion paths:
+  (a) bulk yearbook ZIP named by `student_id` (or CSV mapping) via
+  the data-importer pattern; (b) per-student "Take photo" using
+  `getUserMedia`, cropped to square. Surface in student profile,
+  PBIS Hub cards, teacher roster avatars, Spotlight reveal, pickup
+  curb confirmation, walker gate, safety-plan picker. Fallback:
+  existing initials bubble when null. Privacy: `students.photo_consent
+  BOOL DEFAULT true` — when false, render initials regardless;
+  don't delete the file (schools flip the toggle back).
+
+- **Witness statement numbering — UI surfacing.** Data layer
+  shipped. Still TODO: surface the formatted ID in PlayerDrawer
+  header, Case Detail statements list, witness statement PDF/print,
+  and the audit log payload (copy-on-click). Backfill existing
+  attached statements once at deploy time using `created_at ASC`
+  per case.
+
+- **AST follow-ups.** (1) Voluntary mid-year transfer zero-out
+  hook: ledger is keyed to `staff_id`, not `(school_id, staff_id)`,
+  so the bank silently follows on transfer. Enforce a
+  `transfer_out` ledger entry in the staff-transfer admin path and
+  add a current-school filter in `/api/ast/me`. (2) Optional weekly
+  Friday digest email (per-school `ast_email_digest_enabled`,
+  default OFF; uses existing Resend integration). (3) Per-staff
+  ledger drilldown: `GET /api/ast/staff/:id/ledger` (admin-gated)
+  + modal from Staff & Roles for balance disputes / bargaining-unit
+  reports.
+
+- **Feature licensing Phase 4 candidates.** (1) Wire a third quota
+  consumer to keep `KNOWN_SEAT_QUOTAS` honest (good candidate:
+  `mtss.maxActivePlans` or `displays.maxConcurrentSchedules`).
+  (2) Per-feature usage charts in the SuperUser admin page (sparkline
+  over 30 days, fed by the existing audit log).
 
 ## Gotchas
 
@@ -158,6 +223,8 @@ _Populate as you build_
 - **API route shadowing**: When adding new API routes, especially with dynamic segments, ensure more specific routes are defined before broader ones to prevent shadowing.
 - **Cron jobs and environment variables**: Cron jobs are often conditional on `NODE_ENV` and other environment flags. Verify `EMAIL_REMINDERS_ENABLED` and `RESEND_FROM_ADDRESS` for email functionality.
 - **Drizzle-kit `db push`**: It can be blocked by interactive prompts on rename detection. For additive schema changes, direct `ALTER TABLE` SQL is often used as a workaround. Ensure `lib/db/src/schema/*.ts` files are updated to reflect the true schema.
+- **Public-facing URLs / QR codes (`publicAppOrigin`)**: Links families open OUTSIDE the workspace (post-tour survey QR, brag-page link, lead-notify email) must NOT be built from `$REPLIT_DEV_DOMAIN` — it is the *development* host and is often unset in production, so QR codes ended up pointing at the dev URL or `http://localhost:5000` (a dead page). Resolve origin as: `PUBLIC_APP_URL` → first `$REPLIT_DOMAINS` host (published prod domain in prod, dev/preview host in dev) → inbound request forwarded host → localhost. See `publicAppOrigin(req)` in `routes/tours.ts` and `kioskBaseUrl` in `routes/kiosk.ts`.
+- **PDFs / blobs in the preview iframe**: The session cookie is blocked inside the Replit preview iframe (the app falls back to a Bearer token in sessionStorage, `pulseed.authToken`). A blob URL opened in a new tab renders blank, and `window.open(...).print()` can deadlock and freeze the app. For authed PDFs, trigger a blob **download** (`a.download`) from the current document instead of opening/printing in a tab — this is why the Tours lead-drawer PDFs download to disk.
 
 ## Pointers
 
@@ -167,3 +234,19 @@ _Populate as you build_
 - [Orval documentation](https://orval.dev/): For OpenAPI-based API code generation.
 - [Recharts documentation](https://recharts.org/en-US/guide/GettingStarted): For charting components used in dashboards.
 - [pdfkit documentation](http://pdfkit.org/docs/getting_started.html): For server-side PDF generation.
+
+## Spotlight governor (v2)
+
+Quartile-tiered point pool that activates only when the house
+standings gap exceeds `RUNAWAY_LEADER_THRESHOLD` (1500). Pools by
+rank when active: top `{1,2,3}` / upper-mid `{2,4,6}` / lower-mid
+`{4,6,8}` / bottom `{6,8,10}`; healthy race draws `{1..10}`.
+
+Key invariant: **the value the teacher sees IS the value the DB
+stores** — `/spotlight/pick` bakes the pool-correct value into the
+reveal; `/spotlight/award` re-validates and returns 409 ("re-spin")
+if standings shifted. Strict integer 1..10 validation; no coercion.
+
+Helpers + per-house rotation in `routes/spotlight.ts`
+(`isRebalancerActive`, `poolForHouse`, `pickFromPool`,
+`computeHouseTotalsForCap`).

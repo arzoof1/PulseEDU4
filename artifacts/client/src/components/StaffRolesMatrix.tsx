@@ -19,6 +19,27 @@ type CustomRole = {
   capabilities: string[];
 };
 
+// Fixed academic departments — kept in sync with DEPARTMENTS in the
+// adminStaff route (the server validates writes against the same set).
+const DEPARTMENTS = [
+  "ELA",
+  "Math",
+  "Science",
+  "Social Studies",
+  "CTE",
+  "Elective",
+  "Other",
+] as const;
+
+type HouseOption = {
+  id: number;
+  name: string;
+  color: string;
+  iconKey: string | null;
+  studentCount: number;
+  staffCount: number;
+};
+
 interface Props {
   currentUser: {
     id: number;
@@ -53,6 +74,22 @@ const PAGES: { key: BoolKey; label: string; group: string }[] = [
   { group: "Admin", key: "capStaffRoles", label: "Staff & Roles" },
   { group: "Admin", key: "capManageRoles", label: "Manage Roles" },
   { group: "Admin", key: "capManageDisplays", label: "Manage Displays" },
+  { group: "Admin", key: "capManageDismissal", label: "Set Dismissal Mode" },
+  { group: "Admin", key: "capTourNotify", label: "Tour Alerts" },
+];
+
+const TEACHER_BASELINE: BoolKey[] = [
+  "capHallPasses",
+  "capTardies",
+  "capStudentActivity",
+  "capPbisAward",
+  "capParentEmail",
+  "capSupportNotes",
+  "capAccommodationLog",
+  "capPulloutsRequest",
+  "capInterventionLog",
+  "capReports",
+  "capKioskActivate",
 ];
 
 // Built-in roles that act as "preset" buttons. Clicking applies the
@@ -177,38 +214,122 @@ const ROLE_PRESETS: {
       "capSupportNotes",
     ],
   },
-];
-
-const TEACHER_BASELINE: BoolKey[] = [
-  "capHallPasses",
-  "capTardies",
-  "capStudentActivity",
-  "capPbisAward",
-  "capParentEmail",
-  "capSupportNotes",
-  "capAccommodationLog",
-  "capPulloutsRequest",
-  "capInterventionLog",
-  "capReports",
-  "capKioskActivate",
+  // Non-Exempt: minimal capability bundle. The sidebar collapses to
+  // Hall Pass + Tardy Pass + Comp Time when this flag is on (App.tsx
+  // nav filter). The preset also flips exemptStatus to 'non_exempt'
+  // server-side so Comp Time accrual works — admins can independently
+  // mark other staff non-exempt without applying this role.
+  {
+    flag: "isNonExemptRole",
+    label: "Non-Exempt",
+    capabilities: ["capHallPasses", "capTardies"],
+  },
+  // Front Office: teacher baseline + ISS dashboard for student lookups,
+  // minus Request Pullout (pullouts are a teacher referral). Watchlists
+  // and Accommodations come through the teacher baseline. AST submit
+  // and Comp Time visibility are governed by exemptStatus / feature
+  // flags, not capability flags.
+  {
+    flag: "isFrontOffice",
+    label: "Front Office",
+    capabilities: [
+      "capHallPasses",
+      "capTardies",
+      "capStudentActivity",
+      "capPbisAward",
+      "capParentEmail",
+      "capSupportNotes",
+      "capAccommodationLog",
+      "capInterventionLog",
+      "capReports",
+      "capKioskActivate",
+    ],
+  },
+  // SRO: full teacher view, action-capable. Broken out as its own role
+  // so future SRO-specific surfaces (incident logs, etc) can target it.
+  {
+    flag: "isSro",
+    label: "SRO",
+    capabilities: [...TEACHER_BASELINE],
+  },
+  // Guardian / hall monitor: full teacher view, action-capable.
+  {
+    flag: "isGuardian",
+    label: "Guardian",
+    capabilities: [...TEACHER_BASELINE],
+  },
 ];
 
 export default function StaffRolesMatrix({ currentUser }: Props) {
   const [staff, setStaff] = useState<StaffRow[]>([]);
   const [customRoles, setCustomRoles] = useState<CustomRole[]>([]);
+  // Houses for the per-staff house picker. We keep a live count of
+  // staff-per-house so admins can pick the smallest one ("recommended").
+  // Recomputed locally on every patchStaff so the counts update without
+  // a server round-trip.
+  const [houses, setHouses] = useState<HouseOption[]>([]);
   const [filter, setFilter] = useState("");
   const [savingId, setSavingId] = useState<number | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
   const [showAddStaff, setShowAddStaff] = useState(false);
   const [showAddRole, setShowAddRole] = useState(false);
   const [pwResetTarget, setPwResetTarget] = useState<StaffRow | null>(null);
   const [pwResetValue, setPwResetValue] = useState("");
   const [pwResetBusy, setPwResetBusy] = useState(false);
+  const [tempPwTarget, setTempPwTarget] = useState<StaffRow | null>(null);
+  const [tempPwBusy, setTempPwBusy] = useState(false);
+  const [tempPwResult, setTempPwResult] = useState<{
+    tempPassword: string;
+    displayName: string;
+    email: string;
+  } | null>(null);
 
   const canManageRoles =
     Boolean(currentUser.isSuperUser) || Boolean(currentUser.capManageRoles);
   const canResetPasswords =
     Boolean(currentUser.isSuperUser) || Boolean(currentUser.isAdmin);
+
+  async function generateTempPw(target: StaffRow) {
+    // Confirm here (not on click) so the modal can stay simple, and so
+    // mis-clicks on the row button don't immediately invalidate the
+    // target's existing password.
+    if (
+      !window.confirm(
+        `Generate a new temporary password for ${target.displayName}? ` +
+          `Their current password will stop working immediately.`,
+      )
+    ) {
+      return;
+    }
+    setTempPwBusy(true);
+    setError("");
+    try {
+      const res = await authFetch(
+        `/api/admin/staff/${target.id}/reset-temp-password`,
+        { method: "POST" },
+      );
+      const j = (await res.json().catch(() => ({}))) as {
+        tempPassword?: string;
+        displayName?: string;
+        email?: string;
+        error?: string;
+      };
+      if (!res.ok || !j.tempPassword) {
+        throw new Error(j.error || `Reset failed (${res.status})`);
+      }
+      setTempPwResult({
+        tempPassword: j.tempPassword,
+        displayName: j.displayName ?? target.displayName,
+        email: j.email ?? target.email,
+      });
+      setTempPwTarget(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTempPwBusy(false);
+    }
+  }
 
   async function submitPwReset() {
     if (!pwResetTarget) return;
@@ -242,20 +363,51 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
 
   async function refresh() {
     try {
-      const [s, r] = await Promise.all([
+      const [s, r, h] = await Promise.all([
         authFetch("/api/admin/staff").then((res) =>
           res.ok ? res.json() : Promise.reject(res.statusText),
         ),
         authFetch("/api/custom-roles").then((res) =>
           res.ok ? res.json() : [],
         ),
+        authFetch("/api/houses/with-staff-counts").then((res) =>
+          res.ok ? res.json() : { houses: [] },
+        ),
       ]);
       setStaff(s);
       setCustomRoles(r);
+      setHouses(
+        (h?.houses ?? []) as HouseOption[],
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   }
+
+  // Derived: live staff-per-house counts that reflect optimistic
+  // patches. We don't refetch /api/houses/with-staff-counts on every
+  // edit — instead, we re-derive staffCount from the in-memory staff
+  // array. Smallest house is the "recommended" pick.
+  const housesWithLiveCounts = useMemo<HouseOption[]>(() => {
+    const liveCounts = new Map<number, number>();
+    for (const s of staff) {
+      if (!s.active) continue;
+      const hid = (s["houseId"] as number | null) ?? null;
+      if (hid !== null) liveCounts.set(hid, (liveCounts.get(hid) ?? 0) + 1);
+    }
+    return houses.map((h) => ({
+      ...h,
+      staffCount: liveCounts.get(h.id) ?? 0,
+    }));
+  }, [houses, staff]);
+  const recommendedHouseId = useMemo<number | null>(() => {
+    if (housesWithLiveCounts.length === 0) return null;
+    let best = housesWithLiveCounts[0];
+    for (const h of housesWithLiveCounts) {
+      if (h.staffCount < best.staffCount) best = h;
+    }
+    return best.id;
+  }, [housesWithLiveCounts]);
 
   useEffect(() => {
     refresh();
@@ -273,7 +425,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
 
   async function patchStaff(
     id: number,
-    body: Record<string, boolean | string | null>,
+    body: Record<string, boolean | string | number | null>,
   ) {
     setSavingId(id);
     setError("");
@@ -298,6 +450,33 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
       await refresh();
     } finally {
       setSavingId(null);
+    }
+  }
+
+  async function exportCsv() {
+    setExporting(true);
+    setError("");
+    try {
+      const res = await authFetch("/api/admin/staff/export.csv");
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `Export failed (${res.status})`);
+      }
+      // Download to disk (a blob opened in a new tab renders blank inside the
+      // Replit preview iframe — see PDFs/blobs gotcha).
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `staff-roster-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -373,6 +552,15 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
               + Add Role
             </button>
           )}
+          <button
+            type="button"
+            className="ghost"
+            onClick={exportCsv}
+            disabled={exporting}
+            title="Download the full staff roster (name, email, role, department, and contact details) as a CSV you can open in Excel."
+          >
+            {exporting ? "Exporting…" : "Export staff (CSV)"}
+          </button>
         </div>
       </div>
 
@@ -435,6 +623,28 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
               >
                 Default room
               </th>
+              <th
+                style={{
+                  ...stickyTh,
+                  zIndex: 4,
+                  minWidth: 170,
+                  textAlign: "left",
+                }}
+                title="PBIS house affiliation. Prints on the kiosk activation card and shows in any 'your house' surfaces. The smallest house is recommended so the picker keeps teams balanced."
+              >
+                House
+              </th>
+              <th
+                style={{
+                  ...stickyTh,
+                  zIndex: 4,
+                  minWidth: 150,
+                  textAlign: "left",
+                }}
+                title="Academic department. Included in the staff CSV export."
+              >
+                Department
+              </th>
               {PAGES.map((p) => (
                 <th
                   key={p.key}
@@ -486,21 +696,36 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                       s.active &&
                       // Non-SuperUser can't reset a SuperUser's password.
                       (!Boolean(s.isSuperUser) || currentUser.isSuperUser) && (
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => {
-                            setPwResetTarget(s);
-                            setPwResetValue("");
-                          }}
+                        <div
                           style={{
                             marginTop: 4,
-                            fontSize: 11,
-                            padding: "2px 6px",
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: 4,
                           }}
                         >
-                          Reset password
-                        </button>
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => {
+                              setPwResetTarget(s);
+                              setPwResetValue("");
+                            }}
+                            style={{ fontSize: 11, padding: "2px 6px" }}
+                          >
+                            Reset password
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost"
+                            title="Generate a fresh CSPRNG temp password and show it once — for resending invites or recovering lost first-login credentials."
+                            disabled={tempPwBusy}
+                            onClick={() => generateTempPw(s)}
+                            style={{ fontSize: 11, padding: "2px 6px" }}
+                          >
+                            {tempPwBusy ? "…" : "Reset to temp"}
+                          </button>
+                        </div>
                       )}
                   </td>
                   <td
@@ -589,6 +814,48 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                       }
                     />
                   </td>
+                  <td
+                    style={{
+                      padding: "4px 6px",
+                      borderBottom: "1px solid #f1f5f9",
+                      minWidth: 170,
+                    }}
+                  >
+                    <HouseCell
+                      value={(s["houseId"] as number | null) ?? null}
+                      houses={housesWithLiveCounts}
+                      recommendedHouseId={recommendedHouseId}
+                      saving={isSaving}
+                      onSave={(next) =>
+                        patchStaff(s.id, { houseId: next })
+                      }
+                    />
+                  </td>
+                  <td
+                    style={{
+                      padding: "4px 6px",
+                      borderBottom: "1px solid #f1f5f9",
+                      minWidth: 150,
+                    }}
+                  >
+                    <select
+                      value={(s["department"] as string | null) ?? ""}
+                      disabled={isSaving}
+                      onChange={(e) =>
+                        patchStaff(s.id, {
+                          department: e.target.value === "" ? null : e.target.value,
+                        })
+                      }
+                      style={{ width: "100%" }}
+                    >
+                      <option value="">—</option>
+                      {DEPARTMENTS.map((d) => (
+                        <option key={d} value={d}>
+                          {d}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
                   {PAGES.map((p) => {
                     const checked = Boolean(s[p.key]);
                     return (
@@ -615,7 +882,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={PAGES.length + 2} style={{ padding: 16 }}>
+                <td colSpan={PAGES.length + 5} style={{ padding: 16 }}>
                   No staff match.
                 </td>
               </tr>
@@ -684,6 +951,82 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                 onClick={submitPwReset}
               >
                 {pwResetBusy ? "Saving…" : "Set password"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tempPwResult && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.4)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 50,
+          }}
+          onClick={() => setTempPwResult(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "white",
+              padding: 16,
+              borderRadius: 8,
+              minWidth: 360,
+              maxWidth: "90vw",
+            }}
+          >
+            <h3 style={{ marginTop: 0 }}>Temporary password generated</h3>
+            <p style={{ margin: "4px 0 12px", fontSize: 13 }}>
+              Copy this password and send it to{" "}
+              <strong>{tempPwResult.displayName}</strong> (
+              {tempPwResult.email}) over a trusted channel. They should
+              change it on first sign-in.{" "}
+              <strong>You won't be able to see it again.</strong>
+            </p>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+                borderRadius: 6,
+                padding: "8px 10px",
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                fontSize: 15,
+                userSelect: "all",
+                wordBreak: "break-all",
+              }}
+            >
+              {tempPwResult.tempPassword}
+            </div>
+            <div
+              style={{
+                marginTop: 12,
+                display: "flex",
+                gap: 8,
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard
+                    ?.writeText(tempPwResult.tempPassword)
+                    .catch(() => {});
+                }}
+              >
+                Copy
+              </button>
+              <button type="button" onClick={() => setTempPwResult(null)}>
+                Done
               </button>
             </div>
           </div>
@@ -1017,6 +1360,70 @@ function ModalShell({
         </div>
         {children}
       </div>
+    </div>
+  );
+}
+
+function HouseCell({
+  value,
+  houses,
+  recommendedHouseId,
+  saving,
+  onSave,
+}: {
+  value: number | null;
+  houses: HouseOption[];
+  recommendedHouseId: number | null;
+  saving: boolean;
+  onSave: (next: number | null) => void;
+}) {
+  // No houses configured for this school — show a quiet placeholder so
+  // admins understand the field is intentionally empty rather than broken.
+  if (houses.length === 0) {
+    return (
+      <span style={{ fontSize: 11, color: "var(--text-subtle)" }}>
+        No houses
+      </span>
+    );
+  }
+  const selected = houses.find((h) => h.id === value) ?? null;
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+      {/* Color swatch echoes the chosen house — disappears when unset. */}
+      <span
+        aria-hidden
+        style={{
+          display: "inline-block",
+          width: 12,
+          height: 12,
+          borderRadius: 3,
+          background: selected ? selected.color : "transparent",
+          border: selected ? "1px solid rgba(0,0,0,0.1)" : "1px dashed #cbd5e1",
+          flexShrink: 0,
+        }}
+      />
+      <select
+        disabled={saving}
+        value={value === null ? "" : String(value)}
+        onChange={(e) => {
+          const v = e.target.value;
+          onSave(v === "" ? null : Number(v));
+        }}
+        style={{ fontSize: 12, padding: "2px 4px", minWidth: 130 }}
+      >
+        <option value="">— None —</option>
+        {houses.map((h) => {
+          const isRec = h.id === recommendedHouseId;
+          const label =
+            `${h.name} (${h.staffCount} staff)` +
+            (isRec ? " · recommended" : "");
+          return (
+            <option key={h.id} value={h.id}>
+              {label}
+            </option>
+          );
+        })}
+      </select>
     </div>
   );
 }

@@ -12,7 +12,7 @@ import {
   isStaffBearerAuthEnabled,
   staffIdFromBearerToken,
 } from "./lib/staffBearerAuth";
-import { db, staffTable, schoolsTable } from "@workspace/db";
+import { db, staffTable, schoolsTable, districtsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 declare global {
@@ -318,32 +318,79 @@ app.use(async (req, _res, next) => {
         // requests inside the Replit preview iframe — where session cookies
         // are blocked — keep the SuperUser's switch active across reloads.
         const override = staff.activeSchoolOverride ?? null;
+        // Confirm the staff's home school AND its district are still
+        // active before honoring any school context. Soft-deactivated
+        // (active=false) schools or districts must not be able to act
+        // as the request's tenant; otherwise existing sessions keep
+        // reading/writing under a "retired" tenant. We let the request
+        // through with req.schoolId=null; downstream route guards
+        // already 4xx on missing school.
+        const [homeSchoolActive] = await db
+          .select({
+            schoolActive: schoolsTable.active,
+            districtActive: districtsTable.active,
+          })
+          .from(schoolsTable)
+          .leftJoin(
+            districtsTable,
+            eq(districtsTable.id, schoolsTable.districtId),
+          )
+          .where(eq(schoolsTable.id, staff.schoolId));
+        if (
+          !homeSchoolActive ||
+          !homeSchoolActive.schoolActive ||
+          !homeSchoolActive.districtActive
+        ) {
+          req.schoolId = null;
+          next();
+          return;
+        }
         if (staff.isSuperUser && override && override !== staff.schoolId) {
-          // D6 defense-in-depth: even if a stale pre-D6 override points
-          // at a school in another district, refuse to honor it. Only
-          // requires an extra DB hop on the rare requests where an
-          // override is actually present, and prevents a Hernando
-          // SuperUser whose row already has activeSchoolOverride = some
-          // Pasco school from quietly reading Pasco data on the next
-          // request. switch-school now refuses to *set* such an
-          // override, but old data may still exist.
+          // D6 defense-in-depth: validate the override still points at an
+          // active school. Phase 5 District Switcher: when
+          // ALLOW_CROSS_DISTRICT_SUPERUSER=1 a cross-district override is
+          // permitted (the operator has opted into the cross-district
+          // control tier). Without the flag we still hard-refuse cross-
+          // district overrides — even a stale row in activeSchoolOverride
+          // from before the gate landed must not silently leak data.
+          const crossDistrict =
+            process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
+          // Architect-flagged (Phase 5): previously this only validated
+          // the override school was active, not its district. Mirror the
+          // home-school check above and require districts.active=true on
+          // the override target before honoring it.
           const [overrideSchool] = await db
-            .select({ districtId: schoolsTable.districtId })
+            .select({
+              districtId: schoolsTable.districtId,
+              schoolActive: schoolsTable.active,
+              districtActive: districtsTable.active,
+            })
             .from(schoolsTable)
+            .leftJoin(
+              districtsTable,
+              eq(districtsTable.id, schoolsTable.districtId),
+            )
             .where(eq(schoolsTable.id, override));
           const [homeSchool] = await db
             .select({ districtId: schoolsTable.districtId })
             .from(schoolsTable)
             .where(eq(schoolsTable.id, staff.schoolId));
-          if (
+          const sameDistrict =
             overrideSchool &&
             homeSchool &&
-            overrideSchool.districtId === homeSchool.districtId
+            overrideSchool.districtId === homeSchool.districtId;
+          if (
+            overrideSchool &&
+            overrideSchool.schoolActive &&
+            overrideSchool.districtActive &&
+            (sameDistrict || crossDistrict)
           ) {
             req.schoolId = override;
             req.isSchoolSwitched = true;
           } else {
-            // Stale or cross-district override — fall back to home school.
+            // Stale, cross-district (when gate off), or inactive override
+            // — fall back to home school. (Home school is already known
+            // active here.)
             req.schoolId = staff.schoolId;
           }
         } else {
@@ -359,5 +406,49 @@ app.use(async (req, _res, next) => {
 
 app.use("/api", csrfProtectionMiddleware);
 app.use("/api", router);
+
+// -----------------------------------------------------------------------------
+// 5xx error surface. Before this middleware, an uncaught throw inside a route
+// would be swallowed by Express's default handler — a 500 with no body and
+// nothing in the structured logger. This catches anything that bubbles out,
+// logs it with request context (req.log already has reqId + schoolId from
+// pino-http), and returns a clean JSON 500 to the client. Stack traces are
+// only included in non-production responses so they don't leak to the parent
+// portal or a public preview.
+// -----------------------------------------------------------------------------
+app.use(
+  (
+    err: unknown,
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ) => {
+    if (res.headersSent) {
+      next(err);
+      return;
+    }
+    const e = err as { message?: string; stack?: string; status?: number };
+    const status = typeof e?.status === "number" ? e.status : 500;
+    const reqAny = req as unknown as { log?: typeof logger };
+    (reqAny.log ?? logger).error(
+      {
+        err,
+        path: req.path,
+        method: req.method,
+        schoolId: (req as { schoolId?: number | null }).schoolId ?? null,
+        staffId: (req as { staffId?: number | null }).staffId ?? null,
+        status,
+      },
+      "unhandled route error",
+    );
+    const body: Record<string, unknown> = {
+      error: e?.message ?? "Internal server error",
+    };
+    if (process.env.NODE_ENV !== "production" && e?.stack) {
+      body["stack"] = e.stack;
+    }
+    res.status(status).json(body);
+  },
+);
 
 export default app;

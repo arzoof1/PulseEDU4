@@ -32,9 +32,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import QRCode from "qrcode";
+import { Ticket } from "lucide-react";
 import {
   clearParentSession,
   parentFetch,
+  setParentToken,
   navigate,
   type ParentMe,
 } from "./api";
@@ -47,6 +50,9 @@ interface Snapshot {
     firstName: string;
     lastName: string;
     grade: number;
+    // Grades the student was retained in (ascending). Empty when none.
+    // Drives the small "R" indicator next to the grade label.
+    retainedGrades: number[];
   };
   sectionsAvailable: Record<string, boolean>;
   pbis: {
@@ -81,6 +87,16 @@ interface Snapshot {
   attendance: {
     tardiesThisWeek: number;
     checkInsThisWeek: number;
+    pct: {
+      ytd: { presentDays: number; totalDays: number; pct: number } | null;
+      last30: { presentDays: number; totalDays: number; pct: number } | null;
+    };
+    onTimeStreak: {
+      current: number;
+      longestYtd: number;
+      pctYtd: number | null;
+      countedPeriods: number;
+    } | null;
     recent: Array<{
       id: number;
       entryType: string;
@@ -137,6 +153,31 @@ interface Snapshot {
       notes: string | null;
     }>;
   };
+  // Reteach activity — gated by sec.reteach. Counts-only rollup; no
+  // teacher notes or strategy ever leave the server. Optional so
+  // older API servers without the field still type-check.
+  reteach?: {
+    items: Array<{
+      benchmarkCode: string;
+      oneOnOne: number;
+      smallGroup: number;
+      total: number;
+      lastAt: string;
+    }>;
+  };
+  // PBIS house affiliation. Optional so older API servers still
+  // type-check. Null when the student isn't on a house (or the
+  // school doesn't run houses). `totalPoints` is the school-wide
+  // house total — same number kids see on the hallway TVs.
+  house?: {
+    id: number;
+    name: string;
+    color: string;
+    motto: string | null;
+    iconKey: string | null;
+    iconObjectKey: string | null;
+    totalPoints: number;
+  } | null;
 }
 
 const EkgDivider = () => (
@@ -200,6 +241,10 @@ export default function Dashboard({ me }: { me: ParentMe }) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // Set when the server returns 403 parent_portal_disabled — the school
+  // has turned off the parent-portal license. We render a dedicated
+  // friendly screen rather than the raw error string.
+  const [portalDisabled, setPortalDisabled] = useState(false);
   const [view, setView] = useState<"snapshot" | "prefs">("snapshot");
   // Bumping this nonce forces the snapshot effect to re-run even when
   // activeStudentId is unchanged — used after returning from the
@@ -219,6 +264,7 @@ export default function Dashboard({ me }: { me: ParentMe }) {
     let cancelled = false;
     setLoading(true);
     setError("");
+    setPortalDisabled(false);
     (async () => {
       try {
         const res = await parentFetch(
@@ -227,7 +273,11 @@ export default function Dashboard({ me }: { me: ParentMe }) {
         if (cancelled) return;
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          setError(body.error ?? `Could not load snapshot (${res.status})`);
+          if (res.status === 403 && body.error === "parent_portal_disabled") {
+            setPortalDisabled(true);
+          } else {
+            setError(body.error ?? `Could not load snapshot (${res.status})`);
+          }
         } else {
           setSnapshot((await res.json()) as Snapshot);
         }
@@ -296,6 +346,28 @@ export default function Dashboard({ me }: { me: ParentMe }) {
     } finally {
       setPdfDownloading(false);
     }
+  }
+
+  if (portalDisabled) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+        <div className="max-w-md w-full bg-white border border-slate-200 rounded-2xl p-8 text-center shadow-sm">
+          <div className="mx-auto mb-4 h-12 w-12 rounded-full bg-amber-100 flex items-center justify-center">
+            <ShieldAlert className="h-6 w-6 text-amber-600" />
+          </div>
+          <div className="text-lg font-semibold mb-2">
+            Parent portal paused
+          </div>
+          <p className="text-sm text-slate-600 mb-6">
+            Your school has paused the parent portal. Please contact the
+            school office for an update, or check back later.
+          </p>
+          <Button variant="outline" onClick={handleSignOut}>
+            Sign out
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   if (me.students.length === 0) {
@@ -382,8 +454,25 @@ export default function Dashboard({ me }: { me: ParentMe }) {
                   </h1>
                 )}
               </div>
-              <p className="text-slate-500 font-medium">
-                {gradeLabel(activeStudent.grade)} · ID {activeStudent.studentId}
+              <p className="text-slate-500 font-medium flex items-center gap-2">
+                <span>
+                  {gradeLabel(activeStudent.grade)} · ID {activeStudent.localSisId ?? "—"}
+                </span>
+                {snapshot?.student.retainedGrades &&
+                  snapshot.student.retainedGrades.length > 0 && (
+                    <span
+                      title={`Retained: ${snapshot.student.retainedGrades
+                        .map((g: number) => `Grade ${g}`)
+                        .join(", ")}`}
+                      aria-label={`Retained at ${snapshot.student.retainedGrades
+                        .map((g: number) => `Grade ${g}`)
+                        .join(", ")}`}
+                      className="inline-flex items-center justify-center rounded-full bg-slate-900 text-white text-[11px] font-extrabold leading-none cursor-help"
+                      style={{ width: 18, height: 18 }}
+                    >
+                      R
+                    </span>
+                  )}
               </p>
             </div>
           </div>
@@ -480,6 +569,21 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
           {onTrack ? "On track this week" : "Needs attention this week"}
         </Badge>
       </div>
+
+      {/* Event tickets — QR codes for published school events (8th-grade
+          promotion, graduation, etc.). Fetched separately from the snapshot;
+          the section renders only when the student actually has tickets, so
+          it stays invisible until a school issues them. */}
+      <TicketsSection studentId={snapshot.student.id} />
+
+      {/* House affiliation tile — shows the student's PBIS house, its
+          custom logo (or letter-bubble fallback), and the current
+          school-wide house total. Same number families see on the
+          hallway signage. Gated under `recognition` like everything
+          PBIS. */}
+      {sec.recognition && snapshot.house && (
+        <HouseTile house={snapshot.house} />
+      )}
 
       {/* Parent-facing weekly mood meter — same red(left)/green(right)
           pattern as the signage screens so families learn to read it once.
@@ -586,6 +690,79 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
           title="Attendance"
           icon={<Calendar className="h-4 w-4 text-orange-600" />}
         >
+          {/* Aggregate tiles. Attendance % (YTD + 30d) shows whenever
+              any attendance-day data exists. On-time streak tiles only
+              appear when the school has a default bell schedule with
+              at least one counted period AND the student has logged
+              attendance days to back the calculation. Hides cleanly
+              when nothing has been recorded yet so a new SIS feed
+              doesn't render placeholder tiles. */}
+          {(snapshot.attendance.pct.ytd ||
+            snapshot.attendance.pct.last30 ||
+            snapshot.attendance.onTimeStreak) && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 mb-4">
+              <AttendanceTile
+                label="Attendance · YTD"
+                value={
+                  snapshot.attendance.pct.ytd
+                    ? `${snapshot.attendance.pct.ytd.pct}%`
+                    : "—"
+                }
+                sub={
+                  snapshot.attendance.pct.ytd
+                    ? `${snapshot.attendance.pct.ytd.presentDays} / ${snapshot.attendance.pct.ytd.totalDays} days`
+                    : "no data yet"
+                }
+              />
+              <AttendanceTile
+                label="Attendance · 30d"
+                value={
+                  snapshot.attendance.pct.last30
+                    ? `${snapshot.attendance.pct.last30.pct}%`
+                    : "—"
+                }
+                sub={
+                  snapshot.attendance.pct.last30
+                    ? `${snapshot.attendance.pct.last30.presentDays} / ${snapshot.attendance.pct.last30.totalDays} days`
+                    : "no data yet"
+                }
+              />
+              {snapshot.attendance.onTimeStreak && (
+                <>
+                  <AttendanceTile
+                    label="On-time streak"
+                    value={`${snapshot.attendance.onTimeStreak.current}`}
+                    sub={
+                      snapshot.attendance.onTimeStreak.current === 1
+                        ? "period in a row"
+                        : "periods in a row"
+                    }
+                    accent="emerald"
+                  />
+                  <AttendanceTile
+                    label="Longest streak · YTD"
+                    value={`${snapshot.attendance.onTimeStreak.longestYtd}`}
+                    sub={
+                      snapshot.attendance.onTimeStreak.longestYtd === 1
+                        ? "period"
+                        : "periods"
+                    }
+                    accent="emerald"
+                  />
+                  <AttendanceTile
+                    label="On-time · YTD"
+                    value={
+                      snapshot.attendance.onTimeStreak.pctYtd != null
+                        ? `${snapshot.attendance.onTimeStreak.pctYtd}%`
+                        : "—"
+                    }
+                    sub={`${snapshot.attendance.onTimeStreak.countedPeriods} periods`}
+                    accent="emerald"
+                  />
+                </>
+              )}
+            </div>
+          )}
           {snapshot.attendance.recent.length === 0 ? (
             <Empty text="No tardies or check-ins recorded." />
           ) : (
@@ -738,6 +915,61 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
           icon={<Target className="h-4 w-4 text-emerald-600" />}
         >
           <MtssBlock mtss={snapshot.mtss ?? { tier: 1, plans: [] }} />
+        </Section>
+      )}
+
+      {/* Extra Support — Focused Reteach. Counts-only rollup of
+          benchmark_reteach_log rows for the current school year, gated by
+          BOTH the school-wide showReteach flag, the parent's pref, AND
+          the per-student reteach_logs_parent_visible toggle. Teacher
+          notes / strategy are NEVER in the payload — see
+          lib/parentSnapshot.ts. Section hides when there are zero rows
+          so the page doesn't end with an empty block. */}
+      {sec.reteach && (snapshot.reteach?.items ?? []).length > 0 && (
+        <Section
+          title="Extra Support — Focused Reteach"
+          icon={<Target className="h-4 w-4 text-indigo-600" />}
+        >
+          <p className="text-sm text-slate-600 mb-3">
+            In addition to the regular classroom lessons every student
+            receives, your child's teachers have provided focused extra
+            practice on the standards below this school year.
+          </p>
+          <ul className="divide-y divide-slate-100">
+            {(snapshot.reteach?.items ?? []).map((r) => (
+              <li
+                key={r.benchmarkCode}
+                className="py-3 flex items-center justify-between gap-4"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-mono font-semibold text-slate-800">
+                    {r.benchmarkCode}
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    Most recent {fmtDate(r.lastAt)}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {r.oneOnOne > 0 && (
+                    <Badge
+                      variant="outline"
+                      className="bg-indigo-50 text-indigo-700 border-indigo-200 tabular-nums"
+                    >
+                      1:1 × {r.oneOnOne}
+                    </Badge>
+                  )}
+                  {r.smallGroup > 0 && (
+                    <Badge
+                      variant="outline"
+                      className="bg-teal-50 text-teal-700 border-teal-200 tabular-nums"
+                    >
+                      Small group × {r.smallGroup}
+                    </Badge>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
         </Section>
       )}
 
@@ -968,6 +1200,88 @@ function ParentMoodMeter({ snapshot }: { snapshot: Snapshot }) {
   );
 }
 
+// House affiliation tile. Mirrors the staff-facing HousesPanel logo
+// treatment (custom uploaded PNG on a colored backdrop, letter-bubble
+// fallback when no logo is set) so the parent's view matches the
+// poster on the hallway wall. The house's accent color is used for
+// the backdrop + the points pill so each house looks distinct without
+// us having to think about a palette.
+function HouseTile({
+  house,
+}: {
+  house: NonNullable<Snapshot["house"]>;
+}) {
+  const accent = house.color || "#6366f1";
+  return (
+    <Card className="border-slate-100 overflow-hidden">
+      <div className="h-1 w-full" style={{ background: accent }} />
+      <CardContent className="p-5">
+        <div className="flex items-center gap-4">
+          <div
+            className="flex items-center justify-center rounded-xl overflow-hidden shrink-0"
+            style={{
+              background: accent,
+              width: 72,
+              height: 72,
+            }}
+          >
+            {house.iconObjectKey ? (
+              <img
+                src={`/api/houses/${house.id}/logo.png?v=${encodeURIComponent(
+                  house.iconObjectKey,
+                )}`}
+                alt={`${house.name} logo`}
+                style={{
+                  maxHeight: 60,
+                  maxWidth: "85%",
+                  background: "#fff",
+                  borderRadius: 6,
+                  padding: 4,
+                }}
+              />
+            ) : (
+              <span
+                style={{
+                  color: "#fff",
+                  fontWeight: 700,
+                  fontSize: 32,
+                  opacity: 0.9,
+                }}
+              >
+                {(house.name.charAt(0) || "H").toUpperCase()}
+              </span>
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs uppercase tracking-wider text-slate-500 font-medium">
+              House
+            </div>
+            <div className="text-xl font-bold text-slate-900 truncate">
+              {house.name}
+            </div>
+            {house.motto && (
+              <div className="text-sm text-slate-600 italic truncate mt-0.5">
+                "{house.motto}"
+              </div>
+            )}
+          </div>
+          <div className="text-right shrink-0">
+            <div
+              className="text-3xl font-bold tabular-nums"
+              style={{ color: accent }}
+            >
+              {house.totalPoints.toLocaleString()}
+            </div>
+            <div className="text-[11px] uppercase tracking-wider text-slate-500 font-medium">
+              House points
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function PulseCard({
   label,
   value,
@@ -1022,6 +1336,184 @@ function PulseCard({
   );
 }
 
+// -----------------------------------------------------------------------------
+// TicketsSection — event tickets for a single student. Fetches from
+// /parent/tickets?studentId= (published events only; the family's own tickets,
+// ownership enforced server-side). Renders one QR per ticket with a short code,
+// the same responsibility verbiage families see on the email + PDF, and a
+// "Download tickets (PDF)" button per event. Used tickets are greyed out.
+// Renders nothing when the student has no tickets, so it stays invisible until
+// a school issues them.
+// -----------------------------------------------------------------------------
+interface TicketItem {
+  token: string;
+  seq: number;
+  total: number;
+  status: string;
+  shortCode: string;
+}
+interface TicketEventRow {
+  grantId: number;
+  eventId: number;
+  eventName: string;
+  eventDate: string | null;
+  startTime: string | null;
+  location: string | null;
+  tickets: TicketItem[];
+}
+interface TicketsResponse {
+  responsibility: { headline: string; lines: string[] };
+  events: TicketEventRow[];
+}
+
+function TicketsSection({ studentId }: { studentId: number }) {
+  const [data, setData] = useState<TicketsResponse | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await parentFetch(
+          `/parent/tickets?studentId=${studentId}`,
+        );
+        if (!res.ok) return;
+        const json = (await res.json()) as TicketsResponse;
+        if (!cancelled) setData(json);
+      } catch {
+        /* portal stays quiet if tickets can't load */
+      } finally {
+        if (!cancelled) setLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId]);
+
+  if (!loaded || !data || data.events.length === 0) return null;
+
+  const downloadPdf = async (grantId: number) => {
+    const res = await parentFetch(`/parent/tickets/${grantId}.pdf`);
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "tickets.pdf";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <Section
+      title="Event Tickets"
+      icon={<Ticket className="h-4 w-4 text-violet-600" />}
+    >
+      {/* Responsibility verbiage — identical wording to the email + PDF. */}
+      <div className="mb-4 rounded-lg border border-violet-200 bg-violet-50 p-3">
+        <div className="text-sm font-semibold text-violet-800">
+          {data.responsibility.headline}
+        </div>
+        <ul className="mt-1 list-disc pl-5 text-xs text-violet-900/80 space-y-0.5">
+          {data.responsibility.lines.map((l, i) => (
+            <li key={i}>{l}</li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="space-y-6">
+        {data.events.map((ev) => (
+          <div key={ev.grantId}>
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-800">
+                  {ev.eventName}
+                </div>
+                <div className="text-xs text-slate-500">
+                  {ev.eventDate ? fmtDate(ev.eventDate) : "Date TBA"}
+                  {ev.startTime ? ` · ${ev.startTime}` : ""}
+                  {ev.location ? ` · ${ev.location}` : ""}
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => downloadPdf(ev.grantId)}
+              >
+                <Download className="h-4 w-4 mr-1.5" />
+                Download tickets (PDF)
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {ev.tickets.map((t) => (
+                <TicketCard key={t.token} ticket={t} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+function TicketCard({ ticket }: { ticket: TicketItem }) {
+  const [qr, setQr] = useState<string | null>(null);
+  const used = ticket.status === "used";
+
+  useEffect(() => {
+    let cancelled = false;
+    QRCode.toDataURL(ticket.token, { margin: 1, width: 240 })
+      .then((url) => {
+        if (!cancelled) setQr(url);
+      })
+      .catch(() => {
+        /* leave placeholder */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ticket.token]);
+
+  return (
+    <div
+      className={
+        "rounded-lg border p-3 flex flex-col items-center text-center " +
+        (used
+          ? "border-slate-200 bg-slate-50 opacity-60"
+          : "border-slate-200 bg-white")
+      }
+    >
+      <div className="relative">
+        {qr ? (
+          <img
+            src={qr}
+            alt={`Ticket ${ticket.shortCode}`}
+            className="w-full max-w-[140px] aspect-square"
+          />
+        ) : (
+          <div className="w-[140px] h-[140px] bg-slate-100 rounded" />
+        )}
+        {used && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="bg-slate-800 text-white text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded -rotate-12">
+              Already used
+            </span>
+          </div>
+        )}
+      </div>
+      <div className="mt-2 text-xs font-mono font-semibold text-slate-700">
+        {ticket.shortCode}
+      </div>
+      <div className="text-[11px] text-slate-500">
+        Ticket {ticket.seq} of {ticket.total}
+      </div>
+    </div>
+  );
+}
+
 function Section({
   title,
   icon,
@@ -1046,6 +1538,36 @@ function Section({
 
 function Empty({ text }: { text: string }) {
   return <p className="text-sm text-slate-400 italic">{text}</p>;
+}
+
+// Small stat tile used by the Attendance section to surface attendance
+// % (YTD + last 30) and on-time streak (current + longest). Two
+// accents: default slate for attendance %, emerald for streaks so the
+// "good news" metric pops visually.
+function AttendanceTile({
+  label,
+  value,
+  sub,
+  accent = "slate",
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  accent?: "slate" | "emerald";
+}) {
+  const valueClass =
+    accent === "emerald" ? "text-emerald-700" : "text-slate-800";
+  return (
+    <div className="bg-slate-50 rounded-lg border border-slate-100 p-3">
+      <div className="text-[10px] uppercase tracking-wide text-slate-500">
+        {label}
+      </div>
+      <div className={`text-xl font-bold tabular-nums ${valueClass}`}>
+        {value}
+      </div>
+      <div className="text-[11px] text-slate-500">{sub}</div>
+    </div>
+  );
 }
 
 // FastScoreCard — one tile per subject (ELA / Math). Renders the three

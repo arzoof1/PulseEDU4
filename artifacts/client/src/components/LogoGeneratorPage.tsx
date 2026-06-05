@@ -7,6 +7,12 @@
 // string, downloaded via Blob, and the PNG is rasterized through a
 // canvas. No server round trip.
 import { useMemo, useState } from "react";
+import {
+  HowToUseHelp,
+  HowToSection,
+  RoleSection,
+  howtoListStyle,
+} from "./HowToUseHelp";
 
 interface PresetSwatch {
   label: string;
@@ -213,6 +219,22 @@ export default function LogoGeneratorPage() {
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
       <h2 style={{ marginTop: 0 }}>Brand Logo Generator</h2>
+      <HowToUseHelp title="How to use the Brand Logo Generator">
+        <HowToSection title="What this page is">
+          A client-side tool for producing drop-in logo assets for the Pulse
+          family of apps using the shared EKG + wordmark mark.
+        </HowToSection>
+        <HowToSection title="Day-to-day">
+          <ul style={howtoListStyle}>
+            <li>Pick the app name and adjust options to preview the mark live.</li>
+            <li>Download animated SVG, static SVG, or PNG variants as needed.</li>
+          </ul>
+        </HowToSection>
+        <RoleSection for={["admin", "superUser"]} title="Good to know">
+          Everything is generated in your browser — nothing is saved server-side
+          until you download it.
+        </RoleSection>
+      </HowToUseHelp>
       <p style={{ color: "var(--text-subtle)", marginTop: 0, maxWidth: 720 }}>
         Spin up a sister-app brand mark that matches PulseEDU's look —
         gradient wordmark, EKG sweep, glowing pulse. Export as animated

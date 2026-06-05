@@ -17,6 +17,7 @@ import { authFetch } from "../lib/authToken";
 type School = {
   id: number;
   districtId: number;
+  districtName: string | null;
   name: string;
   shortName: string | null;
   stateSchoolCode: string | null;
@@ -28,6 +29,10 @@ type Status = {
   activeSchoolId: number;
   isSwitched: boolean;
   canSwitch: boolean;
+  // Phase 5 District Switcher: when true, `schools` spans every district
+  // (operator opted into ALLOW_CROSS_DISTRICT_SUPERUSER). UI groups by
+  // district in the popover and shows the active district on the pill.
+  crossDistrict?: boolean;
   schools: School[];
 };
 
@@ -67,7 +72,35 @@ export function SchoolSwitcher() {
   if (!status) return null;
 
   const active = status.schools.find((s) => s.id === status.activeSchoolId);
-  const label = active?.shortName || active?.name || `School #${status.activeSchoolId}`;
+  const baseLabel =
+    active?.shortName || active?.name || `School #${status.activeSchoolId}`;
+  // In cross-district mode we prefix the district so it's obvious which
+  // silo the active context belongs to.
+  const label =
+    status.crossDistrict && active?.districtName
+      ? `${active.districtName} · ${baseLabel}`
+      : baseLabel;
+
+  // Group schools by district (stable order). When not in cross-district
+  // mode there's only one group and we just render a flat list.
+  const groups: Array<{ districtId: number; districtName: string; schools: School[] }> = [];
+  {
+    const byDistrict = new Map<number, { name: string; schools: School[] }>();
+    for (const s of status.schools) {
+      const key = s.districtId;
+      const existing = byDistrict.get(key);
+      if (existing) existing.schools.push(s);
+      else
+        byDistrict.set(key, {
+          name: s.districtName || `District #${s.districtId}`,
+          schools: [s],
+        });
+    }
+    for (const [districtId, { name, schools }] of byDistrict) {
+      groups.push({ districtId, districtName: name, schools });
+    }
+  }
+  const showDistrictHeaders = status.crossDistrict && groups.length > 1;
 
   const switchTo = async (schoolId: number | null) => {
     setBusy(true);
@@ -173,46 +206,83 @@ export function SchoolSwitcher() {
               marginBottom: 4,
             }}
           >
-            Switch active school
+            {status.crossDistrict
+              ? "Switch active district · school"
+              : "Switch active school"}
           </div>
-          {status.schools.map((s) => {
-            const isActive = s.id === status.activeSchoolId;
-            const isHome = s.id === status.homeSchoolId;
-            return (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => switchTo(s.id === status.homeSchoolId ? null : s.id)}
-                disabled={busy || isActive}
-                style={{
-                  display: "block",
-                  width: "100%",
-                  textAlign: "left",
-                  padding: "0.4rem 0.6rem",
-                  background: isActive ? "#e8f5ff" : "transparent",
-                  border: "none",
-                  borderRadius: 4,
-                  cursor: isActive ? "default" : "pointer",
-                  fontSize: "0.85rem",
-                  color: "inherit",
-                }}
-              >
-                <span style={{ fontWeight: isActive ? 600 : 400 }}>
-                  {s.name}
-                </span>
-                {s.stateSchoolCode && (
-                  <span style={{ marginLeft: 6, color: "#888", fontSize: "0.75rem" }}>
-                    #{s.stateSchoolCode}
-                  </span>
+          <div style={{ maxHeight: 360, overflowY: "auto" }}>
+            {groups.map((g) => (
+              <div key={g.districtId}>
+                {showDistrictHeaders && (
+                  <div
+                    style={{
+                      padding: "6px 8px 2px",
+                      fontSize: "0.7rem",
+                      fontWeight: 600,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.4,
+                      color: "#888",
+                      marginTop: 4,
+                    }}
+                  >
+                    {g.districtName}
+                  </div>
                 )}
-                {isHome && (
-                  <span style={{ marginLeft: 6, color: "#0a7", fontSize: "0.7rem" }}>
-                    HOME
-                  </span>
-                )}
-              </button>
-            );
-          })}
+                {g.schools.map((s) => {
+                  const isActive = s.id === status.activeSchoolId;
+                  const isHome = s.id === status.homeSchoolId;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() =>
+                        switchTo(s.id === status.homeSchoolId ? null : s.id)
+                      }
+                      disabled={busy || isActive}
+                      style={{
+                        display: "block",
+                        width: "100%",
+                        textAlign: "left",
+                        padding: "0.4rem 0.6rem",
+                        background: isActive ? "#e8f5ff" : "transparent",
+                        border: "none",
+                        borderRadius: 4,
+                        cursor: isActive ? "default" : "pointer",
+                        fontSize: "0.85rem",
+                        color: "inherit",
+                      }}
+                    >
+                      <span style={{ fontWeight: isActive ? 600 : 400 }}>
+                        {s.name}
+                      </span>
+                      {s.stateSchoolCode && (
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            color: "#888",
+                            fontSize: "0.75rem",
+                          }}
+                        >
+                          #{s.stateSchoolCode}
+                        </span>
+                      )}
+                      {isHome && (
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            color: "#0a7",
+                            fontSize: "0.7rem",
+                          }}
+                        >
+                          HOME
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
           {error && (
             <div style={{ padding: "6px 8px", color: "#c00", fontSize: "0.75rem" }}>
               {error}

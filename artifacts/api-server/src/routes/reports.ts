@@ -397,6 +397,7 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
     ? await db
         .select({
           studentId: studentsTable.studentId,
+          localSisId: studentsTable.localSisId,
           firstName: studentsTable.firstName,
           lastName: studentsTable.lastName,
         })
@@ -408,22 +409,31 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
           ),
         )
     : [];
-  const studentNameById = new Map(
+  const studentInfoById = new Map(
     recentStudents.map((s) => [
       s.studentId,
-      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || s.studentId,
+      {
+        name:
+          `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() ||
+          (s.localSisId ?? ""),
+        localSisId: s.localSisId ?? null,
+      },
     ]),
   );
 
-  const recent = recentRows.map((r) => ({
-    id: r.id,
-    createdAt: r.createdAt,
-    period: r.period,
-    studentId: r.studentId,
-    studentName: studentNameById.get(r.studentId) ?? r.studentId,
-    accommodation: r.accommodation,
-    status: r.status ?? "provided",
-  }));
+  const recent = recentRows.map((r) => {
+    const info = studentInfoById.get(r.studentId);
+    return {
+      id: r.id,
+      createdAt: r.createdAt,
+      period: r.period,
+      studentId: r.studentId,
+      localSisId: info?.localSisId ?? null,
+      studentName: info?.name ?? "",
+      accommodation: r.accommodation,
+      status: r.status ?? "provided",
+    };
+  });
 
   res.json({
     mode: "teacher",

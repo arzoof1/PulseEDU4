@@ -19,6 +19,7 @@ interface Plan {
   studentId: string;
   studentName: string | null;
   studentGrade: number | null;
+  studentLocalSisId?: string | null;
   title: string;
   goals: string;
   tier: number;
@@ -73,6 +74,7 @@ function parseCsv(csv: string | null | undefined): number[] {
 
 interface Student {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: number;
@@ -125,6 +127,47 @@ function joinGoals(list: string[]): string {
     .join("\n");
 }
 
+interface FastSuggestionWindow {
+  schoolYear: string;
+  window: string;
+  masteryPct: number; // -1 = not administered
+  below: boolean;
+}
+
+interface FastSuggestion {
+  studentId: string;
+  studentName: string | null;
+  studentGrade: number | null;
+  studentLocalSisId?: string | null;
+  subject: string;
+  benchmarkCode: string;
+  benchmarkCategory: string | null;
+  suggestedStrategyCategory: string;
+  suggestedTitle: string;
+  suggestedGoal: string;
+  windows: FastSuggestionWindow[];
+  belowCount: number;
+  // Most-recent prior-year PM3 (from the FL Florida historical
+  // importer). Null when no historical data on file.
+  priorYearPm3: { schoolYear: string; pm3: number } | null;
+}
+
+interface FastSuggestionsResp {
+  thresholdPct: number;
+  minWindows: number;
+  schoolYear?: string;
+  suggestions: FastSuggestion[];
+}
+
+// Prefill payload passed from a FAST suggestion into PlanModal.
+export interface MtssPlanPrefill {
+  studentId: string;
+  fastBenchmarkCode: string;
+  tier: number;
+  title: string;
+  goal: string;
+}
+
 export default function MtssPlansAdmin({
   canManage,
   onBack,
@@ -136,7 +179,93 @@ export default function MtssPlansAdmin({
   const [status, setStatus] = useState<StatusFilter>("active");
   const [studentFilter, setStudentFilter] = useState("");
   const [editing, setEditing] = useState<Plan | "new" | null>(null);
+  const [prefill, setPrefill] = useState<MtssPlanPrefill | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
+  // FAST Phase 5 — Tier 2 auto-suggestions tile.
+  const [suggestions, setSuggestions] = useState<FastSuggestion[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [suggestionsError, setSuggestionsError] = useState("");
+  const [suggestionsMeta, setSuggestionsMeta] = useState<{
+    thresholdPct: number;
+    minWindows: number;
+  }>({ thresholdPct: 80, minWindows: 2 });
+  const [suggestionsOpen, setSuggestionsOpen] = useState(true);
+
+  const reloadSuggestions = () => {
+    if (!canManage) return;
+    setSuggestionsLoading(true);
+    setSuggestionsError("");
+    authFetch("/api/mtss-plans/fast-suggestions")
+      .then(async (r) => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.error ?? `HTTP ${r.status}`);
+        }
+        return r.json() as Promise<FastSuggestionsResp>;
+      })
+      .then((data) => {
+        setSuggestions(data.suggestions ?? []);
+        setSuggestionsMeta({
+          thresholdPct: data.thresholdPct,
+          minWindows: data.minWindows,
+        });
+      })
+      .catch((e: Error) =>
+        setSuggestionsError(e.message ?? "Failed to load suggestions"),
+      )
+      .finally(() => setSuggestionsLoading(false));
+  };
+
+  useEffect(() => {
+    reloadSuggestions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canManage]);
+
+  const dismissSuggestion = async (s: FastSuggestion) => {
+    if (!canManage) return;
+    if (
+      !window.confirm(
+        `Dismiss FAST suggestion for ${s.studentName ?? s.studentId} on ${s.benchmarkCode}? It will stay hidden for the rest of this school year.`,
+      )
+    ) {
+      return;
+    }
+    const r = await authFetch("/api/mtss-plans/fast-suggestions/dismiss", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        studentId: s.studentId,
+        benchmarkCode: s.benchmarkCode,
+      }),
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      window.alert(body.error ?? "Failed to dismiss");
+      return;
+    }
+    // Optimistic remove; full reload would also work.
+    setSuggestions((prev) =>
+      prev.filter(
+        (x) =>
+          !(
+            x.studentId === s.studentId &&
+            x.benchmarkCode === s.benchmarkCode
+          ),
+      ),
+    );
+  };
+
+  const createPlanFromSuggestion = (s: FastSuggestion) => {
+    if (!canManage) return;
+    setPrefill({
+      studentId: s.studentId,
+      fastBenchmarkCode: s.benchmarkCode,
+      tier: 2,
+      title: s.suggestedTitle,
+      goal: s.suggestedGoal,
+    });
+    setEditing("new");
+  };
 
   const reload = () => {
     setLoading(true);
@@ -347,6 +476,297 @@ export default function MtssPlansAdmin({
           </div>
         )}
 
+        {canManage && (
+          <div
+            style={{
+              border: "1px solid #fde68a",
+              background: "#fffbeb",
+              borderRadius: 8,
+              padding: "0.75rem 1rem",
+              marginBottom: "1rem",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setSuggestionsOpen((v) => !v)}
+              style={{
+                background: "transparent",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                fontWeight: 700,
+                color: "#92400e",
+                fontSize: "0.95rem",
+              }}
+            >
+              <span style={{ display: "inline-block", width: 12 }}>
+                {suggestionsOpen ? "▾" : "▸"}
+              </span>
+              Suggested from FAST
+              <span
+                style={{
+                  background: "#f59e0b",
+                  color: "white",
+                  borderRadius: 999,
+                  padding: "1px 8px",
+                  fontSize: "0.72rem",
+                }}
+              >
+                {suggestions.length}
+              </span>
+              <span
+                style={{
+                  color: "#a16207",
+                  fontWeight: 400,
+                  fontSize: "0.78rem",
+                }}
+              >
+                students below {suggestionsMeta.thresholdPct}% on the same
+                benchmark in ≥{suggestionsMeta.minWindows} of the last 3
+                windows
+              </span>
+            </button>
+            {suggestionsOpen && (
+              <div style={{ marginTop: 8 }}>
+                {suggestionsLoading && (
+                  <div style={{ color: "#a16207", fontSize: "0.85rem" }}>
+                    Looking at recent FAST windows…
+                  </div>
+                )}
+                {suggestionsError && (
+                  <div style={{ color: "#991b1b", fontSize: "0.85rem" }}>
+                    {suggestionsError}
+                  </div>
+                )}
+                {!suggestionsLoading &&
+                  !suggestionsError &&
+                  suggestions.length === 0 && (
+                    <div style={{ color: "#a16207", fontSize: "0.85rem" }}>
+                      No FAST-driven Tier 2 candidates right now. Re-checks
+                      after each FAST import.
+                    </div>
+                  )}
+                {suggestions.length > 0 && (
+                  <div style={{ overflowX: "auto" }}>
+                    <table
+                      className="pulse-table"
+                      style={{
+                        width: "100%",
+                        borderCollapse: "collapse",
+                        fontSize: "0.85rem",
+                        marginTop: 6,
+                      }}
+                    >
+                      <thead>
+                        <tr style={{ textAlign: "left", color: "#78350f" }}>
+                          <th style={{ padding: "0.4rem" }}>Student</th>
+                          <th style={{ padding: "0.4rem" }}>Subj.</th>
+                          <th style={{ padding: "0.4rem" }}>Benchmark</th>
+                          <th style={{ padding: "0.4rem" }}>Recent windows</th>
+                          <th
+                            style={{ padding: "0.4rem", textAlign: "right" }}
+                          ></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {suggestions.map((s) => (
+                          <tr
+                            key={`${s.studentId}|${s.benchmarkCode}`}
+                            style={{ borderTop: "1px solid #fde68a" }}
+                          >
+                            <td
+                              style={{
+                                padding: "0.4rem",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              <div style={{ fontWeight: 600 }}>
+                                {s.studentName ?? "(unknown)"}
+                              </div>
+                              <div
+                                style={{
+                                  color: "#92400e",
+                                  fontSize: "0.72rem",
+                                }}
+                              >
+                                ID {s.studentLocalSisId ?? "—"}
+                                {s.studentGrade != null
+                                  ? ` • Gr ${s.studentGrade}`
+                                  : ""}
+                              </div>
+                              {s.priorYearPm3 && (
+                                <div
+                                  title={`Prior-year FAST PM3 (${s.priorYearPm3.schoolYear})`}
+                                  style={{
+                                    marginTop: 2,
+                                    fontSize: "0.7rem",
+                                    color: "#6b7280",
+                                  }}
+                                >
+                                  <span style={{ color: "#9ca3af" }}>
+                                    {s.priorYearPm3.schoolYear} PM3
+                                  </span>{" "}
+                                  <span
+                                    style={{
+                                      color: "#374151",
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    {s.priorYearPm3.pm3}
+                                  </span>
+                                </div>
+                              )}
+                            </td>
+                            <td
+                              style={{
+                                padding: "0.4rem",
+                                textTransform: "uppercase",
+                                fontSize: "0.75rem",
+                                color: "#78350f",
+                              }}
+                            >
+                              {s.subject}
+                            </td>
+                            <td style={{ padding: "0.4rem" }}>
+                              <div
+                                style={{
+                                  fontFamily:
+                                    "ui-monospace, SFMono-Regular, monospace",
+                                  fontSize: "0.78rem",
+                                  color: "#0f172a",
+                                }}
+                              >
+                                {s.benchmarkCode}
+                              </div>
+                              {s.benchmarkCategory && (
+                                <div
+                                  style={{
+                                    color: "#78350f",
+                                    fontSize: "0.72rem",
+                                  }}
+                                >
+                                  {s.benchmarkCategory}
+                                </div>
+                              )}
+                            </td>
+                            <td style={{ padding: "0.4rem" }}>
+                              <div
+                                style={{
+                                  display: "inline-flex",
+                                  gap: 4,
+                                  alignItems: "center",
+                                }}
+                              >
+                                {s.windows.map((w) => {
+                                  const label = w.window.toUpperCase();
+                                  const naked = w.masteryPct < 0;
+                                  return (
+                                    <span
+                                      key={`${w.schoolYear}-${w.window}`}
+                                      title={`${w.schoolYear} ${label}`}
+                                      style={{
+                                        display: "inline-flex",
+                                        flexDirection: "column",
+                                        alignItems: "center",
+                                        background: naked
+                                          ? "#f1f5f9"
+                                          : w.below
+                                            ? "#fee2e2"
+                                            : "#dcfce7",
+                                        color: naked
+                                          ? "#94a3b8"
+                                          : w.below
+                                            ? "#991b1b"
+                                            : "#166534",
+                                        border: `1px solid ${
+                                          naked
+                                            ? "#e2e8f0"
+                                            : w.below
+                                              ? "#fecaca"
+                                              : "#bbf7d0"
+                                        }`,
+                                        borderRadius: 6,
+                                        padding: "2px 6px",
+                                        minWidth: 44,
+                                        fontSize: "0.72rem",
+                                        fontWeight: 600,
+                                      }}
+                                    >
+                                      <span style={{ fontSize: "0.66rem" }}>
+                                        {label}
+                                      </span>
+                                      <span>
+                                        {naked ? "—" : `${w.masteryPct}%`}
+                                      </span>
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            </td>
+                            <td
+                              style={{
+                                padding: "0.4rem",
+                                whiteSpace: "nowrap",
+                                textAlign: "right",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "inline-flex",
+                                  gap: 6,
+                                }}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    createPlanFromSuggestion(s)
+                                  }
+                                  style={{
+                                    background: "#0d9488",
+                                    color: "white",
+                                    border: "none",
+                                    borderRadius: 4,
+                                    padding: "3px 10px",
+                                    fontSize: "0.78rem",
+                                    fontWeight: 600,
+                                    cursor: "pointer",
+                                  }}
+                                  title="Create a Tier 2 plan prefilled from this benchmark"
+                                >
+                                  Create plan
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => dismissSuggestion(s)}
+                                  style={{
+                                    background: "white",
+                                    color: "#92400e",
+                                    border: "1px solid #fcd34d",
+                                    borderRadius: 4,
+                                    padding: "3px 10px",
+                                    fontSize: "0.78rem",
+                                    cursor: "pointer",
+                                  }}
+                                  title="Hide for the rest of this school year"
+                                >
+                                  Dismiss
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {loading ? (
           <div style={{ color: "#64748b" }}>Loading plans…</div>
         ) : visiblePlans.length === 0 ? (
@@ -395,7 +815,7 @@ export default function MtssPlansAdmin({
                         {p.studentName ?? "(unknown)"}
                       </div>
                       <div style={{ color: "#64748b", fontSize: "0.78rem" }}>
-                        ID {p.studentId}
+                        ID {p.studentLocalSisId ?? "—"}
                         {p.studentGrade != null
                           ? ` • Gr ${p.studentGrade}`
                           : ""}
@@ -600,14 +1020,23 @@ export default function MtssPlansAdmin({
       {editing !== null && (
         <PlanModal
           plan={editing === "new" ? null : editing}
+          prefill={editing === "new" ? prefill : null}
           students={students}
           existingActivePlanStudentIds={new Set(
             plans.filter((p) => !p.closedAt).map((p) => p.studentId),
           )}
-          onClose={() => setEditing(null)}
+          onClose={() => {
+            setEditing(null);
+            setPrefill(null);
+          }}
           onSaved={() => {
             setEditing(null);
+            setPrefill(null);
             reload();
+            // A new plan from a FAST suggestion drops that row from
+            // the tile (server filter excludes pairs with an active
+            // plan on the same benchmark code).
+            reloadSuggestions();
           }}
         />
       )}
@@ -617,6 +1046,10 @@ export default function MtssPlansAdmin({
 
 interface PlanModalProps {
   plan: Plan | null;
+  // FAST Phase 5 — when present on a new-plan modal, seeds student,
+  // title, first goal, tier, and the fastBenchmarkCode column so the
+  // resulting plan is wired straight back to the suggestion source.
+  prefill?: MtssPlanPrefill | null;
   students: Student[];
   existingActivePlanStudentIds: Set<string>;
   onClose: () => void;
@@ -625,19 +1058,32 @@ interface PlanModalProps {
 
 function PlanModal({
   plan,
+  prefill,
   students,
   existingActivePlanStudentIds,
   onClose,
   onSaved,
 }: PlanModalProps) {
   const isEdit = plan !== null;
-  const [studentId, setStudentId] = useState(plan?.studentId ?? "");
-  const [title, setTitle] = useState(plan?.title ?? "");
+  // Prefill only applies to new-plan creation; edits ignore it.
+  const seed = !isEdit && prefill ? prefill : null;
+  const [studentId, setStudentId] = useState(
+    plan?.studentId ?? seed?.studentId ?? "",
+  );
+  const [title, setTitle] = useState(plan?.title ?? seed?.title ?? "");
   const [goalsList, setGoalsList] = useState<string[]>(() => {
     const initial = splitGoals(plan?.goals ?? "");
-    return initial.length === 0 ? [""] : initial;
+    if (initial.length > 0) return initial;
+    if (seed?.goal) return [seed.goal];
+    return [""];
   });
-  const [tier, setTier] = useState<number>(plan?.tier ?? 2);
+  const [tier, setTier] = useState<number>(
+    plan?.tier ?? seed?.tier ?? 2,
+  );
+  // Carried straight through to the POST body. Edits keep their existing
+  // fastBenchmarkCode untouched (this modal doesn't surface a writer
+  // for it yet — that's Phase 5 follow-up #28).
+  const fastBenchmarkCode = seed?.fastBenchmarkCode ?? null;
   const [pointMin, setPointMin] = useState<string>(
     plan?.pointRangeMin == null ? "" : String(plan.pointRangeMin),
   );
@@ -719,7 +1165,7 @@ function PlanModal({
   }, [studentId]);
 
   const studentLabel = (s: Student) =>
-    `${s.firstName} ${s.lastName} — ID ${s.studentId} (Gr ${s.grade})`;
+    `${s.firstName} ${s.lastName} — ID ${s.localSisId ?? "—"} (Gr ${s.grade})`;
 
   // For the new-plan picker, surface a hint if the student already has
   // an active plan. We don't block — multiple plans per student are
@@ -776,6 +1222,9 @@ function PlanModal({
         ...(autoAssign ? {} : { assignedTeacherIds: additionalIds }),
       };
       if (!isEdit) body.studentId = studentId.trim();
+      if (!isEdit && fastBenchmarkCode) {
+        body.fastBenchmarkCode = fastBenchmarkCode;
+      }
       const r = await authFetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
@@ -868,7 +1317,7 @@ function PlanModal({
         ) : (
           <div style={{ marginBottom: "0.75rem", color: "#475569" }}>
             <strong>Student:</strong>{" "}
-            {plan!.studentName ?? "(unknown)"} — ID {plan!.studentId}
+            {plan!.studentName ?? "(unknown)"} — ID {plan!.studentLocalSisId ?? "—"}
           </div>
         )}
 

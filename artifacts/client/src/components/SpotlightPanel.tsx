@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import * as LucideIcons from "lucide-react";
 import { authFetch } from "../lib/authToken";
+import StudentPhoto from "./StudentPhoto";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 // Spotlight — fair, fast, "pull a name from the hat" picker for whole-class
@@ -34,15 +37,48 @@ interface Prompt {
   sortOrder: number;
 }
 
+interface HouseInfo {
+  id: number;
+  name: string;
+  color: string;
+  iconKey: string | null;
+}
+
 interface PickResult {
   pick: {
     studentId: string;
     firstName: string | null;
     lastName: string | null;
+    house: HouseInfo | null;
+    // Server-supplied for the reveal avatar; null pre-yearbook or
+    // pre-Packet-B server. <StudentPhoto/> falls back to initials.
+    photoObjectKey?: string | null;
+    photoConsent?: boolean | null;
   };
   prompt: { id: number; text: string } | null;
   poolSize: number;
+  // Server picks the awarded point value at pick time so the teacher
+  // never chooses (this lets a hidden runaway-leader cap downgrade
+  // a value silently). Always present from the API; defaulted on the
+  // client only as a paranoid fallback if an old server is in flight.
+  awardedPoints: number;
 }
+
+// Mini house leaderboard row returned by /api/spotlight/award (and the
+// initial /api/houses fetch). Sorted descending by totalPoints in the UI.
+interface HouseTotal {
+  id: number;
+  name: string;
+  color: string;
+  iconKey: string | null;
+  memberCount: number;
+  totalPoints: number;
+}
+
+// Point-value selection used to be a teacher-facing chip row. It is
+// now picked server-side at /spotlight/pick time and arrives baked
+// into the PickResult, so the chip UI is gone — the auto-selected
+// value is shown as a badge on the reveal card instead.
 
 type AnimStyle = "wheel" | "bottles" | "reel" | "spotlight";
 const STYLE_STORAGE_KEY = "pulseedu.spotlight.style";
@@ -104,7 +140,11 @@ type SpinState =
       // a long way before settling. Only set when animStyle === "reel".
       reelSlots?: RosterStudent[];
     }
-  | { kind: "result"; pick: PickResult };
+  // `awarded` flips true after a successful /spotlight/award call.
+  // The card stays put on the same student so the teacher can decide
+  // their next move (change animation style, spin again, or Done)
+  // instead of being auto-advanced into another spin.
+  | { kind: "result"; pick: PickResult; awarded: boolean };
 
 interface SpotlightPanelProps {
   isAdmin: boolean;
@@ -148,6 +188,45 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
   const [skipIds, setSkipIds] = useState<string[]>([]);
   const [spin, setSpin] = useState<SpinState>({ kind: "idle" });
   const [promptsModalOpen, setPromptsModalOpen] = useState(false);
+  // House standings — fetched once on mount but only RENDERED after the
+  // first Correct! award of the session, so the picker stays minimal until
+  // the teacher actually opts into the houses-game vibe. After that the
+  // bar strip persists and animates on subsequent awards.
+  const [houseTotals, setHouseTotals] = useState<HouseTotal[]>([]);
+  const [showHouseBars, setShowHouseBars] = useState(false);
+  // Tracks which house was just credited so its bar can flash + show
+  // a floating "+N". Cleared by a short timer on the bar component.
+  const [lastAward, setLastAward] = useState<{
+    houseId: number | null;
+    points: number;
+    nonce: number;
+  } | null>(null);
+  // Toggle between fireworks-on (default) and silent. Persists per-device.
+  const [fireworksEnabled, setFireworksEnabled] = useState(true);
+  const [fireworksKey, setFireworksKey] = useState<number | null>(null);
+  const [fireworksColor, setFireworksColor] = useState<string>("#fbbf24");
+
+  const [awarding, setAwarding] = useState(false);
+  const [awardError, setAwardError] = useState<string | null>(null);
+
+  // Per-session per-house rotation: tracks which houses have been
+  // credited a Correct! since the panel was opened (or last reset).
+  // Sent to /spotlight/pick so the server prefers students whose
+  // house hasn't been served yet, giving each house a turn before
+  // any house gets a second turn. Resets when all houses have been
+  // served (full cycle) or when the user hits Done.
+  //
+  // The ref mirror exists because awardCorrect's auto-advance
+  // setTimeout fires `pick()` ~2.2s later, and `pick()` would
+  // otherwise close over a stale `servedHouseIds` from before the
+  // award updated it — letting the same house get picked twice in
+  // a row through the auto-advance path.
+  const [servedHouseIds, setServedHouseIds] = useState<number[]>([]);
+  const servedHouseIdsRef = useRef<number[]>([]);
+  useEffect(() => {
+    servedHouseIdsRef.current = servedHouseIds;
+  }, [servedHouseIds]);
+
   const [animStyle, setAnimStyle] = useState<AnimStyle>(() => {
     if (typeof window === "undefined") return "wheel";
     const saved = window.localStorage.getItem(STYLE_STORAGE_KEY);
@@ -160,6 +239,14 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
   // direction across multiple picks rather than snapping back to 0.
   const [wheelRotation, setWheelRotation] = useState(0);
   const animTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Track the auto-advance timeout so reset()/Done can cancel it before
+  // it fires a stale `pick()` against an already-transitioned spin state.
+  const awardAdvanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  // Mirror `spin` into a ref so the auto-advance closure can read the
+  // *latest* state at fire time instead of the value captured at Correct.
+  const spinRef = useRef<SpinState>({ kind: "idle" });
 
   // ---- Admin "Test as teacher" override --------------------------------
   // Lets an admin (or any core-team member) pick any teacher in the school
@@ -411,6 +498,12 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
         body: JSON.stringify({
           candidateStudentIds: effectiveCandidates,
           skipStudentIds: effectiveSkip,
+          // Per-house rotation hint. Server prefers students whose
+          // house isn't in this list; falls back gracefully if the
+          // filter would empty the pool. Read from the ref so the
+          // auto-advance timer in awardCorrect sees the freshly-
+          // updated served-house set rather than the stale closure.
+          servedHouseIds: servedHouseIdsRef.current,
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -478,7 +571,7 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
         reelSlots,
       });
       animTimerRef.current = setTimeout(() => {
-        setSpin({ kind: "result", pick: result });
+        setSpin({ kind: "result", pick: result, awarded: false });
       }, ANIM_DURATION_MS);
     } catch (e) {
       setSpin({ kind: "idle" });
@@ -499,6 +592,7 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
       setSpin({
         kind: "result",
         pick: { ...spin.pick, prompt: body.prompt },
+        awarded: spin.awarded,
       });
     } catch {
       // ignore
@@ -520,7 +614,135 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
 
   function reset() {
     clearAnimTimer();
+    if (awardAdvanceTimerRef.current !== null) {
+      clearTimeout(awardAdvanceTimerRef.current);
+      awardAdvanceTimerRef.current = null;
+    }
     setSpin({ kind: "idle" });
+    setAwardError(null);
+    // End-of-session also ends the per-house rotation cycle.
+    setServedHouseIds([]);
+  }
+
+  // Keep the ref synced so the auto-advance closure inside awardCorrect
+  // sees the live spin state and bails out if the teacher hit Done first.
+  useEffect(() => {
+    spinRef.current = spin;
+  }, [spin]);
+
+  // Cancel any pending auto-advance on unmount so a stray timer can't
+  // call setState on an unmounted SpotlightPanel.
+  useEffect(() => {
+    return () => {
+      if (awardAdvanceTimerRef.current !== null) {
+        clearTimeout(awardAdvanceTimerRef.current);
+        awardAdvanceTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  // ---- Houses + Spotlight Correct! flow --------------------------------
+  // Initial fetch of house totals so we can populate the bars instantly
+  // when the first Correct! lands. We DON'T render the bars yet — the
+  // teacher opts in by hitting Correct. Best-effort: a 401/network blip
+  // just means the bars come up empty on the first award and refill on
+  // the second.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authFetch("/api/houses?windowDays=7", {
+          credentials: "include",
+        });
+        if (!res.ok) return;
+        const body = (await res.json()) as { houses?: HouseTotal[] };
+        if (cancelled) return;
+        setHouseTotals(body.houses ?? []);
+      } catch {
+        // best-effort
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function awardCorrect() {
+    if (spin.kind !== "result") return;
+    if (awarding) return;
+    setAwarding(true);
+    setAwardError(null);
+    // The point value was chosen by the server at /pick from the pool
+    // that fits this student's house standing. We echo it back on
+    // /award; the server re-validates against the current pool. If
+    // standings shifted between pick and award (a 409), the displayed
+    // value would no longer match what the server is willing to store —
+    // we surface that explicitly so the teacher re-spins instead of
+    // silently mutating the value.
+    const awardedPoints = spin.pick.awardedPoints;
+    try {
+      const studentIds = [spin.pick.pick.studentId];
+      const res = await authFetch("/api/spotlight/award", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentIds, points: awardedPoints }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status === 409) {
+          setAwardError(
+            "House standings just changed — please re-spin to get a fresh pick.",
+          );
+        } else {
+          setAwardError(body.error ?? `Award failed (${res.status})`);
+        }
+        return;
+      }
+      const updated = (body.houses ?? []) as HouseTotal[];
+      setHouseTotals(updated);
+      setShowHouseBars(true);
+      const houseId = spin.pick.pick.house?.id ?? null;
+      const color = spin.pick.pick.house?.color ?? "#fbbf24";
+      setLastAward({ houseId, points: awardedPoints, nonce: Date.now() });
+      // Advance the per-session house rotation. Add this house to the
+      // served set; if every house has now had a turn, reset to start
+      // a fresh cycle. House=null students don't participate in the
+      // rotation at all (they're always eligible on the server side).
+      if (houseId !== null) {
+        setServedHouseIds((prev) => {
+          if (prev.includes(houseId)) return prev;
+          const next = [...prev, houseId];
+          const totalHouses = updated.length || houseTotals.length;
+          if (totalHouses > 0 && next.length >= totalHouses) {
+            return [];
+          }
+          return next;
+        });
+      }
+      if (fireworksEnabled) {
+        setFireworksColor(color);
+        setFireworksKey(Date.now());
+        playChime();
+      }
+      // Flip the card into its "awarded" state. The card stays on
+      // this student so the teacher can switch animation styles,
+      // hit "Spin again" deliberately, or Done — instead of being
+      // auto-rolled into the next pick. Per-pick "already awarded"
+      // is tracked on the spin state so a double-click on Correct
+      // can't double-credit the same student.
+      if (spinRef.current.kind === "result") {
+        setSpin({
+          kind: "result",
+          pick: spinRef.current.pick,
+          awarded: true,
+        });
+      }
+    } catch (e) {
+      setAwardError(e instanceof Error ? e.message : "Award failed");
+    } finally {
+      setAwarding(false);
+    }
   }
 
   return (
@@ -762,6 +984,10 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
         {spin.kind === "result" ? (
           <ResultCard
             pick={spin.pick}
+            awarded={spin.awarded}
+            onCorrect={() => void awardCorrect()}
+            awarding={awarding}
+            awardError={awardError}
             onPickAgain={() => void pick()}
             onReroll={() => void rerollPrompt()}
             onAbsentAndRepick={markAbsentAndRepick}
@@ -890,6 +1116,45 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
           }}
         >
           {error}
+        </div>
+      )}
+
+      {showHouseBars && houseTotals.length > 0 && (
+        <HouseBars
+          houses={houseTotals}
+          lastAward={lastAward}
+        />
+      )}
+
+      {fireworksKey !== null && (
+        <Fireworks key={fireworksKey} color={fireworksColor} />
+      )}
+
+      {/* The fireworks/chime opt-out only matters once the teacher has
+          actually used Correct at least once this session — keeping it
+          hidden until then preserves the goal that all celebration
+          chrome appears post-first-Correct. */}
+      {showHouseBars && (
+        <div
+          style={{
+            marginTop: "0.75rem",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.6rem",
+            fontSize: "0.8rem",
+            opacity: 0.7,
+          }}
+        >
+          <label
+            style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}
+          >
+            <input
+              type="checkbox"
+              checked={fireworksEnabled}
+              onChange={(e) => setFireworksEnabled(e.target.checked)}
+            />
+            Fireworks &amp; chime on Correct
+          </label>
         </div>
       )}
 
@@ -1297,6 +1562,10 @@ function SpotlightSweep({
 
 interface ResultCardProps {
   pick: PickResult;
+  awarded: boolean;
+  onCorrect: () => void;
+  awarding: boolean;
+  awardError: string | null;
   onPickAgain: () => void;
   onReroll: () => void;
   onAbsentAndRepick: () => void;
@@ -1305,43 +1574,193 @@ interface ResultCardProps {
 
 function ResultCard({
   pick,
+  awarded,
+  onCorrect,
+  awarding,
+  awardError,
   onPickAgain,
   onReroll,
   onAbsentAndRepick,
   onDone,
 }: ResultCardProps) {
+  const house = pick.pick.house;
+  const fullName = `${pick.pick.firstName ?? pick.pick.studentId} ${
+    pick.pick.lastName ?? ""
+  }`.trim();
   return (
-    <div className="spotlight-result">
+    <div className="spotlight-result" style={{ width: "100%" }}>
       <div className="spotlight-result-eyebrow">🎉 Spotlight</div>
-      <div className="spotlight-result-name">
-        {pick.pick.firstName ?? pick.pick.studentId}{" "}
-        {pick.pick.lastName ?? ""}
+      {/* Packet B — big avatar on the reveal so the whole class sees
+          who got picked. <StudentPhoto/> falls back to an initials
+          bubble when the school hasn't ingested yearbook photos yet
+          or the student has consent=false. */}
+      <div style={{ display: "flex", justifyContent: "center", marginBottom: "0.5rem" }}>
+        <StudentPhoto
+          firstName={pick.pick.firstName ?? ""}
+          lastName={pick.pick.lastName ?? ""}
+          photoObjectKey={pick.pick.photoObjectKey ?? null}
+          photoConsent={pick.pick.photoConsent ?? true}
+          size={120}
+        />
       </div>
+      <div className="spotlight-result-name">{fullName}</div>
+
+      {house ? (
+        <HouseBadge house={house} />
+      ) : (
+        <div
+          style={{
+            fontSize: "0.8rem",
+            opacity: 0.7,
+            marginTop: "0.4rem",
+            fontStyle: "italic",
+          }}
+          title="This student isn't assigned to a house yet — points will still be awarded, just not credited to a house."
+        >
+          (not yet in a house)
+        </div>
+      )}
+
       {pick.prompt && (
         <div className="spotlight-result-prompt">{pick.prompt.text}</div>
       )}
-      <div className="spotlight-result-actions">
+
+      {/* Auto-selected point value badge. The server picks the value
+          at /spotlight/pick time so the teacher can't game the cap;
+          we just reveal it here. Blue pill with a soft white halo
+          (box-shadow) to make it pop without screaming for attention. */}
+      <div
+        style={{
+          display: "flex",
+          gap: "0.5rem",
+          alignItems: "center",
+          justifyContent: "center",
+          marginTop: "0.85rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <span style={{ fontSize: "0.85rem", opacity: 0.75 }}>Worth</span>
+        <div
+          style={{
+            background: "#1d4ed8",
+            color: "#fff",
+            border: "1px solid #1d4ed8",
+            borderRadius: 999,
+            padding: "0.35rem 0.95rem",
+            fontWeight: 700,
+            fontSize: "1rem",
+            minWidth: 56,
+            textAlign: "center",
+            boxShadow:
+              "0 0 0 2px rgba(255,255,255,0.85), 0 0 14px 4px rgba(255,255,255,0.55)",
+          }}
+          aria-label={`Worth ${pick.awardedPoints} point${pick.awardedPoints === 1 ? "" : "s"}`}
+        >
+          {pick.awardedPoints} pt{pick.awardedPoints === 1 ? "" : "s"}
+        </div>
+      </div>
+
+      {/* Correct / Skip — the two big "decide now" buttons. */}
+      <div
+        style={{
+          display: "flex",
+          gap: "0.6rem",
+          justifyContent: "center",
+          marginTop: "0.85rem",
+          flexWrap: "wrap",
+        }}
+      >
         <button
           type="button"
-          onClick={onDone}
-          className="spotlight-result-btn primary"
+          onClick={onCorrect}
+          disabled={awarding || awarded}
+          aria-pressed={awarded}
+          style={{
+            background: awarded
+              ? "#e2e8f0"
+              : house?.color ?? "#16a34a",
+            color: awarded ? "#0f172a" : "#fff",
+            border: "none",
+            borderRadius: 12,
+            padding: "0.7rem 1.4rem",
+            fontWeight: 700,
+            fontSize: "1.05rem",
+            cursor: awarding || awarded ? "default" : "pointer",
+            boxShadow: awarded
+              ? "none"
+              : "0 6px 16px rgba(0,0,0,0.18)",
+            opacity: awarding ? 0.7 : 1,
+            minWidth: 180,
+          }}
         >
-          Got it!
+          {awarding
+            ? "Awarding…"
+            : awarded
+              ? `✅ Awarded +${pick.awardedPoints} pt${pick.awardedPoints === 1 ? "" : "s"}`
+              : `✅ Correct! +${pick.awardedPoints} pt${pick.awardedPoints === 1 ? "" : "s"}`}
         </button>
         <button
           type="button"
           onClick={onPickAgain}
-          className="spotlight-result-btn"
+          disabled={awarding}
+          style={{
+            background: awarded ? "#1d4ed8" : "#fff",
+            color: awarded ? "#fff" : "#334155",
+            border: awarded ? "none" : "1px solid #cbd5e1",
+            borderRadius: 12,
+            padding: "0.7rem 1.1rem",
+            fontWeight: awarded ? 700 : 600,
+            fontSize: "1rem",
+            cursor: awarding ? "not-allowed" : "pointer",
+            boxShadow: awarded
+              ? "0 6px 16px rgba(0,0,0,0.18)"
+              : "none",
+          }}
         >
-          Pick again
+          {awarded ? "🎲 Spin again" : "Skip — pick next"}
         </button>
-        <button
-          type="button"
-          onClick={onReroll}
-          className="spotlight-result-btn"
+      </div>
+
+      {awardError && (
+        <div
+          style={{
+            marginTop: "0.65rem",
+            color: "#991b1b",
+            background: "#fef2f2",
+            border: "1px solid #fecaca",
+            borderRadius: 8,
+            padding: "0.4rem 0.6rem",
+            fontSize: "0.85rem",
+          }}
         >
-          New prompt
-        </button>
+          {awardError}
+        </div>
+      )}
+
+      {/* Secondary actions kept compact under the primary row so the
+          original "absent / re-roll prompt / done" affordances remain
+          accessible without competing visually with Correct/Skip. */}
+      <div
+        className="spotlight-result-actions"
+        style={{ marginTop: "0.85rem" }}
+      >
+        {/* "New prompt" only makes sense when a prompt is actually
+            attached to the pick — for schools that don't use the
+            prompt library it was dead UI. Hidden when pick.prompt is
+            null so the secondary row stays purposeful. */}
+        {pick.prompt && (
+          <button
+            type="button"
+            onClick={onReroll}
+            className="spotlight-result-btn"
+          >
+            New prompt
+          </button>
+        )}
+        {/* "They're absent — re-pick" button hidden by user request.
+            The handler (onAbsentAndRepick / markAbsentAndRepick) is left
+            wired up so we can resurface this affordance trivially later
+            without re-plumbing state. To restore: uncomment below.
         <button
           type="button"
           onClick={onAbsentAndRepick}
@@ -1349,9 +1768,348 @@ function ResultCard({
         >
           They're absent — re-pick
         </button>
+        */}
+        <button
+          type="button"
+          onClick={onDone}
+          className="spotlight-result-btn"
+        >
+          Done
+        </button>
       </div>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// HouseBadge — colored chip with Lucide icon + house name. Falls back to
+// the house's first letter inside a colored circle when iconKey is null
+// or doesn't resolve to a known Lucide icon.
+// ---------------------------------------------------------------------------
+
+function HouseBadge({ house }: { house: HouseInfo }) {
+  const Icon = resolveLucideIcon(house.iconKey);
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "0.5rem",
+        background: house.color,
+        color: "#fff",
+        borderRadius: 999,
+        padding: "0.35rem 0.85rem 0.35rem 0.4rem",
+        marginTop: "0.5rem",
+        fontWeight: 600,
+        fontSize: "0.95rem",
+        boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
+      }}
+    >
+      <span
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 26,
+          height: 26,
+          borderRadius: "50%",
+          background: "rgba(255,255,255,0.22)",
+        }}
+      >
+        {Icon ? (
+          <Icon size={16} strokeWidth={2.5} />
+        ) : (
+          <span style={{ fontSize: "0.85rem", fontWeight: 800 }}>
+            {house.name.charAt(0).toUpperCase()}
+          </span>
+        )}
+      </span>
+      <span>House {house.name}</span>
+    </div>
+  );
+}
+
+// Resolve a Lucide icon name to a component, with a defensive cast since
+// LucideIcons exposes many non-component exports (createLucideIcon, etc.).
+// Returns null when the key is missing or doesn't map to a renderable
+// component, so the badge can fall back to a letter avatar.
+function resolveLucideIcon(
+  key: string | null,
+): React.ComponentType<{ size?: number; strokeWidth?: number }> | null {
+  if (!key) return null;
+  const all = LucideIcons as unknown as Record<string, unknown>;
+  const candidate = all[key];
+  if (typeof candidate === "function" || typeof candidate === "object") {
+    return candidate as React.ComponentType<{
+      size?: number;
+      strokeWidth?: number;
+    }>;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// HouseBars — mini leaderboard along the bottom of the Spotlight panel.
+// Renders one bar per house, normalized so the leader is at 100%. The
+// just-credited house gets a flash + floating "+N" overlay.
+// ---------------------------------------------------------------------------
+
+interface HouseBarsProps {
+  houses: HouseTotal[];
+  lastAward: { houseId: number | null; points: number; nonce: number } | null;
+}
+
+function HouseBars({ houses, lastAward }: HouseBarsProps) {
+  const sorted = [...houses].sort((a, b) => b.totalPoints - a.totalPoints);
+  const maxPoints = Math.max(1, ...sorted.map((h) => h.totalPoints));
+  return (
+    <div
+      style={{
+        marginTop: "1rem",
+        background: "#fff",
+        border: "1px solid #e2e8f0",
+        borderRadius: 12,
+        padding: "0.85rem 1rem",
+        boxShadow: "0 2px 8px rgba(15,23,42,0.06)",
+      }}
+    >
+      <div
+        style={{
+          fontSize: "0.75rem",
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+          color: "#64748b",
+          fontWeight: 700,
+          marginBottom: "0.5rem",
+        }}
+      >
+        House Standings
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
+        {sorted.map((h) => {
+          const pct = Math.round((h.totalPoints / maxPoints) * 100);
+          const justCredited =
+            lastAward !== null && lastAward.houseId === h.id;
+          const Icon = resolveLucideIcon(h.iconKey);
+          return (
+            <div
+              key={h.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.55rem",
+                position: "relative",
+              }}
+            >
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 22,
+                  height: 22,
+                  borderRadius: "50%",
+                  background: h.color,
+                  color: "#fff",
+                  flexShrink: 0,
+                }}
+              >
+                {Icon ? (
+                  <Icon size={13} strokeWidth={2.5} />
+                ) : (
+                  <span style={{ fontSize: "0.7rem", fontWeight: 800 }}>
+                    {h.name.charAt(0).toUpperCase()}
+                  </span>
+                )}
+              </span>
+              <span
+                style={{
+                  fontSize: "0.85rem",
+                  fontWeight: 600,
+                  width: 80,
+                  flexShrink: 0,
+                }}
+              >
+                {h.name}
+              </span>
+              <div
+                style={{
+                  flex: 1,
+                  height: 14,
+                  background: "#f1f5f9",
+                  borderRadius: 999,
+                  overflow: "hidden",
+                  position: "relative",
+                }}
+              >
+                <motion.div
+                  initial={false}
+                  animate={{ width: `${pct}%` }}
+                  transition={{ type: "spring", stiffness: 110, damping: 18 }}
+                  style={{
+                    height: "100%",
+                    background: h.color,
+                    borderRadius: 999,
+                  }}
+                />
+              </div>
+              <span
+                style={{
+                  fontSize: "0.85rem",
+                  fontWeight: 700,
+                  color: "#0f172a",
+                  width: 56,
+                  textAlign: "right",
+                  flexShrink: 0,
+                }}
+              >
+                {h.totalPoints.toLocaleString()}
+              </span>
+              <AnimatePresence>
+                {justCredited && lastAward && (
+                  <motion.div
+                    key={lastAward.nonce}
+                    initial={{ opacity: 0, y: 8, scale: 0.85 }}
+                    animate={{ opacity: 1, y: -18, scale: 1 }}
+                    exit={{ opacity: 0, y: -32 }}
+                    transition={{ duration: 1.1 }}
+                    style={{
+                      position: "absolute",
+                      right: 70,
+                      top: -4,
+                      pointerEvents: "none",
+                      color: h.color,
+                      fontWeight: 800,
+                      fontSize: "1.1rem",
+                      textShadow: "0 1px 2px rgba(255,255,255,0.9)",
+                    }}
+                  >
+                    +{lastAward.points}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Fireworks — short SVG burst overlay. Fixed-position, pointer-events
+// none, auto-cleans by being unmounted via key change in the parent.
+// 14 sparks fly out in evenly-spaced directions from the screen center,
+// fade out over ~1.4s. Color comes from the house's hex.
+// ---------------------------------------------------------------------------
+
+function Fireworks({ color }: { color: string }) {
+  const sparks = useMemo(() => {
+    const N = 14;
+    return Array.from({ length: N }, (_, i) => {
+      const angle = (i / N) * Math.PI * 2;
+      const dist = 120 + Math.random() * 80;
+      return {
+        dx: Math.cos(angle) * dist,
+        dy: Math.sin(angle) * dist,
+        delay: Math.random() * 0.05,
+      };
+    });
+  }, []);
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: "fixed",
+        inset: 0,
+        pointerEvents: "none",
+        zIndex: 999,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <div style={{ position: "relative", width: 0, height: 0 }}>
+        {sparks.map((s, i) => (
+          <motion.div
+            key={i}
+            initial={{ x: 0, y: 0, opacity: 1, scale: 0.6 }}
+            animate={{
+              x: s.dx,
+              y: s.dy,
+              opacity: 0,
+              scale: 1,
+            }}
+            transition={{ duration: 1.2, delay: s.delay, ease: "easeOut" }}
+            style={{
+              position: "absolute",
+              width: 12,
+              height: 12,
+              borderRadius: "50%",
+              background: color,
+              boxShadow: `0 0 12px ${color}`,
+            }}
+          />
+        ))}
+        <motion.div
+          initial={{ opacity: 0.7, scale: 0.4 }}
+          animate={{ opacity: 0, scale: 2.4 }}
+          transition={{ duration: 0.8, ease: "easeOut" }}
+          style={{
+            position: "absolute",
+            width: 80,
+            height: 80,
+            left: -40,
+            top: -40,
+            borderRadius: "50%",
+            background: color,
+            filter: "blur(12px)",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// playChime — short positive WebAudio "ding" played on Correct. Wrapped
+// in a try/catch because some browsers block AudioContext outside of a
+// user-gesture; we never want a missing chime to block the award flow.
+// ---------------------------------------------------------------------------
+
+function playChime() {
+  try {
+    const Ctor =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!Ctor) return;
+    const ctx = new Ctor();
+    const now = ctx.currentTime;
+    // Two-note arpeggio: C5 → E5, fast ADSR. Triangle wave keeps it
+    // friendly rather than the harsh sine-wave "alert" feel.
+    [
+      { freq: 523.25, start: 0 },
+      { freq: 659.25, start: 0.09 },
+    ].forEach(({ freq, start }) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, now + start);
+      gain.gain.linearRampToValueAtTime(0.18, now + start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + start + 0.35);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + start);
+      osc.stop(now + start + 0.4);
+    });
+    // Auto-close so we don't leak audio nodes if the teacher hits Correct
+    // many times in a row. 600ms covers the longest oscillator above.
+    window.setTimeout(() => void ctx.close().catch(() => undefined), 600);
+  } catch {
+    // best-effort
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -31,8 +31,13 @@ import {
   studentsTable,
   supportNotesTable,
   studentFastScoresTable,
+  studentFastItemResponsesTable,
+  studentImportSnapshotsTable,
+  schoolSettingsTable,
+  housesTable,
 } from "@workspace/db";
-import { eq, and, or, desc, sql, isNull } from "drizzle-orm";
+import { recommendNextHouse } from "./houses.js";
+import { eq, and, or, desc, sql, isNull, inArray, gte, lte, ilike } from "drizzle-orm";
 import {
   requireSchool,
   canImportSchoolData,
@@ -40,7 +45,24 @@ import {
   canActAsDistrict,
   getDistrictIdForSchool,
 } from "../lib/scope.js";
+import {
+  DEFAULT_SCHOOL_TZ,
+  getSchoolTimezone,
+  schoolYearLabelFor,
+} from "../lib/schoolYear.js";
 import Papa from "papaparse";
+import ExcelJS from "exceljs";
+
+// Resolve the "YY-YY" school-year label for a given school, honoring the
+// per-school IANA timezone column (falls back to DEFAULT_SCHOOL_TZ).
+// Cached at the schoolYear module level so repeat calls inside one
+// import are free.
+async function currentSchoolYearLabelForSchool(
+  schoolId: number,
+): Promise<string> {
+  const tz = await getSchoolTimezone(schoolId).catch(() => DEFAULT_SCHOOL_TZ);
+  return schoolYearLabelFor(new Date(), tz);
+}
 
 const router: IRouter = Router();
 type StaffRow = typeof staffTable.$inferSelect;
@@ -993,6 +1015,476 @@ router.get("/data-imports/jobs", requireImporter(), async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/data-imports/export?kind=...&scope=school|district
+//   Returns the school's CURRENT data for the requested kind as a CSV
+//   the user can edit and re-upload. Column order matches the sample
+//   CSVs served from /samples/, so a download → edit → upload round
+//   trip uses the same headers the importer expects.
+//
+//   kind ∈ rosters | behavior | fast_scores | fast_prior_year | assessments
+//
+//   District scope is only honored for kinds that the importer itself
+//   supports at district level (assessments today). Anything else
+//   force-clamps to school scope.
+//
+//   Empty schools get a header-only CSV (still valid). Filenames
+//   include kind + ISO date so re-downloads don't overwrite each other
+//   in the user's Downloads folder.
+// ---------------------------------------------------------------------------
+router.get("/data-imports/export", requireImporter(), async (req, res) => {
+  const staff = (req as Request & { staff: StaffRow }).staff;
+  const kindRaw = typeof req.query.kind === "string" ? req.query.kind : "";
+  const SUPPORTED = new Set([
+    "rosters",
+    "behavior",
+    "fast_scores",
+    "fast_prior_year",
+    "assessments",
+  ]);
+  if (!SUPPORTED.has(kindRaw)) {
+    res.status(400).json({ error: "Unknown kind" });
+    return;
+  }
+  const scope =
+    req.query.scope === "district" && kindRaw === "assessments"
+      ? "district"
+      : "school";
+
+  // ---- Optional row filters (kind-specific). All read off req.query
+  // and silently ignored if the kind doesn't support them.
+  // grades: comma-separated ints, e.g. "0,6,7" (0 = K). Used by every
+  //   kind that can be joined back to studentsTable.
+  // from / to: YYYY-MM-DD inclusive, used by behavior + assessments.
+  // subject: "ela" | "math" | "algebra1" | "geometry" — FAST + EOC.
+  // noteType: substring match (case-insensitive) — behavior only.
+  // assessmentName: substring match (case-insensitive) — assessments only.
+  // columns: comma-separated header names to keep in the output;
+  //   omitted = include all. Required-by-importer columns are always
+  //   re-injected at the end so the round-trip stays valid even if the
+  //   user un-checks them in the UI.
+  const parseGrades = (raw: unknown): number[] | null => {
+    if (typeof raw !== "string" || !raw.trim()) return null;
+    const out: number[] = [];
+    for (const tok of raw.split(",")) {
+      const t = tok.trim();
+      if (!t) continue;
+      // Accept both "K" and "0" as kindergarten.
+      if (t.toUpperCase() === "K") {
+        out.push(0);
+        continue;
+      }
+      const n = Number(t);
+      if (Number.isFinite(n) && n >= 0 && n <= 13) out.push(Math.floor(n));
+    }
+    return out.length > 0 ? Array.from(new Set(out)) : null;
+  };
+  const grades = parseGrades(req.query.grades);
+  const fromYmd =
+    typeof req.query.from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from)
+      ? req.query.from
+      : null;
+  const toYmd =
+    typeof req.query.to === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to)
+      ? req.query.to
+      : null;
+  const subjectFilter =
+    req.query.subject === "ela" ||
+    req.query.subject === "math" ||
+    req.query.subject === "algebra1" ||
+    req.query.subject === "geometry"
+      ? (req.query.subject as "ela" | "math" | "algebra1" | "geometry")
+      : null;
+  // Escape LIKE/ILIKE wildcards so a user typing "%" doesn't bypass
+  // substring matching and dump every row in their school. Backslash
+  // first, then the two SQL wildcards. Postgres uses backslash as the
+  // default LIKE escape char.
+  const escapeLike = (s: string): string =>
+    s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+  const noteTypeFilter =
+    typeof req.query.noteType === "string" && req.query.noteType.trim()
+      ? escapeLike(req.query.noteType.trim().toLowerCase())
+      : null;
+  const assessmentNameFilter =
+    typeof req.query.assessmentName === "string" &&
+    req.query.assessmentName.trim()
+      ? escapeLike(req.query.assessmentName.trim().toLowerCase())
+      : null;
+  const columnsFilter =
+    typeof req.query.columns === "string" && req.query.columns.trim()
+      ? new Set(
+          req.query.columns
+            .split(",")
+            .map((c) => c.trim())
+            .filter(Boolean),
+        )
+      : null;
+
+  let schoolIds: number[] = [];
+  if (scope === "district") {
+    if (!canActAsDistrict(staff)) {
+      res.status(403).json({ error: "District access required" });
+      return;
+    }
+    const districtId = await requireActorDistrict(staff, res);
+    if (districtId == null) return;
+    const ds = await db
+      .select({ id: schoolsTable.id })
+      .from(schoolsTable)
+      .where(eq(schoolsTable.districtId, districtId));
+    schoolIds = ds.map((s) => s.id);
+    if (schoolIds.length === 0) {
+      sendCsv(res, kindRaw, []);
+      return;
+    }
+  } else {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    schoolIds = [schoolId];
+  }
+  // Build (header, rows) per kind. Rows are arrays of strings/numbers
+  // in the same order as the headers; Papa.unparse handles quoting and
+  // newlines.
+  let headers: string[] = [];
+  let rows: (string | number | null)[][] = [];
+
+  if (kindRaw === "rosters") {
+    // Roster filter: grade only.
+    const rosterWhere = grades
+      ? and(
+          inArray(studentsTable.schoolId, schoolIds),
+          inArray(studentsTable.grade, grades),
+        )!
+      : inArray(studentsTable.schoolId, schoolIds);
+    const list = await db
+      .select({
+        studentId: studentsTable.studentId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+        parentName: studentsTable.parentName,
+        parentEmail: studentsTable.parentEmail,
+        parentPhone: studentsTable.parentPhone,
+        gender: studentsTable.gender,
+        ell: studentsTable.ell,
+        ese: studentsTable.ese,
+        is504: studentsTable.is504,
+        // Pulled so the export round-trips the student's PBIS house
+        // assignment. Maps to the optional `house_name` importer
+        // column — blank/unknown names fall back to the smallest
+        // house at insert time (recommendNextHouse).
+        houseId: studentsTable.houseId,
+      })
+      .from(studentsTable)
+      .where(rosterWhere)
+      .orderBy(studentsTable.lastName, studentsTable.firstName);
+    // House name lookup for the export. One query per export call,
+    // bounded to the requested schools — cheap (≤ a few dozen rows
+    // total even for a district-wide export).
+    const houseList = await db
+      .select({
+        id: housesTable.id,
+        name: housesTable.name,
+      })
+      .from(housesTable)
+      .where(inArray(housesTable.schoolId, schoolIds));
+    const houseNameById = new Map(houseList.map((h) => [h.id, h.name]));
+    headers = [
+      "student_id",
+      "first_name",
+      "last_name",
+      "grade",
+      "parent_name",
+      "parent_email",
+      "parent_phone",
+      "gender",
+      "ell",
+      "ese",
+      "is_504",
+      // Optional on import. Blank cells get auto-assigned to the
+      // smallest house at insert time; unknown names also fall back.
+      "house_name",
+    ];
+    rows = list.map((r) => [
+      r.studentId,
+      r.firstName,
+      r.lastName,
+      // Grade 0 in the DB = Kindergarten; export as "K" so the round
+      // trip preserves what staff actually expects to see.
+      r.grade === 0 ? "K" : r.grade,
+      r.parentName ?? "",
+      r.parentEmail ?? "",
+      r.parentPhone ?? "",
+      r.gender ?? "",
+      r.ell ? "Y" : "N",
+      r.ese ? "Y" : "N",
+      r.is504 ? "Y" : "N",
+      r.houseId == null ? "" : (houseNameById.get(r.houseId) ?? ""),
+    ]);
+  } else if (kindRaw === "behavior") {
+    // Build a grade-filter subselect once; reused below for FAST +
+    // assessments. Returns the set of student_ids in the selected
+    // schools that match the requested grades.
+    const gradeSubselect = grades
+      ? db
+          .select({ sid: studentsTable.studentId })
+          .from(studentsTable)
+          .where(
+            and(
+              inArray(studentsTable.schoolId, schoolIds),
+              inArray(studentsTable.grade, grades),
+            )!,
+          )
+      : null;
+    const conds = [inArray(supportNotesTable.schoolId, schoolIds)];
+    if (gradeSubselect)
+      conds.push(inArray(supportNotesTable.studentId, gradeSubselect));
+    if (fromYmd)
+      conds.push(gte(supportNotesTable.createdAt, fromYmd));
+    if (toYmd)
+      conds.push(lte(supportNotesTable.createdAt, `${toYmd}T23:59:59`));
+    if (noteTypeFilter)
+      conds.push(ilike(supportNotesTable.noteType, `%${noteTypeFilter}%`));
+    const list = await db
+      .select({
+        studentId: supportNotesTable.studentId,
+        noteType: supportNotesTable.noteType,
+        noteText: supportNotesTable.noteText,
+        staffName: supportNotesTable.staffName,
+        createdAt: supportNotesTable.createdAt,
+      })
+      .from(supportNotesTable)
+      .where(and(...conds)!)
+      .orderBy(desc(supportNotesTable.createdAt));
+    headers = [
+      "student_id",
+      "note_type",
+      "note_text",
+      "staff_name",
+      "created_at",
+    ];
+    rows = list.map((r) => [
+      r.studentId,
+      r.noteType ?? "",
+      r.noteText ?? "",
+      r.staffName ?? "",
+      // createdAt is stored as text (legacy) — pass through verbatim.
+      r.createdAt ?? "",
+    ]);
+  } else if (kindRaw === "fast_scores") {
+    const fsGradeSub = grades
+      ? db
+          .select({ sid: studentsTable.studentId })
+          .from(studentsTable)
+          .where(
+            and(
+              inArray(studentsTable.schoolId, schoolIds),
+              inArray(studentsTable.grade, grades),
+            )!,
+          )
+      : null;
+    const fsConds = [inArray(studentFastScoresTable.schoolId, schoolIds)];
+    if (fsGradeSub)
+      fsConds.push(inArray(studentFastScoresTable.studentId, fsGradeSub));
+    if (subjectFilter)
+      fsConds.push(eq(studentFastScoresTable.subject, subjectFilter));
+    const list = await db
+      .select({
+        studentId: studentFastScoresTable.studentId,
+        subject: studentFastScoresTable.subject,
+        pm1: studentFastScoresTable.pm1,
+        pm2: studentFastScoresTable.pm2,
+        pm3: studentFastScoresTable.pm3,
+        priorYearScore: studentFastScoresTable.priorYearScore,
+        priorYearBq: studentFastScoresTable.priorYearBq,
+      })
+      .from(studentFastScoresTable)
+      .where(and(...fsConds)!)
+      .orderBy(
+        studentFastScoresTable.studentId,
+        studentFastScoresTable.subject,
+      );
+    headers = [
+      "student_id",
+      "subject",
+      "pm1",
+      "pm2",
+      "pm3",
+      "prior_year_score",
+      "prior_year_bq",
+    ];
+    rows = list.map((r) => [
+      r.studentId,
+      // Export the user-friendly label (ELA/Math) — the importer
+      // accepts both that and the lowercase code on re-upload.
+      r.subject === "ela" ? "ELA" : "Math",
+      r.pm1 ?? "",
+      r.pm2 ?? "",
+      r.pm3 ?? "",
+      r.priorYearScore ?? "",
+      r.priorYearBq ? "Y" : "N",
+    ]);
+  } else if (kindRaw === "fast_prior_year") {
+    const fpyGradeSub = grades
+      ? db
+          .select({ sid: studentsTable.studentId })
+          .from(studentsTable)
+          .where(
+            and(
+              inArray(studentsTable.schoolId, schoolIds),
+              inArray(studentsTable.grade, grades),
+            )!,
+          )
+      : null;
+    const fpyConds = [inArray(studentFastScoresTable.schoolId, schoolIds)];
+    if (fpyGradeSub)
+      fpyConds.push(inArray(studentFastScoresTable.studentId, fpyGradeSub));
+    if (subjectFilter)
+      fpyConds.push(eq(studentFastScoresTable.subject, subjectFilter));
+    const list = await db
+      .select({
+        studentId: studentFastScoresTable.studentId,
+        subject: studentFastScoresTable.subject,
+        priorYearScore: studentFastScoresTable.priorYearScore,
+        priorYearBq: studentFastScoresTable.priorYearBq,
+      })
+      .from(studentFastScoresTable)
+      .where(and(...fpyConds)!)
+      .orderBy(
+        studentFastScoresTable.studentId,
+        studentFastScoresTable.subject,
+      );
+    headers = ["student_id", "subject", "prior_year_score", "prior_year_bq"];
+    rows = list
+      // Only include rows that actually have a prior-year score; this
+      // is the prior-year-only export, so empty rows are noise.
+      .filter((r) => r.priorYearScore != null)
+      .map((r) => [
+        r.studentId,
+        r.subject === "ela" ? "ELA" : "Math",
+        r.priorYearScore ?? "",
+        r.priorYearBq ? "Y" : "N",
+      ]);
+  } else if (kindRaw === "assessments") {
+    const aGradeSub = grades
+      ? db
+          .select({ sid: studentsTable.studentId })
+          .from(studentsTable)
+          .where(
+            and(
+              inArray(studentsTable.schoolId, schoolIds),
+              inArray(studentsTable.grade, grades),
+            )!,
+          )
+      : null;
+    const aConds = [inArray(assessmentsTable.schoolId, schoolIds)];
+    if (aGradeSub)
+      aConds.push(inArray(assessmentsTable.studentId, aGradeSub));
+    if (fromYmd)
+      aConds.push(gte(assessmentsTable.administeredAt, new Date(fromYmd)));
+    if (toYmd)
+      aConds.push(
+        lte(assessmentsTable.administeredAt, new Date(`${toYmd}T23:59:59`)),
+      );
+    if (assessmentNameFilter)
+      aConds.push(
+        ilike(assessmentsTable.assessmentName, `%${assessmentNameFilter}%`),
+      );
+    const list = await db
+      .select({
+        studentId: assessmentsTable.studentId,
+        assessmentName: assessmentsTable.assessmentName,
+        score: assessmentsTable.score,
+        scoreLevel: assessmentsTable.scoreLevel,
+        administeredAt: assessmentsTable.administeredAt,
+        source: assessmentsTable.source,
+        schoolId: assessmentsTable.schoolId,
+      })
+      .from(assessmentsTable)
+      .where(and(...aConds)!)
+      .orderBy(desc(assessmentsTable.administeredAt));
+    // Build a school_code map so district exports can round-trip
+    // back through the district importer (which routes by school_code).
+    const codeMap = new Map<number, string>();
+    if (scope === "district") {
+      const ss = await db
+        .select({
+          id: schoolsTable.id,
+          code: schoolsTable.stateSchoolCode,
+        })
+        .from(schoolsTable)
+        .where(inArray(schoolsTable.id, schoolIds));
+      for (const s of ss) codeMap.set(s.id, s.code ?? "");
+    }
+    headers = [
+      "student_id",
+      "assessment_name",
+      "score",
+      "score_level",
+      "administered_at",
+      "source",
+      "school_code",
+    ];
+    rows = list.map((r) => [
+      r.studentId,
+      r.assessmentName,
+      r.score ?? "",
+      r.scoreLevel ?? "",
+      // ISO date (YYYY-MM-DD) — easier to edit in Excel than full ISO.
+      r.administeredAt instanceof Date
+        ? r.administeredAt.toISOString().slice(0, 10)
+        : String(r.administeredAt ?? "").slice(0, 10),
+      r.source ?? "",
+      scope === "district" ? codeMap.get(r.schoolId) ?? "" : "",
+    ]);
+  }
+
+  // Column projection. We always force-keep the importer's required
+  // columns even if the user un-checks them in the UI — otherwise the
+  // CSV can't round-trip back through the importer. The required set
+  // is intentionally hard-coded here (not pulled from the importer
+  // config) because the export endpoint owns its own header order.
+  if (columnsFilter && headers.length > 0) {
+    const REQUIRED: Record<string, string[]> = {
+      rosters: ["student_id", "first_name", "last_name", "grade"],
+      behavior: ["student_id", "note_text"],
+      fast_scores: ["student_id", "subject"],
+      fast_prior_year: ["student_id", "subject", "prior_year_score"],
+      assessments: ["student_id", "assessment_name", "administered_at"],
+    };
+    for (const r of REQUIRED[kindRaw] ?? []) columnsFilter.add(r);
+    const keepIdx: number[] = [];
+    headers.forEach((h, i) => {
+      if (columnsFilter!.has(h)) keepIdx.push(i);
+    });
+    if (keepIdx.length > 0 && keepIdx.length < headers.length) {
+      headers = keepIdx.map((i) => headers[i]!);
+      rows = rows.map((r) => keepIdx.map((i) => r[i] ?? ""));
+    }
+  }
+  sendCsv(res, kindRaw, [headers, ...rows]);
+});
+
+// CSV writer used by the export endpoint above. Pulled out so each
+// kind branch stays focused on its query shape.
+function sendCsv(
+  res: Response,
+  kind: string,
+  rowsWithHeader: (string | number | null)[][],
+): void {
+  const csv = Papa.unparse(rowsWithHeader, { quotes: true });
+  const stamp = new Date().toISOString().slice(0, 10);
+  const filename = `pulseedu-${kind.replace(/_/g, "-")}-${stamp}.csv`;
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${filename}"`,
+  );
+  // Prepend BOM so Excel opens it as UTF-8 instead of Latin-1, which
+  // would mangle accented names on the roster export.
+  res.send("\uFEFF" + csv);
+}
+
+// ---------------------------------------------------------------------------
 // POST /api/data-imports/jobs/:id/rollback
 //   Deletes the rows this job inserted (assessments today; future
 //   importers will need to add their own delete branch). Wrapped in a
@@ -1049,20 +1541,12 @@ router.post(
         .json({ error: `Cannot roll back a ${job.status} job` });
       return;
     }
-    // FAST scores import is an upsert with no per-job audit trail
-    // (the table has no `import_job_id` column), so there is nothing
-    // we can safely undo. Rather than silently flipping the job to
-    // `rolled_back` while the rows stay changed — which gives the
-    // operator false confidence the data was reverted — we refuse
-    // the rollback up front. This must stay in sync with
-    // FAST_SCORES_CONFIG.rollback() (also a no-op).
-    if (job.kind === "fast_scores" || job.kind === "fast_prior_year") {
-      res.status(409).json({
-        error:
-          "FAST score imports cannot be rolled back. Re-upload a corrected CSV to update the affected rows.",
-      });
-      return;
-    }
+    // FAST score and FAST prior-year imports now carry an
+    // `import_job_id` on every row written by the upsert path. Their
+    // KindConfig.rollback() implementations DELETE WHERE
+    // import_job_id = :id AND school_id = :id (defense-in-depth). Rows
+    // written before this column existed have NULL import_job_id and
+    // therefore survive any rollback — that's the desired behavior.
     const deleted = await db.transaction(async (tx) => {
       let count = 0;
       // Multi-kind kinds (rosters, behavior) live in the registry. They
@@ -1071,6 +1555,32 @@ router.post(
       const cfg = KIND_CONFIGS[job.kind];
       if (cfg && job.schoolId != null) {
         count = await cfg.rollback(tx, id, job.schoolId);
+      } else if (job.kind === "fast_florida" && job.schoolId != null) {
+        // FAST Phase 1 — rolling back a Florida xlsx import deletes
+        // every item_response row stamped with this jobId, then
+        // deletes any student_fast_scores row whose import_job_id
+        // matches (defense-in-depth on schoolId). Pre-existing PM
+        // values written by an earlier job survive because their
+        // import_job_id points at that earlier job.
+        const itemRes = await tx
+          .delete(studentFastItemResponsesTable)
+          .where(
+            and(
+              eq(studentFastItemResponsesTable.importJobId, id),
+              eq(studentFastItemResponsesTable.schoolId, job.schoolId),
+            ),
+          );
+        const scoreRes = await tx
+          .delete(studentFastScoresTable)
+          .where(
+            and(
+              eq(studentFastScoresTable.importJobId, id),
+              eq(studentFastScoresTable.schoolId, job.schoolId),
+            ),
+          );
+        count =
+          ((itemRes as unknown as { rowCount?: number }).rowCount ?? 0) +
+          ((scoreRes as unknown as { rowCount?: number }).rowCount ?? 0);
       } else if (job.kind === "assessments") {
         if (job.districtId != null && job.schoolId == null) {
           // District-scope rollback: rows span multiple schools. We
@@ -1113,6 +1623,99 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
+// GET /api/data-imports/jobs/:id/skipped-houses.csv
+//   Re-emits the rows the roster importer rejected for strict
+//   house-name matching as a CSV with the original CSV columns. The
+//   admin can fix the bad house_name values in their SIS (or directly
+//   in the file) and re-upload. Only roster jobs and only rejections
+//   tagged code === "unrecognized_house" are included.
+// ---------------------------------------------------------------------------
+router.get(
+  "/data-imports/jobs/:id/skipped-houses.csv",
+  requireImporter(),
+  async (req, res) => {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isFinite(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid job id" });
+      return;
+    }
+    const [job] = await db
+      .select()
+      .from(importJobsTable)
+      .where(eq(importJobsTable.id, id));
+    if (!job) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+    // Same scope check as rollback: school-scope jobs require same
+    // school. Roster imports are school-only today, but mirror the
+    // rollback shape so this stays correct if that ever changes.
+    if (job.schoolId != null) {
+      const schoolId = requireSchool(req, res);
+      if (!schoolId) return;
+      if (job.schoolId !== schoolId) {
+        res.status(404).json({ error: "Job not found" });
+        return;
+      }
+    } else {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+    if (job.kind !== "rosters") {
+      res
+        .status(400)
+        .json({ error: "Skipped-house export is only available for roster imports" });
+      return;
+    }
+    const log = Array.isArray(job.errorLog)
+      ? (job.errorLog as Array<{
+          row: number;
+          message: string;
+          raw?: Record<string, string>;
+          code?: string;
+          bucket?: string;
+        }>)
+      : [];
+    const skipped = log.filter(
+      (e) => e.code === "unrecognized_house" && e.raw && typeof e.raw === "object",
+    );
+    // Recover the original CSV header order from the union of raw row
+    // keys. Papa.parse preserves insertion order per row, so iterating
+    // entries in seen order gives us the original column order for the
+    // first row, plus any columns that only appear in later rows.
+    const headerOrder: string[] = [];
+    const seenHeader = new Set<string>();
+    for (const e of skipped) {
+      for (const k of Object.keys(e.raw!)) {
+        if (!seenHeader.has(k)) {
+          seenHeader.add(k);
+          headerOrder.push(k);
+        }
+      }
+    }
+    const rowsOut = skipped.map((e) => {
+      const out: Record<string, string> = {};
+      for (const h of headerOrder) out[h] = e.raw![h] ?? "";
+      return out;
+    });
+    const csv =
+      headerOrder.length === 0
+        ? ""
+        : Papa.unparse({ fields: headerOrder, data: rowsOut }, { quotes: true });
+    const safeName = String(job.filename || "roster")
+      .replace(/\.csv$/i, "")
+      .replace(/[^A-Za-z0-9._-]+/g, "_")
+      .slice(0, 80);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="skipped-houses_${safeName}_job${job.id}.csv"`,
+    );
+    res.send(csv);
+  },
+);
+
+// ---------------------------------------------------------------------------
 // ===========================================================================
 // Multi-kind importer registry. Adds rosters + behavior on top of the
 // existing assessments importer. Each kind plugs in its own targets,
@@ -1149,6 +1752,42 @@ interface KindConfig<T = unknown> {
     jobId: number,
     schoolId: number,
   ) => Promise<number>;
+  // Optional: augment the preview response with kind-specific extras.
+  // Called after parsing once we know which rows are valid, so the hook
+  // can inspect parsed values + cross-reference school-scoped state
+  // (e.g. matching CSV house_name against houses.name). Must not mutate.
+  previewExtras?: (
+    parsedValues: T[],
+    schoolId: number,
+  ) => Promise<Record<string, unknown>>;
+  // Optional: post-parse, pre-insert filter. Runs in the commit handler
+  // after parseRow has rejected malformed rows but before insertChunk
+  // touches the database. Used by kinds that need to enforce
+  // school-scoped policy that parseRow can't see (e.g. the Roster
+  // importer's strict house-name mode, which rejects rows whose
+  // `house_name` doesn't match any configured house when the
+  // `strictHouseNameMatch` school setting is on). Items keep their
+  // 1-based CSV row number so rejections get the same `row` field
+  // parseRow-produced errors do.
+  precommitValidate?: (
+    items: Array<{ rowIndex: number; value: T; raw: Record<string, string> }>,
+    schoolId: number,
+  ) => Promise<{
+    kept: T[];
+    rejected: Array<{
+      row: number;
+      message: string;
+      raw?: Record<string, string>;
+      // Machine-readable rejection reason. Lets the UI surface a
+      // dedicated "skipped due to unrecognized house" section and a
+      // fixup CSV download. Optional so other future rejection
+      // categories can stay generic.
+      code?: string;
+      // Distinct value that triggered the rejection (e.g. the
+      // unrecognized house name) — used for grouping in the UI.
+      bucket?: string;
+    }>;
+  }>;
 }
 
 // Same shape as autoMapHeaders but reads its synonym table from the
@@ -1228,6 +1867,13 @@ type ParsedRoster = {
   ell: boolean | undefined;
   ese: boolean | undefined;
   is504: boolean | undefined;
+  // Optional PBIS house affiliation by display name (case-insensitive
+  // match against houses.name for the importer's school). Resolved to
+  // houses.id at insert time. Brand-new students whose row has no
+  // house_name (or an unmatched value) fall back to the smallest-house
+  // recommendation so rosters stay balanced as kids arrive through the
+  // year.
+  houseName: string | null;
 };
 
 // Boolean coercion for CSV columns. Accepts the conventions actual SIS
@@ -1240,6 +1886,56 @@ function parseBoolFlag(raw: string | null | undefined): boolean {
   const v = raw.toString().trim().toLowerCase();
   if (!v) return false;
   return v === "y" || v === "yes" || v === "true" || v === "t" || v === "1";
+}
+
+// Levenshtein distance between two strings (iterative, O(n*m)). Used
+// only to suggest the closest configured house name for an
+// unrecognized CSV value (e.g. "Pheonix" → "Phoenix"); inputs are
+// short school-house names, so the quadratic cost is irrelevant.
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  let prev = new Array<number>(b.length + 1);
+  let curr = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(
+        curr[j - 1] + 1,
+        prev[j] + 1,
+        prev[j - 1] + cost,
+      );
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[b.length];
+}
+
+// Returns the closest configured house name to `value` if one is
+// within a small edit distance, else undefined. Threshold scales with
+// the input length so single-character names don't accept wild
+// matches but typical 6–10 char names tolerate 2-character typos
+// (the "Pheonix"/"Phoenix" case).
+function suggestHouseName(
+  value: string,
+  knownNames: string[],
+): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed || knownNames.length === 0) return undefined;
+  const lower = trimmed.toLowerCase();
+  const threshold = Math.max(1, Math.min(3, Math.ceil(trimmed.length / 3)));
+  let best: { name: string; dist: number } | undefined;
+  for (const name of knownNames) {
+    const d = levenshtein(lower, name.toLowerCase());
+    if (d === 0) return name;
+    if (d <= threshold && (!best || d < best.dist)) {
+      best = { name, dist: d };
+    }
+  }
+  return best?.name;
 }
 
 const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
@@ -1257,6 +1953,7 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
     "ell",
     "ese",
     "is_504",
+    "house_name",
   ]),
   requiredFields: ["student_id", "first_name", "last_name", "grade"],
   headerSynonyms: {
@@ -1305,6 +2002,7 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
     ell: ["ell", "esol", "lep", "ell_flag", "english_learner", "el_status"],
     ese: ["ese", "sped", "swd", "iep", "ese_flag", "exceptional_student"],
     is_504: ["504", "is_504", "section_504", "504_plan", "fivezerofour"],
+    house_name: ["house", "house_name", "housename", "pbis_house", "team"],
   },
   parseRow(row, mapping) {
     const target: Record<string, string> = {};
@@ -1368,57 +2066,359 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
         ell: optionalFlag("ell"),
         ese: optionalFlag("ese"),
         is504: optionalFlag("is_504"),
+        houseName: optional("house_name"),
       },
     };
   },
+  // Roster preview surfaces house_name values the importer could not
+  // match to one of this school's houses. These rows still commit (they
+  // fall back to the smallest-house rotation in insertChunk), but the
+  // banner gives admins a chance to fix typos like "Pheonix" vs
+  // "Phoenix" before they silently land as rebalanced.
+  async previewExtras(parsed, schoolId) {
+    const withHouse = parsed.filter(
+      (p): p is ParsedRoster & { houseName: string } =>
+        typeof p.houseName === "string" && p.houseName.trim().length > 0,
+    );
+    if (withHouse.length === 0) return {};
+    const [houseRows, settingsRow] = await Promise.all([
+      db
+        .select({ name: housesTable.name })
+        .from(housesTable)
+        .where(eq(housesTable.schoolId, schoolId)),
+      db
+        .select({
+          strictHouseNameMatch: schoolSettingsTable.strictHouseNameMatch,
+        })
+        .from(schoolSettingsTable)
+        .where(eq(schoolSettingsTable.schoolId, schoolId)),
+    ]);
+    const knownNames = houseRows.map((h) => h.name.trim());
+    const known = new Set(knownNames.map((n) => n.toLowerCase()));
+    let count = 0;
+    const distinct = new Map<string, string>();
+    for (const p of withHouse) {
+      const trimmed = p.houseName.trim();
+      if (known.has(trimmed.toLowerCase())) continue;
+      count++;
+      if (!distinct.has(trimmed.toLowerCase())) {
+        distinct.set(trimmed.toLowerCase(), trimmed);
+      }
+    }
+    if (count === 0) return {};
+    const samples = Array.from(distinct.values())
+      .slice(0, 10)
+      .map((value) => {
+        const suggestion = suggestHouseName(value, knownNames);
+        return suggestion ? { value, suggestion } : { value };
+      });
+    // `policy` lets the client adapt the banner copy without having to
+    // re-fetch school settings. 'strict' → rows will be skipped at
+    // commit; 'fallback' → rows will commit with the smallest-house
+    // default (the legacy behavior).
+    const policy: "strict" | "fallback" =
+      settingsRow[0]?.strictHouseNameMatch === true ? "strict" : "fallback";
+    return {
+      unrecognizedHouseNames: {
+        rowCount: count,
+        distinctCount: distinct.size,
+        samples,
+        policy,
+      },
+    };
+  },
+  async precommitValidate(items, schoolId) {
+    // Strict mode (school_settings.strict_house_name_match = true):
+    // reject any row whose `house_name` is set but doesn't match a
+    // configured house. The default-off fallback path stays in
+    // insertChunk so unchanged schools keep the smallest-house rotation.
+    const [settingsRow] = await db
+      .select({
+        strictHouseNameMatch: schoolSettingsTable.strictHouseNameMatch,
+      })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId));
+    if (settingsRow?.strictHouseNameMatch !== true) {
+      return { kept: items.map((i) => i.value), rejected: [] };
+    }
+    const houseRows = await db
+      .select({ name: housesTable.name })
+      .from(housesTable)
+      .where(eq(housesTable.schoolId, schoolId));
+    const knownNames = houseRows.map((h) => h.name.trim());
+    const known = new Set(knownNames.map((n) => n.toLowerCase()));
+    const kept: ParsedRoster[] = [];
+    const rejected: Array<{
+      row: number;
+      message: string;
+      raw?: Record<string, string>;
+      code?: string;
+      bucket?: string;
+    }> = [];
+    for (const { rowIndex, value, raw } of items) {
+      const hn = value.houseName?.trim();
+      if (hn && !known.has(hn.toLowerCase())) {
+        const suggestion = suggestHouseName(hn, knownNames);
+        const didYouMean = suggestion
+          ? ` — did you mean "${suggestion}"?`
+          : "";
+        rejected.push({
+          row: rowIndex,
+          message: `Unrecognized house_name "${hn}"${didYouMean} (strict house-name matching is on). Fix the spelling or add the house in PBIS Hub → Houses.`,
+          // Persist the original CSV row + a machine-readable code so the
+          // History tab can group the skipped rows by house and offer a
+          // "Download skipped rows as CSV" fixup export. Without `raw`
+          // the admin would have to hand-rebuild each row in their SIS.
+          raw,
+          code: "unrecognized_house",
+          bucket: hn,
+        });
+        continue;
+      }
+      kept.push(value);
+    }
+    return { kept, rejected };
+  },
   async insertChunk(tx, parsed, schoolId, jobId) {
     if (parsed.length === 0) return 0;
-    // Use returning() so we can count how many actually survived the
-    // unique-constraint conflict check. Drizzle's onConflictDoNothing
-    // skips dupes silently; the returned array tells us the truth.
-    const inserted = await tx
-      .insert(studentsTable)
-      .values(
-        parsed.map((p) => {
-          const row: Record<string, unknown> = {
-            schoolId,
-            studentId: p.studentId,
-            firstName: p.firstName,
-            lastName: p.lastName,
-            grade: p.grade,
-            parentName: p.parentName,
-            parentEmail: p.parentEmail,
-            parentPhone: p.parentPhone,
-            importJobId: jobId,
-            gender: p.gender,
-          };
-          // Only include flag columns when the importer actually saw a
-          // value; otherwise let the column default fire so we don't
-          // overwrite future-set MTSS values via INSERT (insert is moot
-          // here because of onConflictDoNothing, but the principle
-          // holds for the parsed-row shape).
-          if (p.ell !== undefined) row.ell = p.ell;
-          if (p.ese !== undefined) row.ese = p.ese;
-          if (p.is504 !== undefined) row.is504 = p.is504;
-          return row as typeof studentsTable.$inferInsert;
-        }),
-      )
-      .onConflictDoNothing({ target: studentsTable.studentId })
-      .returning({ id: studentsTable.id });
-    return inserted.length;
-  },
-  async rollback(tx, jobId, schoolId) {
-    // Defense in depth: AND on schoolId so a malformed job can't nuke
-    // another school's roster.
-    const r = await tx
-      .delete(studentsTable)
+    // Roster commits are now upsert-with-snapshot: brand-new students
+    // are INSERTed; existing students are UPDATEd with a COALESCE-style
+    // SET that preserves any field the CSV did not mention. Before
+    // each existing-student update we snapshot the prior column values
+    // into student_import_snapshots so rollback can restore them
+    // verbatim. Brand-new inserts get a wasInsert=true snapshot row
+    // (priorJson empty) so rollback can DELETE them by student_id.
+    //
+    // Per-row processing inside the transaction. The volume here is
+    // bounded by the importer's chunk size (a few hundred rows), so
+    // the round-trip cost is acceptable in exchange for clean semantics
+    // and correct snapshots.
+
+    // Pre-fetch existing rows for every student_id in this chunk, in a
+    // single query. We need their prior values for the snapshot.
+    const studentIds = parsed.map((p) => p.studentId);
+    const existing = await tx
+      .select()
+      .from(studentsTable)
       .where(
         and(
-          eq(studentsTable.importJobId, jobId),
           eq(studentsTable.schoolId, schoolId),
+          inArray(studentsTable.studentId, studentIds),
         ),
       );
-    return (r as unknown as { rowCount?: number }).rowCount ?? 0;
+    const existingByStudentId = new Map(
+      existing.map((s) => [s.studentId, s]),
+    );
+
+    // House placement (Phase 5: bulk house placement). For brand-new
+    // inserts only: resolve the CSV's house_name to a houses.id, OR
+    // pick the currently smallest house as the rotating default so
+    // mid-year additions stay balanced. We do NOT touch the houseId
+    // on existing students from the roster importer — that's reserved
+    // for the admin "Change house" modal (audited) and the bulk sort
+    // commit (snapshotted).
+    const houseRows = await tx
+      .select({
+        id: housesTable.id,
+        name: housesTable.name,
+      })
+      .from(housesTable)
+      .where(eq(housesTable.schoolId, schoolId));
+    const houseByName = new Map(
+      houseRows.map((h) => [h.name.trim().toLowerCase(), h.id]),
+    );
+    // Delegate fallback house selection to the shared
+    // recommendNextHouse helper from routes/houses.ts. We pass the
+    // active transaction so each successive insert sees the
+    // uncommitted row count and rotates through houses naturally —
+    // the helper picks the smallest house, ties broken by id.
+    const pickRecommendedHouseId = async (): Promise<number | null> => {
+      if (houseRows.length === 0) return null;
+      return await recommendNextHouse(schoolId, tx);
+    };
+
+    let touched = 0;
+    for (const p of parsed) {
+      const prior = existingByStudentId.get(p.studentId);
+      if (!prior) {
+        // Brand-new student — INSERT and snapshot as wasInsert=true.
+        const insertRow: Record<string, unknown> = {
+          schoolId,
+          studentId: p.studentId,
+          firstName: p.firstName,
+          lastName: p.lastName,
+          grade: p.grade,
+          parentName: p.parentName,
+          parentEmail: p.parentEmail,
+          parentPhone: p.parentPhone,
+          importJobId: jobId,
+          gender: p.gender,
+        };
+        if (p.ell !== undefined) insertRow.ell = p.ell;
+        if (p.ese !== undefined) insertRow.ese = p.ese;
+        if (p.is504 !== undefined) insertRow.is504 = p.is504;
+        // House placement: explicit CSV value wins; otherwise rotate
+        // the smallest house. An unmatched house_name silently falls
+        // back to the rotation rather than erroring the whole row —
+        // an import is the wrong place to fail a child on misspelled
+        // metadata, and the admin sort panel can fix anything stray.
+        if (p.houseName) {
+          const hid = houseByName.get(p.houseName.trim().toLowerCase());
+          if (hid !== undefined) {
+            insertRow.houseId = hid;
+          } else {
+            const fallback = await pickRecommendedHouseId();
+            if (fallback !== null) insertRow.houseId = fallback;
+          }
+        } else {
+          const fallback = await pickRecommendedHouseId();
+          if (fallback !== null) insertRow.houseId = fallback;
+        }
+        // Race: another concurrent commit may have inserted this
+        // student_id between our SELECT and INSERT. onConflictDoNothing
+        // turns that race into a no-op rather than a hard failure;
+        // when it skips we simply don't snapshot.
+        const ins = await tx
+          .insert(studentsTable)
+          .values(insertRow as typeof studentsTable.$inferInsert)
+          .onConflictDoNothing({ target: studentsTable.studentId })
+          .returning({ id: studentsTable.id });
+        if (ins.length > 0) {
+          await tx.insert(studentImportSnapshotsTable).values({
+            importJobId: jobId,
+            schoolId,
+            studentId: p.studentId,
+            wasInsert: true,
+            priorJson: {},
+          });
+          touched += 1;
+        }
+        continue;
+      }
+      // Existing student — only update the columns the CSV actually
+      // provided AND only when the value is changing. Skip the snapshot
+      // entirely if the row is a no-op (every CSV field already matches
+      // the DB). This keeps the snapshot table from growing on
+      // re-uploads of an unchanged file.
+      const updates: Record<string, unknown> = {};
+      const priorSnapshot: Record<string, unknown> = {};
+      const maybe = (
+        key: keyof typeof prior,
+        next: string | number | boolean | null | undefined,
+      ): void => {
+        if (next === undefined) return; // CSV column unmapped → leave alone
+        if (prior[key] === next) return; // no change
+        updates[key as string] = next;
+        priorSnapshot[key as string] = prior[key];
+      };
+      maybe("firstName", p.firstName);
+      maybe("lastName", p.lastName);
+      maybe("grade", p.grade);
+      // Optional columns: when the CSV omits them parseRow returns
+      // null (string optional()) — null DOES overwrite to clear the
+      // field, which matches the CSV-author's intent. To preserve a
+      // field, leave the column out of the mapping entirely.
+      maybe("parentName", p.parentName);
+      maybe("parentEmail", p.parentEmail);
+      maybe("parentPhone", p.parentPhone);
+      maybe("gender", p.gender);
+      if (p.ell !== undefined) maybe("ell", p.ell);
+      if (p.ese !== undefined) maybe("ese", p.ese);
+      if (p.is504 !== undefined) maybe("is504", p.is504);
+      if (Object.keys(updates).length === 0) continue;
+      // Tag the row's importJobId too so the History tab can show
+      // "last touched by" without joining the snapshot table.
+      updates.importJobId = jobId;
+      await tx
+        .update(studentsTable)
+        .set(updates as Partial<typeof studentsTable.$inferInsert>)
+        .where(
+          and(
+            eq(studentsTable.schoolId, schoolId),
+            eq(studentsTable.studentId, p.studentId),
+          ),
+        );
+      await tx.insert(studentImportSnapshotsTable).values({
+        importJobId: jobId,
+        schoolId,
+        studentId: p.studentId,
+        wasInsert: false,
+        priorJson: priorSnapshot,
+      });
+      touched += 1;
+    }
+    return touched;
+  },
+  async rollback(tx, jobId, schoolId) {
+    // Two-phase rollback driven entirely by the snapshot table:
+    //   1. wasInsert=true rows → DELETE the student (the row didn't
+    //      exist before this job). Restricted to students whose
+    //      importJobId still matches — if the student was later
+    //      touched by a different job we leave them in place because
+    //      a hard delete would lose newer data.
+    //   2. wasInsert=false rows → restore each snapshotted column
+    //      back onto the live student row.
+    // After both phases run we delete the snapshots themselves so a
+    // re-rollback (shouldn't happen, but) is a no-op.
+    const snapshots = await tx
+      .select()
+      .from(studentImportSnapshotsTable)
+      .where(
+        and(
+          eq(studentImportSnapshotsTable.importJobId, jobId),
+          eq(studentImportSnapshotsTable.schoolId, schoolId),
+        ),
+      );
+    let count = 0;
+    for (const snap of snapshots) {
+      if (snap.wasInsert) {
+        const r = await tx
+          .delete(studentsTable)
+          .where(
+            and(
+              eq(studentsTable.schoolId, schoolId),
+              eq(studentsTable.studentId, snap.studentId),
+              eq(studentsTable.importJobId, jobId),
+            ),
+          );
+        count += (r as unknown as { rowCount?: number }).rowCount ?? 0;
+        continue;
+      }
+      // Restore prior columns. The snapshot only contains the columns
+      // that were actually changed, so the SET payload is naturally
+      // narrow — we won't accidentally overwrite a field the importer
+      // never touched.
+      //
+      // OWNERSHIP GUARD: only restore when the row's importJobId still
+      // matches this job. If a later job (Job B) has since touched the
+      // same student, importJobId == B != jobId, the UPDATE skips it,
+      // and Job B's newer values stay intact. Without this guard,
+      // rolling back an old import would silently clobber whatever
+      // changed afterward — exactly the kind of "undo deletes data"
+      // surprise rollback is supposed to prevent.
+      const restore = snap.priorJson as Record<string, unknown>;
+      if (Object.keys(restore).length === 0) continue;
+      const r = await tx
+        .update(studentsTable)
+        .set(restore as Partial<typeof studentsTable.$inferInsert>)
+        .where(
+          and(
+            eq(studentsTable.schoolId, schoolId),
+            eq(studentsTable.studentId, snap.studentId),
+            eq(studentsTable.importJobId, jobId),
+          ),
+        );
+      count += (r as unknown as { rowCount?: number }).rowCount ?? 0;
+    }
+    await tx
+      .delete(studentImportSnapshotsTable)
+      .where(
+        and(
+          eq(studentImportSnapshotsTable.importJobId, jobId),
+          eq(studentImportSnapshotsTable.schoolId, schoolId),
+        ),
+      );
+    return count;
   },
 };
 
@@ -1576,7 +2576,7 @@ const BEHAVIOR_CONFIG: KindConfig<ParsedBehavior> = {
 // ---------------------------------------------------------------------------
 type ParsedFastScore = {
   studentId: string;
-  subject: "ela" | "math";
+  subject: "ela" | "math" | "algebra1" | "geometry";
   pm1: number | null;
   pm2: number | null;
   pm3: number | null;
@@ -1660,19 +2660,28 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
     }
     const studentId = row[target.student_id].toString().trim();
     // Subject normalization. "Reading" maps to ela because Florida FAST
-    // ELA Reading exports use that label; everything else normalizes to
-    // its base subject. Anything outside ela/math is rejected (we don't
-    // model EOC subjects yet — see schema header comment).
+    // ELA Reading exports use that label. EOC subjects (Algebra 1,
+    // Geometry) accept their common SIS export aliases too. Anything
+    // unrecognized is rejected.
     const subjectRaw = row[target.subject].toString().trim().toLowerCase();
-    let subject: "ela" | "math";
+    let subject: "ela" | "math" | "algebra1" | "geometry";
     if (subjectRaw === "ela" || subjectRaw === "reading") {
       subject = "ela";
     } else if (subjectRaw === "math" || subjectRaw === "mathematics") {
       subject = "math";
+    } else if (
+      subjectRaw === "algebra1" ||
+      subjectRaw === "algebra 1" ||
+      subjectRaw === "alg1" ||
+      subjectRaw === "algebra_1"
+    ) {
+      subject = "algebra1";
+    } else if (subjectRaw === "geometry" || subjectRaw === "geo") {
+      subject = "geometry";
     } else {
       return {
         ok: false,
-        message: `Unsupported subject "${subjectRaw}" (expected ela or math)`,
+        message: `Unsupported subject "${subjectRaw}" (expected ela, math, algebra1, or geometry)`,
       };
     }
     const pm1 = target.pm1 !== undefined
@@ -1713,11 +2722,23 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
       },
     };
   },
-  async insertChunk(tx, parsed, schoolId, _jobId) {
+  async insertChunk(tx, parsed, schoolId, jobId) {
     if (parsed.length === 0) return 0;
-    // Upsert against (school_id, student_id, subject). Numeric PMs and
-    // prior_year_score use COALESCE so a partial CSV (PM1-only mid-year)
-    // doesn't clobber later PMs back to null.
+    // Upsert against (school_id, student_id, subject, school_year). The
+    // school_year column was added in FAST Phase 1 (Florida xlsx
+    // parser) — the CSV importer always writes the current school
+    // year so it never collides with prior-year backfill rows.
+    //
+    // Per-row PMs / prior_year_score use COALESCE so a partial CSV
+    // (PM1-only mid-year) doesn't clobber later PMs back to null.
+    //
+    // Every row — insert OR conflict-update — gets stamped with the
+    // current jobId via `import_job_id`. Rollback DELETES rows whose
+    // import_job_id matches, so the most recent import "owns" each
+    // row. (Older job ids are overwritten; rolling back an older job
+    // after a newer one already touched its rows is a no-op for those
+    // rows, which matches what the operator wants — the newest data
+    // is the source of truth.)
     //
     // The BQ flag is trickier: it is NOT NULL in the schema, so we
     // can't pass null through INSERT. Instead we partition rows on
@@ -1728,6 +2749,7 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
     //     itself so the existing DB value is preserved.
     // This guarantees a PM-only CSV upload cannot wipe an existing
     // true BQ flag back to false.
+    const schoolYear = await currentSchoolYearLabelForSchool(schoolId);
     const withBq = parsed.filter((p) => p.priorYearBq !== null);
     const withoutBq = parsed.filter((p) => p.priorYearBq === null);
     const now = new Date();
@@ -1739,11 +2761,13 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
             schoolId,
             studentId: p.studentId,
             subject: p.subject,
+            schoolYear,
             pm1: p.pm1,
             pm2: p.pm2,
             pm3: p.pm3,
             priorYearScore: p.priorYearScore,
             priorYearBq: p.priorYearBq as boolean,
+            importJobId: jobId,
             updatedAt: now,
           })),
         )
@@ -1752,6 +2776,7 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
             studentFastScoresTable.schoolId,
             studentFastScoresTable.studentId,
             studentFastScoresTable.subject,
+            studentFastScoresTable.schoolYear,
           ],
           set: {
             pm1: sql`COALESCE(EXCLUDED.pm1, ${studentFastScoresTable.pm1})`,
@@ -1759,6 +2784,7 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
             pm3: sql`COALESCE(EXCLUDED.pm3, ${studentFastScoresTable.pm3})`,
             priorYearScore: sql`COALESCE(EXCLUDED.prior_year_score, ${studentFastScoresTable.priorYearScore})`,
             priorYearBq: sql`EXCLUDED.prior_year_bq`,
+            importJobId: sql`EXCLUDED.import_job_id`,
             updatedAt: now,
           },
         });
@@ -1771,6 +2797,7 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
             schoolId,
             studentId: p.studentId,
             subject: p.subject,
+            schoolYear,
             pm1: p.pm1,
             pm2: p.pm2,
             pm3: p.pm3,
@@ -1778,6 +2805,7 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
             // NOT NULL on a brand-new row only; on conflict the SET
             // clause below preserves the existing value instead.
             priorYearBq: false,
+            importJobId: jobId,
             updatedAt: now,
           })),
         )
@@ -1786,6 +2814,7 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
             studentFastScoresTable.schoolId,
             studentFastScoresTable.studentId,
             studentFastScoresTable.subject,
+            studentFastScoresTable.schoolYear,
           ],
           set: {
             pm1: sql`COALESCE(EXCLUDED.pm1, ${studentFastScoresTable.pm1})`,
@@ -1794,23 +2823,27 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
             priorYearScore: sql`COALESCE(EXCLUDED.prior_year_score, ${studentFastScoresTable.priorYearScore})`,
             // No BQ column in CSV → preserve existing DB value.
             priorYearBq: sql`${studentFastScoresTable.priorYearBq}`,
+            importJobId: sql`EXCLUDED.import_job_id`,
             updatedAt: now,
           },
         });
     }
-    // Silence unused-param lint — jobId is part of the KindConfig
-    // contract but FAST scores doesn't track it (no column).
-    void _jobId;
     return parsed.length;
   },
-  async rollback(_tx, _jobId, _schoolId) {
-    // FAST scores are upserts — there is no per-job audit trail, so
-    // rollback is intentionally a no-op. The UI should warn the
-    // importer that FAST imports are not undoable before they commit.
-    void _tx;
-    void _jobId;
-    void _schoolId;
-    return 0;
+  async rollback(tx, jobId, schoolId) {
+    // Delete every FAST row this job last wrote. Older rows whose
+    // import_job_id was overwritten by a subsequent commit stay put,
+    // which is the correct semantics: rolling back commit #5 cannot
+    // undo data that commit #6 has since rewritten.
+    const r = await tx
+      .delete(studentFastScoresTable)
+      .where(
+        and(
+          eq(studentFastScoresTable.importJobId, jobId),
+          eq(studentFastScoresTable.schoolId, schoolId),
+        ),
+      );
+    return (r as unknown as { rowCount?: number }).rowCount ?? 0;
   },
 };
 
@@ -1821,7 +2854,7 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
 // columns so a prior-year-only file can never wipe current-year PM data.
 type ParsedFastPriorYear = {
   studentId: string;
-  subject: "ela" | "math";
+  subject: "ela" | "math" | "algebra1" | "geometry";
   priorYearScore: number;
   priorYearBq: boolean | null;
 };
@@ -1885,18 +2918,28 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
       }
     }
     const studentId = row[target.student_id].toString().trim();
-    // Same subject normalization as FAST_SCORES_CONFIG. "Reading" maps to
-    // ela because Florida FAST ELA Reading exports use that label.
+    // Same subject normalization as FAST_SCORES_CONFIG — keep these two
+    // in sync. "Reading" maps to ela; EOC aliases map to algebra1 /
+    // geometry.
     const subjectRaw = row[target.subject].toString().trim().toLowerCase();
-    let subject: "ela" | "math";
+    let subject: "ela" | "math" | "algebra1" | "geometry";
     if (subjectRaw === "ela" || subjectRaw === "reading") {
       subject = "ela";
     } else if (subjectRaw === "math" || subjectRaw === "mathematics") {
       subject = "math";
+    } else if (
+      subjectRaw === "algebra1" ||
+      subjectRaw === "algebra 1" ||
+      subjectRaw === "alg1" ||
+      subjectRaw === "algebra_1"
+    ) {
+      subject = "algebra1";
+    } else if (subjectRaw === "geometry" || subjectRaw === "geo") {
+      subject = "geometry";
     } else {
       return {
         ok: false,
-        message: `Unsupported subject "${subjectRaw}" (expected ela or math)`,
+        message: `Unsupported subject "${subjectRaw}" (expected ela, math, algebra1, or geometry)`,
       };
     }
     const priorYearScore = parseOptionalInt(row[target.prior_year_score]);
@@ -1920,13 +2963,16 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
       value: { studentId, subject, priorYearScore, priorYearBq },
     };
   },
-  async insertChunk(tx, parsed, schoolId, _jobId) {
+  async insertChunk(tx, parsed, schoolId, jobId) {
     if (parsed.length === 0) return 0;
-    // Upsert against (school_id, student_id, subject). The SET clause
-    // ONLY touches prior-year columns — PM1/PM2/PM3 are intentionally
-    // not in `set` so they remain whatever value the row already had.
-    // Same withBq / withoutBq partition as FAST_SCORES_CONFIG so a
-    // CSV without a BQ column can't wipe an existing true BQ flag.
+    // Upsert against (school_id, student_id, subject, school_year).
+    // The SET clause ONLY touches prior-year columns — PM1/PM2/PM3
+    // are intentionally not in `set` so they remain whatever value
+    // the row already had. Same withBq / withoutBq partition as
+    // FAST_SCORES_CONFIG so a CSV without a BQ column can't wipe
+    // an existing true BQ flag. import_job_id is overwritten on
+    // conflict — same ownership model as FAST_SCORES_CONFIG.
+    const schoolYear = await currentSchoolYearLabelForSchool(schoolId);
     const withBq = parsed.filter((p) => p.priorYearBq !== null);
     const withoutBq = parsed.filter((p) => p.priorYearBq === null);
     const now = new Date();
@@ -1938,8 +2984,10 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
             schoolId,
             studentId: p.studentId,
             subject: p.subject,
+            schoolYear,
             priorYearScore: p.priorYearScore,
             priorYearBq: p.priorYearBq as boolean,
+            importJobId: jobId,
             updatedAt: now,
           })),
         )
@@ -1948,10 +2996,12 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
             studentFastScoresTable.schoolId,
             studentFastScoresTable.studentId,
             studentFastScoresTable.subject,
+            studentFastScoresTable.schoolYear,
           ],
           set: {
             priorYearScore: sql`EXCLUDED.prior_year_score`,
             priorYearBq: sql`EXCLUDED.prior_year_bq`,
+            importJobId: sql`EXCLUDED.import_job_id`,
             updatedAt: now,
           },
         });
@@ -1964,10 +3014,12 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
             schoolId,
             studentId: p.studentId,
             subject: p.subject,
+            schoolYear,
             priorYearScore: p.priorYearScore,
             // NOT NULL — only used for brand-new rows. On conflict the
             // SET clause below preserves the existing value.
             priorYearBq: false,
+            importJobId: jobId,
             updatedAt: now,
           })),
         )
@@ -1976,27 +3028,693 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
             studentFastScoresTable.schoolId,
             studentFastScoresTable.studentId,
             studentFastScoresTable.subject,
+            studentFastScoresTable.schoolYear,
           ],
           set: {
             priorYearScore: sql`EXCLUDED.prior_year_score`,
             priorYearBq: sql`${studentFastScoresTable.priorYearBq}`,
+            importJobId: sql`EXCLUDED.import_job_id`,
             updatedAt: now,
           },
         });
     }
-    void _jobId;
     return parsed.length;
   },
-  async rollback(_tx, _jobId, _schoolId) {
-    // Same rationale as FAST_SCORES_CONFIG: upsert + no per-job audit
-    // trail = nothing to safely undo. Rollback handler returns 409
-    // before reaching here for fast_prior_year jobs.
-    void _tx;
-    void _jobId;
-    void _schoolId;
-    return 0;
+  async rollback(tx, jobId, schoolId) {
+    // Same model as FAST_SCORES_CONFIG.rollback().
+    const r = await tx
+      .delete(studentFastScoresTable)
+      .where(
+        and(
+          eq(studentFastScoresTable.importJobId, jobId),
+          eq(studentFastScoresTable.schoolId, schoolId),
+        ),
+      );
+    return (r as unknown as { rowCount?: number }).rowCount ?? 0;
   },
 };
+
+// ---------------------------------------------------------------------------
+// FAST Phase 1 — Florida per-student xlsx parser.
+//
+// The state ships a wide xlsx where each row is one student × one
+// administration. Columns 1-18 are demographics + test metadata
+// (Student ID, Test Reason, Test Completion Date, …), col 19 is the
+// scale score ("Grade N FAST ELA Reading Scale Score"), and then
+// ~40 repeating Category / Benchmark / Points Earned / Points Possible
+// quadruplets per student.
+//
+// Phase 6 scope: ELA Reading + Mathematics (grades 3–8). Writing
+// uses a rubric-scored layout without the per-benchmark quadruplets
+// the rest of this parser depends on; the detector surfaces a
+// friendly "not yet supported" rejection until samples are in hand.
+//
+// Storage model:
+//   - One row in student_fast_scores per (student, subject,
+//     school_year) — the scale score lands in pm1/pm2/pm3 based on the
+//     window column.
+//   - One row in student_fast_item_responses per (student × benchmark).
+//     ~40 rows per administration.
+//
+// Idempotency: re-uploading the same PM window for the same school
+// year DELETEs the prior item-response rows for the student set
+// before re-inserting (the scale-score upsert in student_fast_scores
+// is conflict-keyed and handles itself).
+// ---------------------------------------------------------------------------
+type FloridaItemResponse = {
+  category: string | null;
+  benchmarkCode: string;
+  pointsEarned: number | null;
+  pointsPossible: number | null;
+  itemSeq: number;
+};
+
+type FloridaStudentRow = {
+  studentId: string;
+  studentName: string | null;
+  window: "pm1" | "pm2" | "pm3";
+  administeredAt: Date | null;
+  scaleScore: number | null;
+  achievementLevel: string | null;
+  items: FloridaItemResponse[];
+};
+
+type FloridaParse =
+  | { ok: false; error: string }
+  | {
+      ok: true;
+      subject: "ela" | "math";
+      gradeLabel: string | null;
+      windowsSeen: Set<string>;
+      students: FloridaStudentRow[];
+      warnings: Array<{ row: number; message: string }>;
+      totalItems: number;
+    };
+
+// Florida prefixes benchmarks with one or more strand-code segments
+// separated by "|". The number of segments varies by subject:
+//   ELA  (2 segments): "RP|ELA.6.R.1.1"             → "ELA.6.R.1.1"
+//   Math (3 segments): "GRDP|MA.6.DP.1|MA.6.DP.1.6" → "MA.6.DP.1.6"
+// We always want the LAST segment (the most-specific benchmark) so
+// heatmap and MTSS aggregations roll up cleanly. Using lastIndexOf
+// covers both shapes; an unprefixed code passes through unchanged.
+function stripBenchmarkStrand(raw: string): string {
+  const i = raw.lastIndexOf("|");
+  return (i >= 0 ? raw.slice(i + 1) : raw).trim();
+}
+
+function parseCellString(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "string") return v.trim();
+  if (typeof v === "number") return String(v);
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (v instanceof Date) return v.toISOString();
+  // exceljs sometimes wraps rich text / hyperlink values.
+  const obj = v as { text?: unknown; result?: unknown };
+  if (obj && typeof obj.text === "string") return obj.text.trim();
+  if (obj && typeof obj.result === "string") return obj.result.trim();
+  return String(v).trim();
+}
+
+function parseCellNumber(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  const s = parseCellString(v);
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseCellDate(v: unknown): Date | null {
+  if (v === null || v === undefined || v === "") return null;
+  if (v instanceof Date) return Number.isFinite(v.getTime()) ? v : null;
+  const s = parseCellString(v);
+  if (!s) return null;
+  // Florida exports use M/D/YYYY. Date.parse handles that.
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? new Date(t) : null;
+}
+
+function detectWindow(testReason: string): "pm1" | "pm2" | "pm3" | null {
+  const m = /(?:^|[^A-Za-z])PM\s*([123])\b/i.exec(testReason);
+  if (!m) return null;
+  return (`pm${m[1]}`) as "pm1" | "pm2" | "pm3";
+}
+
+// Phase 6 recognizes ELA Reading and Mathematics (per-benchmark
+// quadruplet layout). Writing uses a rubric-scored format that does
+// not carry the Category / Benchmark / Points-Earned / Points-Possible
+// quadruplets the rest of this parser depends on, so we surface a
+// friendly "not yet supported" rejection rather than crashing or
+// mis-importing.
+function detectSubjectFromScaleHeader(
+  header: string,
+):
+  | { subject: "ela" | "math"; grade: string | null }
+  | { error: string } {
+  // Examples we accept:
+  //   "Grade 6 FAST ELA Reading Scale Score"
+  //   "Grade 6 FAST Mathematics Scale Score"
+  //   "FAST ELA Reading Scale Score"
+  const gradeMatch = /Grade\s+(\d+)/i.exec(header);
+  const grade = gradeMatch ? gradeMatch[1] : null;
+  if (/ELA\s+Reading/i.test(header)) {
+    return { subject: "ela", grade };
+  }
+  if (/Mathematics|\bMath\b/i.test(header)) {
+    return { subject: "math", grade };
+  }
+  if (/Writing/i.test(header)) {
+    return {
+      error:
+        "Florida FAST Writing xlsx parsing isn't supported yet — the rubric-scored Writing export has a different layout than ELA/Math. Please contact support if you'd like to prioritize it.",
+    };
+  }
+  return {
+    error: `Could not recognize subject from header "${header}". This importer supports ELA Reading and Mathematics.`,
+  };
+}
+
+async function parseFloridaXlsx(
+  buffer: Buffer,
+): Promise<FloridaParse> {
+  let wb: ExcelJS.Workbook;
+  try {
+    wb = new ExcelJS.Workbook();
+    // exceljs typings prefer ArrayBuffer here; Node Buffer's .buffer
+    // is fine in practice but we slice to the right window in case
+    // the Buffer is a view into a larger pool.
+    const ab = buffer.buffer.slice(
+      buffer.byteOffset,
+      buffer.byteOffset + buffer.byteLength,
+    );
+    await wb.xlsx.load(ab as ArrayBuffer);
+  } catch (e) {
+    return {
+      ok: false,
+      error: `Could not read xlsx: ${(e as Error).message}`,
+    };
+  }
+  const ws = wb.worksheets[0];
+  if (!ws || ws.rowCount < 2) {
+    return { ok: false, error: "xlsx is empty (no data rows)." };
+  }
+
+  const headerRow = ws.getRow(1);
+  const headers: string[] = [];
+  for (let c = 1; c <= ws.columnCount; c++) {
+    headers.push(parseCellString(headerRow.getCell(c).value));
+  }
+
+  // Required columns (case-insensitive exact match).
+  const findIdx = (predicate: (h: string) => boolean): number =>
+    headers.findIndex(predicate);
+  const idxStudentId = findIdx((h) => /^student id$/i.test(h));
+  const idxStudentName = findIdx((h) => /^student name$/i.test(h));
+  const idxTestReason = findIdx((h) => /^test reason$/i.test(h));
+  const idxCompletionDate = findIdx(
+    (h) => /^test completion date$/i.test(h) || /^date taken$/i.test(h),
+  );
+  const idxScaleScore = findIdx((h) =>
+    /FAST.*Scale Score/i.test(h),
+  );
+  const idxAchievement = findIdx((h) =>
+    /FAST.*Achievement Level/i.test(h),
+  );
+
+  if (idxStudentId < 0) {
+    return {
+      ok: false,
+      error: "Missing 'Student ID' column — this does not look like a Florida FAST per-student xlsx export.",
+    };
+  }
+  if (idxTestReason < 0) {
+    return {
+      ok: false,
+      error: "Missing 'Test Reason' column (required to derive the PM window).",
+    };
+  }
+  if (idxScaleScore < 0) {
+    return {
+      ok: false,
+      error:
+        "Missing 'Grade N FAST … Scale Score' column. Re-export from the state portal with the Scale Score column included.",
+    };
+  }
+  const subjectDetect = detectSubjectFromScaleHeader(headers[idxScaleScore]);
+  if ("error" in subjectDetect) {
+    return { ok: false, error: subjectDetect.error };
+  }
+
+  // Walk header row to find repeating Category / Benchmark / Points
+  // Earned / Points Possible quadruplets. Each quad starts where a
+  // "Category" header is followed by Benchmark / Points Earned /
+  // Points Possible in that exact order.
+  const quadStarts: number[] = [];
+  for (let i = 0; i + 3 < headers.length; i++) {
+    if (
+      /^category$/i.test(headers[i]) &&
+      /^benchmark$/i.test(headers[i + 1]) &&
+      /^points earned$/i.test(headers[i + 2]) &&
+      /^points possible$/i.test(headers[i + 3])
+    ) {
+      quadStarts.push(i);
+    }
+  }
+  if (quadStarts.length === 0) {
+    return {
+      ok: false,
+      error:
+        "No 'Category / Benchmark / Points Earned / Points Possible' quadruplets found. Re-export from the state portal with the per-benchmark detail columns included.",
+    };
+  }
+
+  const students: FloridaStudentRow[] = [];
+  const warnings: Array<{ row: number; message: string }> = [];
+  let totalItems = 0;
+  const windowsSeen = new Set<string>();
+
+  for (let r = 2; r <= ws.rowCount; r++) {
+    const row = ws.getRow(r);
+    // exceljs treats trailing empty cells lazily; skip rows where
+    // the Student ID cell is blank.
+    const studentId = parseCellString(row.getCell(idxStudentId + 1).value);
+    if (!studentId) continue;
+    const testReason = parseCellString(row.getCell(idxTestReason + 1).value);
+    const window = detectWindow(testReason);
+    if (!window) {
+      // Per task requirement: reject the entire file rather than
+      // silently skipping rows when the PM window is ambiguous —
+      // a Florida xlsx with un-tagged rows means the operator picked
+      // the wrong export type and we don't want to half-import.
+      return {
+        ok: false,
+        error:
+          `Row ${r}: could not detect PM window from Test Reason "${testReason}". ` +
+          `Re-export from the state portal with Test Reason populated for every row (expected values: "PM1", "PM2", or "PM3").`,
+      };
+    }
+    windowsSeen.add(window);
+
+    const scaleScore = parseCellNumber(row.getCell(idxScaleScore + 1).value);
+    const achievement = idxAchievement >= 0
+      ? parseCellString(row.getCell(idxAchievement + 1).value) || null
+      : null;
+    const administeredAt = idxCompletionDate >= 0
+      ? parseCellDate(row.getCell(idxCompletionDate + 1).value)
+      : null;
+    const studentName = idxStudentName >= 0
+      ? parseCellString(row.getCell(idxStudentName + 1).value) || null
+      : null;
+
+    const items: FloridaItemResponse[] = [];
+    for (let qi = 0; qi < quadStarts.length; qi++) {
+      const base = quadStarts[qi];
+      const benchmarkRaw = parseCellString(row.getCell(base + 2).value);
+      if (!benchmarkRaw) continue; // blank item slot
+      const category = parseCellString(row.getCell(base + 1).value) || null;
+      const pe = parseCellNumber(row.getCell(base + 3).value);
+      const pp = parseCellNumber(row.getCell(base + 4).value);
+      items.push({
+        category,
+        benchmarkCode: stripBenchmarkStrand(benchmarkRaw),
+        pointsEarned: pe !== null ? Math.round(pe) : null,
+        pointsPossible: pp !== null ? Math.round(pp) : null,
+        itemSeq: qi,
+      });
+    }
+    totalItems += items.length;
+
+    students.push({
+      studentId,
+      studentName,
+      window,
+      administeredAt,
+      scaleScore,
+      achievementLevel: achievement,
+      items,
+    });
+  }
+
+  if (students.length === 0) {
+    return {
+      ok: false,
+      error: "No student data rows found.",
+    };
+  }
+
+  return {
+    ok: true,
+    subject: subjectDetect.subject,
+    gradeLabel: subjectDetect.grade,
+    windowsSeen,
+    students,
+    warnings,
+    totalItems,
+  };
+}
+
+// Pull the xlsx bytes off a JSON body. Accepts `xlsxBase64` (string) —
+// matches the existing CSV-as-string pattern so we don't have to wire
+// multipart middleware just for this one route. Capped at ~12 MB pre
+// base-64 (which our 15 MB JSON body limit accommodates).
+function decodeXlsxBody(body: unknown): Buffer | string {
+  const b = body as { xlsxBase64?: unknown } | null;
+  const raw = b && typeof b.xlsxBase64 === "string" ? b.xlsxBase64 : "";
+  if (!raw) return "Missing xlsxBase64 in request body.";
+  // Strip a `data:…;base64,` prefix if the client included one.
+  const stripped = raw.replace(/^data:[^;]+;base64,/, "");
+  let buf: Buffer;
+  try {
+    buf = Buffer.from(stripped, "base64");
+  } catch {
+    return "xlsxBase64 is not valid base64.";
+  }
+  if (buf.length === 0) return "xlsxBase64 decoded to 0 bytes.";
+  if (buf.length > 12 * 1024 * 1024) {
+    return "xlsx exceeds the 12 MB limit. Split the file by grade and try again.";
+  }
+  return buf;
+}
+
+// Validate the admin-supplied school-year label. Allow the current
+// year plus three previous (matches the dropdown the client renders).
+function validateSchoolYearLabel(
+  raw: unknown,
+  current: string,
+): string | null {
+  if (typeof raw !== "string") return null;
+  const m = /^(\d{2})-(\d{2})$/.exec(raw.trim());
+  if (!m) return null;
+  const start = Number(m[1]);
+  const end = Number(m[2]);
+  if (end !== (start + 1) % 100) return null;
+  // Build the allowed set: current + 3 previous.
+  const cm = /^(\d{2})-(\d{2})$/.exec(current);
+  if (!cm) return raw.trim(); // fail open — current isn't well-formed
+  const curStart = Number(cm[1]);
+  const allowed = new Set<string>();
+  for (let off = 0; off <= 3; off++) {
+    const s = (curStart - off + 100) % 100;
+    const e = (s + 1) % 100;
+    const pad = (n: number) => String(n).padStart(2, "0");
+    allowed.add(`${pad(s)}-${pad(e)}`);
+  }
+  return allowed.has(raw.trim()) ? raw.trim() : null;
+}
+
+router.post(
+  "/data-imports/fast_florida/preview",
+  requireImporter(),
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const decoded = decodeXlsxBody(req.body);
+    if (typeof decoded === "string") {
+      res.status(400).json({ error: decoded });
+      return;
+    }
+    const current = await currentSchoolYearLabelForSchool(schoolId);
+    const schoolYear = validateSchoolYearLabel(
+      (req.body as { schoolYear?: unknown })?.schoolYear,
+      current,
+    );
+    if (!schoolYear) {
+      res.status(400).json({
+        error: `Invalid or out-of-range school year. Pick from the current year (${current}) or one of the three preceding years.`,
+      });
+      return;
+    }
+    const parsed = await parseFloridaXlsx(decoded);
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    res.json({
+      kind: "fast_florida",
+      subject: parsed.subject,
+      gradeLabel: parsed.gradeLabel,
+      schoolYear,
+      windowsSeen: Array.from(parsed.windowsSeen).sort(),
+      totalStudents: parsed.students.length,
+      totalItems: parsed.totalItems,
+      warnings: parsed.warnings,
+      // Sample for the wizard's review pane — first 5 students + first
+      // 3 items each. Keeps payload small for the 30+MB raw files.
+      sampleStudents: parsed.students.slice(0, 5).map((s) => ({
+        studentId: s.studentId,
+        studentName: s.studentName,
+        window: s.window,
+        scaleScore: s.scaleScore,
+        achievementLevel: s.achievementLevel,
+        sampleItems: s.items.slice(0, 3),
+      })),
+      readyToCommit: parsed.students.length > 0,
+    });
+  },
+);
+
+router.post(
+  "/data-imports/fast_florida/commit",
+  requireImporter(),
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const decoded = decodeXlsxBody(req.body);
+    if (typeof decoded === "string") {
+      res.status(400).json({ error: decoded });
+      return;
+    }
+    const current = await currentSchoolYearLabelForSchool(schoolId);
+    const schoolYear = validateSchoolYearLabel(
+      (req.body as { schoolYear?: unknown })?.schoolYear,
+      current,
+    );
+    if (!schoolYear) {
+      res.status(400).json({
+        error: `Invalid or out-of-range school year. Pick from the current year (${current}) or one of the three preceding years.`,
+      });
+      return;
+    }
+    // Historical FAST flag (Phase 1 of Historical FAST work). When the
+    // admin checks "Import as historical (prior school year)" the
+    // importer:
+    //   1. requires schoolYear != current (a historical import for the
+    //      CURRENT year is an error — that's a normal import).
+    //   2. requires the parsed file contain ONLY a PM3 window
+    //      (prior-year context is PM3-only by product decision; no
+    //      partial-year backfills).
+    //   3. stamps is_historical = TRUE + imported_as_historical_at = NOW()
+    //      on every row written.
+    const isHistorical =
+      (req.body as { isHistorical?: unknown })?.isHistorical === true;
+    if (isHistorical && schoolYear === current) {
+      res.status(400).json({
+        error:
+          "Historical imports must target a prior school year. Uncheck the historical toggle to import current-year data.",
+      });
+      return;
+    }
+    const filename = typeof (req.body as { filename?: unknown })?.filename ===
+        "string" &&
+      (req.body as { filename: string }).filename.trim()
+      ? (req.body as { filename: string }).filename.trim().slice(0, 200)
+      : "florida.xlsx";
+    const parsed = await parseFloridaXlsx(decoded);
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    const subject = parsed.subject;
+    // Historical imports must be PM3-only (product decision — see
+    // "Out of scope" in the task plan). Reject if the parsed xlsx
+    // contains any non-PM3 window.
+    if (isHistorical) {
+      const nonPm3 = Array.from(parsed.windowsSeen).filter(
+        (w) => w !== "pm3",
+      );
+      if (nonPm3.length > 0 || !parsed.windowsSeen.has("pm3")) {
+        res.status(400).json({
+          error:
+            "Historical FAST imports must contain only PM3 (end-of-year) scores. " +
+            "Upload a PM3-only export to backfill prior years.",
+        });
+        return;
+      }
+    }
+
+    const result = await db.transaction(async (tx) => {
+      const [job] = await tx
+        .insert(importJobsTable)
+        .values({
+          schoolId,
+          districtId: null,
+          kind: "fast_florida",
+          filename,
+          uploadedBy: staff.id,
+          status: "committed",
+          totalRows: parsed.students.length,
+          successRows: 0,
+          errorRows: 0,
+          errorLog: parsed.warnings,
+          // Snapshot the admin-supplied year + detected windows so
+          // History can render "PM2 25-26 for Reading" without
+          // re-parsing the xlsx.
+          // mapping is typed Record<string, string>; serialize the
+          // detected metadata so History can render it without
+          // re-parsing the xlsx.
+          mapping: {
+            subject,
+            school_year: schoolYear,
+            grade_label: parsed.gradeLabel ?? "",
+            windows_seen: Array.from(parsed.windowsSeen).sort().join(","),
+            items_total: String(parsed.totalItems),
+          },
+          committedAt: new Date(),
+        })
+        .returning({ id: importJobsTable.id });
+
+      // 1) Upsert student_fast_scores — one row per student. The scale
+      //    score lands in pm1/pm2/pm3 based on the window column.
+      //    COALESCE means a PM1-only file doesn't wipe PM2/PM3.
+      const now = new Date();
+      const scoreValues = parsed.students.map((s) => ({
+        schoolId,
+        studentId: s.studentId,
+        subject,
+        schoolYear,
+        pm1: s.window === "pm1" ? s.scaleScore : null,
+        pm2: s.window === "pm2" ? s.scaleScore : null,
+        pm3: s.window === "pm3" ? s.scaleScore : null,
+        priorYearScore: null,
+        priorYearBq: false,
+        importJobId: job.id,
+        isHistorical,
+        importedAsHistoricalAt: isHistorical ? now : null,
+        updatedAt: now,
+      }));
+      for (let i = 0; i < scoreValues.length; i += 500) {
+        await tx
+          .insert(studentFastScoresTable)
+          .values(scoreValues.slice(i, i + 500))
+          .onConflictDoUpdate({
+            target: [
+              studentFastScoresTable.schoolId,
+              studentFastScoresTable.studentId,
+              studentFastScoresTable.subject,
+              studentFastScoresTable.schoolYear,
+            ],
+            set: {
+              pm1: sql`COALESCE(EXCLUDED.pm1, ${studentFastScoresTable.pm1})`,
+              pm2: sql`COALESCE(EXCLUDED.pm2, ${studentFastScoresTable.pm2})`,
+              pm3: sql`COALESCE(EXCLUDED.pm3, ${studentFastScoresTable.pm3})`,
+              // Preserve existing BQ + prior_year_score — this importer
+              // doesn't carry them.
+              priorYearBq: sql`${studentFastScoresTable.priorYearBq}`,
+              priorYearScore: sql`${studentFastScoresTable.priorYearScore}`,
+              importJobId: sql`EXCLUDED.import_job_id`,
+              // Historical flag wins on conflict — re-importing a year
+              // as historical re-stamps the row; re-importing as
+              // current clears the historical mark.
+              isHistorical: sql`EXCLUDED.is_historical`,
+              importedAsHistoricalAt: sql`EXCLUDED.imported_as_historical_at`,
+              updatedAt: now,
+            },
+          });
+      }
+
+      // 2) Item responses. For idempotency on re-upload, DELETE any
+      //    existing rows for (school, subject, school_year, window)
+      //    scoped to the student set in the file, then bulk insert
+      //    fresh rows. Rollback then walks import_job_id.
+      const studentIds = parsed.students.map((s) => s.studentId);
+      const uniqueStudentIds = Array.from(new Set(studentIds));
+      const windows = Array.from(parsed.windowsSeen);
+      if (uniqueStudentIds.length > 0 && windows.length > 0) {
+        // Postgres caps single IN(...) lists at 32k params; we chunk
+        // student ids to stay well clear.
+        for (let i = 0; i < uniqueStudentIds.length; i += 1000) {
+          const chunk = uniqueStudentIds.slice(i, i + 1000);
+          await tx.delete(studentFastItemResponsesTable).where(
+            and(
+              eq(studentFastItemResponsesTable.schoolId, schoolId),
+              eq(studentFastItemResponsesTable.subject, subject),
+              eq(studentFastItemResponsesTable.schoolYear, schoolYear),
+              inArray(studentFastItemResponsesTable.window, windows),
+              inArray(studentFastItemResponsesTable.studentId, chunk),
+            ),
+          );
+        }
+      }
+
+      const itemRows: (typeof studentFastItemResponsesTable.$inferInsert)[] =
+        [];
+      for (const s of parsed.students) {
+        for (const it of s.items) {
+          itemRows.push({
+            schoolId,
+            studentId: s.studentId,
+            subject,
+            schoolYear,
+            window: s.window,
+            administeredAt: s.administeredAt,
+            category: it.category,
+            benchmarkCode: it.benchmarkCode,
+            pointsEarned: it.pointsEarned,
+            pointsPossible: it.pointsPossible,
+            itemSeq: it.itemSeq,
+            importJobId: job.id,
+          });
+        }
+      }
+      for (let i = 0; i < itemRows.length; i += 1000) {
+        await tx
+          .insert(studentFastItemResponsesTable)
+          .values(itemRows.slice(i, i + 1000));
+      }
+
+      await tx
+        .update(importJobsTable)
+        .set({
+          successRows: parsed.students.length,
+        })
+        .where(eq(importJobsTable.id, job.id));
+
+      return { id: job.id, items: itemRows.length };
+    });
+
+    req.log.info(
+      {
+        jobId: result.id,
+        students: parsed.students.length,
+        items: result.items,
+        subject,
+        schoolYear,
+        windowsSeen: Array.from(parsed.windowsSeen),
+      },
+      "[fast_florida] committed",
+    );
+
+    res.json({
+      jobId: result.id,
+      subject,
+      schoolYear,
+      gradeLabel: parsed.gradeLabel,
+      windowsSeen: Array.from(parsed.windowsSeen).sort(),
+      totalStudents: parsed.students.length,
+      totalItems: result.items,
+      warningCount: parsed.warnings.length,
+      // Aliases to match the generic commit-result contract the
+      // client's success card renders (totalRows / successRows /
+      // errorRows). For Florida, every parsed student row commits
+      // (parser hard-fails on ambiguity), so success == total.
+      totalRows: parsed.students.length,
+      successRows: parsed.students.length,
+      errorRows: 0,
+    });
+  },
+);
 
 const KIND_CONFIGS: Record<string, KindConfig<any>> = {
   rosters: ROSTERS_CONFIG,
@@ -2041,18 +3759,24 @@ function makePreviewHandler(kind: string, config: KindConfig) {
     const sample: unknown[] = [];
     const mappingOk =
       validateMappingForConfig(mapping, headers, config) === null;
+    const allValid: unknown[] = [];
     if (mappingOk) {
       for (let i = 0; i < rows.length; i++) {
         await yieldImportProcessing(i);
         const parsed = config.parseRow(rows[i], mapping);
         if (parsed.ok) {
           valid++;
+          allValid.push(parsed.value);
           if (sample.length < 10) sample.push(parsed.value);
         } else if (errors.length < 50) {
           errors.push({ row: i + 2, message: parsed.message });
         }
       }
     }
+    const extras: Record<string, unknown> =
+      mappingOk && config.previewExtras && allValid.length > 0
+        ? await config.previewExtras(allValid, schoolId)
+        : {};
     res.json({
       kind,
       headers,
@@ -2069,11 +3793,12 @@ function makePreviewHandler(kind: string, config: KindConfig) {
         config.requiredFields.every((f) =>
           Object.values(mapping).includes(f),
         ),
+      ...extras,
     });
   };
 }
 
-function makeCommitHandler(kind: string, config: KindConfig) {
+function makeCommitHandler<T>(kind: string, config: KindConfig<T>) {
   return async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
@@ -2099,20 +3824,49 @@ function makeCommitHandler(kind: string, config: KindConfig) {
       res.status(400).json({ error: mappingError });
       return;
     }
-    const valid: unknown[] = [];
+    const validIndexed: Array<{
+      rowIndex: number;
+      value: T;
+      raw: Record<string, string>;
+    }> = [];
     const errors: Array<{
       row: number;
       message: string;
       raw?: Record<string, string>;
+      code?: string;
+      bucket?: string;
     }> = [];
     for (let i = 0; i < rows.length; i++) {
       await yieldImportProcessing(i);
       const parsed = config.parseRow(rows[i], mapping);
       if (parsed.ok) {
-        valid.push(parsed.value);
+        validIndexed.push({ rowIndex: i + 2, value: parsed.value, raw: rows[i] });
       } else if (errors.length < 500) {
         errors.push({ row: i + 2, message: parsed.message, raw: rows[i] });
       }
+    }
+    // Post-parse, pre-insert filter (kind-aware). Used by the roster
+    // importer's strict house-name mode to surface unmatched house
+    // names as per-row errors instead of silently routing them through
+    // the smallest-house fallback. We preserve `raw` + `code` so the
+    // History tab can group these rejections by their trigger value
+    // and emit a fixup CSV download.
+    let valid: T[];
+    if (config.precommitValidate) {
+      const r = await config.precommitValidate(validIndexed, schoolId);
+      valid = r.kept;
+      for (const rej of r.rejected) {
+        if (errors.length >= 500) break;
+        errors.push({
+          row: rej.row,
+          message: rej.message,
+          raw: rej.raw,
+          code: rej.code,
+          bucket: rej.bucket,
+        });
+      }
+    } else {
+      valid = validIndexed.map((v) => v.value);
     }
     const result = await db.transaction(async (tx) => {
       const [job] = await tx
@@ -2164,14 +3918,43 @@ function makeCommitHandler(kind: string, config: KindConfig) {
   };
 }
 
+// Roster importer is opt-in per school (school_settings
+// .manual_roster_upload_enabled, default FALSE) because the expected
+// source of truth for most schools is a Classlink / Clever OneRoster
+// sync. The toggle is enforced server-side on BOTH preview and commit
+// — the wizard greys out the Roster card client-side, but a stale tab
+// or scripted client must not be able to bypass it.
+function requireManualRosterUploadEnabled() {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const [row] = await db
+      .select({
+        enabled: schoolSettingsTable.manualRosterUploadEnabled,
+      })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId));
+    if (!row || !row.enabled) {
+      res.status(403).json({
+        error:
+          "Manual roster uploads are disabled for this school. Most schools sync rosters from Classlink or Clever (OneRoster). An administrator can enable manual uploads in School Settings → Data & Integrations.",
+      });
+      return;
+    }
+    next();
+  };
+}
+
 router.post(
   "/data-imports/rosters/preview",
   requireImporter(),
+  requireManualRosterUploadEnabled(),
   makePreviewHandler("rosters", ROSTERS_CONFIG),
 );
 router.post(
   "/data-imports/rosters/commit",
   requireImporter(),
+  requireManualRosterUploadEnabled(),
   makeCommitHandler("rosters", ROSTERS_CONFIG),
 );
 router.post(

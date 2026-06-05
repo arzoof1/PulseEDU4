@@ -28,9 +28,12 @@ type StepRoute = {
   target: string;
 };
 
+type ChecklistRole = "admin" | "tech" | "pbis" | "core-team";
+
 type ChecklistStep = {
   key: string;
   phase: string;
+  role: ChecklistRole;
   label: string;
   hint: string;
   route: StepRoute;
@@ -39,6 +42,23 @@ type ChecklistStep = {
   complete: boolean;
   completedByStaffId: number | null;
   completedAt: string | null;
+};
+
+// Visible chip + readable label for each role. Order matches the
+// rendering order inside a phase: admin steps first (most users),
+// tech next, PBIS coordinator, then Core Team-only guardrails.
+const ROLE_ORDER: ChecklistRole[] = ["admin", "tech", "pbis", "core-team"];
+const ROLE_LABEL: Record<ChecklistRole, string> = {
+  admin: "School Admin",
+  tech: "Tech Coordinator",
+  pbis: "PBIS Coordinator",
+  "core-team": "Core Team",
+};
+const ROLE_COLOR: Record<ChecklistRole, string> = {
+  admin: "#2563eb",
+  tech: "#0891b2",
+  pbis: "#c026d3",
+  "core-team": "#b45309",
 };
 
 type StatusResponse = {
@@ -192,10 +212,17 @@ export default function OnboardingChecklist({ onNavigate }: Props) {
         order.push(s.phase);
       }
     }
-    return order.map((p) => ({
-      phase: p,
-      steps: data.steps.filter((s) => s.phase === p),
-    }));
+    return order.map((p) => {
+      const phaseSteps = data.steps.filter((s) => s.phase === p);
+      // Within a phase, bucket steps by role so admins can scan
+      // "what's mine vs what I need to delegate" at a glance.
+      // Empty role buckets are omitted from the render.
+      const byRole = ROLE_ORDER.map((role) => ({
+        role,
+        steps: phaseSteps.filter((s) => s.role === role),
+      })).filter((g) => g.steps.length > 0);
+      return { phase: p, steps: phaseSteps, byRole };
+    });
   }, [data]);
 
   return (
@@ -326,7 +353,7 @@ export default function OnboardingChecklist({ onNavigate }: Props) {
         </p>
       )}
 
-      {phases.map(({ phase, steps }) => (
+      {phases.map(({ phase, byRole }) => (
         <section key={phase} style={{ marginBottom: "1.4rem" }}>
           <h2
             style={{
@@ -348,14 +375,51 @@ export default function OnboardingChecklist({ onNavigate }: Props) {
               {PHASE_BLURB[phase]}
             </p>
           )}
+          {byRole.map(({ role, steps }) => (
           <div
+            key={role}
             style={{
               border: "1px solid var(--border, #2a3447)",
               borderRadius: 10,
               overflow: "hidden",
               background: "var(--card-bg, rgba(255,255,255,0.02))",
+              marginBottom: "0.55rem",
             }}
           >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                padding: "0.45rem 0.8rem",
+                background: "rgba(255,255,255,0.03)",
+                borderBottom: "1px solid var(--border, #2a3447)",
+              }}
+            >
+              <span
+                aria-label={`Role: ${ROLE_LABEL[role]}`}
+                style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                  color: "#fff",
+                  background: ROLE_COLOR[role],
+                  borderRadius: 4,
+                  padding: "0.15rem 0.45rem",
+                }}
+              >
+                {ROLE_LABEL[role]}
+              </span>
+              <span
+                style={{
+                  fontSize: 11,
+                  color: "var(--muted, #94a3b8)",
+                }}
+              >
+                {steps.filter((s) => s.complete).length} / {steps.length} done
+              </span>
+            </div>
             {steps.map((s, i) => {
               const pill = statusPill(s.autoStatus, s.manualChecked);
               const hintOpen = openHint.has(s.key);
@@ -452,6 +516,7 @@ export default function OnboardingChecklist({ onNavigate }: Props) {
               );
             })}
           </div>
+          ))}
         </section>
       ))}
     </div>

@@ -25,6 +25,7 @@
 
 import type { Request } from "express";
 import { and, eq, gte, inArray, isNull, sql } from "drizzle-orm";
+import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./schoolYear.js";
 import {
   db,
   classSectionsTable,
@@ -182,6 +183,11 @@ export async function applyInsightsFilters(
           inArray(studentFastScoresTable.studentId, ids),
           eq(studentFastScoresTable.priorYearBq, true),
           inArray(studentFastScoresTable.subject, subjects),
+          // FAST Phase 1: BQ flag lives on the current-SY row.
+          eq(
+            studentFastScoresTable.schoolYear,
+            schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+          ),
         ),
       );
     const ok = new Set(bqRows.map((r) => r.studentId));

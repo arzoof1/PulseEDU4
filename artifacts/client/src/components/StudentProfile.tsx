@@ -6,7 +6,9 @@
 // enforces visibility (roster ∪ trusted-adult ∪ core team) and returns
 // 403 if the caller can't see this student. We surface that gracefully.
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import StudentPhoto from "./StudentPhoto";
+import StudentBenchmarksPanel from "./StudentBenchmarksPanel";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 import {
   Radar,
@@ -17,12 +19,23 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { authFetch } from "../lib/authToken";
+import ChangeHouseModal from "./ChangeHouseModal";
 
 type WindowKey = "3" | "7" | "15" | "30" | "custom";
+
+type DismissalMode =
+  | "car_rider"
+  | "walker"
+  | "bus"
+  | "aftercare"
+  | "parent_pickup_only";
 
 interface ProfilePayload {
   header: {
     studentId: string;
+    localSisId?: string | null;
+    studentDbId: number;
+    dismissalMode: string | null;
     firstName: string;
     lastName: string;
     grade: number;
@@ -37,6 +50,13 @@ interface ProfilePayload {
     mtssTier: number;
     activeMtssPlanCount: number;
     visibilityPath: "core" | "roster" | "trusted_adult";
+    // Grades the student was retained in (ascending). Empty when none.
+    // Drives the "Retained: Grade N" Chip in the header and the
+    // mark/unmark control in the demographics editor.
+    retainedGrades: number[];
+    // PBIS house affiliation. null when unassigned. Drives the colored
+    // house pill + admin "Change house" modal in the header.
+    house: { id: number; name: string; color: string } | null;
   };
   window: { from: string; to: string; label: string; days: number | null };
   pillars: {
@@ -48,6 +68,25 @@ interface ProfilePayload {
         pm3: number | null;
         priorYearScore: number | null;
         priorYearBq: boolean;
+        // Multi-year PM3 history from the FL Florida historical
+        // importer. Newest-first; empty when no historical rows.
+        history: Array<{ schoolYear: string; pm3: number }>;
+        // LG "moving target" trajectory — null when no prior PM3,
+        // no current-grade chart, or already at L5.
+        bucket: {
+          targetScore: number;
+          targetSubLevelLabel: string;
+          baselineSubLevel: string;
+          baselineScore: number;
+          latestWindow: "prior" | "pm1" | "pm2" | "pm3";
+          lgMet: boolean;
+          trajectory: Array<{
+            window: "prior" | "pm1" | "pm2" | "pm3";
+            score: number | null;
+            gap: number | null;
+            delta: number | null;
+          }>;
+        } | null;
       }>;
       ireadyScores: Array<{
         subject: "Reading" | "Math";
@@ -218,6 +257,247 @@ function Chip({
   );
 }
 
+// Behavior-aware chip: same visual as <Chip>, but reveals a small
+// popover on hover/focus listing the recent negative PBIS entries +
+// support notes that produced the count. Lets a Core Team member
+// confirm "what actually happened" without leaving the page header.
+function BehaviorRiskChip({
+  label,
+  sev,
+  recentPbis,
+  recentSupportNotes,
+}: {
+  label: string;
+  sev: "info" | "watch" | "high";
+  recentPbis: Array<{
+    polarity: string;
+    reason: string;
+    staffName: string;
+    createdAt: string;
+    points: number;
+  }>;
+  recentSupportNotes: Array<{
+    noteType: string;
+    noteText: string;
+    staffName: string;
+    createdAt: string;
+  }>;
+}) {
+  const s = SEVERITY_STYLES[sev];
+  const [open, setOpen] = useState(false);
+  // Anchor for popover positioning. Popover is rendered as
+  // `position: fixed` (computed from the anchor's bounding rect) so
+  // it can escape ancestor `overflow: hidden/auto` containers — the
+  // surrounding `.card` clips on the X axis, which was hiding the
+  // popover behind the next card.
+  const anchorRef = useRef<HTMLSpanElement | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  useEffect(() => {
+    if (!open || !anchorRef.current) return;
+    const r = anchorRef.current.getBoundingClientRect();
+    setPos({ top: r.bottom + 4, left: r.left });
+  }, [open]);
+  // Server flag counts negative PBIS; surface those first, then any
+  // support notes from the same window as supplementary context.
+  const negatives = recentPbis
+    .filter((p) => p.polarity === "negative")
+    .slice(0, 6);
+  const notes = recentSupportNotes.slice(0, 3);
+  const hasDetail = negatives.length > 0 || notes.length > 0;
+  return (
+    <span
+      ref={anchorRef}
+      style={{ position: "relative", display: "inline-block" }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+    >
+      <span
+        tabIndex={0}
+        role="button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        style={{
+          display: "inline-block",
+          padding: "0.15rem 0.55rem",
+          background: s.background,
+          color: s.color,
+          border: `1px solid ${s.border}`,
+          borderRadius: 999,
+          fontSize: "0.75rem",
+          fontWeight: 600,
+          marginRight: 4,
+          marginBottom: 4,
+          cursor: hasDetail ? "help" : "default",
+        }}
+      >
+        {label}
+        {hasDetail && (
+          <span
+            aria-hidden
+            style={{ marginLeft: 4, opacity: 0.7, fontWeight: 700 }}
+          >
+            ⓘ
+          </span>
+        )}
+      </span>
+      {open && hasDetail && pos && (
+        <div
+          role="dialog"
+          style={{
+            position: "fixed",
+            zIndex: 1000,
+            top: pos.top,
+            left: pos.left,
+            minWidth: 280,
+            maxWidth: 360,
+            background: "white",
+            border: "1px solid #d1d5db",
+            borderRadius: 8,
+            boxShadow: "0 6px 20px rgba(0,0,0,0.12)",
+            padding: "0.6rem 0.7rem",
+            fontWeight: 400,
+            color: "#111827",
+            fontSize: "0.78rem",
+            lineHeight: 1.35,
+          }}
+        >
+          {negatives.length > 0 && (
+            <>
+              <div
+                style={{
+                  fontWeight: 700,
+                  fontSize: "0.72rem",
+                  color: "#6b7280",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.04em",
+                  marginBottom: 4,
+                }}
+              >
+                Recent negative PBIS
+              </div>
+              <ul
+                style={{
+                  margin: 0,
+                  padding: 0,
+                  listStyle: "none",
+                  display: "grid",
+                  gap: 4,
+                }}
+              >
+                {negatives.map((p, i) => {
+                  const when = new Date(p.createdAt);
+                  const dateStr = isNaN(when.valueOf())
+                    ? p.createdAt
+                    : when.toLocaleDateString();
+                  return (
+                    <li
+                      key={`pbis-${i}`}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "auto 1fr",
+                        columnGap: 6,
+                      }}
+                    >
+                      <span
+                        style={{
+                          color: "#6b7280",
+                          fontVariantNumeric: "tabular-nums",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {dateStr}
+                      </span>
+                      <span style={{ minWidth: 0 }}>
+                        <span style={{ fontWeight: 600 }}>
+                          {p.reason || "(no reason)"}
+                        </span>
+                        <span style={{ color: "#6b7280" }}>
+                          {" · "}
+                          {p.staffName || "Staff"}
+                          {p.points ? ` · ${p.points}pt` : ""}
+                        </span>
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
+          {notes.length > 0 && (
+            <>
+              <div
+                style={{
+                  fontWeight: 700,
+                  fontSize: "0.72rem",
+                  color: "#6b7280",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.04em",
+                  marginTop: negatives.length > 0 ? 8 : 0,
+                  marginBottom: 4,
+                }}
+              >
+                Recent support notes
+              </div>
+              <ul
+                style={{
+                  margin: 0,
+                  padding: 0,
+                  listStyle: "none",
+                  display: "grid",
+                  gap: 4,
+                }}
+              >
+                {notes.map((n, i) => {
+                  const when = new Date(n.createdAt);
+                  const dateStr = isNaN(when.valueOf())
+                    ? n.createdAt
+                    : when.toLocaleDateString();
+                  const text =
+                    n.noteText.length > 90
+                      ? n.noteText.slice(0, 87) + "…"
+                      : n.noteText;
+                  return (
+                    <li
+                      key={`note-${i}`}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "auto 1fr",
+                        columnGap: 6,
+                      }}
+                    >
+                      <span
+                        style={{
+                          color: "#6b7280",
+                          fontVariantNumeric: "tabular-nums",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {dateStr}
+                      </span>
+                      <span style={{ minWidth: 0 }}>
+                        <span style={{ fontWeight: 600 }}>{n.noteType}</span>
+                        <span style={{ color: "#6b7280" }}>
+                          {" · "}
+                          {n.staffName || "Staff"}
+                        </span>
+                        {text && (
+                          <div style={{ color: "#374151" }}>{text}</div>
+                        )}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
 function Card({
   title,
   children,
@@ -234,6 +514,12 @@ function Card({
         border: "1px solid #e5e7eb",
         borderRadius: 8,
         padding: "1rem",
+        // minWidth:0 lets the card actually shrink inside its
+        // 1fr grid track (default min-content width otherwise
+        // forces children like tables to push past the card's
+        // right edge into the neighboring column).
+        minWidth: 0,
+        overflow: "hidden",
       }}
     >
       <h3 style={{ marginTop: 0, marginBottom: "0.5rem", fontSize: "1rem" }}>
@@ -254,6 +540,138 @@ function scoreColor(score: number): string {
   if (score >= 75) return "#16a34a"; // green
   if (score >= 50) return "#ca8a04"; // amber
   return "#dc2626"; // red
+}
+
+// LG "moving target" trajectory strip. Renders one line per subject
+// directly underneath the FAST PM table row. Shows:
+//   - target scale score + next-stop sub-level label (e.g.
+//     "→ 220 (Low 2)") on the left
+//   - the prior → pm1 → pm2 → pm3 score path with arrows
+//   - a "now +N" chip showing the live gap from the latest PM window
+//   - a ↓/↑ delta chip showing change vs the previous populated PM
+//     (green ↓ = closing the gap, red ↑ = widening)
+//   - a ✓ "LG met" pill when the latest score has already cleared the
+//     target on the current-grade chart
+//
+// Target is fixed for the year (computed server-side via placePm3 on
+// the prior-grade chart + bucketTarget on the current-grade chart).
+// The number teachers care about — "how far now" — moves with every
+// PM. See buildBucketTrajectory in routes/insights.ts.
+function BucketTrajectoryStrip({
+  bucket,
+}: {
+  bucket: {
+    targetScore: number;
+    targetSubLevelLabel: string;
+    baselineSubLevel: string;
+    baselineScore: number;
+    latestWindow: "prior" | "pm1" | "pm2" | "pm3";
+    lgMet: boolean;
+    trajectory: Array<{
+      window: "prior" | "pm1" | "pm2" | "pm3";
+      score: number | null;
+      gap: number | null;
+      delta: number | null;
+    }>;
+  };
+}) {
+  const latest = bucket.trajectory.find((p) => p.window === bucket.latestWindow);
+  const liveGap = latest?.gap ?? null;
+  const delta = latest?.delta ?? null;
+  const labelFor = (w: "prior" | "pm1" | "pm2" | "pm3") =>
+    w === "prior" ? "Prior" : w.toUpperCase();
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: "0.5rem",
+        rowGap: "0.25rem",
+      }}
+      title={
+        `Baseline: Prior PM3 ${bucket.baselineScore} (${bucket.baselineSubLevel}) ` +
+        `on the prior-grade chart → target ${bucket.targetScore} (${bucket.targetSubLevelLabel}) ` +
+        `on the current-grade chart for an LG.`
+      }
+    >
+      <span style={{ color: "#6b7280" }}>LG target:</span>
+      <span style={{ fontWeight: 700, color: "#1e3a8a" }}>
+        {bucket.targetScore}
+      </span>
+      <span style={{ color: "#6b7280" }}>({bucket.targetSubLevelLabel})</span>
+      <span style={{ color: "#d1d5db" }}>·</span>
+      <span
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          color: "#374151",
+        }}
+      >
+        {bucket.trajectory.map((p, i) => (
+          <React.Fragment key={p.window}>
+            {i > 0 && <span style={{ color: "#d1d5db" }}>→</span>}
+            <span
+              style={{
+                color: p.score == null ? "#d1d5db" : "#374151",
+                fontWeight: p.window === bucket.latestWindow ? 700 : 400,
+              }}
+            >
+              <span style={{ color: "#9ca3af", marginRight: 2, fontSize: "0.7rem" }}>
+                {labelFor(p.window)}
+              </span>
+              {p.score ?? "—"}
+            </span>
+          </React.Fragment>
+        ))}
+      </span>
+      {bucket.lgMet ? (
+        <span
+          style={{
+            background: "#dcfce7",
+            color: "#166534",
+            padding: "2px 8px",
+            borderRadius: 999,
+            fontWeight: 700,
+          }}
+        >
+          ✓ LG met
+        </span>
+      ) : liveGap != null ? (
+        <span
+          style={{
+            background: liveGap <= 0 ? "#dcfce7" : "#fef3c7",
+            color: liveGap <= 0 ? "#166534" : "#92400e",
+            padding: "2px 8px",
+            borderRadius: 999,
+            fontWeight: 700,
+          }}
+        >
+          {liveGap <= 0 ? "✓ on target" : `now +${liveGap} to LG`}
+        </span>
+      ) : null}
+      {delta != null && delta !== 0 && (
+        <span
+          style={{
+            background: delta > 0 ? "#dcfce7" : "#fee2e2",
+            color: delta > 0 ? "#166534" : "#991b1b",
+            padding: "2px 8px",
+            borderRadius: 999,
+            fontWeight: 600,
+          }}
+          title={
+            delta > 0
+              ? `Closed the gap by ${delta} points since the previous PM window.`
+              : `Widened the gap by ${-delta} points since the previous PM window.`
+          }
+        >
+          {delta > 0 ? `↓ ${delta} closing` : `↑ ${-delta} widening`}
+        </span>
+      )}
+    </div>
+  );
 }
 
 // Inline SVG sparkline. Renders a small trend line for daily data.
@@ -477,6 +895,11 @@ function WholeChildRadar({ axes }: { axes: ProfilePayload["radar"]["axes"] }) {
 interface Props {
   studentId: string;
   onBack: () => void;
+  // Caller-supplied label for the back button so the affordance
+  // reflects where the user actually came from (e.g. "Back to Teacher
+  // Roster", "Back to Watchlist"). Defaults to the legacy
+  // "Back to Investigations" copy for older call sites.
+  backLabel?: string;
   // True when the signed-in user is on the core team (Admin / SuperUser /
   // Behavior Specialist / MTSS Coordinator / PBIS Coordinator). Drives the
   // visibility of the inline "Edit demographics" panel that calls
@@ -495,13 +918,1397 @@ interface Props {
   // Coordinator / Guidance Counselor / School Psychologist). Server
   // re-checks via the same gate; this just hides the affordance.
   canPrintOverallReport?: boolean;
+  // True only for actual school Admin / SuperUser (mirrors the
+  // server's isAdminOrSuperUser gate). Distinct from canManage which
+  // also includes Behavior Specialist / MTSS Coord / PBIS Coord.
+  // Used to gate admin-only affordances such as the photo-consent
+  // privacy toggle, which the server rejects (403) for non-admins.
+  isAdmin?: boolean;
+  // True when the signed-in user can change this student's PBIS
+  // house via the Change House modal. Mirrors server isCoreTeam
+  // (Admin / SuperUser / DistrictAdmin / BehaviorSpecialist /
+  // MTSSCoordinator / SchoolPsychologist). Wider than `isAdmin`
+  // because Core Team can move kids between houses for behavior
+  // / sibling reasons.
+  canChangeHouse?: boolean;
+  // True when the signed-in user can upload / capture / remove the
+  // student photo (admin / front-office / core team / counselor /
+  // guidance / social worker). Mirrors server canManageStudentPhoto.
+  // Distinct from canEditSafetyPlan because counselors + social
+  // workers can manage photos but don't necessarily edit safety plans.
+  canManagePhoto?: boolean;
+  // Inline dismissal-mode editor on the header. Mirrors server
+  // `canManageDismissal` (admin tier OR cap_manage_dismissal). When
+  // false the chip still renders (read-only) so any staff member can
+  // see whether a kid is a walker, but the change-mode picker is
+  // hidden.
+  canManageDismissal?: boolean;
+}
+
+// Single-entry student-photo manager — upload OR camera capture. Shown
+// inside the StudentProfile header for users who can manage photos
+// (Admin / Core Team / Guidance — same gate as canEditSafetyPlan).
+// Bytes flow through the existing /api/storage/* presigned-PUT pipeline,
+// then we POST the resulting objectPath to /api/students/:id/photo.
+// The admin-only consent toggle calls PATCH /photo-consent.
+// Phase 4 — admin-only roster-inline "Print badge" button. POSTs a
+// single-student request to the same lanyard-PDF endpoint the
+// settings panel uses; reason is captured for the audit ledger.
+function InlinePrintBadgeButton({ studentRecordId }: { studentRecordId: number }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  async function go() {
+    setBusy(true);
+    setErr("");
+    try {
+      const reason = window.prompt(
+        "Reason for printing this badge? (optional — e.g. lost, damaged, new student)",
+        "",
+      );
+      // Cancel cleanly without firing the print.
+      if (reason === null) {
+        setBusy(false);
+        return;
+      }
+      const res = await authFetch("/api/students/id-badges.pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentIds: [studentRecordId],
+          size: "lanyard",
+          reason: reason.trim() || undefined,
+        }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        throw new Error(b.error ?? `Print failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener");
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div style={{ marginTop: "0.4rem" }}>
+      <button
+        type="button"
+        onClick={go}
+        disabled={busy}
+        style={{
+          background: "#0f766e",
+          color: "#fff",
+          border: "none",
+          borderRadius: 6,
+          padding: "0.45rem 0.8rem",
+          fontWeight: 600,
+          fontSize: "0.85rem",
+          cursor: busy ? "not-allowed" : "pointer",
+          opacity: busy ? 0.7 : 1,
+        }}
+      >
+        🪪 {busy ? "Generating…" : "Print ID badge"}
+      </button>
+      {err && (
+        <span style={{ color: "#b91c1c", marginLeft: "0.5rem", fontSize: "0.85rem" }}>
+          {err}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function StudentPhotoManager({
+  studentId,
+  firstName,
+  lastName,
+  isAdmin,
+}: {
+  studentId: string;
+  firstName: string;
+  lastName: string;
+  isAdmin: boolean;
+}) {
+  const [photoObjectKey, setPhotoObjectKey] = useState<string | null>(null);
+  const [photoConsent, setPhotoConsent] = useState<boolean>(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  // cameraReady flips true once the <video> element has metadata + a
+  // playing frame, so the Capture button is disabled-grey until you can
+  // actually see yourself. Eliminates the "took a photo, got nothing"
+  // failure mode where the user clicked before getUserMedia delivered
+  // its first frame.
+  const [cameraReady, setCameraReady] = useState(false);
+  // Preview-before-upload: snap() now produces a Blob that lives here
+  // until the user confirms "Use this photo" or "Retake". Only on
+  // confirm does it actually upload.
+  const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  // Photo-edit actions used to be hidden behind a pencil toggle, but
+  // that buried the primary affordance (everyone with access to this
+  // panel is *here* to manage the photo). Default-open the actions so
+  // Upload / Take photo / Remove are visible immediately. The pencil
+  // still toggles for users who want a cleaner identity strip.
+  const [actionsOpen, setActionsOpen] = useState(true);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const bulkInputRef = useRef<HTMLInputElement | null>(null);
+  // Per-file progress for the bulk multi-upload flow. Each row maps a
+  // picked file → derived studentId (filename stem) → status. This is
+  // intentionally local to the manager so the modal closes on unmount;
+  // we don't need to persist it across navigations.
+  const [bulkRows, setBulkRows] = useState<
+    Array<{
+      filename: string;
+      studentId: string;
+      status: "pending" | "uploading" | "ok" | "skipped" | "failed";
+      error?: string;
+    }>
+  >([]);
+  const [bulkRunning, setBulkRunning] = useState(false);
+
+  // Pull current photo state on mount.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const r = await authFetch(
+        `/api/students/${encodeURIComponent(studentId)}`,
+      );
+      if (!r.ok || cancelled) return;
+      const j = (await r.json()) as {
+        photoObjectKey?: string | null;
+        photoConsent?: boolean;
+      };
+      if (cancelled) return;
+      setPhotoObjectKey(j.photoObjectKey ?? null);
+      setPhotoConsent(j.photoConsent ?? true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId]);
+
+  // Camera lifecycle: stop the stream on close or unmount so the
+  // browser tab indicator doesn't stay red after the panel closes.
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        for (const t of streamRef.current.getTracks()) t.stop();
+        streamRef.current = null;
+      }
+    };
+  }, []);
+
+  // When cameraOpen flips true the <video> element mounts on the very
+  // next render. This effect runs AFTER that render, so videoRef.current
+  // is guaranteed non-null — much more reliable than the old
+  // setTimeout(0) trick which sometimes attached the stream to a
+  // detached element (causing the "black box" symptom).
+  useEffect(() => {
+    if (!cameraOpen) return;
+    if (previewBlob) return; // we're showing the still preview, not video
+    let cancelled = false;
+    setCameraReady(false);
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: 640, height: 480 },
+          audio: false,
+        });
+        if (cancelled) {
+          for (const t of stream.getTracks()) t.stop();
+          return;
+        }
+        streamRef.current = stream;
+        const v = videoRef.current;
+        if (!v) {
+          for (const t of stream.getTracks()) t.stop();
+          streamRef.current = null;
+          setErr("Camera UI didn't mount in time — try again.");
+          return;
+        }
+        v.srcObject = stream;
+        const onReady = () => {
+          v.removeEventListener("loadedmetadata", onReady);
+          v.removeEventListener("playing", onReady);
+          if (!cancelled) setCameraReady(true);
+        };
+        v.addEventListener("loadedmetadata", onReady);
+        v.addEventListener("playing", onReady);
+        try {
+          await v.play();
+        } catch (playErr) {
+          // Some browsers (Safari) refuse autoplay even with `muted`.
+          // Surface the message so the user knows to interact first.
+          setErr(
+            playErr instanceof Error
+              ? `Camera couldn't start: ${playErr.message}`
+              : "Camera couldn't start.",
+          );
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setErr(
+          e instanceof Error
+            ? `Camera unavailable: ${e.message}`
+            : "Camera unavailable",
+        );
+        setCameraOpen(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      // Stream is intentionally NOT torn down here — closeCamera() and
+      // the unmount effect handle that. Tearing down on every effect
+      // re-run would kill the live preview when React strict-mode
+      // double-invokes the effect in dev.
+    };
+  }, [cameraOpen, previewBlob]);
+
+  // Object-URL housekeeping for the still preview so we don't leak
+  // blob URLs across retakes.
+  useEffect(() => {
+    if (!previewBlob) {
+      setPreviewUrl((u) => {
+        if (u) URL.revokeObjectURL(u);
+        return null;
+      });
+      return;
+    }
+    const url = URL.createObjectURL(previewBlob);
+    setPreviewUrl(url);
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [previewBlob]);
+
+  async function uploadBlob(blob: Blob, filename: string) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const reqRes = await authFetch("/api/storage/uploads/request-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: filename,
+          size: blob.size,
+          contentType: blob.type || "image/jpeg",
+        }),
+      });
+      if (!reqRes.ok) throw new Error("Could not start upload");
+      const { uploadURL, objectPath } = (await reqRes.json()) as {
+        uploadURL: string;
+        objectPath: string;
+      };
+      const putRes = await fetch(uploadURL, {
+        method: "PUT",
+        headers: { "Content-Type": blob.type || "image/jpeg" },
+        body: blob,
+      });
+      if (!putRes.ok) throw new Error("Upload failed");
+      const saveRes = await authFetch(
+        `/api/students/${encodeURIComponent(studentId)}/photo`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ objectPath }),
+        },
+      );
+      if (!saveRes.ok) {
+        const j = (await saveRes.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(j.error ?? "Save failed");
+      }
+      setPhotoObjectKey(objectPath);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setErr("Please pick an image file.");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setErr("Image must be under 8 MB.");
+      return;
+    }
+    await uploadBlob(file, file.name);
+  }
+
+  function openCamera() {
+    setErr(null);
+    setPreviewBlob(null);
+    setActionsOpen(true);
+    setCameraOpen(true);
+    // The mount effect (on cameraOpen) handles the actual getUserMedia
+    // + srcObject attach, because that path needs the <video> element
+    // to already be in the DOM.
+  }
+
+  function stopStream() {
+    if (streamRef.current) {
+      for (const t of streamRef.current.getTracks()) t.stop();
+      streamRef.current = null;
+    }
+  }
+
+  function closeCamera() {
+    stopStream();
+    setCameraReady(false);
+    setPreviewBlob(null);
+    setCameraOpen(false);
+  }
+
+  async function snap() {
+    const v = videoRef.current;
+    if (!v) {
+      setErr("Camera not ready yet — try again.");
+      return;
+    }
+    if (!cameraReady || v.readyState < 2 || !v.videoWidth || !v.videoHeight) {
+      setErr("Camera still warming up — wait a second and try again.");
+      return;
+    }
+    const w = v.videoWidth;
+    const h = v.videoHeight;
+    // Crop to a centered square so the bubble crop is consistent.
+    const side = Math.min(w, h);
+    const sx = (w - side) / 2;
+    const sy = (h - side) / 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = 512;
+    canvas.height = 512;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      setErr("Could not initialize canvas for capture.");
+      return;
+    }
+    ctx.drawImage(v, sx, sy, side, side, 0, 0, 512, 512);
+    const blob: Blob | null = await new Promise((resolve) =>
+      canvas.toBlob((b) => resolve(b), "image/jpeg", 0.9),
+    );
+    if (!blob) {
+      setErr("Could not capture image.");
+      return;
+    }
+    // Stop the live stream now — we don't need the camera light on
+    // while the user reviews the still. If they hit Retake we'll
+    // re-acquire via the mount effect.
+    stopStream();
+    setCameraReady(false);
+    setPreviewBlob(blob);
+  }
+
+  function retake() {
+    setPreviewBlob(null);
+    // setCameraOpen is already true — clearing previewBlob causes the
+    // mount effect to re-acquire the stream and re-attach to <video>.
+  }
+
+  async function confirmPreview() {
+    if (!previewBlob) return;
+    const blob = previewBlob;
+    closeCamera();
+    await uploadBlob(blob, `${studentId}-snapshot.jpg`);
+  }
+
+  // Bulk upload — admin picks many files at once. Each filename's stem
+  // (everything before the last dot) is treated as the studentId. We
+  // iterate sequentially so a tenant uploading 800 yearbook photos
+  // doesn't open 800 concurrent fetches and trigger backpressure / GCS
+  // throttling. Per-row status updates render live so the operator
+  // sees progress on a long batch. Errors don't abort the run — a bad
+  // filename or a deactivated student just marks that row failed and
+  // we move on.
+  function studentIdFromFilename(name: string): string {
+    const stem = name.replace(/\.[^./\\]+$/, "");
+    return stem.trim();
+  }
+
+  async function uploadOne(file: File, studentId: string): Promise<void> {
+    const reqRes = await authFetch("/api/storage/uploads/request-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: file.name,
+        size: file.size,
+        contentType: file.type || "image/jpeg",
+      }),
+    });
+    if (!reqRes.ok) throw new Error("Could not start upload");
+    const { uploadURL, objectPath } = (await reqRes.json()) as {
+      uploadURL: string;
+      objectPath: string;
+    };
+    const putRes = await fetch(uploadURL, {
+      method: "PUT",
+      headers: { "Content-Type": file.type || "image/jpeg" },
+      body: file,
+    });
+    if (!putRes.ok) throw new Error("Upload failed");
+    const saveRes = await authFetch(
+      `/api/students/${encodeURIComponent(studentId)}/photo`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ objectPath }),
+      },
+    );
+    if (!saveRes.ok) {
+      const j = (await saveRes.json().catch(() => ({}))) as { error?: string };
+      throw new Error(j.error ?? `Save failed (${saveRes.status})`);
+    }
+  }
+
+  function handleBulkFiles(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (files.length === 0) return;
+    const rows = files.map((f) => ({
+      filename: f.name,
+      studentId: studentIdFromFilename(f.name),
+      status: f.type.startsWith("image/")
+        ? ("pending" as const)
+        : ("skipped" as const),
+      error: f.type.startsWith("image/") ? undefined : "Not an image file",
+    }));
+    setBulkRows(rows);
+    void runBulk(files, rows);
+  }
+
+  async function runBulk(
+    files: File[],
+    initial: Array<{ filename: string; studentId: string; status: string }>,
+  ) {
+    setBulkRunning(true);
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]!;
+      const initRow = initial[i]!;
+      if (initRow.status === "skipped") continue;
+      if (file.size > 8 * 1024 * 1024) {
+        setBulkRows((prev) =>
+          prev.map((r, idx) =>
+            idx === i
+              ? { ...r, status: "failed", error: "Image > 8 MB" }
+              : r,
+          ),
+        );
+        continue;
+      }
+      if (!initRow.studentId) {
+        setBulkRows((prev) =>
+          prev.map((r, idx) =>
+            idx === i
+              ? { ...r, status: "failed", error: "Filename has no studentId" }
+              : r,
+          ),
+        );
+        continue;
+      }
+      setBulkRows((prev) =>
+        prev.map((r, idx) =>
+          idx === i ? { ...r, status: "uploading" } : r,
+        ),
+      );
+      try {
+        await uploadOne(file, initRow.studentId);
+        setBulkRows((prev) =>
+          prev.map((r, idx) =>
+            idx === i ? { ...r, status: "ok" } : r,
+          ),
+        );
+      } catch (err) {
+        setBulkRows((prev) =>
+          prev.map((r, idx) =>
+            idx === i
+              ? {
+                  ...r,
+                  status: "failed",
+                  error: err instanceof Error ? err.message : "Upload failed",
+                }
+              : r,
+          ),
+        );
+      }
+    }
+    setBulkRunning(false);
+  }
+
+  async function handleRemove() {
+    if (!confirm("Remove this student's photo?")) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authFetch(
+        `/api/students/${encodeURIComponent(studentId)}/photo`,
+        { method: "DELETE" },
+      );
+      if (!r.ok) throw new Error("Remove failed");
+      setPhotoObjectKey(null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Remove failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleConsent(next: boolean) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authFetch(
+        `/api/students/${encodeURIComponent(studentId)}/photo-consent`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ consent: next }),
+        },
+      );
+      if (!r.ok) throw new Error("Could not update consent");
+      setPhotoConsent(next);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not update consent");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const btn: React.CSSProperties = {
+    border: "1px solid #cbd5e1",
+    background: "#fff",
+    padding: "0.3rem 0.7rem",
+    borderRadius: 6,
+    fontSize: "0.78rem",
+    fontWeight: 600,
+    cursor: busy ? "not-allowed" : "pointer",
+    opacity: busy ? 0.6 : 1,
+  };
+  return (
+    <div
+      style={{
+        marginTop: "0.6rem",
+        padding: "0.6rem 0.75rem",
+        background: "#f8fafc",
+        border: "1px solid #cbd5e1",
+        borderRadius: 6,
+      }}
+    >
+      <div
+        style={{ display: "flex", alignItems: "center", gap: 12 }}
+      >
+        <StudentPhoto
+          firstName={firstName}
+          lastName={lastName}
+          photoObjectKey={photoObjectKey}
+          photoConsent={photoConsent}
+          size={64}
+        />
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            flex: 1,
+            minWidth: 0,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <div style={{ fontSize: "0.85rem", fontWeight: 600 }}>
+              Student photo
+            </div>
+            {/* Pencil toggle — collapsed view shows just the avatar +
+                title; click to slide the four action buttons open. */}
+            <button
+              type="button"
+              aria-label={
+                actionsOpen ? "Hide photo actions" : "Edit photo"
+              }
+              aria-expanded={actionsOpen}
+              title={actionsOpen ? "Hide" : "Edit photo"}
+              onClick={() => setActionsOpen((o) => !o)}
+              style={{
+                background: actionsOpen ? "#e0f2fe" : "transparent",
+                border: "1px solid",
+                borderColor: actionsOpen ? "#0ea5e9" : "#cbd5e1",
+                borderRadius: 6,
+                width: 28,
+                height: 28,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                color: actionsOpen ? "#0369a1" : "#475569",
+                fontSize: 14,
+                lineHeight: 1,
+                transition: "transform 0.18s ease, background 0.18s ease",
+                transform: actionsOpen ? "rotate(0deg)" : "rotate(0deg)",
+              }}
+            >
+              {actionsOpen ? "✕" : "✎"}
+            </button>
+          </div>
+          {/* Slide-open panel. We animate grid-template-rows so the
+              collapsed state genuinely takes 0 height (no layout
+              shifting from a hidden-but-occupying row). */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateRows: actionsOpen ? "1fr" : "0fr",
+              transition: "grid-template-rows 0.22s ease",
+            }}
+          >
+            <div style={{ overflow: "hidden", minHeight: 0 }}>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                  paddingTop: 2,
+                }}
+              >
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    style={btn}
+                    disabled={busy}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    Upload
+                  </button>
+                  <button
+                    type="button"
+                    style={btn}
+                    disabled={busy}
+                    onClick={openCamera}
+                  >
+                    Take photo
+                  </button>
+                  {photoObjectKey && (
+                    <button
+                      type="button"
+                      style={{
+                        ...btn,
+                        borderColor: "#fecaca",
+                        color: "#b91c1c",
+                      }}
+                      disabled={busy}
+                      onClick={handleRemove}
+                    >
+                      Remove
+                    </button>
+                  )}
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      style={btn}
+                      disabled={bulkRunning}
+                      onClick={() => bulkInputRef.current?.click()}
+                      title="Pick many image files at once. Each filename (without extension) is matched to a student ID — e.g. 1234.jpg sets the photo for student 1234."
+                    >
+                      Bulk upload…
+                    </button>
+                  )}
+                  {/* capture="environment" hints to mobile browsers that
+                      tapping this opens the rear camera natively, which
+                      is the most reliable phone/tablet capture path —
+                      getUserMedia in Safari has historically been
+                      finicky. On desktop the attribute is ignored. */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    style={{ display: "none" }}
+                    onChange={handleFile}
+                  />
+                  <input
+                    ref={bulkInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    style={{ display: "none" }}
+                    onChange={handleBulkFiles}
+                  />
+                </div>
+                {isAdmin && (
+                  <label
+                    style={{
+                      fontSize: "0.75rem",
+                      color: "#475569",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={photoConsent}
+                      disabled={busy}
+                      onChange={(e) => toggleConsent(e.target.checked)}
+                    />
+                    Photo consent (admin) — when off, every render falls
+                    back to initials regardless of whether bytes are
+                    stored.
+                  </label>
+                )}
+              </div>
+            </div>
+          </div>
+          {err && (
+            <div style={{ color: "#b91c1c", fontSize: "0.75rem" }}>{err}</div>
+          )}
+        </div>
+      </div>
+      {bulkRows.length > 0 && (
+        <div
+          style={{
+            marginTop: 10,
+            padding: "0.5rem 0.7rem",
+            background: "#fff",
+            border: "1px solid #cbd5e1",
+            borderRadius: 6,
+            maxHeight: 240,
+            overflowY: "auto",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              fontSize: "0.78rem",
+              fontWeight: 600,
+              marginBottom: 4,
+            }}
+          >
+            <span>
+              Bulk upload —{" "}
+              {bulkRows.filter((r) => r.status === "ok").length}/
+              {bulkRows.length} done
+              {bulkRunning ? " (uploading…)" : ""}
+            </span>
+            {!bulkRunning && (
+              <button
+                type="button"
+                style={{
+                  ...btn,
+                  padding: "0.15rem 0.5rem",
+                  fontSize: "0.7rem",
+                }}
+                onClick={() => setBulkRows([])}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <table style={{ width: "100%", fontSize: "0.72rem" }}>
+            <tbody>
+              {bulkRows.map((r, i) => {
+                const color =
+                  r.status === "ok"
+                    ? "#15803d"
+                    : r.status === "failed"
+                      ? "#b91c1c"
+                      : r.status === "skipped"
+                        ? "#6b7280"
+                        : "#0f172a";
+                return (
+                  <tr key={i}>
+                    <td
+                      style={{
+                        padding: "1px 4px",
+                        whiteSpace: "nowrap",
+                        color: "#64748b",
+                      }}
+                    >
+                      {r.filename}
+                    </td>
+                    <td
+                      style={{
+                        padding: "1px 4px",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      → {r.studentId || "(no id)"}
+                    </td>
+                    <td style={{ padding: "1px 4px", color }}>
+                      {r.status === "uploading"
+                        ? "uploading…"
+                        : r.status === "ok"
+                          ? "✓"
+                          : r.status === "skipped"
+                            ? "skipped"
+                            : r.status === "failed"
+                              ? `✗ ${r.error ?? ""}`
+                              : "queued"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {cameraOpen && (
+        <div style={{ marginTop: 10 }}>
+          {previewBlob && previewUrl ? (
+            // Confirm-before-upload step: nothing has been saved yet.
+            // The user picks "Use this photo" to actually upload, or
+            // "Retake" to re-acquire the live stream.
+            <>
+              <div
+                style={{
+                  width: 320,
+                  height: 240,
+                  background: "#000",
+                  borderRadius: 6,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  overflow: "hidden",
+                }}
+              >
+                <img
+                  src={previewUrl}
+                  alt="Captured preview"
+                  style={{
+                    maxWidth: "100%",
+                    maxHeight: "100%",
+                    display: "block",
+                  }}
+                />
+              </div>
+              <div
+                style={{
+                  marginTop: 6,
+                  fontSize: "0.75rem",
+                  color: "#475569",
+                }}
+              >
+                Preview only — nothing saved yet.
+              </div>
+              <div style={{ marginTop: 6, display: "flex", gap: 6 }}>
+                <button
+                  type="button"
+                  style={{
+                    ...btn,
+                    background: "#16a34a",
+                    color: "white",
+                    borderColor: "#16a34a",
+                  }}
+                  onClick={confirmPreview}
+                  disabled={busy}
+                >
+                  ✓ Use this photo
+                </button>
+                <button
+                  type="button"
+                  style={btn}
+                  onClick={retake}
+                  disabled={busy}
+                >
+                  ↻ Retake
+                </button>
+                <button
+                  type="button"
+                  style={btn}
+                  onClick={closeCamera}
+                  disabled={busy}
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                style={{
+                  width: 320,
+                  height: 240,
+                  background: "#000",
+                  borderRadius: 6,
+                  // Mirror so the user sees themselves like a bathroom
+                  // mirror (selfie convention). The captured frame is
+                  // NOT mirrored — drawImage reads the un-flipped
+                  // source pixels, so the saved photo orients
+                  // correctly for everyone else viewing it.
+                  transform: "scaleX(-1)",
+                  objectFit: "cover",
+                }}
+              />
+              <div
+                style={{
+                  marginTop: 6,
+                  fontSize: "0.75rem",
+                  color: cameraReady ? "#15803d" : "#b45309",
+                }}
+              >
+                {cameraReady
+                  ? "● Live — click Capture when ready."
+                  : "Starting camera…"}
+              </div>
+              <div style={{ marginTop: 6, display: "flex", gap: 6 }}>
+                <button
+                  type="button"
+                  style={btn}
+                  onClick={snap}
+                  disabled={busy || !cameraReady}
+                >
+                  📸 Capture
+                </button>
+                <button type="button" style={btn} onClick={closeCamera}>
+                  Cancel
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Mark/unmark grade-level retentions for a single student. Lives inside
+// the demographics editor so it shares the same admin/Core-Team gate.
+// Existing retentions render as black "R Grade N" chips with an "x"
+// to remove. The picker on the right marks a new grade. Server is
+// idempotent on (student, grade), so a re-mark is a safe no-op.
+// ReteachParentVisibilityToggle — admin-only per-student switch
+// controlling whether benchmark reteach activity appears on this
+// student's parent HeartBEAT report. Three gates must ALL be true
+// for a parent to see the section: (1) school-wide `showReteach`
+// heartbeat section flag, (2) parent's own pref (defaults to the
+// school setting), (3) this per-student flag. Self-contained:
+// fetches its own state on mount via the dedicated endpoint so we
+// don't have to thread it through the profile payload.
+function ReteachParentVisibilityToggle({ studentId }: { studentId: string }) {
+  const [visible, setVisible] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await authFetch(
+          `/api/students/${encodeURIComponent(studentId)}/reteach-visibility`,
+        );
+        if (!r.ok) throw new Error("load failed");
+        const j: { visible: boolean } = await r.json();
+        if (alive) setVisible(!!j.visible);
+      } catch {
+        if (alive) setVisible(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [studentId]);
+  async function toggle(next: boolean) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authFetch(
+        `/api/students/${encodeURIComponent(studentId)}/reteach-visibility`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ visible: next }),
+        },
+      );
+      if (!r.ok) throw new Error("update failed");
+      setVisible(next);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "update failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (visible === null) return null;
+  return (
+    <div
+      style={{
+        marginTop: "0.6rem",
+        padding: "0.6rem 0.75rem",
+        background: "#f8fafc",
+        border: "1px solid #cbd5e1",
+        borderRadius: 6,
+      }}
+    >
+      <label
+        style={{
+          fontSize: "0.78rem",
+          color: "#334155",
+          display: "inline-flex",
+          alignItems: "flex-start",
+          gap: 8,
+          cursor: busy ? "not-allowed" : "pointer",
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={visible}
+          disabled={busy}
+          onChange={(e) => toggle(e.target.checked)}
+          style={{ marginTop: 2 }}
+        />
+        <span>
+          <strong>Show focused reteach on parent report (admin)</strong>
+          <div style={{ color: "#64748b", marginTop: 2 }}>
+            When on, this student's parents see a counts-only rollup of
+            benchmark reteach activity (1:1 and small-group). Teacher
+            notes and strategy are NEVER surfaced. Also requires the
+            school-wide "Extra Support — Focused Reteach" section to be
+            enabled in HeartBEAT settings.
+          </div>
+        </span>
+      </label>
+      {err && (
+        <div style={{ color: "#b91c1c", fontSize: "0.72rem", marginTop: 4 }}>
+          {err}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RetentionManager({
+  studentId,
+  retainedGrades,
+  onChange,
+}: {
+  studentId: string;
+  retainedGrades: number[];
+  onChange: (next: number[]) => void;
+}) {
+  const [pickGrade, setPickGrade] = useState<number>(1);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>("");
+
+  async function add() {
+    if (busy) return;
+    setErr("");
+    setBusy(true);
+    try {
+      const r = await authFetch(
+        `/api/students/${encodeURIComponent(studentId)}/retentions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ gradeLevel: pickGrade }),
+        },
+      );
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        setErr(j.error ?? `HTTP ${r.status}`);
+        return;
+      }
+      // Merge locally — server is idempotent so no double-rows.
+      const set = new Set(retainedGrades);
+      set.add(pickGrade);
+      onChange([...set].sort((a, b) => a - b));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(grade: number) {
+    if (busy) return;
+    setErr("");
+    setBusy(true);
+    try {
+      const r = await authFetch(
+        `/api/students/${encodeURIComponent(studentId)}/retentions/${grade}`,
+        { method: "DELETE" },
+      );
+      if (!r.ok && r.status !== 204) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        setErr(j.error ?? `HTTP ${r.status}`);
+        return;
+      }
+      onChange(retainedGrades.filter((g) => g !== grade));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: "0.4rem",
+        paddingTop: "0.4rem",
+        borderTop: "1px dashed #cbd5e1",
+      }}
+    >
+      <span style={{ fontSize: "0.8rem", color: "#475569", fontWeight: 600 }}>
+        Retention:
+      </span>
+      {retainedGrades.length === 0 && (
+        <span style={{ fontSize: "0.8rem", color: "#94a3b8" }}>
+          (none recorded)
+        </span>
+      )}
+      {retainedGrades.map((g) => (
+        <span
+          key={g}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+            padding: "2px 8px",
+            borderRadius: 999,
+            background: "#0f172a",
+            color: "white",
+            fontSize: 12,
+            fontWeight: 700,
+          }}
+        >
+          R · Grade {g}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => remove(g)}
+            title={`Remove Grade ${g} retention`}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "white",
+              cursor: "pointer",
+              fontSize: 12,
+              padding: 0,
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      <span style={{ marginLeft: "auto", display: "inline-flex", gap: 4, alignItems: "center" }}>
+        <select
+          value={pickGrade}
+          onChange={(e) => setPickGrade(Number(e.target.value))}
+          disabled={busy}
+          style={{ fontSize: "0.8rem", padding: "0.15rem 0.35rem" }}
+        >
+          {[1, 2, 3, 4, 5, 6, 7, 8].map((g) => (
+            <option key={g} value={g}>
+              Grade {g}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={add}
+          style={{
+            fontSize: "0.8rem",
+            padding: "0.2rem 0.55rem",
+            border: "1px solid #cbd5e1",
+            background: "#f8fafc",
+            borderRadius: 6,
+            cursor: "pointer",
+          }}
+        >
+          + Mark retained
+        </button>
+      </span>
+      {err && (
+        <span style={{ fontSize: "0.75rem", color: "#b91c1c" }}>{err}</span>
+      )}
+    </div>
+  );
+}
+
+// Inline dismissal-mode chip + editor on the Student Profile header.
+// Read-only by default — every staff member can see whether a kid is a
+// walker / car-rider / bus rider, so the dispatcher at the front desk
+// answering "is Maya a walker today?" doesn't have to bounce out to
+// the pickup admin page. When `canEdit` is true (admin tier OR
+// cap_manage_dismissal), clicking the chip opens a small inline
+// picker. Saves go through PATCH /pickup/students/:id/dismissal-mode
+// which is keyed by db id (not the human studentId).
+const DISMISSAL_OPTIONS: Array<{ value: DismissalMode; label: string }> = [
+  { value: "car_rider", label: "Car Rider" },
+  { value: "walker", label: "Walker" },
+  { value: "bus", label: "Bus" },
+  { value: "aftercare", label: "Aftercare" },
+  { value: "parent_pickup_only", label: "Parent Pickup Only" },
+];
+
+function dismissalLabel(mode: string | null): string {
+  const found = DISMISSAL_OPTIONS.find((o) => o.value === mode);
+  return found?.label ?? (mode ? mode : "—");
+}
+
+function DismissalModeChip({
+  studentDbId,
+  value,
+  canEdit,
+  onSaved,
+}: {
+  studentDbId: number;
+  value: string | null;
+  canEdit: boolean;
+  onSaved: (next: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Two modes carry safety/operational weight that the front desk
+  // needs to spot at a glance:
+  //   - walker: drives whether the kid belongs on the walker gate
+  //     roster.
+  //   - parent_pickup_only: custody / restraining-order context where
+  //     the standard car line cannot release the student.
+  // Both get a highlighted chip; everything else stays neutral.
+  const isWalker = value === "walker";
+  const isParentOnly = value === "parent_pickup_only";
+  const highlight = isWalker || isParentOnly;
+  const chipStyle: React.CSSProperties = {
+    display: "inline-block",
+    marginLeft: 4,
+    padding: "0.2rem 0.6rem",
+    borderRadius: 999,
+    fontSize: "0.78rem",
+    fontWeight: 600,
+    border: `1px solid ${highlight ? "#fdba74" : "#cbd5e1"}`,
+    background: highlight ? "#fff7ed" : "#f1f5f9",
+    color: highlight ? "#9a3412" : "#334155",
+    cursor: canEdit ? "pointer" : "default",
+  };
+
+  async function save(next: DismissalMode) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authFetch(
+        `/api/pickup/students/${studentDbId}/dismissal-mode`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dismissalMode: next }),
+        },
+      );
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error ?? `Save failed (${r.status})`);
+      }
+      onSaved(next);
+      setEditing(false);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <span
+        style={chipStyle}
+        title={
+          canEdit
+            ? "Dismissal mode — click to change"
+            : "Dismissal mode (read-only — needs the Set Dismissal Mode capability or admin role to change)"
+        }
+        onClick={() => {
+          if (canEdit) setEditing(true);
+        }}
+      >
+        🚸 {dismissalLabel(value)}
+      </span>
+    );
+  }
+
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        marginLeft: 4,
+      }}
+    >
+      <select
+        value={value ?? "car_rider"}
+        disabled={busy}
+        onChange={(e) => void save(e.target.value as DismissalMode)}
+        style={{
+          padding: "0.18rem 0.4rem",
+          borderRadius: 6,
+          border: "1px solid #94a3b8",
+          fontSize: "0.78rem",
+        }}
+      >
+        {DISMISSAL_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={() => {
+          setEditing(false);
+          setErr(null);
+        }}
+        disabled={busy}
+        style={{
+          background: "transparent",
+          border: "1px solid #cbd5e1",
+          borderRadius: 6,
+          padding: "0.15rem 0.4rem",
+          fontSize: "0.72rem",
+          cursor: "pointer",
+        }}
+      >
+        ✕
+      </button>
+      {err && (
+        <span style={{ fontSize: "0.72rem", color: "#b91c1c" }}>{err}</span>
+      )}
+    </span>
+  );
 }
 
 export default function StudentProfile({
   studentId,
   onBack,
+  backLabel = "Back to Investigations",
   canManage = false,
   canEditSafetyPlan = false,
+  isAdmin = false,
+  canChangeHouse = false,
+  canManagePhoto = false,
+  canManageDismissal = false,
   onOpenSafetyPlan,
   canPrintOverallReport = false,
 }: Props) {
@@ -534,6 +2341,11 @@ export default function StudentProfile({
   const [editIs504, setEditIs504] = useState(false);
   const [editCtEla, setEditCtEla] = useState(false);
   const [editCtMath, setEditCtMath] = useState(false);
+  // Change-house modal (admin-only). Open state lives at the page
+  // level so the modal portals out of the header chip stack and the
+  // save callback can patch our local `data.header.house` in place
+  // without forcing a refetch of the whole profile payload.
+  const [changeHouseOpen, setChangeHouseOpen] = useState(false);
 
   // Unified intervention history (Tier 2 + Tier 3 + legacy + check-in/out).
   // Lives below the pillars grid as the canonical "everything we've tried
@@ -644,7 +2456,7 @@ export default function StudentProfile({
     return (
       <div className="card" style={{ marginBottom: "1rem" }}>
         <button type="button" onClick={onBack} style={{ marginBottom: "0.5rem" }}>
-          ← Back to Investigations
+          ← {backLabel}
         </button>
         <p style={{ color: "var(--text-subtle)" }}>Loading profile…</p>
       </div>
@@ -654,7 +2466,7 @@ export default function StudentProfile({
     return (
       <div className="card" style={{ marginBottom: "1rem" }}>
         <button type="button" onClick={onBack} style={{ marginBottom: "0.5rem" }}>
-          ← Back to Investigations
+          ← {backLabel}
         </button>
         <p style={{ color: "#991b1b" }}>{error ?? "Failed to load."}</p>
       </div>
@@ -687,7 +2499,7 @@ export default function StudentProfile({
               cursor: "pointer",
             }}
           >
-            ← Back to Investigations
+            ← {backLabel}
           </button>
           <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
             <span style={{ color: "#6b7280", fontSize: "0.85rem" }}>Window:</span>
@@ -749,6 +2561,43 @@ export default function StudentProfile({
             <li><strong>Family</strong> — communication log + emergency contacts (read-only).</li>
           </ul>
         </HowToSection>
+        <HowToSection title="FAST Benchmarks panel (Academics)">
+          ELA and Math render side-by-side, each with its own
+          PM1/PM2/PM3 toggle, school-year picker, and sort. The colored
+          mastery pill, E/P count (e.g. <code>2/3</code>), and tiny
+          trend line all sit in one cell per benchmark so both subjects
+          fit on screen without horizontal scroll. Category rollup
+          tiles above the table are weighted by points (not an average
+          of percents), so a high-point benchmark moves the rollup
+          correctly.
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Trend sparkline</strong> — plots mastery % for
+              that single benchmark in chronological order across every
+              PM window on file (current year is PM1 → PM2 → PM3;
+              prior-year FAST data extends the line back when imported,
+              up to ~6 points). The dashed rule is the school's mastery
+              threshold; the endpoint dot is colored by the most recent
+              window's status (green at/above, yellow near, orange/red
+              below). Hover to see each point as <code>SY PMx: %</code>.
+              If only one window exists for a code, the line is
+              suppressed and shows "—" — one point isn't a trend. The
+              line is per benchmark code (e.g. "is this kid improving
+              on MA.7.AR.1.2?"), not per subject.
+            </li>
+            <li>
+              <strong>Color palette</strong> — green ≥ threshold,
+              yellow within 10 points, orange within 30, red otherwise.
+              Identical to the teacher heatmap so heatmap + profile
+              read as one product.
+            </li>
+            <li>
+              <strong>MTSS pill</strong> on a benchmark row means an
+              active MTSS plan for this student targets that code
+              (lights up automatically once Phase 5 writes plan tags).
+            </li>
+          </ul>
+        </HowToSection>
         <RoleSection for="teacher" title="What teachers can do here">
           You see this profile for any student on your roster. Use the
           intervention history below the pillars when building parent
@@ -778,7 +2627,7 @@ export default function StudentProfile({
             <div style={{ color: "#6b7280", marginBottom: 6 }}>
               Grade {header.grade}
               {header.gender && <> &middot; {header.gender}</>}
-              <> &middot; {header.studentId}</>
+              <> &middot; {header.localSisId ?? "—"}</>
             </div>
             <div>
               {header.flags.ell && <Chip label="ELL" sev="info" />}
@@ -786,6 +2635,35 @@ export default function StudentProfile({
               {header.flags.is504 && <Chip label="504" sev="info" />}
               {header.flags.ctEla && <Chip label="CT ELA" sev="info" />}
               {header.flags.ctMath && <Chip label="CT Math" sev="info" />}
+              {header.retainedGrades && header.retainedGrades.length > 0 && (
+                <span
+                  title={`Retained: ${header.retainedGrades
+                    .map((g) => `Grade ${g}`)
+                    .join(", ")}`}
+                  aria-label={`Retained at ${header.retainedGrades
+                    .map((g) => `Grade ${g}`)
+                    .join(", ")}`}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 20,
+                    height: 20,
+                    borderRadius: "50%",
+                    background: "#0f172a",
+                    color: "white",
+                    fontSize: 12,
+                    fontWeight: 800,
+                    lineHeight: 1,
+                    marginLeft: 4,
+                    marginRight: 2,
+                    cursor: "help",
+                    verticalAlign: "middle",
+                  }}
+                >
+                  R
+                </span>
+              )}
               {header.mtssTier === 1 ? (
                 <Chip label="Tier 1 (no plan)" sev="info" />
               ) : (
@@ -797,6 +2675,81 @@ export default function StudentProfile({
                   sev="watch"
                 />
               )}
+              <DismissalModeChip
+                studentDbId={header.studentDbId}
+                value={header.dismissalMode}
+                canEdit={canManageDismissal}
+                onSaved={(next) =>
+                  setData((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          header: { ...prev.header, dismissalMode: next },
+                        }
+                      : prev,
+                  )
+                }
+              />
+              {/* PBIS house pill. Always rendered (read-only) so any
+                  staff member sees which house the student belongs to;
+                  admins additionally get a "Change" button that opens
+                  the audited single-student house-change modal. */}
+              {header.house ? (
+                <span
+                  title={`PBIS house: ${header.house.name}`}
+                  style={{
+                    display: "inline-block",
+                    marginLeft: 4,
+                    padding: "0.2rem 0.6rem",
+                    background: header.house.color || "#e5e7eb",
+                    color: "#0f172a",
+                    border: "1px solid rgba(15,23,42,0.12)",
+                    borderRadius: 999,
+                    fontSize: "0.78rem",
+                    fontWeight: 700,
+                  }}
+                >
+                  🏠 {header.house.name}
+                </span>
+              ) : (
+                <span
+                  title="No PBIS house assigned"
+                  style={{
+                    display: "inline-block",
+                    marginLeft: 4,
+                    padding: "0.2rem 0.6rem",
+                    background: "#f1f5f9",
+                    color: "#475569",
+                    border: "1px dashed #cbd5e1",
+                    borderRadius: 999,
+                    fontSize: "0.78rem",
+                    fontWeight: 600,
+                  }}
+                >
+                  No house
+                </span>
+              )}
+              {canChangeHouse && (
+                <button
+                  type="button"
+                  onClick={() => setChangeHouseOpen(true)}
+                  style={{
+                    marginLeft: 4,
+                    background: "transparent",
+                    border: "1px solid #cbd5e1",
+                    color: "#1e3a8a",
+                    padding: "0.2rem 0.6rem",
+                    borderRadius: 999,
+                    fontSize: "0.78rem",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                  title="Change this student's PBIS house"
+                >
+                  Change house
+                </button>
+              )}
+              
               {canPrintOverallReport && (
                 <a
                   href={`/api/students/${encodeURIComponent(studentId)}/overall-report-pdf`}
@@ -877,6 +2830,44 @@ export default function StudentProfile({
                 </button>
               )}
             </div>
+            {/* Retention manager — gated on canEditSafetyPlan, which
+                covers Admin / Behavior Specialist / MTSS Coordinator /
+                Guidance Counselor / School Psych. Lives outside the
+                demographics editor so a Counselor (who lacks
+                canManage / canManageMtssPlans) can still mark/unmark
+                retentions without needing the demographics editor. */}
+            {canManagePhoto && data?.header && (
+              <StudentPhotoManager
+                studentId={studentId}
+                firstName={data.header.firstName}
+                lastName={data.header.lastName}
+                isAdmin={isAdmin}
+              />
+            )}
+            {isAdmin && data?.header && (
+              <InlinePrintBadgeButton studentRecordId={data.header.studentDbId} />
+            )}
+            {isAdmin && (
+              <ReteachParentVisibilityToggle studentId={studentId} />
+            )}
+            {canEditSafetyPlan && (
+              <div style={{ marginTop: "0.6rem" }}>
+                <RetentionManager
+                  studentId={studentId}
+                  retainedGrades={data?.header.retainedGrades ?? []}
+                  onChange={(next) => {
+                    setData((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            header: { ...prev.header, retainedGrades: next },
+                          }
+                        : prev,
+                    );
+                  }}
+                />
+              </div>
+            )}
             {canManage && editing && (
               <div
                 style={{
@@ -1047,15 +3038,83 @@ export default function StudentProfile({
         <div className="card" style={{ marginBottom: 0 }}>
           <h3 style={{ margin: "0 0 0.5rem 0", fontSize: "1rem" }}>Things to know</h3>
           <div>
-            {riskFlags.map((f) => (
-              <Chip key={f.code} label={f.label} sev={f.severity} />
-            ))}
+            {riskFlags.map((f) => {
+              // Behavior flags get a hover popover with the actual
+              // recent PBIS / support-note entries so the reader can
+              // see "what happened" without leaving the header.
+              const isBehavior = f.code.startsWith("BEHAVIOR");
+              if (isBehavior) {
+                return (
+                  <BehaviorRiskChip
+                    key={f.code}
+                    label={f.label}
+                    sev={f.severity}
+                    recentPbis={pillars.behavior.recentPbis}
+                    recentSupportNotes={pillars.behavior.recentSupportNotes}
+                  />
+                );
+              }
+              return <Chip key={f.code} label={f.label} sev={f.severity} />;
+            })}
           </div>
         </div>
       )}
 
       {/* Whole-child radar */}
       <WholeChildRadar axes={data.radar.axes} />
+
+      {/* FAST Analysis Over Time — full-width section above the
+          pillars grid. Pulled out of the Academics card so each
+          subject gets ~half the page width, the trend sparkline is
+          readable at a glance, and the page reads as "trajectory
+          first, pillar deep-dives below". */}
+      <div className="card" style={{ marginBottom: 0 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            justifyContent: "space-between",
+            borderBottom: "3px solid #1e3a8a",
+            paddingBottom: "0.4rem",
+            marginBottom: "0.75rem",
+          }}
+        >
+          <h2
+            style={{
+              margin: 0,
+              fontSize: "1.15rem",
+              color: "#1e3a8a",
+              letterSpacing: "0.01em",
+            }}
+          >
+            FAST Analysis Over Time
+          </h2>
+          <span style={{ color: "#6b7280", fontSize: "0.78rem" }}>
+            ELA &amp; Math · PM1 → PM2 → PM3
+          </span>
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns:
+              "repeat(auto-fit, minmax(min(100%, 420px), 1fr))",
+            gap: "1.25rem",
+          }}
+        >
+          <StudentBenchmarksPanel
+            studentId={data.header.studentId}
+            subject="ela"
+            showHeader={true}
+            showTopBorder={false}
+          />
+          <StudentBenchmarksPanel
+            studentId={data.header.studentId}
+            subject="math"
+            showHeader={true}
+            showTopBorder={false}
+          />
+        </div>
+      </div>
 
       {/* Pillars grid */}
       <div
@@ -1096,18 +3155,92 @@ export default function StudentProfile({
                 </thead>
                 <tbody>
                   {pillars.academics.fastScores.map((s) => (
-                    <tr key={s.subject}>
-                      <td style={{ textTransform: "uppercase" }}>{s.subject}</td>
-                      <td style={{ textAlign: "right" }}>{s.pm1 ?? "—"}</td>
-                      <td style={{ textAlign: "right" }}>{s.pm2 ?? "—"}</td>
-                      <td style={{ textAlign: "right" }}>{s.pm3 ?? "—"}</td>
-                      <td style={{ textAlign: "right" }}>
-                        {s.priorYearScore ?? "—"}
-                        {s.priorYearBq && (
-                          <span style={{ color: "#991b1b", marginLeft: 4 }}>(BQ)</span>
-                        )}
-                      </td>
-                    </tr>
+                    <React.Fragment key={s.subject}>
+                      <tr>
+                        <td style={{ textTransform: "uppercase" }}>{s.subject}</td>
+                        <td
+                          style={{
+                            textAlign: "right",
+                            ...(s.bucket?.latestWindow === "pm1"
+                              ? { fontWeight: 700 }
+                              : {}),
+                          }}
+                        >
+                          {s.pm1 ?? "—"}
+                        </td>
+                        <td
+                          style={{
+                            textAlign: "right",
+                            ...(s.bucket?.latestWindow === "pm2"
+                              ? { fontWeight: 700 }
+                              : {}),
+                          }}
+                        >
+                          {s.pm2 ?? "—"}
+                        </td>
+                        <td
+                          style={{
+                            textAlign: "right",
+                            ...(s.bucket?.latestWindow === "pm3"
+                              ? { fontWeight: 700 }
+                              : {}),
+                          }}
+                        >
+                          {s.pm3 ?? "—"}
+                        </td>
+                        <td style={{ textAlign: "right" }}>
+                          {s.priorYearScore ?? "—"}
+                          {s.priorYearBq && (
+                            <span style={{ color: "#991b1b", marginLeft: 4 }}>(BQ)</span>
+                          )}
+                        </td>
+                      </tr>
+                      {s.bucket && (
+                        <tr>
+                          <td
+                            colSpan={5}
+                            style={{
+                              paddingLeft: 16,
+                              paddingTop: 0,
+                              paddingBottom: 6,
+                              fontSize: "0.75rem",
+                              color: "#374151",
+                            }}
+                          >
+                            <BucketTrajectoryStrip bucket={s.bucket} />
+                          </td>
+                        </tr>
+                      )}
+                      {s.history.length > 0 && (
+                        <tr>
+                          <td
+                            colSpan={5}
+                            style={{
+                              paddingLeft: 16,
+                              paddingTop: 0,
+                              paddingBottom: 6,
+                              fontSize: "0.75rem",
+                              color: "#6b7280",
+                            }}
+                          >
+                            <span style={{ marginRight: 8 }}>History PM3:</span>
+                            {s.history.map((h, i) => (
+                              <span key={h.schoolYear} style={{ marginRight: 10 }}>
+                                {i > 0 && (
+                                  <span style={{ color: "#d1d5db", marginRight: 10 }}>
+                                    ·
+                                  </span>
+                                )}
+                                <span style={{ color: "#9ca3af" }}>{h.schoolYear}</span>{" "}
+                                <span style={{ color: "#374151", fontWeight: 600 }}>
+                                  {h.pm3}
+                                </span>
+                              </span>
+                            ))}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>
@@ -1223,6 +3356,11 @@ export default function StudentProfile({
               </ul>
             </div>
           )}
+          {/* FAST per-benchmark history (ELA + Math) lives in the
+              full-width "FAST Analysis Over Time" section above the
+              pillars grid — not inside this card — so each subject
+              gets ~half the page width and the trend sparkline is
+              readable. */}
         </Card>
 
         <Card
@@ -1757,6 +3895,19 @@ export default function StudentProfile({
           </div>
         )}
       </div>
+      {changeHouseOpen && data && (
+        <ChangeHouseModal
+          studentId={data.header.studentId}
+          studentName={`${data.header.firstName} ${data.header.lastName}`}
+          currentHouseId={data.header.house?.id ?? null}
+          onClose={() => setChangeHouseOpen(false)}
+          onSaved={(next) =>
+            setData((prev) =>
+              prev ? { ...prev, header: { ...prev.header, house: next } } : prev,
+            )
+          }
+        />
+      )}
     </div>
   );
 }

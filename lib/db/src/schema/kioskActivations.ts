@@ -17,6 +17,10 @@ export const kioskActivationsTable = pgTable(
     schoolId: integer("school_id").notNull(),
     tokenHash: text("token_hash").notNull().unique(),
     room: text("room").notNull(),
+    // The staff member the kiosk is FOR — i.e. whose room this is and
+    // whose name shows on the kiosk masthead. For sub/proxy
+    // activations this is the absent teacher, not the Core Team member
+    // who activated it.
     staffId: integer("staff_id").notNull(),
     activatedAt: timestamp("activated_at", { withTimezone: true })
       .notNull()
@@ -26,6 +30,22 @@ export const kioskActivationsTable = pgTable(
     deviceFingerprint: text("device_fingerprint"),
     deactivatedAt: timestamp("deactivated_at", { withTimezone: true }),
     deactivatedByStaffId: integer("deactivated_by_staff_id"),
+    // Phase 1 (kiosk activation cards) — provenance + audit columns.
+    // enrollTokenId: the kiosk_enroll_tokens row this activation used
+    //   (NULL = activated via email + password, the legacy path).
+    // activatedByStaffId: who triggered the activation. For self
+    //   activations this equals staffId; for Core Team sub/proxy
+    //   activations it's the Core Team member, while staffId remains
+    //   the absent teacher so the kiosk shows the right name.
+    // proxyForStaffId: redundant with staffId when sessionKind='proxy'
+    //   but kept explicit so admin queries can filter "show me all
+    //   live sub coverages" without joining sessionKind.
+    // sessionKind: 'password' | 'enroll' | 'proxy' — categorizes the
+    //   activation for the Active Kiosks admin panel and audit log.
+    enrollTokenId: integer("enroll_token_id"),
+    activatedByStaffId: integer("activated_by_staff_id"),
+    proxyForStaffId: integer("proxy_for_staff_id"),
+    sessionKind: text("session_kind"),
   },
   (t) => ({
     // Defense-in-depth against race conditions in the activate flow:

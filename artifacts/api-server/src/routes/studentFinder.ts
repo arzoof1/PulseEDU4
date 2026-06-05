@@ -51,6 +51,12 @@ function nowHHMM(): string {
 }
 
 // Typeahead — name or student_id, school-scoped, capped at 20 results.
+// Each hit is enriched with the student's CURRENT-period room +
+// teacher extension so the searcher can read the answer to "where is
+// this kid right now / who do I call?" without clicking through to the
+// schedule. When the school has no default bell schedule configured
+// (or it's outside the school day) the location fields come back null
+// and the row degrades to the original name + grade + ID display.
 router.get("/student-finder/search", async (req: Request, res: Response) => {
   if (!req.staffId) {
     res.status(401).json({ error: "Sign-in required" });
@@ -69,6 +75,7 @@ router.get("/student-finder/search", async (req: Request, res: Response) => {
   const rows = await db
     .select({
       studentId: studentsTable.studentId,
+      localSisId: studentsTable.localSisId,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
       grade: studentsTable.grade,
@@ -84,15 +91,213 @@ router.get("/student-finder/search", async (req: Request, res: Response) => {
           // were noisy and pulled in unrelated kids.
           ilike(studentsTable.firstName, `${q}%`),
           ilike(studentsTable.lastName, `${q}%`),
-          ilike(studentsTable.studentId, `${q}%`),
+          // Match local SIS ID only — that's the 6-digit credential
+          // staff know the kid by. FLEID is never visible in the UI;
+          // it stays server-side for FAST + state reporting.
+          ilike(studentsTable.localSisId, `${q}%`),
         ),
       ),
     )
     .orderBy(asc(studentsTable.lastName), asc(studentsTable.firstName))
     .limit(20);
 
-  res.json({ students: rows });
+  // Resolve the school's current bell-schedule period (if any) and join
+  // each hit's section roster against it. We do this in two queries
+  // total (one for the period, one bulk join across all 20 hits)
+  // rather than per-row, to keep the typeahead snappy.
+  type Enrichment = {
+    currentPeriodName: string | null;
+    currentRoom: string | null;
+    currentTeacherName: string | null;
+    currentWorkExtension: string | null;
+  };
+  const enrichmentByStudent = new Map<string, Enrichment>();
+
+  if (rows.length > 0) {
+    const [schedule] = await db
+      .select()
+      .from(bellSchedulesTable)
+      .where(
+        and(
+          eq(bellSchedulesTable.schoolId, schoolId),
+          eq(bellSchedulesTable.isDefault, true),
+          eq(bellSchedulesTable.active, true),
+        ),
+      );
+    if (schedule) {
+      const now = nowHHMM();
+      const bellPeriods = await db
+        .select()
+        .from(bellSchedulePeriodsTable)
+        .where(eq(bellSchedulePeriodsTable.scheduleId, schedule.id));
+      const current = bellPeriods.find(
+        (bp) => now >= bp.startTime && now < bp.endTime,
+      );
+      if (current) {
+        const ids = rows.map((r) => r.studentId);
+        const sectionRows = await db
+          .select({
+            studentId: sectionRosterTable.studentId,
+            room: staffTable.defaultRoom,
+            teacherName: staffTable.displayName,
+            workExtension: staffTable.workExtension,
+          })
+          .from(sectionRosterTable)
+          .innerJoin(
+            classSectionsTable,
+            eq(classSectionsTable.id, sectionRosterTable.sectionId),
+          )
+          .innerJoin(
+            staffTable,
+            eq(staffTable.id, classSectionsTable.teacherStaffId),
+          )
+          .where(
+            and(
+              eq(sectionRosterTable.schoolId, schoolId),
+              eq(classSectionsTable.schoolId, schoolId),
+              eq(staffTable.schoolId, schoolId),
+              eq(classSectionsTable.isPlanning, false),
+              eq(classSectionsTable.period, current.periodNumber),
+              inArray(sectionRosterTable.studentId, ids),
+            ),
+          );
+        // First-row-wins on co-teaching; the locator just needs A room.
+        for (const r of sectionRows) {
+          if (enrichmentByStudent.has(r.studentId)) continue;
+          enrichmentByStudent.set(r.studentId, {
+            currentPeriodName: current.name,
+            currentRoom: r.room ?? null,
+            currentTeacherName: r.teacherName ?? null,
+            currentWorkExtension: r.workExtension ?? null,
+          });
+        }
+      }
+    }
+  }
+
+  const students = rows.map((r) => {
+    const e = enrichmentByStudent.get(r.studentId);
+    return {
+      ...r,
+      currentPeriodName: e?.currentPeriodName ?? null,
+      currentRoom: e?.currentRoom ?? null,
+      currentTeacherName: e?.currentTeacherName ?? null,
+      currentWorkExtension: e?.currentWorkExtension ?? null,
+    };
+  });
+
+  res.json({ students });
 });
+
+// Staff typeahead — name search, school-scoped, capped at 20 results.
+// Returns the columns that make it usable as a quick "where do I find this
+// person / what's their extension" lookup: displayName, defaultRoom,
+// workExtension, and (gated) cellPhone. Cell visibility mirrors the
+// /today endpoint: caller is Core Team OR per-school toggle is on.
+router.get(
+  "/student-finder/staff-search",
+  async (req: Request, res: Response) => {
+    if (!req.staffId) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+
+    const qRaw = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    if (qRaw.length < 1) {
+      res.json({ staff: [] });
+      return;
+    }
+    const q = qRaw.slice(0, 64);
+
+    const [me] = await db
+      .select()
+      .from(staffTable)
+      .where(eq(staffTable.id, req.staffId!));
+    const callerIsCoreTeam = !!me && isCoreTeam(me);
+    const [visibilitySettings] = await db
+      .select({
+        staffDirectoryShowCellPhone:
+          schoolSettingsTable.staffDirectoryShowCellPhone,
+      })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId))
+      .limit(1);
+    const showCellPhone =
+      callerIsCoreTeam ||
+      Boolean(visibilitySettings?.staffDirectoryShowCellPhone);
+
+    const rows = await db
+      .select({
+        id: staffTable.id,
+        displayName: staffTable.displayName,
+        email: staffTable.email,
+        defaultRoom: staffTable.defaultRoom,
+        workExtension: staffTable.workExtension,
+        cellPhone: staffTable.cellPhone,
+        isAdmin: staffTable.isAdmin,
+        isDistrictAdmin: staffTable.isDistrictAdmin,
+        isSuperUser: staffTable.isSuperUser,
+        isPbisCoordinator: staffTable.isPbisCoordinator,
+        isBehaviorSpecialist: staffTable.isBehaviorSpecialist,
+        isMtssCoordinator: staffTable.isMtssCoordinator,
+        isSchoolPsychologist: staffTable.isSchoolPsychologist,
+        isCounselor: staffTable.isCounselor,
+        isSocialWorker: staffTable.isSocialWorker,
+        isGuidanceCounselor: staffTable.isGuidanceCounselor,
+        isDean: staffTable.isDean,
+        isEseCoordinator: staffTable.isEseCoordinator,
+        isIssTeacher: staffTable.isIssTeacher,
+      })
+      .from(staffTable)
+      .where(
+        and(
+          eq(staffTable.schoolId, schoolId),
+          or(
+            ilike(staffTable.displayName, `${q}%`),
+            // Allow substring match on the back end of name so "Smith"
+            // finds "John Smith" — staff often searched by last name.
+            ilike(staffTable.displayName, `% ${q}%`),
+            ilike(staffTable.email, `${q}%`),
+          ),
+        ),
+      )
+      .orderBy(asc(staffTable.displayName))
+      .limit(20);
+
+    // Derive a single human-friendly role label for display. Most staff
+    // will have one role flag set; if multiple, we pick the highest-tier.
+    function roleLabel(r: typeof rows[number]): string {
+      if (r.isSuperUser) return "SuperUser";
+      if (r.isDistrictAdmin) return "District Admin";
+      if (r.isAdmin) return "Admin";
+      if (r.isBehaviorSpecialist) return "Behavior Specialist";
+      if (r.isMtssCoordinator) return "MTSS Coordinator";
+      if (r.isSchoolPsychologist) return "School Psychologist";
+      if (r.isPbisCoordinator) return "PBIS Coordinator";
+      if (r.isGuidanceCounselor) return "Guidance Counselor";
+      if (r.isCounselor) return "School Counselor";
+      if (r.isSocialWorker) return "Social Worker";
+      if (r.isEseCoordinator) return "ESE Coordinator";
+      if (r.isDean) return "Dean";
+      if (r.isIssTeacher) return "ISS Teacher";
+      return "Teacher";
+    }
+
+    res.json({
+      staff: rows.map((r) => ({
+        id: r.id,
+        displayName: r.displayName,
+        email: r.email,
+        role: roleLabel(r),
+        defaultRoom: r.defaultRoom ?? null,
+        workExtension: r.workExtension ?? null,
+        cellPhone: showCellPhone ? (r.cellPhone ?? null) : null,
+      })),
+    });
+  },
+);
 
 // "Today" payload — bell schedule, the student's class per period, plus the
 // live overrides (active hall pass, absent flag).

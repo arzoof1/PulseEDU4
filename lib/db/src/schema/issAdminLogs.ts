@@ -25,6 +25,11 @@ export const issAdminLogsTable = pgTable(
     reasonId: integer("reason_id"),
     reasonText: text("reason_text"),
     notes: text("notes"),
+    // Admin-entered "days for reports" — independent of the per-day
+    // attendance rows. Lets reports count assigned days without having
+    // to derive them from iss_attendance_day (useful when admins enter
+    // a single dated event for a multi-day suspension).
+    dayCount: integer("day_count"),
     createdById: integer("created_by_id").notNull(),
     createdByName: text("created_by_name").notNull(),
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),

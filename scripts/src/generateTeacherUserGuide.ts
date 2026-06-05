@@ -61,6 +61,20 @@ const CHAPTERS: Chapter[] = [
       "These three pages cover how to sign in, find your way around the app, and recognize what each part of the screen is for. Read this once on day one — every other chapter assumes you can navigate the sidebar.",
     features: [
       {
+        title: "Which Role You Carry",
+        whereToFind: "Sidebar — what you see is driven by the role your administrator assigned.",
+        whenToUseIt: "Read this once if your job title isn't 'classroom teacher' — the same sidebar serves several staff bundles.",
+        steps: [
+          { action: "Teacher.", detail: "Default. Every screen in this guide applies to you." },
+          { action: "SRO (School Resource Officer) or Guardian (hall monitor / security aide).", detail: "Your sidebar matches Teacher one-for-one — every chapter applies. The role label is broken out for reporting; functionally you act like a teacher." },
+          { action: "Front Office.", detail: "Same as Teacher EXCEPT 'Request Pullout' is hidden — pullouts are a teacher referral, not a front-desk action. Skip the Request Pullout chapter; everything else applies." },
+          { action: "Non-Exempt.", detail: "Your sidebar is intentionally narrow: Hall Pass, Tardy Pass, and Comp Time only. Skip every other chapter in this guide; refer to your school's Comp Time policy and the on-screen Comp Time instructions." },
+        ],
+        tips: [
+          "If a chapter in this guide describes a sidebar item you don't see, your role doesn't have it — that's expected, not a bug.",
+        ],
+      },
+      {
         title: "Sign In",
         whereToFind: "Open the PulseEDU URL your school provided in any browser.",
         whenToUseIt: "Every morning before first period.",

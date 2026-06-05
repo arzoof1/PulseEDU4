@@ -1,8 +1,18 @@
 import { Router, type IRouter } from "express";
-import { db, staffTable, districtsTable, schoolsTable } from "@workspace/db";
+import {
+  db,
+  staffTable,
+  districtsTable,
+  schoolsTable,
+  schoolSettingsTable,
+  plansTable,
+} from "@workspace/db";
 import { eq, asc, and } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import { getDistrictIdForSchool } from "../lib/scope";
+import { generateAndHashTempPassword } from "../lib/tempPassword";
+import { applyPlanToSchool } from "../lib/featureLicensing";
+import { bindObjectToSchool } from "./storage";
 
 const router: IRouter = Router();
 
@@ -48,19 +58,36 @@ router.get("/tenancy/schools", async (req, res) => {
   if (!staff) return;
 
   const actorDistrictId = await getDistrictIdForSchool(staff.schoolId);
+  // Phase 5 District Switcher: when ALLOW_CROSS_DISTRICT_SUPERUSER=1, a
+  // SuperUser sees ALL active schools across every district (grouped by
+  // district in the UI). Same env gate used by tenancy mutations,
+  // featureLicensing CRUD, and the superuser overview rollup.
+  const crossDistrict =
+    staff.isSuperUser && process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
 
   const all = await db
-    .select()
+    .select({
+      id: schoolsTable.id,
+      districtId: schoolsTable.districtId,
+      name: schoolsTable.name,
+      shortName: schoolsTable.shortName,
+      stateSchoolCode: schoolsTable.stateSchoolCode,
+      isPrimary: schoolsTable.isPrimary,
+      districtName: districtsTable.name,
+    })
     .from(schoolsTable)
+    .leftJoin(districtsTable, eq(districtsTable.id, schoolsTable.districtId))
     .where(
       and(
         eq(schoolsTable.active, true),
-        // For SuperUsers, restrict to their own district. For everyone else
-        // we still pull the row so the badge can render their home school's
-        // name; the .filter below narrows to exactly that one row.
-        actorDistrictId !== null
-          ? eq(schoolsTable.districtId, actorDistrictId)
-          : sql`false`,
+        // SuperUser + cross-district env flag = see every district.
+        // Otherwise restrict to caller's own district. Non-staff with
+        // no resolvable district see nothing (false).
+        crossDistrict
+          ? sql`true`
+          : actorDistrictId !== null
+            ? eq(schoolsTable.districtId, actorDistrictId)
+            : sql`false`,
       ),
     )
     .orderBy(asc(schoolsTable.districtId), asc(schoolsTable.id));
@@ -74,9 +101,11 @@ router.get("/tenancy/schools", async (req, res) => {
     activeSchoolId: req.schoolId ?? staff.schoolId,
     isSwitched: !!req.isSchoolSwitched,
     canSwitch: !!staff.isSuperUser,
+    crossDistrict,
     schools: visible.map((s) => ({
       id: s.id,
       districtId: s.districtId,
+      districtName: s.districtName,
       name: s.name,
       shortName: s.shortName,
       stateSchoolCode: s.stateSchoolCode,
@@ -121,27 +150,42 @@ router.post("/tenancy/switch-school", async (req, res) => {
     return;
   }
 
+  // Architect-flagged (Phase 5): we previously only validated the school
+  // was active, not the district. With cross-district switching enabled
+  // that gap meant a SuperUser could land in a school whose district was
+  // soft-deactivated. Join districts and require both rows active.
   const [school] = await db
-    .select()
+    .select({
+      id: schoolsTable.id,
+      name: schoolsTable.name,
+      districtId: schoolsTable.districtId,
+      schoolActive: schoolsTable.active,
+      districtActive: districtsTable.active,
+    })
     .from(schoolsTable)
-    .where(and(eq(schoolsTable.id, schoolId), eq(schoolsTable.active, true)));
-  if (!school) {
+    .leftJoin(districtsTable, eq(districtsTable.id, schoolsTable.districtId))
+    .where(eq(schoolsTable.id, schoolId));
+  if (!school || !school.schoolActive || !school.districtActive) {
     res.status(404).json({ error: "School not found or inactive" });
     return;
   }
 
-  // Cross-district switching is rejected. A Hernando SuperUser switching
-  // into a Pasco school would resolve req.schoolId to a Pasco school for
-  // the rest of the session — the scope sweeps from D3-D5 only enforced
-  // *school* scoping, so cross-district reach via the switcher would
-  // expose Pasco data to Hernando. If we ever want a true cross-district
-  // SuperUser, that's a separate flag (e.g. `isCrossDistrictSuperUser`).
-  const actorDistrictId = await getDistrictIdForSchool(staff.schoolId);
-  if (actorDistrictId === null || school.districtId !== actorDistrictId) {
-    res
-      .status(403)
-      .json({ error: "Cannot switch into a school in another district" });
-    return;
+  // Cross-district switching is the Phase 5 District Switcher. Gated by
+  // ALLOW_CROSS_DISTRICT_SUPERUSER=1 — same env flag tenancy mutations
+  // and featureLicensing CRUD already use. Without the flag, a Hernando
+  // SuperUser switching into a Pasco school would resolve req.schoolId
+  // to a Pasco school for the rest of the session, exposing Pasco data
+  // to a Hernando staff. With the flag, the operator has explicitly
+  // opted into the cross-district control tier.
+  const crossDistrict = process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
+  if (!crossDistrict) {
+    const actorDistrictId = await getDistrictIdForSchool(staff.schoolId);
+    if (actorDistrictId === null || school.districtId !== actorDistrictId) {
+      res
+        .status(403)
+        .json({ error: "Cannot switch into a school in another district" });
+      return;
+    }
   }
 
   // schoolId === staff.schoolId means the SuperUser picked their own home
@@ -363,6 +407,15 @@ router.get("/tenancy/status", async (req, res) => {
       stateDistrictCode: d.stateDistrictCode,
       timezone: d.timezone,
       active: d.active,
+      // District-level School Tours branding (SuperUser-managed). We expose
+      // a boolean for the logo rather than the object key — the key stays
+      // server-side; the admin previews via the streaming route.
+      tagline: d.tagline,
+      brandHasLogo: !!d.logoObjectKey,
+      brandHeroTop: d.brandHeroTop,
+      brandDocuments: d.brandDocuments,
+      brandFooter: d.brandFooter,
+      brandWatermark: d.brandWatermark,
     })),
     schools: schools.map((s) => ({
       id: s.id,
@@ -379,6 +432,793 @@ router.get("/tenancy/status", async (req, res) => {
     totalOrphans,
     perSchoolBreakdownAvailable: true,
   });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/tenancy/onboard-district
+//   SuperUser-only. End-to-end "stand up a new district" wizard target:
+//   creates the district row, its first (primary) school, the school's
+//   default settings row, applies the default `enterprise` plan to it,
+//   and creates the first school-admin staff member. All inside a single
+//   transaction so a partial failure leaves no orphan rows.
+//
+//   Returns the IDs of all three created rows plus a one-time temporary
+//   password for the admin so the SuperUser can hand it off in band. The
+//   admin can change it on first login (existing flow).
+// ---------------------------------------------------------------------------
+router.post("/tenancy/onboard-district", async (req, res) => {
+  const staff = await requireSuperUser(req, res);
+  if (!staff) return;
+
+  const body = (req.body ?? {}) as {
+    districtName?: unknown;
+    districtSlug?: unknown;
+    stateDistrictCode?: unknown;
+    timezone?: unknown;
+    schoolName?: unknown;
+    schoolShortName?: unknown;
+    stateSchoolCode?: unknown;
+    adminEmail?: unknown;
+    adminFirstName?: unknown;
+    adminLastName?: unknown;
+    planKey?: unknown;
+  };
+
+  // ---- Validate (all strings, trimmed, required vs. optional). ------------
+  const districtName =
+    typeof body.districtName === "string" ? body.districtName.trim() : "";
+  const districtSlug =
+    typeof body.districtSlug === "string" ? body.districtSlug.trim() : "";
+  const schoolName =
+    typeof body.schoolName === "string" ? body.schoolName.trim() : "";
+  const adminEmail =
+    typeof body.adminEmail === "string" ? body.adminEmail.trim().toLowerCase() : "";
+  const adminFirstName =
+    typeof body.adminFirstName === "string" ? body.adminFirstName.trim() : "";
+  const adminLastName =
+    typeof body.adminLastName === "string" ? body.adminLastName.trim() : "";
+
+  const missing: string[] = [];
+  if (!districtName) missing.push("districtName");
+  if (!districtSlug) missing.push("districtSlug");
+  if (!schoolName) missing.push("schoolName");
+  if (!adminEmail) missing.push("adminEmail");
+  if (!adminFirstName) missing.push("adminFirstName");
+  if (!adminLastName) missing.push("adminLastName");
+  if (missing.length > 0) {
+    res
+      .status(400)
+      .json({ error: `Missing required fields: ${missing.join(", ")}` });
+    return;
+  }
+
+  // Slug shape: lowercase letters + digits + hyphens only. Matches the
+  // existing seed convention and keeps URLs predictable.
+  if (!/^[a-z0-9-]+$/.test(districtSlug)) {
+    res.status(400).json({
+      error:
+        "districtSlug must contain only lowercase letters, digits, and hyphens",
+    });
+    return;
+  }
+  if (!/^\S+@\S+\.\S+$/.test(adminEmail)) {
+    res.status(400).json({ error: "adminEmail is not a valid email" });
+    return;
+  }
+
+  const stateDistrictCode =
+    typeof body.stateDistrictCode === "string" && body.stateDistrictCode.trim()
+      ? body.stateDistrictCode.trim()
+      : null;
+  const timezone =
+    typeof body.timezone === "string" && body.timezone.trim()
+      ? body.timezone.trim()
+      : "America/New_York";
+  const schoolShortName =
+    typeof body.schoolShortName === "string" && body.schoolShortName.trim()
+      ? body.schoolShortName.trim()
+      : null;
+  const stateSchoolCode =
+    typeof body.stateSchoolCode === "string" && body.stateSchoolCode.trim()
+      ? body.stateSchoolCode.trim()
+      : null;
+
+  // ---- Pre-flight uniqueness checks (outside tx for friendlier errors). ---
+  const [slugClash] = await db
+    .select()
+    .from(districtsTable)
+    .where(eq(districtsTable.slug, districtSlug));
+  if (slugClash) {
+    res.status(409).json({
+      error: `District slug "${districtSlug}" is already taken`,
+    });
+    return;
+  }
+  const [emailClash] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.email, adminEmail));
+  if (emailClash) {
+    res.status(409).json({
+      error: `A staff member with email ${adminEmail} already exists`,
+    });
+    return;
+  }
+
+  // ---- Generate temp password BEFORE the tx (bcrypt is slow). -------------
+  // Shared CSPRNG helper (lib/tempPassword.ts) — see that file for the
+  // alphabet rationale.
+  const { tempPassword, passwordHash } = await generateAndHashTempPassword();
+
+  // ---- Look up the plan to assign to the new school. Caller may pass
+  //      `planKey` to override; defaults to "enterprise" for back-compat
+  //      with the original wizard. Unknown key → 400 so the SuperUser
+  //      doesn't silently land on the default. -----------------------------
+  const planKey =
+    typeof body.planKey === "string" && body.planKey.trim()
+      ? body.planKey.trim()
+      : "enterprise";
+  const [selectedPlan] = await db
+    .select()
+    .from(plansTable)
+    .where(eq(plansTable.key, planKey));
+  if (!selectedPlan && planKey !== "enterprise") {
+    res.status(400).json({ error: `Unknown plan key "${planKey}"` });
+    return;
+  }
+
+  // ---- Transactional create: district → school → settings → admin. -------
+  try {
+    const result = await db.transaction(async (tx) => {
+      const [district] = await tx
+        .insert(districtsTable)
+        .values({
+          name: districtName,
+          slug: districtSlug,
+          stateDistrictCode,
+          timezone,
+        })
+        .returning();
+
+      const [school] = await tx
+        .insert(schoolsTable)
+        .values({
+          districtId: district.id,
+          name: schoolName,
+          shortName: schoolShortName,
+          stateSchoolCode,
+          isPrimary: true,
+          active: true,
+        })
+        .returning();
+
+      // Settings row uses every column's DB default — same shape every
+      // school in the system starts with.
+      await tx
+        .insert(schoolSettingsTable)
+        .values({ schoolId: school.id });
+
+      // Assign the chosen plan (if seeded) so all superFeature_* flags
+      // are explicitly set from the plan's features map. Wrapped in the
+      // same tx for atomicity.
+      if (selectedPlan) {
+        await applyPlanToSchool(school.id, selectedPlan.id, tx);
+      }
+
+      const [admin] = await tx
+        .insert(staffTable)
+        .values({
+          schoolId: school.id,
+          email: adminEmail,
+          passwordHash,
+          displayName: `${adminFirstName} ${adminLastName}`,
+          isAdmin: true,
+          active: true,
+        })
+        .returning();
+
+      return { district, school, admin };
+    });
+
+    res.status(201).json({
+      district: {
+        id: result.district.id,
+        name: result.district.name,
+        slug: result.district.slug,
+      },
+      school: {
+        id: result.school.id,
+        name: result.school.name,
+        shortName: result.school.shortName,
+      },
+      admin: {
+        id: result.admin.id,
+        email: result.admin.email,
+        displayName: result.admin.displayName,
+      },
+      // One-time. Not stored anywhere on the server beyond the bcrypt
+      // hash. The SuperUser must capture it from the response.
+      tempPassword,
+    });
+  } catch (err: any) {
+    // Map race-condition unique-violations back to a deterministic 409
+    // so the operator sees the same friendly message the pre-flight
+    // check produces. Postgres error code 23505 = unique_violation.
+    const pgCode = err?.cause?.code ?? err?.code;
+    if (pgCode === "23505") {
+      const detail: string = err?.cause?.detail ?? err?.detail ?? "";
+      const isSlug = /districts.*slug/i.test(detail);
+      const isEmail = /staff.*email/i.test(detail);
+      res.status(409).json({
+        error: isSlug
+          ? `District slug "${districtSlug}" is already taken`
+          : isEmail
+            ? `A staff member with email ${adminEmail} already exists`
+            : "A row with this identifier already exists",
+      });
+      return;
+    }
+    req.log?.error?.({ err }, "onboard-district failed");
+    res
+      .status(500)
+      .json({ error: "Failed to onboard district — see server logs" });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/tenancy/onboard-school
+//   SuperUser-only. Adds a school under an EXISTING district. Mirrors
+//   onboard-district but skips the district insert + inherits the district's
+//   current default plan (looked up from `plansTable.key = 'enterprise'`,
+//   same default the district wizard uses today — when per-district plan
+//   selection lands, swap this for the district's actual plan).
+//
+//   Transactional: school → schoolSettings → applyPlan → first admin.
+//   Returns the new IDs plus a one-time CSPRNG temp password.
+// ---------------------------------------------------------------------------
+router.post("/tenancy/onboard-school", async (req, res) => {
+  const staff = await requireSuperUser(req, res);
+  if (!staff) return;
+
+  const body = (req.body ?? {}) as {
+    districtId?: unknown;
+    schoolName?: unknown;
+    schoolShortName?: unknown;
+    stateSchoolCode?: unknown;
+    adminEmail?: unknown;
+    adminFirstName?: unknown;
+    adminLastName?: unknown;
+    planKey?: unknown;
+  };
+
+  const districtId =
+    typeof body.districtId === "number" &&
+    Number.isInteger(body.districtId) &&
+    body.districtId > 0
+      ? body.districtId
+      : null;
+  const schoolName =
+    typeof body.schoolName === "string" ? body.schoolName.trim() : "";
+  const adminEmail =
+    typeof body.adminEmail === "string"
+      ? body.adminEmail.trim().toLowerCase()
+      : "";
+  const adminFirstName =
+    typeof body.adminFirstName === "string" ? body.adminFirstName.trim() : "";
+  const adminLastName =
+    typeof body.adminLastName === "string" ? body.adminLastName.trim() : "";
+
+  const missing: string[] = [];
+  if (districtId === null) missing.push("districtId");
+  if (!schoolName) missing.push("schoolName");
+  if (!adminEmail) missing.push("adminEmail");
+  if (!adminFirstName) missing.push("adminFirstName");
+  if (!adminLastName) missing.push("adminLastName");
+  if (missing.length > 0) {
+    res
+      .status(400)
+      .json({ error: `Missing required fields: ${missing.join(", ")}` });
+    return;
+  }
+  if (!/^\S+@\S+\.\S+$/.test(adminEmail)) {
+    res.status(400).json({ error: "adminEmail is not a valid email" });
+    return;
+  }
+
+  const schoolShortName =
+    typeof body.schoolShortName === "string" && body.schoolShortName.trim()
+      ? body.schoolShortName.trim()
+      : null;
+  const stateSchoolCode =
+    typeof body.stateSchoolCode === "string" && body.stateSchoolCode.trim()
+      ? body.stateSchoolCode.trim()
+      : null;
+
+  // Pre-flight: district must exist; admin email must be globally unique.
+  const [district] = await db
+    .select()
+    .from(districtsTable)
+    .where(eq(districtsTable.id, districtId!));
+  if (!district) {
+    res.status(404).json({ error: `District ${districtId} not found` });
+    return;
+  }
+
+  // Cross-tenant guard — SuperUser is district-wide by default, NOT
+  // cross-district. Without this, a SuperUser in District A could
+  // create schools + admins inside District B by supplying its id.
+  // Matches the same env gate used by /superuser/overview + audit-health.
+  const crossDistrict = process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
+  if (!crossDistrict) {
+    const callerDistrictId = await getDistrictIdForSchool(staff.schoolId);
+    if (callerDistrictId === null || callerDistrictId !== district.id) {
+      res.status(403).json({
+        error: "Cannot onboard a school into another district",
+      });
+      return;
+    }
+  }
+  const [emailClash] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.email, adminEmail));
+  if (emailClash) {
+    res
+      .status(409)
+      .json({ error: `A staff member with email ${adminEmail} already exists` });
+    return;
+  }
+
+  // Temp password — shared helper, same shape as onboard-district.
+  const { tempPassword, passwordHash } = await generateAndHashTempPassword();
+
+  // Same plan-pick contract as onboard-district: caller can override the
+  // default "enterprise" with `planKey`; unknown key 400s.
+  const planKey =
+    typeof body.planKey === "string" && body.planKey.trim()
+      ? body.planKey.trim()
+      : "enterprise";
+  const [selectedPlan] = await db
+    .select()
+    .from(plansTable)
+    .where(eq(plansTable.key, planKey));
+  if (!selectedPlan && planKey !== "enterprise") {
+    res.status(400).json({ error: `Unknown plan key "${planKey}"` });
+    return;
+  }
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      const [school] = await tx
+        .insert(schoolsTable)
+        .values({
+          districtId: district.id,
+          name: schoolName,
+          shortName: schoolShortName,
+          stateSchoolCode,
+          // Not the primary school of the district — that's the one
+          // created at district onboarding. Additional schools default
+          // to non-primary; active.
+          isPrimary: false,
+          active: true,
+        })
+        .returning();
+
+      await tx.insert(schoolSettingsTable).values({ schoolId: school.id });
+
+      if (selectedPlan) {
+        await applyPlanToSchool(school.id, selectedPlan.id, tx);
+      }
+
+      const [admin] = await tx
+        .insert(staffTable)
+        .values({
+          schoolId: school.id,
+          email: adminEmail,
+          passwordHash,
+          displayName: `${adminFirstName} ${adminLastName}`,
+          isAdmin: true,
+          active: true,
+        })
+        .returning();
+
+      return { school, admin };
+    });
+
+    res.status(201).json({
+      district: {
+        id: district.id,
+        name: district.name,
+        slug: district.slug,
+      },
+      school: {
+        id: result.school.id,
+        name: result.school.name,
+        shortName: result.school.shortName,
+      },
+      admin: {
+        id: result.admin.id,
+        email: result.admin.email,
+        displayName: result.admin.displayName,
+      },
+      tempPassword,
+    });
+  } catch (err: any) {
+    const pgCode = err?.cause?.code ?? err?.code;
+    if (pgCode === "23505") {
+      const detail: string = err?.cause?.detail ?? err?.detail ?? "";
+      const isEmail = /staff.*email/i.test(detail);
+      res.status(409).json({
+        error: isEmail
+          ? `A staff member with email ${adminEmail} already exists`
+          : "A row with this identifier already exists",
+      });
+      return;
+    }
+    req.log?.error?.({ err }, "onboard-school failed");
+    res
+      .status(500)
+      .json({ error: "Failed to onboard school — see server logs" });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/tenancy/schools/:id
+//   SuperUser-only. Edits a school's editable metadata + soft-delete via
+//   `active`. Hard-delete is intentionally not offered — too many FK
+//   dependents (students, staff, audit rows). Deactivating a school
+//   hides it from rollups + lookups; reactivating restores it.
+//
+//   Guardrails:
+//     * Cross-district: same env gate as onboard-school.
+//     * Cannot deactivate the district's primary school — that's the
+//       row created at district onboarding; if you need to retire it,
+//       deactivate the district instead.
+// ---------------------------------------------------------------------------
+router.patch("/tenancy/schools/:id", async (req, res) => {
+  const staff = await requireSuperUser(req, res);
+  if (!staff) return;
+
+  const schoolId = Number(req.params.id);
+  if (!Number.isInteger(schoolId) || schoolId <= 0) {
+    res.status(400).json({ error: "school id must be a positive integer" });
+    return;
+  }
+
+  const body = (req.body ?? {}) as {
+    name?: unknown;
+    shortName?: unknown;
+    stateSchoolCode?: unknown;
+    active?: unknown;
+  };
+
+  // Build a partial-update object — only patch keys the caller sent. All
+  // strings are trimmed; explicit `null` (or empty string) on the optional
+  // fields clears them.
+  const patch: {
+    name?: string;
+    shortName?: string | null;
+    stateSchoolCode?: string | null;
+    active?: boolean;
+  } = {};
+
+  if (body.name !== undefined) {
+    if (typeof body.name !== "string" || !body.name.trim()) {
+      res.status(400).json({ error: "name must be a non-empty string" });
+      return;
+    }
+    patch.name = body.name.trim();
+  }
+  if (body.shortName !== undefined) {
+    if (body.shortName === null || body.shortName === "") {
+      patch.shortName = null;
+    } else if (typeof body.shortName === "string") {
+      patch.shortName = body.shortName.trim() || null;
+    } else {
+      res.status(400).json({ error: "shortName must be a string or null" });
+      return;
+    }
+  }
+  if (body.stateSchoolCode !== undefined) {
+    if (body.stateSchoolCode === null || body.stateSchoolCode === "") {
+      patch.stateSchoolCode = null;
+    } else if (typeof body.stateSchoolCode === "string") {
+      patch.stateSchoolCode = body.stateSchoolCode.trim() || null;
+    } else {
+      res
+        .status(400)
+        .json({ error: "stateSchoolCode must be a string or null" });
+      return;
+    }
+  }
+  if (body.active !== undefined) {
+    if (typeof body.active !== "boolean") {
+      res.status(400).json({ error: "active must be a boolean" });
+      return;
+    }
+    patch.active = body.active;
+  }
+
+  if (Object.keys(patch).length === 0) {
+    res.status(400).json({ error: "no editable fields supplied" });
+    return;
+  }
+
+  // Pre-flight: school must exist; caller must own its district.
+  const [school] = await db
+    .select()
+    .from(schoolsTable)
+    .where(eq(schoolsTable.id, schoolId));
+  if (!school) {
+    res.status(404).json({ error: `School ${schoolId} not found` });
+    return;
+  }
+  const crossDistrict = process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
+  if (!crossDistrict) {
+    const callerDistrictId = await getDistrictIdForSchool(staff.schoolId);
+    if (callerDistrictId === null || callerDistrictId !== school.districtId) {
+      res
+        .status(403)
+        .json({ error: "Cannot edit a school in another district" });
+      return;
+    }
+  }
+  // The primary school of a district is a structural anchor — refuse
+  // to deactivate it from this endpoint. (Renaming + state code edits
+  // are fine.)
+  if (patch.active === false && school.isPrimary) {
+    res.status(409).json({
+      error:
+        "Cannot deactivate the district's primary school. Deactivate the district instead.",
+    });
+    return;
+  }
+
+  try {
+    const [updated] = await db
+      .update(schoolsTable)
+      .set(patch)
+      .where(eq(schoolsTable.id, schoolId))
+      .returning();
+    res.json({
+      school: {
+        id: updated.id,
+        name: updated.name,
+        shortName: updated.shortName,
+        stateSchoolCode: updated.stateSchoolCode,
+        active: updated.active,
+        isPrimary: updated.isPrimary,
+      },
+    });
+  } catch (err: any) {
+    // Postgres unique_violation. The schema has a composite unique
+    // index on (district_id, state_school_code); surface that as 409
+    // instead of a generic 500 so the UI can show a useful message.
+    if (err?.code === "23505") {
+      res.status(409).json({
+        error:
+          "A school with that state code already exists in this district.",
+      });
+      return;
+    }
+    req.log?.error?.({ err, schoolId }, "patch-school failed");
+    res.status(500).json({ error: "Failed to update school" });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/tenancy/districts/:id
+//   SuperUser-only. Edits a district's editable metadata + soft-delete
+//   via `active`. Mirrors PATCH /tenancy/schools/:id. Hard-delete is
+//   intentionally not offered — districts own every downstream row.
+//
+//   Guardrails:
+//     * Cross-district: same env gate as the rest of this file.
+//     * Slug rewrite goes through 23505 → 409 (districts.slug is unique).
+// ---------------------------------------------------------------------------
+router.patch("/tenancy/districts/:id", async (req, res) => {
+  const staff = await requireSuperUser(req, res);
+  if (!staff) return;
+
+  const districtId = Number(req.params.id);
+  if (!Number.isInteger(districtId) || districtId <= 0) {
+    res.status(400).json({ error: "district id must be a positive integer" });
+    return;
+  }
+
+  const body = (req.body ?? {}) as {
+    name?: unknown;
+    slug?: unknown;
+    stateDistrictCode?: unknown;
+    timezone?: unknown;
+    active?: unknown;
+    tagline?: unknown;
+    logoObjectPath?: unknown;
+    brandHeroTop?: unknown;
+    brandDocuments?: unknown;
+    brandFooter?: unknown;
+    brandWatermark?: unknown;
+  };
+
+  const patch: {
+    name?: string;
+    slug?: string;
+    stateDistrictCode?: string | null;
+    timezone?: string;
+    active?: boolean;
+    tagline?: string | null;
+    logoObjectKey?: string | null;
+    brandHeroTop?: boolean;
+    brandDocuments?: boolean;
+    brandFooter?: boolean;
+    brandWatermark?: boolean;
+  } = {};
+
+  if (body.name !== undefined) {
+    if (typeof body.name !== "string" || !body.name.trim()) {
+      res.status(400).json({ error: "name must be a non-empty string" });
+      return;
+    }
+    patch.name = body.name.trim();
+  }
+  if (body.slug !== undefined) {
+    if (typeof body.slug !== "string" || !body.slug.trim()) {
+      res.status(400).json({ error: "slug must be a non-empty string" });
+      return;
+    }
+    const slug = body.slug.trim().toLowerCase();
+    if (!/^[a-z0-9-]+$/.test(slug)) {
+      res
+        .status(400)
+        .json({ error: "slug must be lowercase letters, digits, or hyphens" });
+      return;
+    }
+    patch.slug = slug;
+  }
+  if (body.stateDistrictCode !== undefined) {
+    if (body.stateDistrictCode === null || body.stateDistrictCode === "") {
+      patch.stateDistrictCode = null;
+    } else if (typeof body.stateDistrictCode === "string") {
+      patch.stateDistrictCode = body.stateDistrictCode.trim() || null;
+    } else {
+      res
+        .status(400)
+        .json({ error: "stateDistrictCode must be a string or null" });
+      return;
+    }
+  }
+  if (body.timezone !== undefined) {
+    if (typeof body.timezone !== "string" || !body.timezone.trim()) {
+      res.status(400).json({ error: "timezone must be a non-empty string" });
+      return;
+    }
+    patch.timezone = body.timezone.trim();
+  }
+  if (body.active !== undefined) {
+    if (typeof body.active !== "boolean") {
+      res.status(400).json({ error: "active must be a boolean" });
+      return;
+    }
+    patch.active = body.active;
+  }
+
+  // --- District-level School Tours branding -----------------------------
+  if (body.tagline !== undefined) {
+    if (body.tagline === null || body.tagline === "") {
+      patch.tagline = null;
+    } else if (typeof body.tagline === "string") {
+      patch.tagline = body.tagline.trim().slice(0, 200) || null;
+    } else {
+      res.status(400).json({ error: "tagline must be a string or null" });
+      return;
+    }
+  }
+  for (const flag of [
+    "brandHeroTop",
+    "brandDocuments",
+    "brandFooter",
+    "brandWatermark",
+  ] as const) {
+    if (body[flag] !== undefined) {
+      if (typeof body[flag] !== "boolean") {
+        res.status(400).json({ error: `${flag} must be a boolean` });
+        return;
+      }
+      patch[flag] = body[flag] as boolean;
+    }
+  }
+  // Logo path is validated here but bound (claimed against the uploader's
+  // school ACL) only after the ownership pre-flight below.
+  let logoToBind: string | null | undefined;
+  if (body.logoObjectPath !== undefined) {
+    if (typeof body.logoObjectPath !== "string") {
+      res.status(400).json({ error: "logoObjectPath must be a string" });
+      return;
+    }
+    const trimmed = body.logoObjectPath.trim();
+    if (trimmed === "") {
+      logoToBind = null;
+    } else if (trimmed.startsWith("/objects/")) {
+      logoToBind = trimmed;
+    } else {
+      res.status(400).json({ error: "Logo path must start with /objects/" });
+      return;
+    }
+  }
+
+  if (Object.keys(patch).length === 0 && logoToBind === undefined) {
+    res.status(400).json({ error: "no editable fields supplied" });
+    return;
+  }
+
+  // Pre-flight: district must exist; caller must own it unless cross-
+  // district gate is open.
+  const [district] = await db
+    .select()
+    .from(districtsTable)
+    .where(eq(districtsTable.id, districtId));
+  if (!district) {
+    res.status(404).json({ error: `District ${districtId} not found` });
+    return;
+  }
+  const crossDistrict = process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
+  if (!crossDistrict) {
+    const callerDistrictId = await getDistrictIdForSchool(staff.schoolId);
+    if (callerDistrictId === null || callerDistrictId !== districtId) {
+      res.status(403).json({ error: "Cannot edit another district" });
+      return;
+    }
+  }
+
+  try {
+    // Bind / clear the district logo. Binding claims the freshly-uploaded
+    // object against the SuperUser's own school ACL (there is no district
+    // ACL owner); the logo is later streamed publicly by key via ACL-bypass.
+    if (logoToBind !== undefined) {
+      if (logoToBind === null) {
+        patch.logoObjectKey = null;
+      } else {
+        const ok = await bindObjectToSchool(logoToBind, staff.schoolId);
+        if (!ok) {
+          res
+            .status(403)
+            .json({ error: "Logo upload not authorized for this district" });
+          return;
+        }
+        patch.logoObjectKey = logoToBind;
+      }
+    }
+    const [updated] = await db
+      .update(districtsTable)
+      .set(patch)
+      .where(eq(districtsTable.id, districtId))
+      .returning();
+    res.json({
+      district: {
+        id: updated.id,
+        name: updated.name,
+        slug: updated.slug,
+        stateDistrictCode: updated.stateDistrictCode,
+        timezone: updated.timezone,
+        active: updated.active,
+        tagline: updated.tagline,
+        brandHasLogo: !!updated.logoObjectKey,
+        brandHeroTop: updated.brandHeroTop,
+        brandDocuments: updated.brandDocuments,
+        brandFooter: updated.brandFooter,
+        brandWatermark: updated.brandWatermark,
+      },
+    });
+  } catch (err: any) {
+    if (err?.code === "23505") {
+      res
+        .status(409)
+        .json({ error: "A district with that slug already exists." });
+      return;
+    }
+    req.log?.error?.({ err, districtId }, "patch-district failed");
+    res.status(500).json({ error: "Failed to update district" });
+  }
 });
 
 export default router;

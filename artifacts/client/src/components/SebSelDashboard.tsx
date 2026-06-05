@@ -28,11 +28,17 @@ import {
 } from "recharts";
 import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, howtoListStyle } from "./HowToUseHelp";
-import InsightsFilterBar, {
+import {
   EMPTY_FILTERS,
   filtersToQuery,
   type InsightsFilterValue,
 } from "./InsightsFilterBar";
+import InsightsPicker, {
+  csvFilename,
+  downloadCsv,
+  extractTopLists,
+  topListsToCsv,
+} from "./InsightsPicker";
 
 type FlagKey = "plan" | "bq" | "negatives" | "iep504";
 
@@ -97,15 +103,6 @@ interface Props {
   onOpenProfile: (studentId: string) => void;
 }
 
-const GRADE_OPTIONS = [
-  { value: "", label: "All grades" },
-  { value: "K", label: "K" },
-  ...Array.from({ length: 12 }, (_, i) => ({
-    value: String(i + 1),
-    label: `Grade ${i + 1}`,
-  })),
-];
-
 // Palette: keep it distinct from the prior three dashboards.
 //   - purple = MTSS / plan-related KPIs
 //   - blue   = demographic SEL flags (IEP / 504 / ELL)
@@ -142,7 +139,7 @@ const FLAG_LABEL: Record<FlagKey, string> = {
 };
 
 export default function SebSelDashboard({ onOpenProfile }: Props) {
-  const [grade, setGrade] = useState("");
+  const [selectedGrades, setSelectedGrades] = useState<string[]>([]);
   const [filters, setFilters] = useState<InsightsFilterValue>(EMPTY_FILTERS);
   const [data, setData] = useState<SebSelResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -153,7 +150,7 @@ export default function SebSelDashboard({ onOpenProfile }: Props) {
     setLoading(true);
     setError("");
     const qs = new URLSearchParams();
-    if (grade) qs.set("grade", grade);
+    if (selectedGrades.length > 0) qs.set("grades", selectedGrades.join(","));
     for (const [k, v] of filtersToQuery(filters)) qs.set(k, v);
     authFetch(`/api/insights/sebsel?${qs.toString()}`)
       .then(async (r) => {
@@ -176,7 +173,7 @@ export default function SebSelDashboard({ onOpenProfile }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [grade, filters]);
+  }, [selectedGrades, filters]);
 
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
@@ -197,29 +194,22 @@ export default function SebSelDashboard({ onOpenProfile }: Props) {
             plan yet.
           </p>
         </div>
-        <div
-          style={{
-            display: "flex",
-            gap: "0.5rem",
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
-        >
-          <select
-            value={grade}
-            onChange={(e) => setGrade(e.target.value)}
-            style={selectStyle}
-          >
-            {GRADE_OPTIONS.map((g) => (
-              <option key={g.value} value={g.value}>
-                {g.label}
-              </option>
-            ))}
-          </select>
-        </div>
       </div>
 
-      <InsightsFilterBar value={filters} onChange={setFilters} />
+      <InsightsPicker
+        grades={selectedGrades}
+        onGradesChange={setSelectedGrades}
+        filters={filters}
+        onFiltersChange={setFilters}
+        onDownloadCsv={() => {
+          if (!data) return;
+          downloadCsv(
+            csvFilename("sebsel", selectedGrades),
+            topListsToCsv(extractTopLists(data)),
+          );
+        }}
+        csvDisabled={!data}
+      />
 
       <HowToUseHelp title="How to use SEB / SEL">
         <HowToSection title="What this dashboard is">
@@ -998,9 +988,10 @@ const selectStyle: React.CSSProperties = {
 
 const panelTitleStyle: React.CSSProperties = {
   fontSize: 12,
+  fontWeight: 700,
   letterSpacing: "0.04em",
   textTransform: "uppercase",
-  color: "var(--text-subtle, #64748b)",
+  color: "var(--brand-accent, #6d28d9)",
   marginBottom: "0.5rem",
 };
 

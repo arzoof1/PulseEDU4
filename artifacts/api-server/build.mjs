@@ -106,6 +106,14 @@ async function buildAll() {
       "puppeteer",
       "puppeteer-core",
       "electron",
+      // pdfkit ships its core fonts as .afm files under js/data/ and
+      // resolves them by relative path at runtime. Bundling it puts
+      // the JS in dist/ but leaves the .afm assets behind, so the
+      // first call into PDFKit explodes with
+      // "ENOENT: ... dist/data/Helvetica.afm". Externalize so it
+      // loads from node_modules where the data/ folder lives.
+      "pdfkit",
+      "fontkit",
     ],
     sourcemap: "linked",
     plugins: [

@@ -27,7 +27,12 @@ export type InsightsTileId =
   | "plans"
   | "interventions"
   | "earlyWarning"
-  | "separations";
+  | "separations"
+  | "fastBenchmarks"
+  | "instructionalCoverage"
+  | "classComposer"
+  | "algebraPlacement"
+  | "reteachActivity";
 
 export type InsightsGroupId = "domains" | "actions" | "monitoring";
 

@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import {
+  HowToUseHelp,
+  HowToSection,
+  RoleSection,
+  howtoListStyle,
+} from "./HowToUseHelp";
 
 // Per-school case-closure outcome catalog. Admins/SuperUsers can add,
 // edit (label/description/sort order), and retire outcomes. The `code`
@@ -117,6 +123,28 @@ export default function CaseOutcomesPage() {
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
       <h2 style={{ marginTop: 0 }}>Case Closure Outcomes</h2>
+      <HowToUseHelp title="How to use Case Closure Outcomes">
+        <HowToSection title="What this page is">
+          The per-school catalog of outcome reasons staff pick from when a
+          Watchlist case is closed.
+        </HowToSection>
+        <HowToSection title="Day-to-day">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Add / edit</strong> — manage the label, description, and
+              sort order shown when closing a case.
+            </li>
+            <li>
+              <strong>Retire</strong> — hide an outcome from future use without
+              deleting history.
+            </li>
+          </ul>
+        </HowToSection>
+        <RoleSection for={["admin", "superUser"]} title="Codes are permanent">
+          An outcome's code is locked once created — closed cases reference it.
+          Edit the label, but never repurpose a code.
+        </RoleSection>
+      </HowToUseHelp>
       <p style={{ color: "var(--ink-soft)", marginTop: 0 }}>
         Every case must be closed with one of these outcomes. Add ones that
         match your school's discipline language; retire defaults you don't use.

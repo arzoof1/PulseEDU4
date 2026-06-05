@@ -9,6 +9,10 @@ interface Period {
   name: string;
   startTime: string;
   endTime: string;
+  // Counts toward the parent-portal on-time streak. Defaults TRUE
+  // (matches DB). Toggle OFF for lunch / advisory / passing periods
+  // so the streak only reflects academic periods.
+  includedInOnTimeStreak?: boolean;
 }
 
 interface Schedule {
@@ -51,7 +55,13 @@ const KIND_LABEL: Record<ScheduleKind, string> = {
 };
 
 function blankPeriod(num: number): Period {
-  return { periodNumber: num, name: `P${num}`, startTime: "08:00", endTime: "08:50" };
+  return {
+    periodNumber: num,
+    name: `P${num}`,
+    startTime: "08:00",
+    endTime: "08:50",
+    includedInOnTimeStreak: true,
+  };
 }
 
 export default function BellScheduleSection() {
@@ -549,6 +559,8 @@ function ScheduleEditor({
           name: p.name.trim() || `P${i + 1}`,
           startTime: p.startTime,
           endTime: p.endTime,
+          // Default TRUE if the legacy row never had the field set.
+          includedInOnTimeStreak: p.includedInOnTimeStreak !== false,
         })),
       };
       const url = isNew ? "/api/bell-schedules" : `/api/bell-schedules/${initial.id}`;
@@ -663,6 +675,9 @@ function ScheduleEditor({
             <th style={{ padding: "0.5rem" }}>Period name</th>
             <th style={{ padding: "0.5rem", width: 140 }}>Start (HH:MM)</th>
             <th style={{ padding: "0.5rem", width: 140 }}>End (HH:MM)</th>
+            <th style={{ padding: "0.5rem", width: 160 }} title="When ON, this period counts toward the parent-portal on-time streak. Turn OFF for lunch / advisory / passing periods.">
+              On-time streak
+            </th>
             <th style={{ padding: "0.5rem", width: 1 }}></th>
           </tr>
         </thead>
@@ -690,6 +705,16 @@ function ScheduleEditor({
                   type="time"
                   value={p.endTime}
                   onChange={(e) => updatePeriod(idx, { endTime: e.target.value })}
+                />
+              </td>
+              <td style={{ padding: "0.5rem", textAlign: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={p.includedInOnTimeStreak !== false}
+                  onChange={(e) =>
+                    updatePeriod(idx, { includedInOnTimeStreak: e.target.checked })
+                  }
+                  title="Count this period toward the parent-portal on-time streak"
                 />
               </td>
               <td style={{ padding: "0.5rem" }}>

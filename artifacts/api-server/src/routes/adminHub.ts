@@ -24,8 +24,10 @@ import {
 import {
   db,
   staffTable,
+  schoolsTable,
   studentsTable,
   issAdminLogsTable,
+  issAdminLogAuditTable,
   issAttendanceDayTable,
   ossLogsTable,
   ossLogDaysTable,
@@ -34,7 +36,7 @@ import {
   disciplineReasonsTable,
   issAcknowledgementsTable,
 } from "@workspace/db";
-import { and, eq, gte, lte, sql, inArray, desc } from "drizzle-orm";
+import { and, eq, gte, lte, or, sql, inArray, desc } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
@@ -105,7 +107,8 @@ async function resolveStudent(schoolId: number, studentId: string) {
 }
 
 // Resolve & validate `reason` body field. Either reasonId pointing at an
-// active discipline_reasons row, or a free-text reasonText fallback.
+// active discipline_reasons row (school-scoped OR district-scoped for
+// the school's district), or a free-text reasonText fallback.
 async function resolveReason(
   schoolId: number,
   body: Record<string, unknown>,
@@ -114,13 +117,24 @@ async function resolveReason(
   if (rid !== undefined && rid !== null && rid !== "") {
     const n = typeof rid === "number" ? rid : Number(rid);
     if (!Number.isInteger(n) || n <= 0) return "reasonId must be a positive integer";
+    // Look up the school's district once so we can accept a district-
+    // scoped reason from the master list as well.
+    const [school] = await db
+      .select({ districtId: schoolsTable.districtId })
+      .from(schoolsTable)
+      .where(eq(schoolsTable.id, schoolId));
     const [r] = await db
       .select()
       .from(disciplineReasonsTable)
       .where(
         and(
           eq(disciplineReasonsTable.id, n),
-          eq(disciplineReasonsTable.schoolId, schoolId),
+          school?.districtId
+            ? or(
+                eq(disciplineReasonsTable.schoolId, schoolId),
+                eq(disciplineReasonsTable.districtId, school.districtId),
+              )
+            : eq(disciplineReasonsTable.schoolId, schoolId),
         ),
       );
     if (!r) return "Reason not found";
@@ -128,6 +142,18 @@ async function resolveReason(
   }
   const free = cleanText(body.reasonText, 200);
   return { reasonId: null, reasonText: free };
+}
+
+// Parse and clamp the admin-entered "days for reports" field. Returns
+// `null` when absent/empty (treated as not specified), a positive int
+// up to 60 when present, or an error string for malformed input.
+function parseDayCount(raw: unknown): number | null | string {
+  if (raw === undefined || raw === null || raw === "") return null;
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 60) {
+    return "dayCount must be an integer between 1 and 60";
+  }
+  return n;
 }
 
 // Validate the body's `dates` array → unique YYYY-MM-DD list.
@@ -281,6 +307,7 @@ router.get(
       ? await db
           .select({
             studentId: studentsTable.studentId,
+            localSisId: studentsTable.localSisId,
             firstName: studentsTable.firstName,
             lastName: studentsTable.lastName,
             grade: studentsTable.grade,
@@ -403,6 +430,13 @@ router.post(
     const notes = cleanText(body.notes, 4000);
     const overrideCapacity = Boolean(body.overrideCapacity);
 
+    const dayCountOrErr = parseDayCount(body.dayCount);
+    if (typeof dayCountOrErr === "string") {
+      res.status(400).json({ error: dayCountOrErr });
+      return;
+    }
+    const dayCount = dayCountOrErr;
+
     // Capacity check: hard-block always, soft-warn requires override.
     const [settings] = await db
       .select({
@@ -468,6 +502,7 @@ router.post(
         reasonId: reason.reasonId,
         reasonText: reason.reasonText,
         notes,
+        dayCount,
         createdById: staff.id,
         createdByName: staff.displayName,
       })
@@ -557,6 +592,569 @@ router.post(
   },
 );
 
+// ---------- ISS log: audit trail ---------------------------------------
+// Returns every edit/trim/delete event ever recorded for an assignment,
+// newest first. Used by the Admin Hub detail drawer's "History" tab.
+router.get(
+  "/admin-hub/iss-logs/:id/audit",
+  requireAdminHubMW(),
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const rows = await db
+      .select()
+      .from(issAdminLogAuditTable)
+      .where(
+        and(
+          eq(issAdminLogAuditTable.adminLogId, id),
+          eq(issAdminLogAuditTable.schoolId, schoolId),
+        ),
+      )
+      .orderBy(desc(issAdminLogAuditTable.createdAt));
+    res.json({ rows });
+  },
+);
+
+// ---------- ISS edit helpers -------------------------------------------
+
+// A day row counts as "served" if it has ANY signal that the kid showed
+// up or was processed against it. Per replit.md:
+//   - present_periods has at least one period, OR
+//   - marked_served = true, OR
+//   - rolled_from_date is not null (means an earlier day cascaded into
+//     this one, so the assignment is mid-flight)
+function isDayServed(d: typeof issAttendanceDayTable.$inferSelect): boolean {
+  return (
+    (d.presentPeriods?.length ?? 0) > 0 ||
+    d.markedServed === true ||
+    d.rolledFromDate !== null
+  );
+}
+
+function validateEditReason(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const t = raw.trim();
+  if (t.length < 5) return null;
+  return t.length > 500 ? t.slice(0, 500) : t;
+}
+
+// ---------- ISS log: edit reason / notes -------------------------------
+// Editable on any non-cancelled assignment regardless of served status —
+// reason and notes are administrative metadata, not date-bound facts.
+router.patch(
+  "/admin-hub/iss-logs/:id",
+  requireAdminHubMW(),
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const editReason = validateEditReason(body.editReason);
+    if (!editReason) {
+      res
+        .status(400)
+        .json({ error: "editReason is required (min 5 chars)" });
+      return;
+    }
+
+    const [log] = await db
+      .select()
+      .from(issAdminLogsTable)
+      .where(
+        and(
+          eq(issAdminLogsTable.id, id),
+          eq(issAdminLogsTable.schoolId, schoolId),
+        ),
+      );
+    if (!log) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    if (log.cancelledAt) {
+      res
+        .status(409)
+        .json({ error: "Cannot edit a cancelled assignment" });
+      return;
+    }
+
+    // Build the patch. Only fields explicitly present in the body
+    // mutate; missing keys are left alone (PATCH semantics).
+    const patch: Partial<typeof issAdminLogsTable.$inferInsert> = {};
+    const audits: Array<{
+      action: string;
+      beforeJson: Record<string, unknown>;
+      afterJson: Record<string, unknown>;
+    }> = [];
+
+    if ("reasonId" in body || "reasonText" in body) {
+      const reason = await resolveReason(schoolId, body);
+      if (typeof reason === "string") {
+        res.status(400).json({ error: reason });
+        return;
+      }
+      if (
+        reason.reasonId !== log.reasonId ||
+        reason.reasonText !== log.reasonText
+      ) {
+        patch.reasonId = reason.reasonId;
+        patch.reasonText = reason.reasonText;
+        audits.push({
+          action: "edit_reason",
+          beforeJson: {
+            reasonId: log.reasonId,
+            reasonText: log.reasonText,
+          },
+          afterJson: {
+            reasonId: reason.reasonId,
+            reasonText: reason.reasonText,
+          },
+        });
+      }
+    }
+
+    if ("notes" in body) {
+      const newNotes = cleanText(body.notes, 4000);
+      if (newNotes !== log.notes) {
+        patch.notes = newNotes;
+        audits.push({
+          action: "edit_notes",
+          beforeJson: { notes: log.notes },
+          afterJson: { notes: newNotes },
+        });
+      }
+    }
+
+    if (Object.keys(patch).length === 0) {
+      res.json({ log, changed: false });
+      return;
+    }
+
+    const updated = await db.transaction(async (tx) => {
+      const [u] = await tx
+        .update(issAdminLogsTable)
+        .set(patch)
+        .where(
+          and(
+            eq(issAdminLogsTable.id, id),
+            eq(issAdminLogsTable.schoolId, schoolId),
+          ),
+        )
+        .returning();
+      for (const a of audits) {
+        await tx.insert(issAdminLogAuditTable).values({
+          schoolId,
+          adminLogId: id,
+          actorStaffId: staff.id,
+          actorDisplayName: staff.displayName,
+          action: a.action,
+          beforeJson: a.beforeJson,
+          afterJson: a.afterJson,
+          editReason,
+        });
+      }
+      return u;
+    });
+
+    res.json({ log: updated, changed: true });
+  },
+);
+
+// ---------- ISS log: edit dates (trim future + add days) ---------------
+// Body: { editReason, dates: string[] }
+// `dates` is the FULL desired set of days for the assignment. The
+// server diffs against current rows:
+//   - days in current but not in `dates`: removed (must be future or
+//     today-unserved; any attempt to remove a served day → 409)
+//   - days in `dates` but not in current: added (must be >= today)
+// Days that have already been served are immutable and MUST appear
+// in the new `dates` set unchanged.
+router.patch(
+  "/admin-hub/iss-logs/:id/dates",
+  requireAdminHubMW(),
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const editReason = validateEditReason(body.editReason);
+    if (!editReason) {
+      res
+        .status(400)
+        .json({ error: "editReason is required (min 5 chars)" });
+      return;
+    }
+    const datesOrErr = parseDates(body.dates);
+    if (typeof datesOrErr === "string") {
+      res.status(400).json({ error: datesOrErr });
+      return;
+    }
+    const desiredDates = new Set(datesOrErr);
+    const today = new Date().toISOString().slice(0, 10);
+
+    // Concurrency-safe: lock the parent log and all current day rows
+    // inside the tx via SELECT ... FOR UPDATE, re-read state under the
+    // lock, validate, mutate, then audit from the *actual* post-state.
+    // Prevents the "served-between-validation-and-delete" TOCTOU that
+    // would otherwise allow removing a day someone just marked served.
+    let result:
+      | { ok: true; changed: boolean; added: string[]; removed: string[] }
+      | { ok: false; status: number; body: Record<string, unknown> };
+    try {
+      result = await db.transaction(async (tx) => {
+        const [log] = await tx
+          .select()
+          .from(issAdminLogsTable)
+          .where(
+            and(
+              eq(issAdminLogsTable.id, id),
+              eq(issAdminLogsTable.schoolId, schoolId),
+            ),
+          )
+          .for("update");
+        if (!log) {
+          return {
+            ok: false as const,
+            status: 404,
+            body: { error: "Not found" },
+          };
+        }
+        if (log.cancelledAt) {
+          return {
+            ok: false as const,
+            status: 409,
+            body: { error: "Cannot edit a cancelled assignment" },
+          };
+        }
+
+        const currentDays = await tx
+          .select()
+          .from(issAttendanceDayTable)
+          .where(
+            and(
+              eq(issAttendanceDayTable.adminLogId, id),
+              eq(issAttendanceDayTable.schoolId, schoolId),
+            ),
+          )
+          .for("update");
+
+        const currentByDay = new Map(currentDays.map((d) => [d.day, d]));
+        const currentDaySet = new Set(currentDays.map((d) => d.day));
+
+        const servedDays = currentDays.filter(isDayServed).map((d) => d.day);
+        const servedMissing = servedDays.filter((d) => !desiredDates.has(d));
+        if (servedMissing.length > 0) {
+          return {
+            ok: false as const,
+            status: 409,
+            body: {
+              error: "Cannot remove served days",
+              servedDays: servedMissing,
+            },
+          };
+        }
+
+        const toAdd = [...desiredDates].filter((d) => !currentDaySet.has(d));
+        const pastAdds = toAdd.filter((d) => d < today);
+        if (pastAdds.length > 0) {
+          return {
+            ok: false as const,
+            status: 400,
+            body: { error: "Cannot add past dates", pastDates: pastAdds },
+          };
+        }
+
+        const toRemove = [...currentDaySet].filter(
+          (d) => !desiredDates.has(d),
+        );
+        const illegalRemoves = toRemove.filter((d) => {
+          const row = currentByDay.get(d)!;
+          if (d > today) return false;
+          if (d === today && !isDayServed(row)) return false;
+          return true;
+        });
+        if (illegalRemoves.length > 0) {
+          return {
+            ok: false as const,
+            status: 409,
+            body: {
+              error: "Cannot remove past or served days",
+              illegalDates: illegalRemoves,
+            },
+          };
+        }
+
+        if (toAdd.length === 0 && toRemove.length === 0) {
+          return {
+            ok: true as const,
+            changed: false,
+            added: [],
+            removed: [],
+          };
+        }
+
+        const before = currentDays.map((d) => d.day).sort();
+
+        // .returning() so we audit what *actually* changed in the DB,
+        // not what we intended — handles concurrent walk-in inserts
+        // that hit the unique (school, student, day) index.
+        const actuallyRemoved: string[] = [];
+        if (toRemove.length > 0) {
+          const deleted = await tx
+            .delete(issAttendanceDayTable)
+            .where(
+              and(
+                eq(issAttendanceDayTable.schoolId, schoolId),
+                eq(issAttendanceDayTable.adminLogId, id),
+                inArray(issAttendanceDayTable.day, toRemove),
+              ),
+            )
+            .returning({ day: issAttendanceDayTable.day });
+          for (const d of deleted) actuallyRemoved.push(d.day);
+        }
+
+        const actuallyAdded: string[] = [];
+        for (const day of toAdd) {
+          const inserted = await tx
+            .insert(issAttendanceDayTable)
+            .values({
+              schoolId,
+              studentId: log.studentId,
+              day,
+              source: "admin",
+              adminLogId: id,
+              notes: log.notes,
+              addedById: staff.id,
+              addedByName: staff.displayName,
+            })
+            .onConflictDoNothing({
+              target: [
+                issAttendanceDayTable.studentId,
+                issAttendanceDayTable.day,
+                issAttendanceDayTable.schoolId,
+              ],
+            })
+            .returning({ day: issAttendanceDayTable.day });
+          for (const r of inserted) actuallyAdded.push(r.day);
+        }
+
+        if (actuallyRemoved.length === 0 && actuallyAdded.length === 0) {
+          return {
+            ok: true as const,
+            changed: false,
+            added: [],
+            removed: [],
+          };
+        }
+
+        // Audit from actual post-mutation state, not intent.
+        const finalDays = await tx
+          .select({ day: issAttendanceDayTable.day })
+          .from(issAttendanceDayTable)
+          .where(
+            and(
+              eq(issAttendanceDayTable.adminLogId, id),
+              eq(issAttendanceDayTable.schoolId, schoolId),
+            ),
+          );
+        const after = finalDays.map((r) => r.day).sort();
+
+        if (actuallyRemoved.length > 0) {
+          await tx.insert(issAdminLogAuditTable).values({
+            schoolId,
+            adminLogId: id,
+            actorStaffId: staff.id,
+            actorDisplayName: staff.displayName,
+            action: "trim_days",
+            beforeJson: { days: before, removed: actuallyRemoved.sort() },
+            afterJson: { days: after },
+            editReason,
+          });
+        }
+        if (actuallyAdded.length > 0) {
+          await tx.insert(issAdminLogAuditTable).values({
+            schoolId,
+            adminLogId: id,
+            actorStaffId: staff.id,
+            actorDisplayName: staff.displayName,
+            action: "edit_dates",
+            beforeJson: { days: before, added: actuallyAdded.sort() },
+            afterJson: { days: after },
+            editReason,
+          });
+        }
+
+        return {
+          ok: true as const,
+          changed: true,
+          added: actuallyAdded,
+          removed: actuallyRemoved,
+        };
+      });
+    } catch (e) {
+      req.log.error({ err: e }, "iss-log dates edit failed");
+      res.status(500).json({ error: "Edit failed" });
+      return;
+    }
+
+    if (!result.ok) {
+      res.status(result.status).json(result.body);
+      return;
+    }
+    res.json({
+      ok: true,
+      changed: result.changed,
+      added: result.added,
+      removed: result.removed,
+    });
+  },
+);
+
+// ---------- ISS log: delete entire assignment --------------------------
+// Body: { editReason }
+// Only allowed when NO day on this assignment has been served (no
+// present_periods, no marked_served, no rolled_from_date anywhere).
+// Audit retention for partially-served assignments is intentional —
+// use trim_days for that path instead.
+router.delete(
+  "/admin-hub/iss-logs/:id",
+  requireAdminHubMW(),
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const editReason = validateEditReason(body.editReason);
+    if (!editReason) {
+      res
+        .status(400)
+        .json({ error: "editReason is required (min 5 chars)" });
+      return;
+    }
+
+    // Concurrency-safe: SELECT ... FOR UPDATE on both the parent log
+    // and its day rows inside the tx, recheck zero-served under the
+    // lock, then delete. Prevents the "served-between-check-and-delete"
+    // TOCTOU where a parallel "mark served" could lose its only record.
+    let result:
+      | { ok: true }
+      | { ok: false; status: number; body: Record<string, unknown> };
+    try {
+      result = await db.transaction(async (tx) => {
+        const [log] = await tx
+          .select()
+          .from(issAdminLogsTable)
+          .where(
+            and(
+              eq(issAdminLogsTable.id, id),
+              eq(issAdminLogsTable.schoolId, schoolId),
+            ),
+          )
+          .for("update");
+        if (!log) {
+          return {
+            ok: false as const,
+            status: 404,
+            body: { error: "Not found" },
+          };
+        }
+        const currentDays = await tx
+          .select()
+          .from(issAttendanceDayTable)
+          .where(
+            and(
+              eq(issAttendanceDayTable.adminLogId, id),
+              eq(issAttendanceDayTable.schoolId, schoolId),
+            ),
+          )
+          .for("update");
+        const servedDays = currentDays.filter(isDayServed).map((d) => d.day);
+        if (servedDays.length > 0) {
+          return {
+            ok: false as const,
+            status: 409,
+            body: {
+              error:
+                "Cannot delete an assignment with served days. Trim future days instead.",
+              servedDays,
+            },
+          };
+        }
+        const before = {
+          log: {
+            reasonId: log.reasonId,
+            reasonText: log.reasonText,
+            notes: log.notes,
+            createdById: log.createdById,
+            createdByName: log.createdByName,
+            createdAt: log.createdAt,
+          },
+          days: currentDays.map((d) => d.day).sort(),
+        };
+        await tx
+          .delete(issAttendanceDayTable)
+          .where(
+            and(
+              eq(issAttendanceDayTable.schoolId, schoolId),
+              eq(issAttendanceDayTable.adminLogId, id),
+            ),
+          );
+        await tx
+          .delete(issAdminLogsTable)
+          .where(
+            and(
+              eq(issAdminLogsTable.id, id),
+              eq(issAdminLogsTable.schoolId, schoolId),
+            ),
+          );
+        // Audit row points at the now-deleted log id. The audit table
+        // has no FK, so this is fine — auditors can still trace what
+        // was deleted, by whom, and why.
+        await tx.insert(issAdminLogAuditTable).values({
+          schoolId,
+          adminLogId: id,
+          actorStaffId: staff.id,
+          actorDisplayName: staff.displayName,
+          action: "delete_assignment",
+          beforeJson: before,
+          afterJson: null,
+          editReason,
+        });
+        return { ok: true as const };
+      });
+    } catch (e) {
+      req.log.error({ err: e }, "iss-log delete failed");
+      res.status(500).json({ error: "Delete failed" });
+      return;
+    }
+
+    if (!result.ok) {
+      res.status(result.status).json(result.body);
+      return;
+    }
+    res.json({ ok: true, deleted: id });
+  },
+);
+
 // ---------- OSS log: detail --------------------------------------------
 router.get(
   "/admin-hub/oss-logs/:id",
@@ -622,6 +1220,13 @@ router.post(
     const dates = datesOrErr;
     const notes = cleanText(body.notes, 4000);
 
+    const dayCountOrErr = parseDayCount(body.dayCount);
+    if (typeof dayCountOrErr === "string") {
+      res.status(400).json({ error: dayCountOrErr });
+      return;
+    }
+    const dayCount = dayCountOrErr;
+
     const [log] = await db
       .insert(ossLogsTable)
       .values({
@@ -630,6 +1235,7 @@ router.post(
         reasonId: reason.reasonId,
         reasonText: reason.reasonText,
         notes,
+        dayCount,
         createdById: staff.id,
         createdByName: staff.displayName,
       })
@@ -745,6 +1351,7 @@ router.get(
     );
     const expected = (await db.execute(
       sql`SELECT sr.student_id AS student_id,
+                 st.local_sis_id AS local_sis_id,
                  cs.teacher_staff_id AS teacher_id,
                  cs.period AS period,
                  s.display_name AS teacher_name,
@@ -760,6 +1367,7 @@ router.get(
              AND cs.period IS NOT NULL`,
     )).rows as {
       student_id: string;
+      local_sis_id: string | null;
       teacher_id: number;
       period: number;
       teacher_name: string;
@@ -783,6 +1391,7 @@ router.get(
 
     type Row = {
       studentId: string;
+      localSisId: string | null;
       studentName: string;
       teacherId: number;
       teacherName: string;
@@ -799,7 +1408,8 @@ router.get(
       );
       return {
         studentId: e.student_id,
-        studentName: (e.student_name ?? "").trim() || e.student_id,
+        localSisId: e.local_sis_id ?? null,
+        studentName: (e.student_name ?? "").trim() || (e.local_sis_id ?? ""),
         teacherId: e.teacher_id,
         teacherName: e.teacher_name,
         period: e.period,

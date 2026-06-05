@@ -1,10 +1,19 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { runSeed } from "./seedRunner";
+import { bootstrapCriticalColumns, runSeed } from "./seedRunner";
+import { recoverSuperUserPasswordOnce } from "./seed";
 import {
   scheduledJobsEnabled,
   startScheduledJobs,
 } from "./lib/scheduledJobs.js";
+
+process.on("unhandledRejection", (reason, promise) => {
+  logger.error({ err: reason, promise }, "Unhandled promise rejection");
+});
+process.on("uncaughtException", (err) => {
+  logger.fatal({ err }, "Uncaught exception — process will exit");
+  setTimeout(() => process.exit(1), 100);
+});
 
 const rawPort = process.env["PORT"];
 
@@ -47,6 +56,15 @@ function startListening(): void {
 
       logger.info({ port }, "Server listening");
 
+      recoverSuperUserPasswordOnce()
+        .then(() => logger.info("[boot] superuser recovery one-shot checked"))
+        .catch((err) =>
+          logger.error(
+            { err },
+            "[boot] superuser password recovery failed (early)",
+          ),
+        );
+
       if (seedInBackground) {
         logger.info("Starting seed in background (post-listen)");
         runSeed()
@@ -71,7 +89,12 @@ function startListening(): void {
 // RUN_BOOT_SEED=true is explicitly configured. Development keeps the original
 // seed-first behavior by default for fresh local databases.
 if (seedInBackground) {
-  startListening();
+  bootstrapCriticalColumns()
+    .catch((err) => {
+      logger.error({ err }, "Critical bootstrap failed; exiting");
+      process.exit(1);
+    })
+    .then(() => startListening());
 } else if (!runBootSeed) {
   logger.info(
     { nodeEnv: process.env.NODE_ENV ?? "development" },

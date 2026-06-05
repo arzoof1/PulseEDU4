@@ -1,12 +1,21 @@
 // FAST cut-score tables and placement helpers.
 //
 // Source: FL DOE FAST scale-score "Learning Gains" tables.
-//   - ELA   → Table 6 (grades 3–10)
-//   - Math  → Table 8 (grades 3–8 + Algebra 1 + Geometry)
+//   - ELA       → Table 6 (grades 3–10)
+//   - Math      → Table 8 (grades 3–8)
+//   - Algebra 1 → Table 8 continuation, EOC scale (separate chart)
+//   - Geometry  → Table 8 continuation, EOC scale (separate chart)
 //
-// Algebra 1 and Geometry EOC are intentionally NOT included in the
-// chart yet — per spec, the Teacher Roster hides the bucket icon for
-// those students (and we don't have FAST EOC scores in seed data).
+// EOC subjects are stored under their own subject keys ("algebra1" /
+// "geometry"), NOT under "math" with grade 9/10 — a 9th grader could
+// take Geometry early and an 8th grader could take Algebra 1, so the
+// EOC subject is what determines the chart, not the student's grade.
+//
+// The Algebra 1 and Geometry chart objects below are intentionally
+// EMPTY placeholders awaiting authoritative FL DOE cut-score values
+// (see Run & Operate notes). Until they're populated, `hasChart()`
+// returns false for those subjects and the roster falls back to the
+// "n/a" bucket render — same as today.
 //
 // Conventions:
 //   - Each grade has Levels 1–5.
@@ -18,15 +27,23 @@
 //   - PM1 / PM2 placement: use the student's CURRENT-grade chart.
 //   - PM3 placement:       use the PRIOR-grade chart (it represents
 //                          end-of-prior-year mastery).
-//   - 3rd grade has no prior-grade chart, so we fall back to G3 for
-//     PM3 placement and the bucket icon is HIDDEN.
-//   - Algebra 1 / Geometry: not in this table; bucket also HIDDEN.
+//   - 3rd grade has no prior-grade chart, so we fall back to the G3
+//     chart for PM3 placement AND compute the bucket target from G3.
+//     The gap will be optimistic since no grade-jump is involved —
+//     intentional per product decision; tooltip on the roster should
+//     note this for the 3rd-grade column.
+//   - Algebra 1 / Geometry EOC: scored on EOC scale (425–575); chart
+//     lookup is by subject only, grade is ignored for those rows.
 //
 // Bucket target:
 //   - Always computed against the student's CURRENT-grade chart.
-//   - Target = the MIN of the next level above their PM3 placement.
+//   - Target = the MIN of the NEXT SUB-BAND on the climb path:
+//       Low1 → Mid1 → High1 → Low2 → High2 → L3 → L4 → L5.
+//     Sub-bands give smaller, more achievable increments than whole
+//     levels.
 //   - Gap   = target − pm3Score.
-//   - Color: green ≤ 0, orange 1–5, red > 5.
+//   - Color reflects the student's CURRENT level (per FAST palette):
+//       L1 red, L2 orange, L3 green, L4 blue, L5 purple.
 
 export type SubLevel =
   | "1.1" // Level 1 Low
@@ -43,13 +60,24 @@ export interface Placement {
   subLevel: SubLevel;
 }
 
+export type BucketColor = "red" | "orange" | "green" | "blue" | "purple";
+
 export interface BucketInfo {
   // The min score on the current-grade chart that lands the student in
-  // the next level up. null when no next level exists (already at L5).
+  // the next SUB-BAND on the climb path. null when no next stop exists
+  // (already at L5) or no chart is available.
   targetScore: number | null;
-  // pm3 - target. Negative = at/above next level. null when target null.
+  // pm3 - target. Negative = at/above next stop. null when target null.
   gap: number | null;
-  color: "green" | "orange" | "red" | null;
+  // Color of the student's CURRENT level (per FAST palette), not the
+  // gap size. null when no placement.
+  color: BucketColor | null;
+  // The student's current sub-level (e.g. "1.2", "2.2", "3"). null when
+  // no placement.
+  currentSubLevel: SubLevel | null;
+  // Human-readable label of the next stop on the path (e.g. "Mid 1",
+  // "High 2", "Level 3"). null when already at L5 / no chart.
+  nextStopLabel: string | null;
 }
 
 // Per-grade chart. We only need the Level 3/4/5 mins and the L1/L2 sub
@@ -219,16 +247,107 @@ const MATH: Record<number, FastChart> = {
   },
 };
 
-export type Subject = "ela" | "math";
+export type Subject = "ela" | "math" | "algebra1" | "geometry";
+
+// All recognised subject keys (registry use — keep in sync with Subject).
+// Used by the FAST coverage telemetry tile so it can enumerate which
+// charts exist without hard-coding the list in every consumer.
+export const SUBJECT_KEYS: readonly Subject[] = [
+  "ela",
+  "math",
+  "algebra1",
+  "geometry",
+] as const;
+
+// ---- Algebra 1 EOC (B.E.S.T., approved by SBE 2024-01-10) ----
+// Source: "Florida Assessment of Student Thinking (FAST) Achievement
+// Level Scale Scores including Learning Gains Subcategories"
+// (FLDOE, approved 2024-01-10). EOC scale is 325–475.
+const ALGEBRA1_EOC: FastChart | null = {
+  L1Low: [325, 342],
+  L1Mid: [343, 360],
+  L1High: [361, 378],
+  L2Low: [379, 389],
+  L2High: [390, 399],
+  L3: [400, 417],
+  L4: [418, 434],
+  L5: [435, 475],
+};
+
+// ---- Geometry EOC (B.E.S.T., approved by SBE 2024-01-10) ----
+const GEOMETRY_EOC: FastChart | null = {
+  L1Low: [325, 344],
+  L1Mid: [345, 364],
+  L1High: [365, 384],
+  L2Low: [385, 394],
+  L2High: [395, 403],
+  L3: [404, 422],
+  L4: [423, 431],
+  L5: [432, 475],
+};
 
 function chartFor(subject: Subject, grade: number): FastChart | null {
-  const table = subject === "ela" ? ELA : MATH;
-  return table[grade] ?? null;
+  switch (subject) {
+    case "ela":
+      return ELA[grade] ?? null;
+    case "math":
+      return MATH[grade] ?? null;
+    case "algebra1":
+      // EOC charts are keyed by subject only, not grade.
+      return ALGEBRA1_EOC;
+    case "geometry":
+      return GEOMETRY_EOC;
+  }
 }
 
 // Public: does this (subject, grade) have a chart at all?
 export function hasChart(subject: Subject, grade: number): boolean {
   return chartFor(subject, grade) !== null;
+}
+
+// Public: minimum scale score for a given whole level (1..5) on the
+// chart selected by subject + chart-grade. Returns null when no chart
+// exists for that (subject, grade). Used by the Cusp Composer to
+// compute "distance from cut" against a real chart boundary.
+export function levelMin(
+  subject: Subject,
+  chartGrade: number,
+  level: 1 | 2 | 3 | 4 | 5,
+): number | null {
+  const c = chartFor(subject, chartGrade);
+  if (!c) return null;
+  switch (level) {
+    case 1:
+      return c.L1Low[0];
+    case 2:
+      return c.L2Low[0];
+    case 3:
+      return c.L3[0];
+    case 4:
+      return c.L4[0];
+    case 5:
+      return c.L5[0];
+  }
+}
+
+// Public: pick the chart-grade used for a given window.
+//   - PM1/PM2: student's current grade.
+//   - PM3:     student's prior grade (3rd graders fall back to G3).
+//   - EOC subjects: chart is grade-agnostic; return currentGrade
+//     unchanged (chartFor ignores it).
+//
+// Returns the grade that should be passed to chartFor / levelMin so
+// callers get the same chart the placement helpers already use.
+export function chartGradeFor(
+  subject: Subject,
+  currentGrade: number,
+  window: string,
+): number {
+  if (subject === "algebra1" || subject === "geometry") return currentGrade;
+  if (window !== "pm3") return currentGrade;
+  const prior = currentGrade - 1;
+  // 3rd-grade fallback: no prior chart, use current. Matches placePm3.
+  return chartFor(subject, prior) ? prior : currentGrade;
 }
 
 // Place a raw scale score on a given chart. Returns null if no chart
@@ -259,13 +378,20 @@ export function placeOnChart(
 }
 
 // Place a PM3 score using the PRIOR-grade chart (per the worked
-// example). 3rd graders have no prior chart — caller should still
-// expect a placement (we fall back to G3) but suppress the bucket icon.
+// example). 3rd graders have no prior chart — we fall back to the
+// current (G3) chart so they still get a placement AND a bucket
+// (option B per product decision). For EOC subjects the grade is
+// ignored — the chart is keyed by subject only.
 export function placePm3(
   score: number,
   subject: Subject,
   currentGrade: number,
 ): Placement | null {
+  // EOC subjects: chart lookup ignores grade, so prior-grade fallback
+  // is a no-op. Place directly on the EOC chart.
+  if (subject === "algebra1" || subject === "geometry") {
+    return placeOnChart(score, subject, currentGrade);
+  }
   const priorGrade = currentGrade - 1;
   const c = chartFor(subject, priorGrade);
   if (c) return placeOnChart(score, subject, priorGrade);
@@ -273,41 +399,84 @@ export function placePm3(
   return placeOnChart(score, subject, currentGrade);
 }
 
-// Compute the bucket target on the CURRENT-grade chart given the PM3
-// placement level. Returns null when:
-//   - no current-grade chart exists (Algebra/Geometry, etc.)
-//   - the student is already at L5 (no next level)
-//   - currentGrade === 3 (per spec: hide bucket for grade 3)
-export function bucketTarget(
-  subject: Subject,
-  currentGrade: number,
-  placedLevel: 1 | 2 | 3 | 4 | 5,
-): number | null {
-  if (currentGrade === 3) return null;
-  const c = chartFor(subject, currentGrade);
-  if (!c) return null;
-  switch (placedLevel) {
-    case 1:
+// The climb path: each sub-band's next stop. Used to compute the
+// bucket target one INCREMENT at a time rather than jumping a whole
+// integer level.
+const NEXT_STOP: Record<SubLevel, SubLevel | null> = {
+  "1.1": "1.2",
+  "1.2": "1.3",
+  "1.3": "2.1",
+  "2.1": "2.2",
+  "2.2": "3",
+  "3": "4",
+  "4": "5",
+  "5": null,
+};
+
+export const SUB_LEVEL_LABEL: Record<SubLevel, string> = {
+  "1.1": "Low 1",
+  "1.2": "Mid 1",
+  "1.3": "High 1",
+  "2.1": "Low 2",
+  "2.2": "High 2",
+  "3": "Level 3",
+  "4": "Level 4",
+  "5": "Level 5",
+};
+
+// Min score for a given sub-band on a chart.
+function subLevelMin(c: FastChart, sub: SubLevel): number | null {
+  switch (sub) {
+    case "1.1":
+      return c.L1Low[0];
+    case "1.2":
+      return c.L1Mid[0];
+    case "1.3":
+      return c.L1High[0];
+    case "2.1":
       return c.L2Low[0];
-    case 2:
+    case "2.2":
+      return c.L2High[0];
+    case "3":
       return c.L3[0];
-    case 3:
+    case "4":
       return c.L4[0];
-    case 4:
+    case "5":
       return c.L5[0];
-    case 5:
-      return null; // already at top
   }
 }
 
-export function bucketColor(
-  gap: number | null,
-): "green" | "orange" | "red" | null {
-  if (gap === null) return null;
-  if (gap <= 0) return "green";
-  if (gap <= 5) return "orange";
-  return "red";
+// Compute the bucket target on the CURRENT-grade chart given the PM3
+// placement sub-level. Returns null when:
+//   - no current-grade chart exists (EOC placeholders, K–2, etc.)
+//   - the student is already at L5 (no next stop)
+//
+// Note: 3rd grade is intentionally NOT suppressed here — per product
+// decision (option B), G3 students get a bucket computed against
+// their G3 chart (same chart their PM3 was placed on, since there's
+// no prior-grade chart). The gap will be optimistic — surface a
+// tooltip in the UI explaining "no grade-jump applied for 3rd grade."
+export function bucketTarget(
+  subject: Subject,
+  currentGrade: number,
+  placedSubLevel: SubLevel,
+): { score: number; nextStop: SubLevel } | null {
+  const c = chartFor(subject, currentGrade);
+  if (!c) return null;
+  const next = NEXT_STOP[placedSubLevel];
+  if (next === null) return null;
+  const score = subLevelMin(c, next);
+  if (score === null) return null;
+  return { score, nextStop: next };
 }
+
+const LEVEL_COLOR: Record<1 | 2 | 3 | 4 | 5, BucketColor> = {
+  1: "red",
+  2: "orange",
+  3: "green",
+  4: "blue",
+  5: "purple",
+};
 
 // One-shot bucket computation for a PM3 score.
 export function bucketFor(
@@ -317,12 +486,29 @@ export function bucketFor(
 ): BucketInfo {
   const placement = placePm3(pm3Score, subject, currentGrade);
   if (!placement) {
-    return { targetScore: null, gap: null, color: null };
+    return {
+      targetScore: null,
+      gap: null,
+      color: null,
+      currentSubLevel: null,
+      nextStopLabel: null,
+    };
   }
-  const target = bucketTarget(subject, currentGrade, placement.level);
+  const target = bucketTarget(subject, currentGrade, placement.subLevel);
   if (target === null) {
-    return { targetScore: null, gap: null, color: null };
+    return {
+      targetScore: null,
+      gap: null,
+      color: LEVEL_COLOR[placement.level],
+      currentSubLevel: placement.subLevel,
+      nextStopLabel: null,
+    };
   }
-  const gap = target - pm3Score;
-  return { targetScore: target, gap, color: bucketColor(gap) };
+  return {
+    targetScore: target.score,
+    gap: target.score - pm3Score,
+    color: LEVEL_COLOR[placement.level],
+    currentSubLevel: placement.subLevel,
+    nextStopLabel: SUB_LEVEL_LABEL[target.nextStop],
+  };
 }

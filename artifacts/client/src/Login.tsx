@@ -367,6 +367,26 @@ export default function Login({
             Back to sign in
           </button>
         )}
+
+        <div
+          style={{
+            textAlign: "center",
+            fontSize: "0.75rem",
+            opacity: 0.6,
+            marginTop: "0.25rem",
+            lineHeight: 1.4,
+          }}
+        >
+          A Pulse Kinetics product ·{" "}
+          <a
+            href="https://pulsekinetics.us"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: "#93c5fd", textDecoration: "none" }}
+          >
+            pulsekinetics.us
+          </a>
+        </div>
       </form>
     </div>
   );
