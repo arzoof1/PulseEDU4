@@ -50,7 +50,6 @@ import {
 } from "@workspace/db";
 import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { sendMyWatchlistSeedEmail } from "../lib/myWatchlistSeedEmail.js";
-import { resolvePublicAppOrigin } from "../lib/publicAppUrl.js";
 
 const router: IRouter = Router();
 
@@ -571,7 +570,11 @@ router.post("/insights/my-watchlist", async (req, res) => {
             const studentName = studentRow
               ? `${studentRow.firstName} ${studentRow.lastName}`
               : studentId;
-            const appBaseUrl = resolvePublicAppOrigin();
+            const appBaseUrl =
+              process.env.PUBLIC_APP_URL ||
+              (process.env.REPLIT_DEV_DOMAIN
+                ? `https://${process.env.REPLIT_DEV_DOMAIN}`
+                : "https://app.pulseedu.com");
             await sendMyWatchlistSeedEmail({
               toEmail: targetEmail,
               toDisplayName: targetDisplay,

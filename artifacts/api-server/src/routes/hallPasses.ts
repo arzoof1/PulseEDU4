@@ -17,6 +17,7 @@ import {
   dailyLimitConflictMessage,
 } from "./studentHallPassLimits";
 import { resolveStudentIdInput } from "../lib/studentIdResolver.js";
+import { checkRestroomAccess } from "../lib/restroomAccess.js";
 
 const router: IRouter = Router();
 
@@ -98,6 +99,23 @@ router.post("/hall-passes", async (req, res) => {
     res.status(400).json({
       error:
         "contactedAcknowledged must be true when destinationTeacher is set",
+    });
+    return;
+  }
+
+  // Restroom Access Control hard block — enforced server-side so a stale
+  // tab or crafted request can't issue a pass to a restroom that's hidden
+  // for this room/teacher. No-op when the feature is off or the
+  // destination isn't a restroom.
+  const restroomCheck = await checkRestroomAccess(schoolId, {
+    destination,
+    originRoom,
+    teacherName,
+  });
+  if (!restroomCheck.allowed) {
+    res.status(403).json({
+      code: "RESTROOM_BLOCKED",
+      error: restroomCheck.reason ?? "Restroom not available for this pass.",
     });
     return;
   }

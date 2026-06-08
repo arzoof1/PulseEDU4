@@ -195,7 +195,7 @@ router.get("/houses/with-staff-counts", async (req, res) => {
   if (!staffId) {
     const auth = req.headers.authorization;
     if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      staffId = verifyAuthToken(auth.slice(7).trim())?.staffId ?? null;
+      staffId = verifyAuthToken(auth.slice(7).trim());
     }
   }
   if (!staffId) {

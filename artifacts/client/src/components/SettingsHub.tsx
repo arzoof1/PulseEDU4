@@ -5,6 +5,7 @@ export type SettingsTileId =
   | "notifications"
   | "kiosk-setup"
   | "allowlist"
+  | "restroom-access"
   | "locations"
   | "staff-defaults"
   | "school"
@@ -56,6 +57,13 @@ export interface SettingsTile {
   subtitle: string;
   badge?: number;
   legacy?: boolean;
+  /**
+   * When true the tile renders disabled with a "Coming soon" pill and does
+   * not fire onSelect. Used to gate a feature whose code ships but whose UI
+   * isn't ready for users yet (e.g. School Grade Calculator while its
+   * calculation is being finalized).
+   */
+  comingSoon?: boolean;
   group?: SettingsGroupId;
 }
 
@@ -175,20 +183,29 @@ function TileButton({
   tile: SettingsTile;
   onSelect: (id: SettingsTileId) => void;
 }) {
+  const comingSoon = !!tile.comingSoon;
   return (
     <button
       key={tile.id}
       type="button"
-      onClick={() => onSelect(tile.id)}
+      onClick={() => {
+        if (comingSoon) return;
+        onSelect(tile.id);
+      }}
+      disabled={comingSoon}
+      aria-disabled={comingSoon}
       style={{
         ...cardStyle,
-        opacity: tile.legacy ? 0.7 : 1,
+        opacity: comingSoon ? 0.55 : tile.legacy ? 0.7 : 1,
+        cursor: comingSoon ? "not-allowed" : "pointer",
       }}
       onMouseEnter={(e) => {
+        if (comingSoon) return;
         (e.currentTarget as HTMLButtonElement).style.borderColor =
           "var(--accent, #3b82f6)";
       }}
       onMouseLeave={(e) => {
+        if (comingSoon) return;
         (e.currentTarget as HTMLButtonElement).style.borderColor =
           "var(--border, #2a3447)";
       }}
@@ -202,19 +219,36 @@ function TileButton({
         }}
       >
         <div style={{ fontSize: "1.5rem", lineHeight: 1 }}>{tile.icon}</div>
-        {typeof tile.badge === "number" && tile.badge > 0 && (
+        {comingSoon ? (
           <span
             style={{
-              background: "var(--accent, #3b82f6)",
-              color: "white",
+              background: "rgba(148,163,184,0.25)",
+              color: "var(--text-subtle)",
               borderRadius: 999,
               padding: "0.1rem 0.5rem",
-              fontSize: 12,
+              fontSize: 11,
               fontWeight: 600,
+              whiteSpace: "nowrap",
             }}
           >
-            {tile.badge}
+            Coming soon
           </span>
+        ) : (
+          typeof tile.badge === "number" &&
+          tile.badge > 0 && (
+            <span
+              style={{
+                background: "var(--accent, #3b82f6)",
+                color: "white",
+                borderRadius: 999,
+                padding: "0.1rem 0.5rem",
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              {tile.badge}
+            </span>
+          )
         )}
       </div>
       <div style={{ fontWeight: 600 }}>

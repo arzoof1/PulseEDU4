@@ -156,12 +156,10 @@ const REQUIRED_FIELDS_DISTRICT: AssessmentField[] = [
   "school_code",
 ];
 
-// Hard caps for synchronous import requests. Larger district feeds should move
-// to the future streaming/background-worker path instead of tying up the API
-// process in one request.
-const MAX_ROWS_PER_IMPORT = 15000;
-const MAX_CSV_BYTES = 10 * 1024 * 1024;
-const IMPORT_LOOP_YIELD_EVERY_ROWS = 1000;
+// Hard cap on rows per import. Anything bigger should be split into
+// smaller files — keeps a runaway upload from filling assessments and
+// the error_log jsonb. Adjustable later if real district feeds need it.
+const MAX_ROWS_PER_IMPORT = 50000;
 
 const VALID_TARGETS = new Set<string>([
   "student_id",
@@ -172,34 +170,6 @@ const VALID_TARGETS = new Set<string>([
   "source",
   "school_code",
 ]);
-
-function validateCsvPayload(csv: string, res: Response): boolean {
-  if (!csv.trim()) {
-    res.status(400).json({ error: "CSV body is required" });
-    return false;
-  }
-  if (Buffer.byteLength(csv, "utf8") > MAX_CSV_BYTES) {
-    res.status(413).json({
-      error: `CSV exceeds the ${MAX_CSV_BYTES / 1024 / 1024}MB size limit. Split the file and try again.`,
-    });
-    return false;
-  }
-  return true;
-}
-
-function rejectTooManyRows(rowCount: number, res: Response): boolean {
-  if (rowCount <= MAX_ROWS_PER_IMPORT) return false;
-  res.status(400).json({
-    error: `CSV exceeds the ${MAX_ROWS_PER_IMPORT}-row limit (got ${rowCount}). Split the file and try again.`,
-  });
-  return true;
-}
-
-async function yieldImportProcessing(index: number): Promise<void> {
-  if (index > 0 && index % IMPORT_LOOP_YIELD_EVERY_ROWS === 0) {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-}
 
 // Server-side mapping validator. Catches malformed mappings that bypass
 // the frontend's uniqueness check or reference columns / targets that
@@ -552,13 +522,21 @@ router.post(
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
     const csv = typeof req.body?.csv === "string" ? req.body.csv : "";
-    if (!validateCsvPayload(csv, res)) return;
+    if (!csv.trim()) {
+      res.status(400).json({ error: "CSV body is required" });
+      return;
+    }
     const { headers, rows, parseError } = parseCsv(csv);
     if (parseError) {
       res.status(400).json({ error: parseError, headers });
       return;
     }
-    if (rejectTooManyRows(rows.length, res)) return;
+    if (rows.length > MAX_ROWS_PER_IMPORT) {
+      res.status(400).json({
+        error: `CSV exceeds the ${MAX_ROWS_PER_IMPORT}-row limit (got ${rows.length}). Split the file and try again.`,
+      });
+      return;
+    }
     const auto = autoMapHeaders(headers);
     // Caller can override any column. We trust the override but only for
     // headers that actually exist AND for known target fields. Duplicate
@@ -584,7 +562,6 @@ router.post(
     let valid = 0;
     const sample: ParsedAssessment[] = [];
     for (let i = 0; i < rows.length; i++) {
-      await yieldImportProcessing(i);
       const parsed = parseRow(rows[i], mapping);
       if (parsed.ok) {
         valid++;
@@ -637,13 +614,21 @@ router.post(
       req.body?.mapping && typeof req.body.mapping === "object"
         ? (req.body.mapping as Record<string, string>)
         : {};
-    if (!validateCsvPayload(csv, res)) return;
+    if (!csv.trim()) {
+      res.status(400).json({ error: "CSV body is required" });
+      return;
+    }
     const { headers, rows, parseError } = parseCsv(csv);
     if (parseError) {
       res.status(400).json({ error: parseError });
       return;
     }
-    if (rejectTooManyRows(rows.length, res)) return;
+    if (rows.length > MAX_ROWS_PER_IMPORT) {
+      res.status(400).json({
+        error: `CSV exceeds the ${MAX_ROWS_PER_IMPORT}-row limit (got ${rows.length}). Split the file and try again.`,
+      });
+      return;
+    }
     const mappingError = validateMapping(mapping, headers);
     if (mappingError) {
       res.status(400).json({ error: mappingError });
@@ -656,7 +641,6 @@ router.post(
       raw?: Record<string, string>;
     }> = [];
     for (let i = 0; i < rows.length; i++) {
-      await yieldImportProcessing(i);
       const parsed = parseRow(rows[i], mapping);
       if (parsed.ok) {
         valid.push(parsed.value);
@@ -753,13 +737,21 @@ router.post(
     const districtId = await requireActorDistrict(staff, res);
     if (districtId == null) return;
     const csv = typeof req.body?.csv === "string" ? req.body.csv : "";
-    if (!validateCsvPayload(csv, res)) return;
+    if (!csv.trim()) {
+      res.status(400).json({ error: "CSV body is required" });
+      return;
+    }
     const { headers, rows, parseError } = parseCsv(csv);
     if (parseError) {
       res.status(400).json({ error: parseError, headers });
       return;
     }
-    if (rejectTooManyRows(rows.length, res)) return;
+    if (rows.length > MAX_ROWS_PER_IMPORT) {
+      res.status(400).json({
+        error: `CSV exceeds the ${MAX_ROWS_PER_IMPORT}-row limit (got ${rows.length}). Split the file and try again.`,
+      });
+      return;
+    }
     const auto = autoMapHeaders(headers);
     const supplied =
       req.body?.mapping && typeof req.body.mapping === "object"
@@ -789,7 +781,6 @@ router.post(
       validateMapping(mapping, headers, REQUIRED_FIELDS_DISTRICT) === null;
     if (mappingOk) {
       for (let i = 0; i < rows.length; i++) {
-        await yieldImportProcessing(i);
         const parsed = parseRowDistrict(rows[i], mapping, codeToId);
         if (parsed.ok) {
           valid++;
@@ -856,13 +847,21 @@ router.post(
       req.body?.mapping && typeof req.body.mapping === "object"
         ? (req.body.mapping as Record<string, string>)
         : {};
-    if (!validateCsvPayload(csv, res)) return;
+    if (!csv.trim()) {
+      res.status(400).json({ error: "CSV body is required" });
+      return;
+    }
     const { headers, rows, parseError } = parseCsv(csv);
     if (parseError) {
       res.status(400).json({ error: parseError });
       return;
     }
-    if (rejectTooManyRows(rows.length, res)) return;
+    if (rows.length > MAX_ROWS_PER_IMPORT) {
+      res.status(400).json({
+        error: `CSV exceeds the ${MAX_ROWS_PER_IMPORT}-row limit (got ${rows.length}). Split the file and try again.`,
+      });
+      return;
+    }
     const mappingError = validateMapping(
       mapping,
       headers,
@@ -880,7 +879,6 @@ router.post(
       raw?: Record<string, string>;
     }> = [];
     for (let i = 0; i < rows.length; i++) {
-      await yieldImportProcessing(i);
       const parsed = parseRowDistrict(rows[i], mapping, codeToId);
       if (parsed.ok) {
         valid.push(parsed.value);
@@ -3732,13 +3730,21 @@ function makePreviewHandler(kind: string, config: KindConfig) {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
     const csv = typeof req.body?.csv === "string" ? req.body.csv : "";
-    if (!validateCsvPayload(csv, res)) return;
+    if (!csv.trim()) {
+      res.status(400).json({ error: "CSV body is required" });
+      return;
+    }
     const { headers, rows, parseError } = parseCsv(csv);
     if (parseError) {
       res.status(400).json({ error: parseError, headers });
       return;
     }
-    if (rejectTooManyRows(rows.length, res)) return;
+    if (rows.length > MAX_ROWS_PER_IMPORT) {
+      res.status(400).json({
+        error: `CSV exceeds the ${MAX_ROWS_PER_IMPORT}-row limit (got ${rows.length}). Split the file and try again.`,
+      });
+      return;
+    }
     const auto = autoMapHeadersForConfig(headers, config);
     const supplied =
       req.body?.mapping && typeof req.body.mapping === "object"
@@ -3762,7 +3768,6 @@ function makePreviewHandler(kind: string, config: KindConfig) {
     const allValid: unknown[] = [];
     if (mappingOk) {
       for (let i = 0; i < rows.length; i++) {
-        await yieldImportProcessing(i);
         const parsed = config.parseRow(rows[i], mapping);
         if (parsed.ok) {
           valid++;
@@ -3812,13 +3817,21 @@ function makeCommitHandler<T>(kind: string, config: KindConfig<T>) {
       req.body?.mapping && typeof req.body.mapping === "object"
         ? (req.body.mapping as Record<string, string>)
         : {};
-    if (!validateCsvPayload(csv, res)) return;
+    if (!csv.trim()) {
+      res.status(400).json({ error: "CSV body is required" });
+      return;
+    }
     const { headers, rows, parseError } = parseCsv(csv);
     if (parseError) {
       res.status(400).json({ error: parseError });
       return;
     }
-    if (rejectTooManyRows(rows.length, res)) return;
+    if (rows.length > MAX_ROWS_PER_IMPORT) {
+      res.status(400).json({
+        error: `CSV exceeds the ${MAX_ROWS_PER_IMPORT}-row limit (got ${rows.length}). Split the file and try again.`,
+      });
+      return;
+    }
     const mappingError = validateMappingForConfig(mapping, headers, config);
     if (mappingError) {
       res.status(400).json({ error: mappingError });
@@ -3837,7 +3850,6 @@ function makeCommitHandler<T>(kind: string, config: KindConfig<T>) {
       bucket?: string;
     }> = [];
     for (let i = 0; i < rows.length; i++) {
-      await yieldImportProcessing(i);
       const parsed = config.parseRow(rows[i], mapping);
       if (parsed.ok) {
         validIndexed.push({ rowIndex: i + 2, value: parsed.value, raw: rows[i] });

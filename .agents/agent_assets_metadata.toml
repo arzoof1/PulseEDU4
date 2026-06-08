@@ -294,3 +294,15 @@ id = "o7YgSAMdJIif3yst07vsI"
 uri = "file://exports/PulseEDU-Demo-Guide.docx"
 type = "word_document"
 title = "PulseEDU Demo Guide (Word — editable)"
+
+[[outputs]]
+id = "Ma0t3BxvdHQcXGJAE-WCN"
+uri = "file://docs/hall-pass-demo-runbook.md"
+type = "text"
+title = "Hall Pass Demo Run-Book"
+
+[[outputs]]
+id = "WFc5pJBaEo_BW9A8ErTaK"
+uri = "file://exports/hall-pass-demo-runbook.pdf"
+type = "pdf"
+title = "Hall Pass Demo Run-Book (PDF)"

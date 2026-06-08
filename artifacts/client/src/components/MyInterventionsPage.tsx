@@ -10,7 +10,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
-import { fetchAllStudents } from "../lib/students";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 export type InterventionHistoryRow = {
@@ -145,9 +144,11 @@ export default function MyInterventionsPage({
     let cancelled = false;
     (async () => {
       try {
-        const arr = await fetchAllStudents<
+        const r = await authFetch("/api/students");
+        if (!r.ok) return;
+        const arr = (await r.json()) as Array<
           StudentLite & { firstName: string; lastName: string }
-        >();
+        >;
         if (!cancelled) setStudents(arr);
       } catch {
         // Non-fatal — picker just won't autocomplete.

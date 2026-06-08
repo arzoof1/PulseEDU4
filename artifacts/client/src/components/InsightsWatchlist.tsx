@@ -20,7 +20,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
-import { fetchAllStudents } from "../lib/students";
 import {
   HowToUseHelp,
   HowToSection,
@@ -362,10 +361,11 @@ export default function InsightsWatchlist({
 
   useEffect(() => {
     let cancelled = false;
-    fetchAllStudents<StudentLookup>()
-      .then((rowsResp) => {
+    authFetch("/api/students")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rowsResp: StudentLookup[]) => {
         if (cancelled) return;
-        setStudentDirectory(rowsResp);
+        setStudentDirectory(Array.isArray(rowsResp) ? rowsResp : []);
       })
       .catch(() => {});
     return () => {

@@ -1459,15 +1459,38 @@ router.get(
         });
       }
 
-      // Column header row — rotate -45° so long benchmark codes fit
-      // without overflowing the column width. headerHeight needs to
-      // be tall enough that the rotated text (80pt wide at 7pt has
-      // ~57pt vertical extent after a 45° rotation) fully clears the
-      // top of the band. 75pt gives a small safety margin without
-      // wasting page real estate — earlier value of 120 left ~45pt
-      // of pure whitespace above the codes and pushed the first
-      // student row off the page.
-      const headerHeight = 75;
+      // Column headers — rotate -45° so codes sit over narrow columns.
+      // Math benchmark codes are long "STRAND|BENCHMARK" composites (e.g.
+      // "MA.7.NSO.1|MA.7.NSO.1.1", up to 49 chars for multi-standard items
+      // like "MA.8.DP.2|MA.8.DP.2.3 and MA.8.DP.2.2|MA.8.DP.2.3"). Printing
+      // the raw code overflowed upward into the Bottom-3 tile and clipped the
+      // right margin. We display the BENCHMARK portion only (the part after
+      // "|"), deduped across " and " composites — this keeps the full
+      // standard identity (e.g. "MA.7.NSO.1.1") at ELA-like length. ELA codes
+      // have no "|" and pass through unchanged.
+      const shortCode = (code: string): string => {
+        const benches = code.split(/\s+and\s+/).map((p) => {
+          const i = p.lastIndexOf("|");
+          return (i >= 0 ? p.slice(i + 1) : p).trim();
+        });
+        const uniq = Array.from(new Set(benches.filter(Boolean)));
+        return uniq.join(" / ") || code;
+      };
+
+      // Size the header band to the tallest rotated label so nothing bleeds
+      // into the tile above. At -45° the vertical extent ≈ textWidth * sin45.
+      // Clamp to [46, 130]: 46 keeps ELA-length codes tight; 130 caps the
+      // band for the longest math composites.
+      doc.font("Helvetica").fontSize(7);
+      let maxLabelW = 0;
+      for (const b of chunk) {
+        const w = doc.widthOfString(shortCode(b.code));
+        if (w > maxLabelW) maxLabelW = w;
+      }
+      const headerHeight = Math.min(
+        130,
+        Math.max(46, Math.ceil(maxLabelW * 0.7071) + 10),
+      );
       // Small buffer above the band so the rotated text never bleeds
       // into the bottom-3 tile above on chunk 0, or into the previous
       // row of cells on subsequent chunks.
@@ -1480,17 +1503,32 @@ router.get(
           width: nameColW,
         });
 
+      const rightLimit = doc.page.width - doc.page.margins.right;
       chunk.forEach((b, i) => {
-        const x = doc.page.margins.left + nameColW + i * cellW + cellW / 2;
+        // Anchor each rotated code at the LEFT edge of its own column, sitting
+        // on the grid rule, then let it rise up-and-to-the-right at 45°. With
+        // translate()+rotate() the diagonal body sits over its own column and
+        // the bottom tip points at the column. The previous approach anchored
+        // the text's right edge at the column CENTER and let it sag up-LEFT,
+        // which pushed the first column's label back over the "Student" name
+        // column and left every code visually offset from its cells. Long
+        // composites can still reach past the right margin, so shrink the font
+        // (down to 5pt) just for labels whose diagonal reach would cross it.
+        const colLeft = doc.page.margins.left + nameColW + i * cellW;
+        const label = shortCode(b.code);
+        let fs = 7;
+        doc.font("Helvetica").fontSize(fs);
+        while (
+          fs > 5 &&
+          colLeft + 2 + doc.widthOfString(label) * 0.7071 > rightLimit
+        ) {
+          fs -= 0.5;
+          doc.fontSize(fs);
+        }
         doc.save();
-        doc.rotate(-45, { origin: [x, headerY + headerHeight - 6] });
-        doc
-          .font("Helvetica")
-          .fontSize(7)
-          .text(b.code, x - 80, headerY + headerHeight - 10, {
-            width: 80,
-            align: "right",
-          });
+        doc.translate(colLeft + 2, headerY + headerHeight - 2);
+        doc.rotate(-45);
+        doc.fillColor("#111").text(label, 0, -3, { lineBreak: false });
         doc.restore();
       });
 

@@ -2666,13 +2666,7 @@ function DeactivateModal({
         setError(b.error ?? "Sign-in failed");
         return;
       }
-      const loginBody = (await loginRes.json().catch(() => null)) as {
-        csrfToken?: string;
-      } | null;
-      const { setCsrfToken } = await import("./lib/csrf");
-      if (loginBody?.csrfToken) setCsrfToken(loginBody.csrfToken);
-      const { authFetch } = await import("./lib/authToken");
-      const deactRes = await authFetch("/api/kiosk/deactivate", {
+      const deactRes = await fetch("/api/kiosk/deactivate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token }),
@@ -2687,9 +2681,7 @@ function DeactivateModal({
       }
       // Always log the staff out so we don't leave a teacher session sitting on
       // a shared classroom device.
-      await authFetch("/api/auth/logout", { method: "POST" }).catch(() => {});
-      const { clearAuthToken } = await import("./lib/authToken");
-      clearAuthToken();
+      await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
       if (!deactRes.ok && deactRes.status !== 404) {
         const b = await deactRes.json().catch(() => ({}));
         setError(b.error ?? `Deactivation failed (${deactRes.status})`);

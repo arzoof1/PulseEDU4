@@ -38,7 +38,7 @@ async function loadStaff(req: Request) {
   if (!id) {
     const auth = req.headers.authorization;
     if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      id = verifyAuthToken(auth.slice(7).trim())?.staffId ?? null;
+      id = verifyAuthToken(auth.slice(7).trim());
     }
   }
   if (!id) return null;

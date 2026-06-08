@@ -4,11 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm run build && pnpm run start",
+    "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
-    "start": "node --env-file=.env --enable-source-maps ./dist/index.mjs",
-    "seed": "pnpm run build && node --env-file=.env --enable-source-maps ./dist/seedCli.mjs",
-    "worker:scheduled": "pnpm run build && node --env-file=.env --enable-source-maps ./dist/scheduledJobsWorker.mjs",
+    "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
@@ -30,7 +28,6 @@
     "express": "^5",
     "express-session": "^1.19.0",
     "google-auth-library": "^10.6.2",
-    "helmet": "^8.1.0",
     "node-cron": "^4.2.1",
     "otplib": "^12.0.1",
     "papaparse": "^5.5.3",

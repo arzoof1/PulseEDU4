@@ -38,9 +38,6 @@ export const staffTable = pgTable("staff", {
   previewTargetStaffId: integer("preview_target_staff_id"),
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
-  // Bumped on logout / password change to invalidate outstanding staff bearer
-  // tokens (when STAFF_BEARER_AUTH_ENABLED). Session cookies are unaffected.
-  authTokenVersion: integer("auth_token_version").notNull().default(0),
   displayName: text("display_name").notNull(),
 
   // ---- Role flags (legacy gates + labels/presets) ----

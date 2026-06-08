@@ -881,9 +881,9 @@ export default function TeacherBenchmarksTab({
           onClick={openPdf}
           disabled={!data || data.benchmarks.length === 0}
           style={{ padding: "4px 10px", fontWeight: 600 }}
-          title="Open printable PDF of this heatmap"
+          title="Open printable heatmap PDF"
         >
-          Print PDF{" "}
+          Print HEATMAP{" "}
           {periodFilter == null ? "(All periods)" : `(Period ${periodFilter})`}
         </button>
         <button

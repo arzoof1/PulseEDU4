@@ -1,4 +1,11 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Login from "./Login";
 import {
   HowToUseHelp,
@@ -100,6 +107,7 @@ import HeartbeatSectionsAdmin from "./components/HeartbeatSectionsAdmin";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
 import LocationsAdmin from "./components/LocationsAdmin";
+import RestroomAccessAdmin from "./components/RestroomAccessAdmin";
 import StaffRolesMatrix from "./components/StaffRolesMatrix";
 import BellScheduleSection from "./components/BellScheduleSection";
 import Displays from "./components/Displays";
@@ -132,7 +140,6 @@ import SchoolSwitcher from "./components/SchoolSwitcher";
 import SchoolBrandingPanel from "./components/SchoolBrandingPanel";
 import { useSchoolBranding } from "./lib/branding";
 import { authFetch } from "./lib/authToken";
-import { fetchAllStudents } from "./lib/students";
 import {
   AreaChart,
   Area,
@@ -5869,6 +5876,47 @@ function App() {
   >([]);
   const [copiedRoom, setCopiedRoom] = useState<string | null>(null);
 
+  // Restroom Access Control state (loaded from GET /api/restroom-access).
+  const [restroomAccessEnabled, setRestroomAccessEnabled] = useState(false);
+  const [restroomList, setRestroomList] = useState<
+    { id: number; name: string }[]
+  >([]);
+  const [restroomNames, setRestroomNames] = useState<string[]>([]);
+  const [restroomRoomDefaults, setRestroomRoomDefaults] = useState<
+    Record<string, string[]>
+  >({});
+  const [restroomTeacherOverrides, setRestroomTeacherOverrides] = useState<
+    Record<string, string[]>
+  >({});
+
+  const loadRestroomAccess = useCallback(() => {
+    authFetch("/api/restroom-access")
+      .then((res) => (res.ok ? res.json() : null))
+      .then(
+        (
+          data: {
+            enabled: boolean;
+            restrooms: { id: number; name: string }[];
+            restroomNames: string[];
+            roomDefaults: Record<string, string[]>;
+            teacherOverrides: Record<string, string[]>;
+          } | null,
+        ) => {
+          if (!data) return;
+          setRestroomAccessEnabled(Boolean(data.enabled));
+          setRestroomList(Array.isArray(data.restrooms) ? data.restrooms : []);
+          setRestroomNames(
+            Array.isArray(data.restroomNames) ? data.restroomNames : [],
+          );
+          setRestroomRoomDefaults(data.roomDefaults ?? {});
+          setRestroomTeacherOverrides(data.teacherOverrides ?? {});
+        },
+      )
+      .catch((err) =>
+        console.error("Failed to load restroom access:", err),
+      );
+  }, []);
+
   useEffect(() => {
     // Prefer the per-staff defaultRoom stored on the user record (the new
     // editable field in Staff & Roles); fall back to the older staffDefaults
@@ -6029,13 +6077,11 @@ function App() {
 
   useEffect(() => {
     import("./lib/authToken").then(({ authFetch, setAuthToken }) => {
-      import("./lib/csrf").then(({ setCsrfToken }) => {
       authFetch("/api/auth/me")
         .then((res) => (res.ok ? res.json() : null))
         .then(
-          (user: (typeof authUser & { authToken?: string; csrfToken?: string }) | null) => {
+          (user: (typeof authUser & { authToken?: string }) | null) => {
             if (user?.authToken) setAuthToken(user.authToken);
-            if (user?.csrfToken) setCsrfToken(user.csrfToken);
             setAuthUser(user);
             // Kick off feature-licensing fetch as soon as auth lands.
             // Idempotent: no-op on repeated calls.
@@ -6044,7 +6090,6 @@ function App() {
         )
         .catch(() => setAuthUser(null))
         .finally(() => setAuthLoading(false));
-      });
     });
   }, []);
 
@@ -6116,6 +6161,8 @@ function App() {
       .catch((err) =>
         console.error("Failed to load teacher allowlist:", err),
       );
+
+    loadRestroomAccess();
 
     authFetch("/api/staff-defaults")
       .then((res) => (res.ok ? res.json() : []))
@@ -6592,8 +6639,9 @@ function App() {
   };
 
   const loadStudents = () => {
-    fetchAllStudents<Student>()
-      .then((data) => setStudents(data))
+    authFetch("/api/students")
+      .then((res) => res.json())
+      .then((data: Student[]) => setStudents(data))
       .catch((err) => console.error("Failed to load students:", err));
   };
 
@@ -9499,8 +9547,6 @@ function App() {
               type="button"
               onClick={async () => {
                 await authFetch("/api/auth/logout", { method: "POST" });
-                const { clearAuthToken } = await import("./lib/authToken");
-                clearAuthToken();
                 setAuthUser(null);
               }}
               style={{
@@ -10252,171 +10298,6 @@ function App() {
           front-of-room kiosk; "Show QR" mints a phone-ready view-only
           link. The component self-hides when nothing is in scope. */}
       <CompanionQueuePanel user={authUser} />
-      {(() => {
-        let active = 0;
-        let overdue = 0;
-        let ended = 0;
-        const today = new Date();
-        for (const p of hallPasses) {
-          const created = new Date(p.createdAt);
-          const isToday =
-            created.getFullYear() === today.getFullYear() &&
-            created.getMonth() === today.getMonth() &&
-            created.getDate() === today.getDate();
-          if (!isToday) continue;
-          if (p.status !== "active") {
-            ended++;
-          } else if (p.status === "active") {
-            const expiresAt =
-              new Date(p.createdAt).getTime() +
-              p.maxDurationMinutes * 60 * 1000;
-            if (now >= expiresAt) overdue++;
-            else active++;
-          }
-        }
-        return (
-          <>
-            <div
-              style={{
-                borderTopLeftRadius: "var(--radius-lg, 8px)",
-                borderTopRightRadius: "var(--radius-lg, 8px)",
-                overflow: "hidden",
-                marginBottom: "-1px",
-              }}
-            >
-              <div className="section-header-bar-teal" style={{ width: "100%", margin: 0 }} />
-              <div className="section-header-band-hub" style={{ width: "100%", margin: 0 }} />
-            </div>
-          <div className="card">
-            <h2
-              style={{
-                margin: 0,
-                fontSize: "1.5rem",
-                fontWeight: 700,
-                color: "#7c3aed",
-              }}
-            >
-              Hall Pass Summary
-            </h2>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "2fr 1fr 1fr",
-                gap: "1rem",
-                alignItems: "stretch",
-              }}
-            >
-              <div
-                style={{
-                  background: "white",
-                  border: "1px solid #e2e8f0",
-                  borderRadius: 16,
-                  padding: "1.25rem 1.5rem",
-                  boxShadow: "0 1px 3px rgba(15,23,42,0.06)",
-                  display: "flex",
-                  flexDirection: "column",
-                  justifyContent: "space-between",
-                  minHeight: 200,
-                  position: "relative",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "flex-start",
-                    gap: "1rem",
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: "1.5rem",
-                      fontWeight: 800,
-                      color: "#1e1b4b",
-                      lineHeight: 1.15,
-                    }}
-                  >
-                    Active Hall Passes
-                  </div>
-                  <div style={{ fontSize: "1.75rem" }} aria-hidden>
-                    🚶
-                  </div>
-                </div>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "1rem",
-                    marginTop: "1rem",
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: "3.25rem",
-                      fontWeight: 700,
-                      color: "#94a3b8",
-                      lineHeight: 1,
-                    }}
-                  >
-                    {active}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => window.print()}
-                    style={{
-                      flex: 1,
-                      background: "var(--brand-header-bg)",
-                      border: "none",
-                      borderRadius: 12,
-                      color: "white",
-                      fontWeight: 600,
-                      fontSize: "1rem",
-                      padding: "0.85rem 1rem",
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      gap: "0.5rem",
-                    }}
-                  >
-                    <span aria-hidden>🖨️</span>
-                    Report of Students
-                  </button>
-                </div>
-              </div>
-              <div className="stat-card stat-overdue">
-                <span
-                  className="stat-label"
-                  style={{
-                    fontSize: "1.5rem",
-                    fontWeight: 800,
-                    color: "#1e1b4b",
-                    lineHeight: 1.15,
-                  }}
-                >
-                  Overdue Passes
-                </span>
-                <span className="stat-value">{overdue}</span>
-              </div>
-              <div className="stat-card stat-ended">
-                <span
-                  className="stat-label"
-                  style={{
-                    fontSize: "1.5rem",
-                    fontWeight: 800,
-                    color: "#1e1b4b",
-                    lineHeight: 1.15,
-                  }}
-                >
-                  Ended Passes
-                </span>
-                <span className="stat-value">{ended}</span>
-              </div>
-            </div>
-          </div>
-          </>
-        );
-      })()}
 
       {/* Create Pass CTA was here — moved to the top of the overview
           so it's tappable on mobile without scrolling past the stats. */}
@@ -10433,6 +10314,10 @@ function App() {
         canChangeTeacher={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
         nearDestinations={teacherAllowlistMap[currentStaffUser] ?? []}
         bypassContactAck={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
+        restroomAccessEnabled={restroomAccessEnabled}
+        restroomNames={restroomNames}
+        restroomRoomDefaults={restroomRoomDefaults}
+        restroomTeacherOverrides={restroomTeacherOverrides}
         maxMinutes={schoolSettings.hallPassMaxMinutes}
         defaultMinutes={schoolSettings.hallPassDefaultMinutes}
         onCreate={async (payload) => {
@@ -10834,6 +10719,171 @@ function App() {
           </table>
         )}
       </div>
+      {(() => {
+        let active = 0;
+        let overdue = 0;
+        let ended = 0;
+        const today = new Date();
+        for (const p of hallPasses) {
+          const created = new Date(p.createdAt);
+          const isToday =
+            created.getFullYear() === today.getFullYear() &&
+            created.getMonth() === today.getMonth() &&
+            created.getDate() === today.getDate();
+          if (!isToday) continue;
+          if (p.status !== "active") {
+            ended++;
+          } else if (p.status === "active") {
+            const expiresAt =
+              new Date(p.createdAt).getTime() +
+              p.maxDurationMinutes * 60 * 1000;
+            if (now >= expiresAt) overdue++;
+            else active++;
+          }
+        }
+        return (
+          <>
+            <div
+              style={{
+                borderTopLeftRadius: "var(--radius-lg, 8px)",
+                borderTopRightRadius: "var(--radius-lg, 8px)",
+                overflow: "hidden",
+                marginBottom: "-1px",
+              }}
+            >
+              <div className="section-header-bar-teal" style={{ width: "100%", margin: 0 }} />
+              <div className="section-header-band-hub" style={{ width: "100%", margin: 0 }} />
+            </div>
+          <div className="card">
+            <h2
+              style={{
+                margin: 0,
+                fontSize: "1.5rem",
+                fontWeight: 700,
+                color: "#7c3aed",
+              }}
+            >
+              Hall Pass Summary
+            </h2>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "2fr 1fr 1fr",
+                gap: "1rem",
+                alignItems: "stretch",
+              }}
+            >
+              <div
+                style={{
+                  background: "white",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 16,
+                  padding: "1.25rem 1.5rem",
+                  boxShadow: "0 1px 3px rgba(15,23,42,0.06)",
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
+                  minHeight: 200,
+                  position: "relative",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                    gap: "1rem",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "1.5rem",
+                      fontWeight: 800,
+                      color: "#1e1b4b",
+                      lineHeight: 1.15,
+                    }}
+                  >
+                    Active Hall Passes
+                  </div>
+                  <div style={{ fontSize: "1.75rem" }} aria-hidden>
+                    🚶
+                  </div>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "1rem",
+                    marginTop: "1rem",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "3.25rem",
+                      fontWeight: 700,
+                      color: "#94a3b8",
+                      lineHeight: 1,
+                    }}
+                  >
+                    {active}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    style={{
+                      flex: 1,
+                      background: "var(--brand-header-bg)",
+                      border: "none",
+                      borderRadius: 12,
+                      color: "white",
+                      fontWeight: 600,
+                      fontSize: "1rem",
+                      padding: "0.85rem 1rem",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "0.5rem",
+                    }}
+                  >
+                    <span aria-hidden>🖨️</span>
+                    Report of Students
+                  </button>
+                </div>
+              </div>
+              <div className="stat-card stat-overdue">
+                <span
+                  className="stat-label"
+                  style={{
+                    fontSize: "1.5rem",
+                    fontWeight: 800,
+                    color: "#1e1b4b",
+                    lineHeight: 1.15,
+                  }}
+                >
+                  Overdue Passes
+                </span>
+                <span className="stat-value">{overdue}</span>
+              </div>
+              <div className="stat-card stat-ended">
+                <span
+                  className="stat-label"
+                  style={{
+                    fontSize: "1.5rem",
+                    fontWeight: 800,
+                    color: "#1e1b4b",
+                    lineHeight: 1.15,
+                  }}
+                >
+                  Ended Passes
+                </span>
+                <span className="stat-value">{ended}</span>
+              </div>
+            </div>
+          </div>
+          </>
+        );
+      })()}
 
       </>)}
       {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "hub" && (() => {
@@ -20500,6 +20550,15 @@ function App() {
                 group: "hall-pass-locations",
               },
               {
+                id: "restroom-access",
+                icon: "🚻",
+                title: "Restroom Access Control",
+                subtitle: restroomAccessEnabled
+                  ? "ON · choose which restrooms each room and teacher can send to."
+                  : "Limit which restrooms show per room and per teacher.",
+                group: "hall-pass-locations",
+              },
+              {
                 id: "school",
                 icon: "🏫",
                 title: "School Settings",
@@ -20700,6 +20759,11 @@ function App() {
                 subtitle:
                   "Estimate the Florida school grade from FAST + manual components per PM window.",
                 group: "admin-tenancy",
+                // Temporarily gated: the page and its API stay in place, but
+                // the tile is disabled so staff can't open it and see grades
+                // calculated with the not-yet-finalized rules. Remove this
+                // flag to re-enable.
+                comingSoon: true,
               });
             }
             // Signage launcher — kiosk URLs for the three Pulse hallway-TV
@@ -21996,6 +22060,12 @@ function App() {
         );
       })()}
 
+      {activeSection === "settings" && canManageSettings && settingsTile === "restroom-access" && (
+        <RestroomAccessAdmin
+          staffUsers={staffUsers}
+          onChanged={loadRestroomAccess}
+        />
+      )}
       {activeSection === "settings" && canManageSettings && (settingsTile === "allowlist" || settingsTile === "locations" || settingsTile === "staff-defaults" || settingsTile === "school") && (
         <>
         {settingsTile === "allowlist" && (

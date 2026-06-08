@@ -1,12 +1,6 @@
 // Parent-side fetch helper. Mirrors the staff `authToken.ts` but uses a
 // SEPARATE storage key so that a parent and a staff user can be signed in
 // in two tabs of the same browser without stomping on each other.
-import {
-  clearCsrfToken,
-  csrfHeadersForMethod,
-  setCsrfToken,
-} from "../lib/csrf";
-
 const KEY = "pulseed.parentToken";
 
 export function setParentToken(token: string | null | undefined) {
@@ -26,38 +20,18 @@ export function getParentToken(): string | null {
   }
 }
 
-export function clearParentSession() {
-  setParentToken(null);
-  clearCsrfToken();
-}
-
-function applyParentMePayload(data: {
-  authToken?: string;
-  csrfToken?: string;
-} | null) {
-  if (typeof data?.authToken === "string" && data.authToken.length > 0) {
-    setParentToken(data.authToken);
-  }
-  if (typeof data?.csrfToken === "string" && data.csrfToken.length > 0) {
-    setCsrfToken(data.csrfToken);
-  }
-}
-
 function buildHeaders(init: RequestInit): Headers {
   const headers = new Headers(init.headers ?? {});
   const t = getParentToken();
   if (t && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${t}`);
   }
-  for (const [key, value] of Object.entries(csrfHeadersForMethod(init.method))) {
-    if (!headers.has(key)) headers.set(key, value);
-  }
   return headers;
 }
 
-let refreshInFlight: Promise<boolean> | null = null;
+let refreshInFlight: Promise<string | null> | null = null;
 
-async function refreshParentSession(): Promise<boolean> {
+async function refreshParentToken(): Promise<string | null> {
   if (refreshInFlight) return refreshInFlight;
   refreshInFlight = (async () => {
     try {
@@ -68,15 +42,18 @@ async function refreshParentSession(): Promise<boolean> {
         credentials: "include",
         headers,
       });
-      if (!res.ok) return false;
-      const data = (await res.json().catch(() => null)) as {
-        authToken?: string;
-        csrfToken?: string;
-      } | null;
-      applyParentMePayload(data);
-      return !!(data?.csrfToken || data?.authToken);
+      if (!res.ok) return null;
+      const data = (await res.json().catch(() => null)) as
+        | { authToken?: string }
+        | null;
+      const fresh = data?.authToken;
+      if (typeof fresh === "string" && fresh.length > 0) {
+        setParentToken(fresh);
+        return fresh;
+      }
+      return null;
     } catch {
-      return false;
+      return null;
     } finally {
       refreshInFlight = null;
     }
@@ -88,29 +65,12 @@ export async function parentFetch(
   input: RequestInfo | URL,
   init: RequestInit = {},
 ): Promise<Response> {
-  const doFetch = () =>
-    fetch(input, {
-      credentials: "include",
-      ...init,
-      headers: buildHeaders(init),
-    });
-
-  let res = await doFetch();
-
-  if (res.status === 403) {
-    const body = (await res.clone().json().catch(() => null)) as {
-      error?: string;
-    } | null;
-    if (
-      body?.error === "csrf_token_required" ||
-      body?.error === "csrf_token_invalid"
-    ) {
-      if (await refreshParentSession()) {
-        res = await doFetch();
-      }
-    }
-  }
-
+  const headers = buildHeaders(init);
+  const res = await fetch(input, {
+    credentials: "include",
+    ...init,
+    headers,
+  });
   if (res.status !== 401) return res;
 
   const url =
@@ -121,11 +81,15 @@ export async function parentFetch(
         : (input as Request).url;
   if (url.includes("/api/parent-auth/")) return res;
 
-  if (await refreshParentSession()) {
-    return doFetch();
-  }
-
-  return res;
+  const fresh = await refreshParentToken();
+  if (!fresh) return res;
+  const retryHeaders = new Headers(init.headers ?? {});
+  retryHeaders.set("Authorization", `Bearer ${fresh}`);
+  return fetch(input, {
+    credentials: "include",
+    ...init,
+    headers: retryHeaders,
+  });
 }
 
 export interface ParentMe {
@@ -134,8 +98,8 @@ export interface ParentMe {
   displayName: string;
   schoolId: number;
   active: boolean;
+  hasPassword: boolean;
   authToken?: string;
-  csrfToken?: string;
   students: Array<{
     id: number;
     studentId: string;

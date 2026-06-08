@@ -5,7 +5,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { fetchStudentsPage } from "../../lib/students";
+import { authFetch } from "../../lib/authToken";
 import VoiceTextarea from "./VoiceTextarea";
 
 // MentionTextarea — wraps VoiceTextarea (so dictation still works) and
@@ -118,11 +118,16 @@ export default function MentionTextarea({
     const handle = setTimeout(async () => {
       setSearching(true);
       try {
-        const data = await fetchStudentsPage<StudentHit>({
-          q: query.trim(),
-          limit: 12,
-        });
-        if (!cancelled) setHits(data.items);
+        const url = query.trim()
+          ? `/api/students?q=${encodeURIComponent(query.trim())}`
+          : `/api/students`;
+        const res = await authFetch(url, { credentials: "include" });
+        if (!res.ok) {
+          if (!cancelled) setHits([]);
+          return;
+        }
+        const data = (await res.json()) as StudentHit[];
+        if (!cancelled) setHits(data.slice(0, 12));
       } catch {
         if (!cancelled) setHits([]);
       } finally {

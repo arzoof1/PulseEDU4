@@ -1,109 +1,97 @@
-// Staff API auth: HttpOnly session cookie is the primary mechanism.
-// Bearer tokens are only stored in memory when the server opts in
-// (STAFF_BEARER_AUTH_ENABLED) — never in sessionStorage (XSS-safe default).
-
-import {
-  clearCsrfToken,
-  csrfHeadersForMethod,
-  setCsrfToken,
-} from "./csrf";
-
-let inMemoryAuthToken: string | null = null;
+const KEY = "pulseed.authToken";
 
 export function setAuthToken(token: string | null | undefined) {
-  inMemoryAuthToken = token && token.length > 0 ? token : null;
-}
-
-export function clearAuthToken() {
-  inMemoryAuthToken = null;
-  clearCsrfToken();
+  try {
+    if (token) sessionStorage.setItem(KEY, token);
+    else sessionStorage.removeItem(KEY);
+  } catch {
+    /* sessionStorage may be unavailable in some contexts */
+  }
 }
 
 export function getAuthToken(): string | null {
-  return inMemoryAuthToken;
+  try {
+    return sessionStorage.getItem(KEY);
+  } catch {
+    return null;
+  }
 }
 
 export function authHeader(): Record<string, string> {
-  const t = inMemoryAuthToken;
+  const t = getAuthToken();
   return t ? { Authorization: `Bearer ${t}` } : {};
-}
-
-function applyAuthMePayload(data: {
-  authToken?: string;
-  csrfToken?: string;
-} | null) {
-  if (typeof data?.authToken === "string" && data.authToken.length > 0) {
-    setAuthToken(data.authToken);
-  }
-  if (typeof data?.csrfToken === "string" && data.csrfToken.length > 0) {
-    setCsrfToken(data.csrfToken);
-  }
 }
 
 function buildHeaders(init: RequestInit): Headers {
   const headers = new Headers(init.headers ?? {});
-  const t = inMemoryAuthToken;
+  const t = getAuthToken();
   if (t && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${t}`);
-  }
-  for (const [key, value] of Object.entries(csrfHeadersForMethod(init.method))) {
-    if (!headers.has(key)) headers.set(key, value);
   }
   return headers;
 }
 
-function requestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") return input;
-  if (input instanceof URL) return input.pathname;
-  return (input as Request).url;
-}
+let refreshInFlight: Promise<string | null> | null = null;
 
-async function refreshStaffSession(): Promise<boolean> {
-  const meRes = await fetch("/api/auth/me", { credentials: "include" });
-  if (!meRes.ok) return false;
-  const data = (await meRes.json().catch(() => null)) as {
-    authToken?: string;
-    csrfToken?: string;
-  } | null;
-  applyAuthMePayload(data);
-  return !!(data?.csrfToken || data?.authToken);
+async function refreshAuthToken(): Promise<string | null> {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    try {
+      const headers = new Headers();
+      const t = getAuthToken();
+      if (t) headers.set("Authorization", `Bearer ${t}`);
+      const res = await fetch("/api/auth/me", {
+        credentials: "include",
+        headers,
+      });
+      if (!res.ok) return null;
+      const data = (await res.json().catch(() => null)) as
+        | { authToken?: string }
+        | null;
+      const fresh = data?.authToken;
+      if (typeof fresh === "string" && fresh.length > 0) {
+        setAuthToken(fresh);
+        return fresh;
+      }
+      return null;
+    } catch {
+      return null;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
 }
 
 export async function authFetch(
   input: RequestInfo | URL,
   init: RequestInit = {},
 ): Promise<Response> {
-  const doFetch = () =>
-    fetch(input, {
-      credentials: "include",
-      ...init,
-      headers: buildHeaders(init),
-    });
-
-  let res = await doFetch();
-  const url = requestUrl(input);
-
-  if (res.status === 403) {
-    const body = (await res.clone().json().catch(() => null)) as {
-      error?: string;
-    } | null;
-    if (
-      body?.error === "csrf_token_required" ||
-      body?.error === "csrf_token_invalid"
-    ) {
-      if (await refreshStaffSession()) {
-        res = await doFetch();
-      }
-    }
-  }
-
+  const headers = buildHeaders(init);
+  const res = await fetch(input, {
+    credentials: "include",
+    ...init,
+    headers,
+  });
   if (res.status !== 401) return res;
 
+  // Avoid recursion: never retry the refresh endpoint itself.
+  const url =
+    typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.pathname
+        : (input as Request).url;
   if (url.includes("/api/auth/")) return res;
 
-  if (await refreshStaffSession()) {
-    return doFetch();
-  }
+  const fresh = await refreshAuthToken();
+  if (!fresh) return res;
 
-  return res;
+  const retryHeaders = new Headers(init.headers ?? {});
+  retryHeaders.set("Authorization", `Bearer ${fresh}`);
+  return fetch(input, {
+    credentials: "include",
+    ...init,
+    headers: retryHeaders,
+  });
 }

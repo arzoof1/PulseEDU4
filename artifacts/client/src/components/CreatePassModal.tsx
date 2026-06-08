@@ -36,6 +36,22 @@ interface Props {
   nearDestinations: string[];
   /** When true (e.g. Hall Pass admin), the contact-ack is never required. */
   bypassContactAck: boolean;
+  /**
+   * Restroom Access Control. When true, restroom-kind destinations are
+   * HARD-LIMITED to the resolved allowed set (per-teacher override if the
+   * teacher has one, else the origin room default). Unselected restrooms
+   * are hidden entirely. Non-restroom destinations are never affected.
+   */
+  restroomAccessEnabled?: boolean;
+  /** Every restroom-kind destination name for the school. */
+  restroomNames?: string[];
+  /** Per-origin-room default allowed restroom names. */
+  restroomRoomDefaults?: Record<string, string[]>;
+  /**
+   * Per-teacher restroom override (names). A key being present means that
+   * teacher has an override and inherits NOTHING from the room default.
+   */
+  restroomTeacherOverrides?: Record<string, string[]>;
   /** Maximum minutes a teacher can request (set in school settings). */
   maxMinutes?: number;
   /** Default starting value for the time slider. */
@@ -158,6 +174,10 @@ export default function CreatePassModal({
   canChangeTeacher,
   nearDestinations,
   bypassContactAck,
+  restroomAccessEnabled,
+  restroomNames,
+  restroomRoomDefaults,
+  restroomTeacherOverrides,
   maxMinutes,
   defaultMinutes,
   onCreate,
@@ -170,6 +190,18 @@ export default function CreatePassModal({
     MIN_MIN,
     Math.min(MAX_MIN, Math.trunc(defaultMinutes ?? FALLBACK_DEFAULT)),
   );
+  // Slider tick labels scale to the configured max. Hardcoding 1/10/20/max
+  // produced nonsense like "1 10 20 10" when a school's max was below 20.
+  const sliderTicks = Array.from(
+    new Set([
+      MIN_MIN,
+      Math.round(MAX_MIN / 3),
+      Math.round((MAX_MIN * 2) / 3),
+      MAX_MIN,
+    ]),
+  )
+    .filter((n) => n >= MIN_MIN && n <= MAX_MIN)
+    .sort((a, b) => a - b);
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [studentQuery, setStudentQuery] = useState("");
   const [selectedStudent, setSelectedStudent] =
@@ -209,7 +241,7 @@ export default function CreatePassModal({
     [destinationsByRoom],
   );
 
-  const availableDestinations = useMemo(() => {
+  const roomAvailableDestinations = useMemo(() => {
     if (originRoom && destinationsByRoom[originRoom]) {
       return destinationsByRoom[originRoom];
     }
@@ -219,6 +251,75 @@ export default function CreatePassModal({
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [destinationsByRoom, originRoom]);
+
+  const restroomNameSet = useMemo(
+    () => new Set(restroomNames ?? []),
+    [restroomNames],
+  );
+
+  // Apply Restroom Access Control on top of the room's destination list.
+  // When OFF (or no restrooms configured), behavior is identical to before.
+  // When ON: strip every restroom-kind destination, then add back ONLY the
+  // resolved allowed restrooms — the teacher's override if they have one,
+  // otherwise the origin room's default restroom set. A teacher override
+  // wins outright over the room default (it does not merge). Non-restroom
+  // destinations pass through untouched.
+  const availableDestinations = useMemo(() => {
+    if (!restroomAccessEnabled || restroomNameSet.size === 0) {
+      return roomAvailableDestinations;
+    }
+    const override = restroomTeacherOverrides?.[selectedTeacher];
+    const allowed =
+      override !== undefined
+        ? override
+        : (restroomRoomDefaults?.[originRoom] ?? []);
+    const allowedRestroomSet = new Set(
+      allowed.filter((d) => restroomNameSet.has(d)),
+    );
+    const nonRestrooms = roomAvailableDestinations.filter(
+      (d) => !restroomNameSet.has(d),
+    );
+    const allowedRestrooms = Array.from(allowedRestroomSet);
+    return [...nonRestrooms, ...allowedRestrooms].sort((a, b) =>
+      a.localeCompare(b),
+    );
+  }, [
+    roomAvailableDestinations,
+    restroomAccessEnabled,
+    restroomNameSet,
+    restroomTeacherOverrides,
+    restroomRoomDefaults,
+    selectedTeacher,
+    originRoom,
+  ]);
+
+  // Explicit empty-state guardrail: when Restroom Access Control is ON and
+  // the resolved set for this room/teacher has no restrooms, the modal must
+  // say so (and point to the admin screen) instead of silently showing none.
+  const noRestroomsAvailable = useMemo(() => {
+    if (!restroomAccessEnabled || restroomNameSet.size === 0) return false;
+    return !availableDestinations.some((d) => restroomNameSet.has(d));
+  }, [restroomAccessEnabled, restroomNameSet, availableDestinations]);
+
+  // If the currently-picked destination is a restroom that just got
+  // hidden (origin room / teacher changed, or override applied), clear it
+  // so a stale, now-blocked restroom can't be submitted. Only restroom
+  // destinations are touched — teacher-name and other destinations stay.
+  useEffect(() => {
+    if (!restroomAccessEnabled) return;
+    if (
+      destination &&
+      restroomNameSet.has(destination) &&
+      !availableDestinations.includes(destination)
+    ) {
+      setDestination("");
+    }
+  }, [
+    restroomAccessEnabled,
+    destination,
+    restroomNameSet,
+    availableDestinations,
+  ]);
 
   const filteredStudents = useMemo(() => {
     const q = studentQuery.trim().toLowerCase();
@@ -598,9 +699,17 @@ export default function CreatePassModal({
                       </ul>
                     </>
                   )}
+                  {noRestroomsAvailable && (
+                    <p className="cp-empty">
+                      No restrooms are available for this room
+                      {selectedTeacher ? ` / ${selectedTeacher}` : ""}. An admin
+                      can enable them under Settings → Restroom Access.
+                    </p>
+                  )}
                   {groupedDestinations.near.length === 0 &&
                     groupedDestinations.other.length === 0 &&
-                    groupedDestinations.teachers.length === 0 && (
+                    groupedDestinations.teachers.length === 0 &&
+                    !noRestroomsAvailable && (
                       <p className="cp-empty">No destinations match.</p>
                     )}
                 </div>
@@ -650,10 +759,9 @@ export default function CreatePassModal({
                   aria-label="Pass duration in minutes"
                 />
                 <div className="cp-slider-ticks">
-                  <span>{MIN_MIN}</span>
-                  <span>10</span>
-                  <span>20</span>
-                  <span>{MAX_MIN}</span>
+                  {sliderTicks.map((t) => (
+                    <span key={t}>{t}</span>
+                  ))}
                 </div>
               </div>
 

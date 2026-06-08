@@ -3,3 +3,5 @@
 - [Prod deployment identity](prod-deployment-identity.md) — live pulseedu.pulsekinetics.us is a SEPARATE nginx/Helmet host with its own DB; this workspace + executeSql(production) don't reach it. Verify before assuming prod==workspace.
 - [Deployment secret propagation](deployment-secret-propagation.md) — updating a workspace secret value may not reach the published deployment; secret-gated boot one-shots can stay dormant in prod. Bake a one-way value (e.g. bcrypt hash) instead.
 - [School Grade LG parity](school-grade-lg-parity.md) — learning-gain prior evidence must come from `loadFastHistory` historical PM3 (like Teacher Roster), never `priorYearScore`.
+- [FAST Benchmarks PDF headers](fast-benchmarks-pdf-headers.md) — diagonal code headers: anchor at column LEFT edge + translate/rotate rising up-right; verify by rendering the real PDF, don't eyeball.
+- [Hall pass destination policy](hall-pass-destination-policy.md) — destination-visibility policies (e.g. Restroom Access) must be enforced in POST /hall-passes, not just CreatePassModal; client filtering is bypassable.

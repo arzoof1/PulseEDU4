@@ -1,4 +1,5 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
+import bcrypt from "bcryptjs";
 import { randomBytes, createHash } from "node:crypto";
 import {
   db,
@@ -25,13 +26,6 @@ import { and, eq, inArray, isNull, gt, desc, sql, ne, asc } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
-import { bcryptCompare, bcryptHash } from "../lib/bcrypt.js";
-import {
-  checkLoginAllowed,
-  recordLoginFailure,
-  recordLoginSuccess,
-  sendLoginRateLimited,
-} from "../lib/loginThrottle.js";
 import { getSchoolTimezone, startOfDayUtc } from "../lib/schoolYear.js";
 import { loadBrandingForSchool } from "./schoolBranding.js";
 import {
@@ -463,31 +457,20 @@ router.post("/kiosk/activate", async (req, res) => {
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-
-  const blocked = await checkLoginAllowed(req, "staff", normalizedEmail);
-  if (blocked) {
-    sendLoginRateLimited(res, blocked);
-    return;
-  }
-
   const [staff] = await db
     .select()
     .from(staffTable)
     .where(eq(staffTable.email, normalizedEmail));
 
   if (!staff || !staff.active) {
-    await recordLoginFailure(req, "staff", normalizedEmail);
     res.status(401).json({ error: "Invalid email or password" });
     return;
   }
-  const ok = await bcryptCompare(password, staff.passwordHash);
+  const ok = await bcrypt.compare(password, staff.passwordHash);
   if (!ok) {
-    await recordLoginFailure(req, "staff", normalizedEmail);
     res.status(401).json({ error: "Invalid email or password" });
     return;
   }
-
-  await recordLoginSuccess(req, "staff", normalizedEmail);
 
   const { deviceLabel, deviceFingerprint } = cleanDeviceFields(req);
   const outcome = await resolveActivation({
@@ -1319,7 +1302,7 @@ async function findEnrollTokenByPin(
   for (const row of candidates) {
     if (!row.pinHash) continue;
     // eslint-disable-next-line no-await-in-loop
-    if (await bcryptCompare(pin, row.pinHash)) return row;
+    if (await bcrypt.compare(pin, row.pinHash)) return row;
   }
   return null;
 }
@@ -2188,7 +2171,7 @@ async function issueEnrollToken(args: {
   const rawToken = generateEnrollToken();
   const tokenHash = hashToken(rawToken);
   const rawPin = generatePin();
-  const pinHash = await bcryptHash(rawPin, 10);
+  const pinHash = await bcrypt.hash(rawPin, 10);
 
   const tokenId = await db.transaction(async (tx) => {
     await tx
@@ -2362,7 +2345,7 @@ router.post("/kiosk/cards.pdf", requireAdmin, async (req, res) => {
         return;
       }
       // eslint-disable-next-line no-await-in-loop
-      const pinOk = await bcryptCompare(p.pin, row.pinHash);
+      const pinOk = await bcrypt.compare(p.pin, row.pinHash);
       if (!pinOk) {
         res.status(400).json({
           error: "Supplied PIN does not match the live card for this teacher.",

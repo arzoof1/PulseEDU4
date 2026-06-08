@@ -11,7 +11,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
-import { fetchAllStudents } from "../lib/students";
 import SafetyPlanEditor from "./SafetyPlanEditor";
 import StudentPhoto from "./StudentPhoto";
 
@@ -110,8 +109,9 @@ export default function SafetyPlansAdminPage({ canManage, onBack }: Props) {
 
   // Pre-load students once for the create-plan picker (school-scoped).
   useEffect(() => {
-    fetchAllStudents<Student>()
-      .then((rows) => setStudents(rows))
+    authFetch("/api/students")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: Student[]) => Array.isArray(rows) && setStudents(rows))
       .catch(() => {});
   }, []);
 

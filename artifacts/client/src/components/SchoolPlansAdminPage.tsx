@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
 // SuperUser-only cross-school feature management. Renders a grid of
@@ -51,7 +50,7 @@ const FEATURE_LABELS: Record<string, string> = {
 };
 
 async function jget<T>(url: string): Promise<T> {
-  const r = await authFetch(url);
+  const r = await fetch(url, { credentials: "include" });
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   return r.json();
 }
@@ -61,8 +60,9 @@ async function jsend<T>(
   method: "PATCH" | "POST" | "DELETE",
   body?: unknown,
 ): Promise<T> {
-  const r = await authFetch(url, {
+  const r = await fetch(url, {
     method,
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });

@@ -34,13 +34,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import QRCode from "qrcode";
 import { Ticket } from "lucide-react";
-import {
-  clearParentSession,
-  parentFetch,
-  setParentToken,
-  navigate,
-  type ParentMe,
-} from "./api";
+import { parentFetch, setParentToken, navigate, type ParentMe } from "./api";
 
 interface Snapshot {
   parent: { displayName: string; email: string };
@@ -296,11 +290,14 @@ export default function Dashboard({ me }: { me: ParentMe }) {
 
   async function handleSignOut() {
     try {
-      await parentFetch("/api/parent-auth/logout", { method: "POST" });
+      await fetch("/api/parent-auth/logout", {
+        method: "POST",
+        credentials: "include",
+      });
     } catch {
       /* swallow */
     }
-    clearParentSession();
+    setParentToken(null);
     navigate("/parent/login");
   }
 

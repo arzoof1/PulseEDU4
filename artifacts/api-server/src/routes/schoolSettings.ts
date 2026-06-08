@@ -129,6 +129,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     compTimeRequireAuthForm,
     compTimeAuthFormObjectKey,
     fastHistoryYearsVisible,
+    restroomAccessControlEnabled,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -440,6 +441,17 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.strictHouseNameMatch = strictHouseNameMatch;
+  }
+  // Restroom Access Control on/off. School-wide policy — any settings-
+  // manager can flip it (same gate as the rest of this PUT). Boolean only.
+  if (restroomAccessControlEnabled !== undefined) {
+    if (typeof restroomAccessControlEnabled !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "restroomAccessControlEnabled must be a boolean" });
+      return;
+    }
+    updates.restroomAccessControlEnabled = restroomAccessControlEnabled;
   }
   if (staffDirectoryShowCellPhone !== undefined) {
     if (typeof staffDirectoryShowCellPhone !== "boolean") {

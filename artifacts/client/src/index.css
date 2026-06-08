@@ -1435,8 +1435,26 @@ ul[style*="listStyle: none"] li button:hover {
   cursor: pointer;
   letter-spacing: 0.02em;
 }
-.cp-send:hover { background: var(--primary-hover); }
-.cp-send:disabled { opacity: 0.6; cursor: not-allowed; }
+/* Enabled = ready to send: keep it dark and ring it green so the teacher
+   gets a clear "ok to click" affordance. The :not(:disabled) bumps the
+   specificity above the global button:hover rule, which was lightening
+   the button on hover. */
+.cp-send:not(:disabled) {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #10b981;
+}
+.cp-send:hover:not(:disabled) {
+  background: var(--primary-hover);
+  border-color: transparent;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #059669;
+}
+.cp-send:active:not(:disabled) {
+  background: var(--primary-hover);
+}
+.cp-send:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  box-shadow: none;
+}
 .cp-error {
   background: var(--accent-soft);
   color: var(--accent);

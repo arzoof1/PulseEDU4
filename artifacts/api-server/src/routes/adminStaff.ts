@@ -5,10 +5,10 @@ import {
   type Response,
   type NextFunction,
 } from "express";
+import bcrypt from "bcryptjs";
 import { db, staffTable, housesTable, schoolsTable } from "@workspace/db";
 import { and, eq, asc, inArray, sql } from "drizzle-orm";
-import { staffIdFromBearerToken } from "../lib/staffBearerAuth.js";
-import { bcryptHash } from "../lib/bcrypt.js";
+import { verifyAuthToken } from "../lib/authToken.js";
 import {
   getDistrictIdForSchool,
   getSchoolIdsForDistrict,
@@ -29,7 +29,7 @@ async function loadStaff(req: Request): Promise<StaffRow | null> {
   if (!id) {
     const auth = req.headers.authorization;
     if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      id = await staffIdFromBearerToken(auth.slice(7).trim());
+      id = verifyAuthToken(auth.slice(7).trim());
     }
   }
   if (!id) return null;
@@ -747,7 +747,7 @@ router.post(
       targetSchoolId = bodySchoolId;
     }
 
-    const passwordHash = await bcryptHash(password, 10);
+    const passwordHash = await bcrypt.hash(password, 10);
     const [row] = await db
       .insert(staffTable)
       .values({
@@ -860,7 +860,7 @@ router.post(
       return;
     }
 
-    const passwordHash = await bcryptHash(newPassword, 10);
+    const passwordHash = await bcrypt.hash(newPassword, 10);
     await db
       .update(staffTable)
       .set({ passwordHash })

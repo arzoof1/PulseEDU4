@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Heart } from "lucide-react";
 import { setParentToken, navigate, type ParentMe } from "./api";
-import { setCsrfToken } from "../lib/csrf";
 
 export default function ParentLogin({
   onLoggedIn,
@@ -53,7 +52,6 @@ export default function ParentLogin({
       }
       const body = await res.json();
       if (body.authToken) setParentToken(body.authToken);
-      if (body.csrfToken) setCsrfToken(body.csrfToken);
       // Pull /me to get the linked-students list, then hand off.
       const meRes = await fetch("/api/parent-auth/me", {
         credentials: "include",
@@ -67,7 +65,6 @@ export default function ParentLogin({
       }
       const me = (await meRes.json()) as ParentMe;
       if (me.authToken) setParentToken(me.authToken);
-      if (me.csrfToken) setCsrfToken(me.csrfToken);
       onLoggedIn(me);
       navigate("/parent");
     } catch (err) {

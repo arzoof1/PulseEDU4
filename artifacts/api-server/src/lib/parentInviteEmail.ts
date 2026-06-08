@@ -1,9 +1,20 @@
 import { getUncachableResendClient } from "./resendClient.js";
-import { resolvePublicAppOrigin } from "./publicAppUrl.js";
 import { logger } from "./logger.js";
 
+// Build the absolute URL the parent will click in the invite email. Order:
+//   1. PUBLIC_APP_URL (production override — set this in deployment Secrets)
+//   2. REPLIT_DEV_DOMAIN (the dev/preview host, always present in dev)
+//   3. localhost fallback (last resort, only useful for local curl tests)
+function publicAppOrigin(): string {
+  const explicit = process.env.PUBLIC_APP_URL;
+  if (explicit && explicit.length > 0) return explicit.replace(/\/+$/, "");
+  const replit = process.env.REPLIT_DEV_DOMAIN;
+  if (replit && replit.length > 0) return `https://${replit}`;
+  return "http://localhost:5000";
+}
+
 export function buildAcceptInviteUrl(token: string): string {
-  return `${resolvePublicAppOrigin()}/parent/accept-invite/${encodeURIComponent(token)}`;
+  return `${publicAppOrigin()}/parent/accept-invite/${encodeURIComponent(token)}`;
 }
 
 type SendInviteArgs = {

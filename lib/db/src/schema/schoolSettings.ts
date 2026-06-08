@@ -239,6 +239,21 @@ export const schoolSettingsTable = pgTable(
   //     The server enforces this on EVERY release event, so a stale
   //     client tab can't bypass it.
   // -----------------------------------------------------------------
+  // -----------------------------------------------------------------
+  // Restroom Access Control. When ON, the Create Pass modal HARD-BLOCKS
+  // restroom-kind destinations to the resolved allowed set: a teacher's
+  // per-teacher override (teacher_restroom_overrides) if they have one,
+  // otherwise the origin room's restroom pairings
+  // (location_allowed_destinations restroom rows). Unselected restrooms
+  // are hidden entirely. When a room has no restroom config and the
+  // teacher has no override, NO restrooms are offered (explicit empty
+  // state — no fall-through to "all restrooms"). Non-restroom
+  // destinations are never affected. Default OFF preserves existing
+  // behavior for every current school.
+  // -----------------------------------------------------------------
+  restroomAccessControlEnabled: boolean("restroom_access_control_enabled")
+    .notNull()
+    .default(false),
   pickupCutoffTime: text("pickup_cutoff_time").notNull().default("15:30"),
   pickupTeacherViewScope: text("pickup_teacher_view_scope")
     .notNull()
