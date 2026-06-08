@@ -17,6 +17,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { fetchAllStudents } from "../lib/students";
 import {
   HowToUseHelp,
   HowToSection,
@@ -272,11 +273,10 @@ export default function MyWatchList({ onOpenStudent, currentUser }: Props) {
   // Pull the student directory once for the add modal.
   useEffect(() => {
     let cancelled = false;
-    authFetch("/api/students")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((rows: StudentLookup[]) => {
+    fetchAllStudents<StudentLookup>()
+      .then((rows) => {
         if (cancelled) return;
-        setStudentDirectory(Array.isArray(rows) ? rows : []);
+        setStudentDirectory(rows);
       })
       .catch(() => {});
     return () => {

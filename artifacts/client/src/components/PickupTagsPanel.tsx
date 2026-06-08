@@ -6,6 +6,7 @@ import {
   type CSSProperties,
 } from "react";
 import { authFetch } from "../lib/authToken";
+import { searchStudents } from "../lib/students";
 
 // =============================================================================
 // PickupTagsPanel — in-app Pickup Tag Printing
@@ -226,13 +227,9 @@ export default function PickupTagsPanel() {
     setSearching(true);
     const t = setTimeout(async () => {
       try {
-        const res = await authFetch(
-          `/api/students?q=${encodeURIComponent(q)}`,
-        );
-        if (!res.ok) return;
-        const data = (await res.json()) as StudentHit[];
+        const data = await searchStudents<StudentHit>(q, 12);
         if (mySeq !== searchSeq.current) return;
-        setHits(data.slice(0, 12));
+        setHits(data);
       } finally {
         if (mySeq === searchSeq.current) setSearching(false);
       }

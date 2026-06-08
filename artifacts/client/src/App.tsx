@@ -67,6 +67,7 @@ import {
   LockedBadge,
   FeatureGate,
 } from "./lib/features";
+import { fetchAllStudents } from "./lib/students";
 import { StudentFinderModal } from "./components/StudentFinderModal";
 import StaffDirectoryPage from "./components/StaffDirectoryPage";
 import OnboardingChecklist from "./components/OnboardingChecklist";
@@ -6639,9 +6640,8 @@ function App() {
   };
 
   const loadStudents = () => {
-    authFetch("/api/students")
-      .then((res) => res.json())
-      .then((data: Student[]) => setStudents(data))
+    fetchAllStudents<Student>()
+      .then((data) => setStudents(data))
       .catch((err) => console.error("Failed to load students:", err));
   };
 

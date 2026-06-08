@@ -20,14 +20,30 @@ function studentsUrl(query: StudentsQuery): string {
   return suffix ? `/api/students?${suffix}` : "/api/students";
 }
 
+/** Normalize GET /api/students JSON (legacy array or paginated page). */
+export function studentsItemsFromJson<T>(data: unknown): T[] {
+  if (Array.isArray(data)) return data as T[];
+  if (
+    data &&
+    typeof data === "object" &&
+    Array.isArray((data as StudentsPage<T>).items)
+  ) {
+    return (data as StudentsPage<T>).items;
+  }
+  return [];
+}
+
 async function readStudentsPage<T>(res: Response): Promise<StudentsPage<T>> {
   const data = await res.json();
   if (Array.isArray(data)) {
     return { items: data as T[], nextCursor: null };
   }
   return {
-    items: Array.isArray(data?.items) ? (data.items as T[]) : [],
-    nextCursor: typeof data?.nextCursor === "string" ? data.nextCursor : null,
+    items: studentsItemsFromJson<T>(data),
+    nextCursor:
+      typeof (data as StudentsPage<T>)?.nextCursor === "string"
+        ? (data as StudentsPage<T>).nextCursor
+        : null,
   };
 }
 

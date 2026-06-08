@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { fetchAllStudents } from "../lib/students";
 
 // Admin tool — print Student ID badges (PDF, lanyard or CR80, with
 // rectangle photo on the badge when consent + photo are present,
@@ -47,9 +48,8 @@ export function StudentBadgesPanel() {
   const [events, setEvents] = useState<PrintEvent[]>([]);
 
   useEffect(() => {
-    authFetch("/api/students")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((d) => setStudents(Array.isArray(d) ? d : d?.students ?? []))
+    fetchAllStudents<StudentRow>()
+      .then((rows) => setStudents(rows))
       .catch(() => setStudents([]));
     refreshEvents();
   }, []);
