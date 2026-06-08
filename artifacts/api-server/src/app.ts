@@ -1,11 +1,17 @@
-import express, { type Express } from "express";
-import cors from "cors";
+import express, { type Express, type RequestHandler } from "express";
+import helmet from "helmet";
 import pinoHttp from "pino-http";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import router from "./routes";
+import { corsMiddleware } from "./lib/corsConfig.js";
+import { resolvePublicAppOrigin } from "./lib/publicAppUrl.js";
+import { csrfProtectionMiddleware } from "./lib/csrf.js";
 import { logger } from "./lib/logger";
-import { verifyAuthToken } from "./lib/authToken";
+import {
+  isStaffBearerAuthEnabled,
+  staffIdFromBearerToken,
+} from "./lib/staffBearerAuth";
 import { db, staffTable, schoolsTable, districtsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
@@ -41,10 +47,37 @@ declare global {
 declare module "express-session" {
   interface SessionData {
     activeSchoolId?: number;
+    csrfToken?: string;
   }
 }
 
 const app: Express = express();
+const isProduction = process.env.NODE_ENV === "production";
+
+function csvEnv(name: string): string[] {
+  return (process.env[name] ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function frameAncestors(): string[] {
+  const configured = csvEnv("SECURITY_FRAME_ANCESTORS");
+  if (configured.length > 0) return configured;
+
+  const ancestors = ["'self'"];
+  ancestors.push(resolvePublicAppOrigin());
+
+  // Replit previews are iframe-based in development; keep that opt-in and
+  // production-configurable instead of using X-Frame-Options DENY/SAMEORIGIN.
+  if (!isProduction) {
+    ancestors.push("http://localhost:5173", "http://localhost:5174");
+    const replit = process.env.REPLIT_DEV_DOMAIN?.trim();
+    if (replit) ancestors.push(`https://${replit}`);
+  }
+
+  return ancestors;
+}
 
 // Required so express-session honors X-Forwarded-Proto from the Replit proxy
 // (TLS terminates upstream, so without this `secure: true` cookies are dropped).
@@ -60,6 +93,41 @@ if (!databaseUrl) {
 }
 
 const PgSession = connectPgSimple(session);
+
+app.use(
+  helmet({
+    // Development Vite/React tooling can require eval/inline assets. Keep CSP
+    // strict in production and disabled locally to avoid breaking dev UX.
+    contentSecurityPolicy: isProduction
+      ? {
+          useDefaults: true,
+          directives: {
+            "default-src": ["'self'"],
+            "base-uri": ["'self'"],
+            "object-src": ["'none'"],
+            "frame-ancestors": frameAncestors(),
+            "form-action": ["'self'"],
+            "img-src": ["'self'", "data:", "blob:", "https:"],
+            "media-src": ["'self'", "data:", "blob:", "https:"],
+            "connect-src": ["'self'", ...csvEnv("CSP_CONNECT_SRC")],
+            "script-src": ["'self'"],
+            "style-src": ["'self'", "'unsafe-inline'"],
+          },
+        }
+      : false,
+    crossOriginEmbedderPolicy: false,
+    // frame-ancestors is more precise than X-Frame-Options for this app's
+    // preview/deployment needs; avoid emitting a conflicting legacy header.
+    frameguard: false,
+    hsts: isProduction
+      ? {
+          maxAge: 15552000,
+          includeSubDomains: true,
+        }
+      : false,
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  }),
+);
 
 app.use(
   pinoHttp({
@@ -80,18 +148,49 @@ app.use(
     },
   }),
 );
-app.use(cors());
-// JSON body limit: bumped from the 100KB default so the Data Imports
-// route can accept CSV text in the request body. The frontend caps file
-// uploads at 10MB; 15MB gives headroom for JSON-quoting overhead.
-app.use(express.json({ limit: "15mb" }));
-app.use(express.urlencoded({ extended: true, limit: "15mb" }));
+app.use(corsMiddleware);
+
+const defaultJsonParser = express.json({ limit: "256kb" });
+const defaultUrlencodedParser = express.urlencoded({
+  extended: true,
+  limit: "64kb",
+});
+const importJsonParser = express.json({ limit: "15mb" });
+const importUrlencodedParser = express.urlencoded({
+  extended: true,
+  limit: "15mb",
+});
+
+function skipDataImportRequests(parser: RequestHandler): RequestHandler {
+  return (req, res, next) => {
+    const path = req.originalUrl.split("?")[0] ?? "";
+    if (path.startsWith("/api/data-imports")) {
+      next();
+      return;
+    }
+    parser(req, res, next);
+  };
+}
+
+// Data import endpoints accept CSV text in JSON bodies. Keep the larger limit
+// scoped to those routes; normal APIs use tighter defaults to reduce abuse.
+app.use("/api/data-imports", importJsonParser, importUrlencodedParser);
+app.use(skipDataImportRequests(defaultJsonParser));
+app.use(skipDataImportRequests(defaultUrlencodedParser));
 
 app.use(
   session({
     store: new PgSession({
       conObject: { connectionString: databaseUrl },
       tableName: "user_sessions",
+      // Not in Drizzle schema (connect-pg-simple owns this table). Create on first use
+      // so local / fresh DBs work without a separate migration step.
+      createTableIfMissing: true,
+      // Make the default cleanup behavior explicit: prune expired sessions
+      // every 15 minutes so user_sessions does not grow without bound.
+      pruneSessionInterval: 15 * 60,
+      errorLog: (err: unknown) =>
+        logger.warn({ err }, "session store background error"),
     }),
     secret: sessionSecret,
     resave: false,
@@ -104,27 +203,23 @@ app.use(
       // to allow third-party cookies, which is increasingly blocked by
       // default and was breaking the session inside the Replit preview iframe.
       sameSite: "lax",
-      secure: true,
+      // HttpOnly cookies work on http://localhost in dev; Secure only over HTTPS.
+      secure: process.env.NODE_ENV === "production",
       maxAge: 1000 * 60 * 60 * 24 * 14,
     },
     name: "pulseed.sid",
   }),
 );
 
-// Resolve the authenticated staff id per request from EITHER the session
-// cookie OR a server-issued Bearer token (HMAC-signed with SESSION_SECRET).
-// The bearer fallback is needed inside the Replit preview iframe where the
-// session cookie is often blocked. We DO NOT write to req.session here, so:
-//   - logout (which destroys the session) stays authoritative for cookie auth
-//   - the session store sees no extra writes/churn
-//   - bearer-derived identity never gets persisted with a different sid
-// Routes should read req.staffId instead of req.session.staffId.
+// Resolve staff identity from the HttpOnly session cookie. Bearer tokens are
+// optional (STAFF_BEARER_AUTH_ENABLED) for legacy iframe/dev only; they are
+// versioned and revoked on logout. Routes should read req.staffId.
 app.use(async (req, _res, next) => {
   let sid: number | null = req.session.staffId ?? null;
-  if (!sid) {
+  if (!sid && isStaffBearerAuthEnabled()) {
     const auth = req.headers.authorization;
     if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      sid = verifyAuthToken(auth.slice(7).trim());
+      sid = await staffIdFromBearerToken(auth.slice(7).trim());
     }
   }
   // "Preview as another staff" swap. Backed by staff.preview_target_staff_id
@@ -309,6 +404,7 @@ app.use(async (req, _res, next) => {
   next();
 });
 
+app.use("/api", csrfProtectionMiddleware);
 app.use("/api", router);
 
 // -----------------------------------------------------------------------------
