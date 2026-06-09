@@ -431,6 +431,44 @@ export default function PickupTagsPanel() {
         active tag at this school. PDFs open as downloads.
       </p>
 
+      <div
+        style={{
+          ...card,
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: 12,
+          borderLeft: "4px solid var(--accent, #1d4ed8)",
+        }}
+      >
+        <div style={{ flex: "1 1 260px", minWidth: 240 }}>
+          <div style={{ fontWeight: 600, marginBottom: 2 }}>
+            Need to authorize a student for car-rider / parent pickup?
+          </div>
+          <div
+            style={{
+              color: "var(--text-subtle, #6b7280)",
+              fontSize: 13,
+            }}
+          >
+            Assigning a student a 4-digit pickup number happens on the
+            Pickup Admin screen. Open it to search a student and issue a
+            number, then come back here to print the tag.
+          </div>
+        </div>
+        <a
+          href={`${import.meta.env.BASE_URL}pickup/admin`}
+          style={{
+            ...primaryBtn,
+            display: "inline-block",
+            textDecoration: "none",
+            whiteSpace: "nowrap",
+          }}
+        >
+          Assign students for pickup →
+        </a>
+      </div>
+
       <div style={card}>
         <div style={{ fontWeight: 600, marginBottom: 8 }}>
           School-wide
