@@ -225,6 +225,8 @@ interface FastSuggestionsResp {
 // closely-monitored Tier 3 academic plan wired back to that subject.
 export interface MtssPlanPrefill {
   studentId: string;
+  studentName?: string | null;
+  studentLocalSisId?: string | null;
   fastSubject: string;
   tier: number;
   title: string;
@@ -390,6 +392,8 @@ export default function MtssPlansAdmin({
     if (!canManage) return;
     setPrefill({
       studentId: s.studentId,
+      studentName: s.studentName,
+      studentLocalSisId: s.studentLocalSisId,
       fastSubject: s.subject,
       tier: 3,
       title: s.suggestedTitle,
@@ -1773,7 +1777,18 @@ function PlanModal({
           {isEdit ? "Edit MTSS Plan" : "New MTSS Plan"}
         </h3>
 
-        {!isEdit ? (
+        {isEdit ? (
+          <div style={{ marginBottom: "0.75rem", color: "#475569" }}>
+            <strong>Student:</strong>{" "}
+            {plan!.studentName ?? "(unknown)"} — ID {plan!.studentLocalSisId ?? "—"}
+          </div>
+        ) : seed?.studentId ? (
+          <div style={{ marginBottom: "0.75rem", color: "#475569" }}>
+            <strong>Student:</strong>{" "}
+            {seed.studentName ?? "(unknown)"} — ID{" "}
+            {seed.studentLocalSisId ?? "—"}
+          </div>
+        ) : (
           <div style={{ marginBottom: "0.75rem" }}>
             <label
               style={{ display: "block", fontWeight: 600, marginBottom: 4 }}
@@ -1811,11 +1826,6 @@ function PlanModal({
                 {dupHint}
               </div>
             )}
-          </div>
-        ) : (
-          <div style={{ marginBottom: "0.75rem", color: "#475569" }}>
-            <strong>Student:</strong>{" "}
-            {plan!.studentName ?? "(unknown)"} — ID {plan!.studentLocalSisId ?? "—"}
           </div>
         )}
 
