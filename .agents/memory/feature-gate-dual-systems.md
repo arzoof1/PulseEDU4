@@ -32,3 +32,26 @@ consistent by dropping its page gate.
 **How to apply:** when adding/auditing a `FeatureGate`-wrapped page, confirm the
 nav entry uses `useFeatureVisible` with the identical feature key, or that the
 page intentionally has no page-level gate and relies solely on its nav gate.
+
+## The `/api/me/features` store must reload on every auth transition
+
+`lib/features.tsx` is a module-level singleton (no Context). `useFeatureVisible`
+and `FeatureGate` fall **fully closed** whenever the store is not `status:"ready"`
+with the feature enabled — so if `/api/me/features` never loads for a session,
+*every* `useFeatureVisible` nav item (MTSS, ISS Dashboard, Displays) vanishes and
+every `FeatureGate` page goes blank.
+
+**Rule:** any path that establishes or tears down auth (login-form `onLogin`,
+logout, mount-with-session) MUST trigger a features (re)load. The robust wiring is
+an effect keyed on `authUser?.id` that calls `refreshFeatures(true)` when present
+and `clearFeatures()` when null — do **not** rely on a one-shot mount-only fetch.
+
+**Why:** the MTSS-button-gone regression — features were loaded only from the
+`[]`-deps mount auth effect, so a fresh sign-in via the Login form (which sets
+`authUser` through a different path) never loaded `/api/me/features`; the store
+stayed empty and all `useFeatureVisible` nav items disappeared. School switching
+is already safe because it does `window.location.reload()`.
+
+**How to apply:** `refreshFeatures` is request-id guarded, so concurrent/stale
+fetches (e.g. a pre-logout response landing after `clearFeatures`) cannot clobber
+newer state — prefer it over ad-hoc one-shot fetches.

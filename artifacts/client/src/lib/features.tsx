@@ -2,8 +2,10 @@
 //
 // We deliberately skip a Context provider here because App.tsx is a
 // 21k-line module that already owns auth state directly. Instead, the
-// hook is backed by a module-level store + `useSyncExternalStore`, and
-// App.tsx kicks off `initFeatures()` once after auth lands.
+// hook is backed by a module-level store + `useSyncExternalStore`.
+// App.tsx calls `refreshFeatures(true)` whenever the authenticated
+// user changes and `clearFeatures()` on logout, so feature gates
+// always reflect the current session.
 
 import React, { useSyncExternalStore } from "react";
 import { authFetch } from "./authToken";
@@ -40,17 +42,24 @@ function getSnapshot() {
 }
 
 let inflight: Promise<void> | null = null;
+// Monotonic request id. Bumped on every refresh and on clearFeatures so
+// a late/stale response (e.g. a pre-logout fetch resolving after the
+// user signed out) can never clobber newer state.
+let requestSeq = 0;
 
 // Idempotent. Safe to call repeatedly — only one fetch in flight.
-// Re-call with `force=true` to invalidate (e.g. after the SuperUser
-// admin UI flips a flag and wants to see the effect immediately).
+// Re-call with `force=true` to invalidate (e.g. after a login/logout
+// or when the SuperUser admin UI flips a flag and wants to see the
+// effect immediately).
 export async function refreshFeatures(force = false): Promise<void> {
   if (inflight && !force) return inflight;
+  const seq = ++requestSeq;
   inflight = (async () => {
     state = { ...state, status: "loading" };
     emit();
     try {
       const res = await authFetch("/api/me/features");
+      if (seq !== requestSeq) return; // superseded by a newer call/clear
       if (!res.ok) {
         // Treat as "no licensing context" — every gate falls closed.
         state = { status: "error", map: {} };
@@ -58,26 +67,22 @@ export async function refreshFeatures(force = false): Promise<void> {
         return;
       }
       const json = (await res.json()) as { features?: FeatureMap };
+      if (seq !== requestSeq) return; // superseded while parsing
       state = { status: "ready", map: json.features ?? {} };
       emit();
     } catch {
+      if (seq !== requestSeq) return;
       state = { status: "error", map: {} };
       emit();
     } finally {
-      inflight = null;
+      if (seq === requestSeq) inflight = null;
     }
   })();
   return inflight;
 }
 
-// Called by App.tsx after auth lands. No-op when called pre-auth.
-export function initFeatures(): void {
-  if (state.status === "idle") {
-    void refreshFeatures();
-  }
-}
-
 export function clearFeatures(): void {
+  requestSeq++; // invalidate any in-flight fetch
   state = { status: "idle", map: {} };
   inflight = null;
   emit();

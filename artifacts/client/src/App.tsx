@@ -62,7 +62,8 @@ import AuditHealthPanel from "./components/districtOverview/AuditHealthPanel";
 import CrossDistrictReports from "./components/districtOverview/CrossDistrictReports";
 import BulkOverridesPanel from "./components/districtOverview/BulkOverridesPanel";
 import {
-  initFeatures,
+  clearFeatures,
+  refreshFeatures,
   useFeatureVisible,
   LockedBadge,
   FeatureGate,
@@ -6083,15 +6084,27 @@ function App() {
           (user: (typeof authUser & { authToken?: string }) | null) => {
             if (user?.authToken) setAuthToken(user.authToken);
             setAuthUser(user);
-            // Kick off feature-licensing fetch as soon as auth lands.
-            // Idempotent: no-op on repeated calls.
-            if (user) initFeatures();
           },
         )
         .catch(() => setAuthUser(null))
         .finally(() => setAuthLoading(false));
     });
   }, []);
+
+  // Load feature-licensing whenever the authenticated user changes.
+  // The mount effect above only covers an existing session at page
+  // load; a fresh sign-in via the Login form flows through here so
+  // feature-gated nav items and pages never get stuck closed (the
+  // gates fall closed until /api/me/features resolves). Force-refresh
+  // so a new login always pulls that user's current licensing, and
+  // clear on logout so the next user starts clean.
+  useEffect(() => {
+    if (authUser) {
+      void refreshFeatures(true);
+    } else {
+      clearFeatures();
+    }
+  }, [authUser?.id]);
 
   useEffect(() => {
     if (!authUser) return;
