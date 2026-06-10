@@ -106,6 +106,37 @@ const TIER_COLORS: Record<number, string> = {
   3: "#b91c1c", // red
 };
 
+// Tier/track filter tabs for the plans list. Academic plans are
+// distinguished by `fastSubject` being set; behavior plans have it null.
+// "All" keeps every plan reachable (Tier 1 + light Tier 2 academic plans
+// that don't get their own tab). Tier 2 academic is light (no check-ins),
+// so it isn't broken out as its own tab — those show under "All".
+type TierTab = "all" | "t2b" | "t3b" | "t3a";
+
+const TIER_TABS: Array<{ key: TierTab; label: string; color: string }> = [
+  { key: "all", label: "All", color: "#475569" },
+  { key: "t2b", label: "Tier 2 Behavior", color: "#d97706" },
+  { key: "t3b", label: "Tier 3 Behavior", color: "#b91c1c" },
+  { key: "t3a", label: "Tier 3 Academic", color: "#1d4ed8" },
+];
+
+function matchesTierTab(p: Plan, tab: TierTab): boolean {
+  switch (tab) {
+    case "t2b":
+      return p.tier === 2 && !p.fastSubject;
+    case "t3b":
+      return p.tier === 3 && !p.fastSubject;
+    case "t3a":
+      return p.tier === 3 && !!p.fastSubject;
+    default:
+      return true;
+  }
+}
+
+function subjectChipLabel(subject: string | null | undefined): string {
+  return subject === "math" ? "Math" : "ELA";
+}
+
 function fmtDate(iso: string | null | undefined): string {
   if (!iso) return "—";
   try {
@@ -197,6 +228,7 @@ export default function MtssPlansAdmin({
   const [error, setError] = useState("");
   const [status, setStatus] = useState<StatusFilter>("active");
   const [studentFilter, setStudentFilter] = useState("");
+  const [tierTab, setTierTab] = useState<TierTab>("all");
   const [editing, setEditing] = useState<Plan | "new" | null>(null);
   const [prefill, setPrefill] = useState<MtssPlanPrefill | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
@@ -320,7 +352,10 @@ export default function MtssPlansAdmin({
       .catch(() => {});
   }, []);
 
-  const visiblePlans = useMemo(() => {
+  // Search filter first (name / id / title), then the tier-track tab.
+  // Tab counts come off the search-filtered list so they reflect the
+  // current search while still showing how many plans sit under each tab.
+  const searchFilteredPlans = useMemo(() => {
     if (!studentFilter.trim()) return plans;
     const needle = studentFilter.trim().toLowerCase();
     return plans.filter((p) => {
@@ -332,6 +367,21 @@ export default function MtssPlansAdmin({
       );
     });
   }, [plans, studentFilter]);
+
+  const tabCounts = useMemo<Record<TierTab, number>>(
+    () => ({
+      all: searchFilteredPlans.length,
+      t2b: searchFilteredPlans.filter((p) => matchesTierTab(p, "t2b")).length,
+      t3b: searchFilteredPlans.filter((p) => matchesTierTab(p, "t3b")).length,
+      t3a: searchFilteredPlans.filter((p) => matchesTierTab(p, "t3a")).length,
+    }),
+    [searchFilteredPlans],
+  );
+
+  const visiblePlans = useMemo(
+    () => searchFilteredPlans.filter((p) => matchesTierTab(p, tierTab)),
+    [searchFilteredPlans, tierTab],
+  );
 
   const closePlan = async (plan: Plan) => {
     if (!canManage) return;
@@ -482,6 +532,40 @@ export default function MtssPlansAdmin({
               + New Plan
             </button>
           )}
+        </div>
+
+        {/* Tier / track tabs — quick filter so users don't scroll the
+            whole list to find a Tier 2 Behavior vs Tier 3 Academic plan. */}
+        <div
+          style={{
+            display: "flex",
+            gap: 6,
+            marginBottom: "0.75rem",
+            flexWrap: "wrap",
+          }}
+        >
+          {TIER_TABS.map((t) => {
+            const active = tierTab === t.key;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setTierTab(t.key)}
+                style={{
+                  padding: "0.4rem 0.9rem",
+                  borderRadius: 999,
+                  border: `1px solid ${active ? t.color : "#cbd5e1"}`,
+                  background: active ? t.color : "white",
+                  color: active ? "white" : "#475569",
+                  fontSize: "0.85rem",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                {t.label} ({tabCounts[t.key]})
+              </button>
+            );
+          })}
         </div>
 
         {error && (
@@ -932,6 +1016,21 @@ export default function MtssPlansAdmin({
                       >
                         T{p.tier}
                       </span>
+                      {p.fastSubject && (
+                        <span
+                          style={{
+                            marginLeft: 4,
+                            background: "#dbeafe",
+                            color: "#1d4ed8",
+                            padding: "2px 6px",
+                            borderRadius: 999,
+                            fontSize: "0.7rem",
+                            fontWeight: 600,
+                          }}
+                        >
+                          {subjectChipLabel(p.fastSubject)}
+                        </span>
+                      )}
                     </td>
                     <td style={{ padding: "0.5rem" }}>{p.title}</td>
                     <td
