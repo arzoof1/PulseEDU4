@@ -6119,12 +6119,28 @@ export async function ensurePickupSchema(): Promise<void> {
       deactivated_at TIMESTAMPTZ
     )
   `);
+  // contact_slot links an auto-issued number back to the SIS emergency
+  // contact (slot 1-4) it was generated from, so the school-wide
+  // bulk-assign stays idempotent per (student, contact). NULL = a
+  // manually-issued number or the "Family" fallback for students with
+  // no contacts on file.
+  await db.execute(sql`
+    ALTER TABLE student_pickup_authorizations
+      ADD COLUMN IF NOT EXISTS contact_slot INTEGER
+  `);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_auth_number_per_school ON student_pickup_authorizations(school_id, pickup_number)`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_auth_by_student ON student_pickup_authorizations(student_id)`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_auth_by_parent ON student_pickup_authorizations(parent_id)`);
   // Partial unique: only the ACTIVE rows must have a unique number per
   // school. Retired numbers can be reused for a new tag without conflict.
   await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS pickup_auth_active_number_unique ON student_pickup_authorizations(school_id, pickup_number) WHERE active`);
+  // Partial unique: at most ONE active auth per (school, student,
+  // contact_slot) so the school-wide bulk-assign can never double-issue a
+  // number for the same emergency contact, even under a concurrent run.
+  // Scoped to contact_slot IS NOT NULL — manually-issued rows and the
+  // "Family" fallback (slot NULL) are intentionally unconstrained, and
+  // pre-existing rows all have NULL slots so this is safe to add.
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS pickup_auth_active_contact_slot_unique ON student_pickup_authorizations(school_id, student_id, contact_slot) WHERE active AND contact_slot IS NOT NULL`);
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS pickup_queue_events (

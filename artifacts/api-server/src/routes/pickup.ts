@@ -11,6 +11,7 @@ import {
   staffTable,
   parentsTable,
   studentPickupAuthorizationsTable,
+  studentEmergencyContactsTable,
   pickupQueueEventsTable,
   bellSchedulesTable,
   bellSchedulePeriodsTable,
@@ -1714,10 +1715,14 @@ router.get("/pickup/capacity", requireStaff, async (req, res) => {
 });
 
 // POST /pickup/authorizations/bulk-assign
-// Body: { guardianLabel?: string } — defaults to "Primary".
-// Issues a fresh active authorization for every student in the school
-// who does NOT already have an active authorization. Idempotent — a
-// second run after a partial roster import only fills the new students.
+// Path B: issue ONE pickup number per SIS emergency contact per student.
+// Each number releases exactly one child — no sibling matching, no
+// grouping. For every student we iterate their emergency-contact slots
+// (1-4) and ensure an active authorization exists for each
+// (student, contactSlot) pair. Students with no contacts on file get a
+// single "Family" fallback number (contactSlot = null). Idempotent: a
+// re-run only fills the gaps — contacts that already have an active
+// number are skipped — so it is safe to click after every roster import.
 router.post(
   "/pickup/authorizations/bulk-assign",
   requireStaff,
@@ -1730,43 +1735,61 @@ router.post(
       res.status(403).json({ error: "Not authorized to manage pickup tags" });
       return;
     }
-    const guardianLabel =
-      typeof req.body?.guardianLabel === "string" &&
-      req.body.guardianLabel.trim().length > 0
-        ? String(req.body.guardianLabel).trim()
-        : "Primary";
 
     try {
       const result = await db.transaction(async (tx) => {
-        // 1. Pull students who don't already have an active authorization.
-        const studentsMissing = await tx
-          .select({ id: studentsTable.id })
+        // Serialize bulk-assign per school: a transaction-scoped advisory
+        // lock makes two operators clicking "Assign" at once queue instead
+        // of racing off the same active-number snapshot (which would
+        // otherwise collide on the partial unique index and 500). Released
+        // automatically on commit/rollback. 0x504b_5542 ("PKUB") is an
+        // arbitrary namespace constant unique to this operation.
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock(${0x504b5542}, ${schoolId})`,
+        );
+        // 1. Every student in the school (id = PK, studentId = SIS/district
+        //    code, which is how emergency contacts are keyed).
+        const students = await tx
+          .select({
+            id: studentsTable.id,
+            sisStudentId: studentsTable.studentId,
+          })
           .from(studentsTable)
-          .leftJoin(
-            studentPickupAuthorizationsTable,
-            and(
-              eq(
-                studentPickupAuthorizationsTable.studentId,
-                studentsTable.id,
-              ),
-              eq(studentPickupAuthorizationsTable.active, true),
-            ),
-          )
-          .where(
-            and(
-              eq(studentsTable.schoolId, schoolId),
-              sql`${studentPickupAuthorizationsTable.id} IS NULL`,
-            ),
-          );
+          .where(eq(studentsTable.schoolId, schoolId));
 
-        if (studentsMissing.length === 0) {
-          return { assigned: 0, totalStudents: 0, capacityHit: false };
+        if (students.length === 0) {
+          return {
+            assigned: 0,
+            studentsTouched: 0,
+            capacityHit: false,
+          };
         }
 
-        // 2. Pull all active numbers (school-wide) so we don't collide.
-        const taken = await tx
+        // 2. All emergency contacts for the school, grouped by SIS id.
+        const contacts = await tx
           .select({
+            studentId: studentEmergencyContactsTable.studentId,
+            slot: studentEmergencyContactsTable.slot,
+            contactName: studentEmergencyContactsTable.contactName,
+            relationship: studentEmergencyContactsTable.relationship,
+          })
+          .from(studentEmergencyContactsTable)
+          .where(eq(studentEmergencyContactsTable.schoolId, schoolId));
+        const contactsBySis = new Map<string, typeof contacts>();
+        for (const c of contacts) {
+          const list = contactsBySis.get(c.studentId) ?? [];
+          list.push(c);
+          contactsBySis.set(c.studentId, list);
+        }
+
+        // 3. All active authorizations: track used numbers (collision
+        //    avoidance) and which (student, contactSlot) pairs already
+        //    have a live number (idempotency).
+        const activeAuths = await tx
+          .select({
+            studentId: studentPickupAuthorizationsTable.studentId,
             pickupNumber: studentPickupAuthorizationsTable.pickupNumber,
+            contactSlot: studentPickupAuthorizationsTable.contactSlot,
           })
           .from(studentPickupAuthorizationsTable)
           .where(
@@ -1775,32 +1798,77 @@ router.post(
               eq(studentPickupAuthorizationsTable.active, true),
             ),
           );
-        const used = new Set(taken.map((t) => t.pickupNumber));
+        const used = new Set(activeAuths.map((a) => a.pickupNumber));
+        // Key: `${studentDbId}:${slot ?? "family"}`.
+        const existingPairs = new Set(
+          activeAuths.map(
+            (a) => `${a.studentId}:${a.contactSlot ?? "family"}`,
+          ),
+        );
+        // Students that already have ANY active number — used to decide
+        // whether a contactless student still needs the Family fallback.
+        const studentsWithAnyActive = new Set(
+          activeAuths.map((a) => a.studentId),
+        );
 
-        // 3. Issue numbers + insert rows.
-        let assigned = 0;
-        for (const s of studentsMissing) {
+        const issue = (
+          studentDbId: number,
+          guardianLabel: string,
+          contactSlot: number | null,
+        ) => {
           const num = nextFreeNumber(used);
           if (!num) {
-            // Throw rolls back the whole batch so we don't partially
-            // assign half the roster.
+            // Throw rolls back the whole batch so we never partially
+            // assign — capacity problems are all-or-nothing.
             throw new Error("CAPACITY_EXHAUSTED");
           }
           used.add(num);
-          await tx.insert(studentPickupAuthorizationsTable).values({
+          return tx.insert(studentPickupAuthorizationsTable).values({
             schoolId,
-            studentId: s.id,
+            studentId: studentDbId,
             parentId: null,
             guardianLabel,
+            contactSlot,
             pickupNumber: num,
             restrictedFrom: false,
             active: true,
           });
-          assigned++;
+        };
+
+        let assigned = 0;
+        const touched = new Set<number>();
+        for (const s of students) {
+          const studentContacts = (contactsBySis.get(s.sisStudentId) ?? [])
+            .slice()
+            .sort((a, b) => a.slot - b.slot);
+
+          if (studentContacts.length > 0) {
+            for (const c of studentContacts) {
+              const key = `${s.id}:${c.slot}`;
+              if (existingPairs.has(key)) continue;
+              const label =
+                c.relationship && c.relationship.trim().length > 0
+                  ? c.relationship.trim()
+                  : c.contactName && c.contactName.trim().length > 0
+                    ? c.contactName.trim()
+                    : `Contact ${c.slot}`;
+              await issue(s.id, label, c.slot);
+              existingPairs.add(key);
+              assigned++;
+              touched.add(s.id);
+            }
+          } else if (!studentsWithAnyActive.has(s.id)) {
+            // No SIS contacts on file: issue one shared "Family" number
+            // so the student is still releasable at the curb.
+            await issue(s.id, "Family", null);
+            studentsWithAnyActive.add(s.id);
+            assigned++;
+            touched.add(s.id);
+          }
         }
         return {
           assigned,
-          totalStudents: studentsMissing.length,
+          studentsTouched: touched.size,
           capacityHit: false,
         };
       });
@@ -1811,6 +1879,20 @@ router.post(
         res.status(409).json({
           error:
             "Not enough free pickup numbers to cover the remaining roster. Free up numbers or expand the range.",
+        });
+        return;
+      }
+      // Unique-violation (23505) — a concurrent manual issue or assign
+      // grabbed a number/contact-slot mid-run. The whole batch rolled back;
+      // the operator can simply re-click (assign is idempotent).
+      const pgCode =
+        e && typeof e === "object" && "code" in e
+          ? (e as { code?: unknown }).code
+          : undefined;
+      if (pgCode === "23505") {
+        res.status(409).json({
+          error:
+            "Pickup numbers shifted while assigning (another change happened at the same time). Please run Assign again.",
         });
         return;
       }

@@ -43,6 +43,12 @@ export const studentPickupAuthorizationsTable = pgTable(
     // because parents.displayName is the parent's chosen handle, which
     // may not be the relationship label the school wants on the screen.
     guardianLabel: text("guardian_label").notNull(),
+    // Links an auto-issued number to the SIS emergency-contact slot (1-4)
+    // it was generated from, so the school-wide bulk-assign can stay
+    // idempotent per (student, contact). NULL for manually-issued numbers
+    // and for the single "Family" fallback issued to students with no
+    // emergency contacts on file.
+    contactSlot: integer("contact_slot"),
     // 4-digit number printed on the hanger. Unique per (school, active=true)
     // — see the partial unique index below. Re-issued when an authorization
     // is deactivated.

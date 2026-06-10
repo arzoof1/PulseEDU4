@@ -8,14 +8,17 @@ import {
 import { authFetch } from "../lib/authToken";
 
 // =============================================================================
-// PickupTagsPanel — in-app Pickup Tag Printing
+// PickupTagsPanel — the single Parent Pickup hub
 //
-// Office staff + Core Team need to print pickup tags from inside the
-// staff app without remembering the `/pickup/admin` URL (which is also
-// admin-gated). This panel mirrors the print actions of
-// AuthorizationsAdminPage but limits itself to *read + print* — no
-// issuing, no toggle, no dismissal-mode editor. Those stay on the
-// admin URL.
+// One screen for the whole pickup-number lifecycle: school-wide assign,
+// print (alphabetical / by teacher / by student), and per-tag manage
+// (issue, restrict, deactivate, reprint). This replaces the older split
+// where setup lived on the `/pickup/admin` URL and printing lived here.
+//
+// Path B numbering: one pickup number per SIS emergency contact per
+// student — each number releases EXACTLY ONE child, no sibling matching.
+// The school-wide "Assign pickup numbers" button is idempotent: a re-run
+// after a roster import only fills the gaps.
 //
 // Server gate is `canManagePickup` in lib/coreTeam.ts (admin / Core
 // Team / counselor / front-office secretary / confidential secretary).
@@ -31,15 +34,19 @@ type AuthRow = {
   pickupNumber: string;
   restrictedFrom: boolean;
   active: boolean;
+  contactSlot: number | null;
   parentDisplayName: string | null;
 };
 
+// The /api/students search returns the full student row. We only read
+// the safe identifiers here — localSisId is the school-facing SIS id.
+// NEVER surface `studentId` (the state FLEID / district code) in the UI.
 type StudentHit = {
   id: number;
-  studentId: string;
+  localSisId: string | null;
   firstName: string;
   lastName: string;
-  gradeLevel?: string | null;
+  grade?: number | null;
 };
 
 type TeacherOption = {
@@ -148,12 +155,26 @@ export default function PickupTagsPanel() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
+  // School-wide assign (Path B). Idempotent on the server, but we still
+  // confirm before firing because it can mint thousands of numbers.
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkResult, setBulkResult] = useState<string | null>(null);
+
+  // Manual issue form (for the looked-up student) — covers the edge case
+  // of a student with no SIS contact who still needs an extra number.
+  const [issueGuardian, setIssueGuardian] = useState("");
+  const [issueNumber, setIssueNumber] = useState("");
+  const [issueRestricted, setIssueRestricted] = useState(false);
+  const [issueBusy, setIssueBusy] = useState(false);
+
+  // Per-row in-flight guard (reissue / restrict / deactivate).
+  const [rowBusyId, setRowBusyId] = useState<number | null>(null);
+
   // Name typeahead. Debounced /api/students?q= against the same search
   // the Admin Hub discipline modal uses — prefix-matches first/last
-  // name and student_id, school-scoped server-side. Picking a hit
-  // populates studentDbId (numeric PK), which the existing load path
-  // already consumes; we keep the manual DB-id input as an escape
-  // hatch for tickets that already cite an internal id.
+  // name and SIS id, school-scoped server-side. Picking a hit populates
+  // studentDbId (numeric PK), which the load path consumes; we keep the
+  // manual DB-id input as an escape hatch for tickets citing an id.
   const [nameQ, setNameQ] = useState("");
   const [hits, setHits] = useState<StudentHit[]>([]);
   const [searching, setSearching] = useState(false);
@@ -268,6 +289,48 @@ export default function PickupTagsPanel() {
       .slice(0, 12);
   })();
 
+  // School-wide assign — Path B (one number per emergency contact).
+  const runBulkAssign = async () => {
+    const ok = window.confirm(
+      "Assign pickup numbers to every student?\n\n" +
+        "This issues one 4-digit number per emergency contact on file " +
+        "(each number releases one child). Students already covered are " +
+        "skipped — it is safe to run after each roster import.",
+    );
+    if (!ok) return;
+    setBulkBusy(true);
+    setBulkResult(null);
+    setMsg(null);
+    try {
+      const res = await authFetch(`/api/pickup/authorizations/bulk-assign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const b = (await res.json().catch(() => ({}))) as {
+        assigned?: number;
+        studentsTouched?: number;
+        error?: string;
+      };
+      if (!res.ok) {
+        setBulkResult(b.error ?? `Assign failed (${res.status})`);
+        return;
+      }
+      const assigned = b.assigned ?? 0;
+      const touched = b.studentsTouched ?? 0;
+      setBulkResult(
+        assigned === 0
+          ? "All students are already assigned — nothing to do."
+          : `Issued ${assigned} new number(s) across ${touched} student(s).`,
+      );
+      if (studentDbId !== null) void refresh(studentDbId);
+    } catch (err) {
+      setBulkResult(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   // Load (but don't print) the tag-id set for a teacher. Surface the
   // count so the user can sanity-check before downloading 47 pages.
   const loadTagsForTeacher = async (t: TeacherOption) => {
@@ -320,11 +383,16 @@ export default function PickupTagsPanel() {
     return viewPdf(`/api/pickup/tags.pdf?ids=${teacherAuthIds.join(",")}`);
   };
 
+  const studentHitLabel = (s: StudentHit) => {
+    const sis = s.localSisId ? ` (SIS ${s.localSisId})` : "";
+    const grade =
+      s.grade !== null && s.grade !== undefined ? ` · grade ${s.grade}` : "";
+    return `${s.lastName}, ${s.firstName}${sis}${grade}`;
+  };
+
   const pickStudent = (s: StudentHit) => {
     setStudentDbIdInput(String(s.id));
-    setStudentLabel(
-      `${s.lastName}, ${s.firstName} (${s.studentId}${s.gradeLevel ? ` · grade ${s.gradeLevel}` : ""})`,
-    );
+    setStudentLabel(studentHitLabel(s));
     setNameQ(`${s.firstName} ${s.lastName}`);
     setShowHits(false);
     setMsg(null);
@@ -391,6 +459,100 @@ export default function PickupTagsPanel() {
   const viewOne = (a: AuthRow) =>
     viewPdf(`/api/pickup/authorizations/${a.id}/tag.pdf`);
 
+  // Reprint = reissue: deactivate the old number (curb keypad rejects it
+  // immediately) and mint a fresh one, then download the new tag. This
+  // is the "lost tag" flow — the family's old card stops working.
+  const reissueAndPrint = async (a: AuthRow) => {
+    const ok = window.confirm(
+      `Reprint tag ${a.pickupNumber} for ${a.guardianLabel}?\n\n` +
+        "This invalidates the current number and issues a NEW one. The " +
+        "old card will no longer work at the curb.",
+    );
+    if (!ok) return;
+    setRowBusyId(a.id);
+    setMsg(null);
+    try {
+      const res = await authFetch(
+        `/api/pickup/authorizations/${a.id}/reissue`,
+        { method: "POST" },
+      );
+      const b = (await res.json().catch(() => ({}))) as {
+        authorization?: { id: number; pickupNumber: string };
+        error?: string;
+      };
+      if (!res.ok || !b.authorization) {
+        setMsg(b.error ?? `Reissue failed (${res.status})`);
+        return;
+      }
+      if (studentDbId !== null) await refresh(studentDbId);
+      await downloadPdf(
+        `/api/pickup/authorizations/${b.authorization.id}/tag.pdf`,
+        `pickup-tag-${b.authorization.pickupNumber}.pdf`,
+      );
+    } finally {
+      setRowBusyId(null);
+    }
+  };
+
+  const patchAuth = async (
+    a: AuthRow,
+    patch: { restrictedFrom?: boolean; active?: boolean },
+  ) => {
+    setRowBusyId(a.id);
+    setMsg(null);
+    try {
+      const res = await authFetch(`/api/pickup/authorizations/${a.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setMsg(b.error ?? `Update failed (${res.status})`);
+        return;
+      }
+      if (studentDbId !== null) await refresh(studentDbId);
+    } finally {
+      setRowBusyId(null);
+    }
+  };
+
+  const issueForStudent = async () => {
+    if (studentDbId === null) return;
+    const label = issueGuardian.trim();
+    if (!label) {
+      setMsg("Enter a guardian label (e.g. Mom, Dad, Grandma).");
+      return;
+    }
+    setIssueBusy(true);
+    setMsg(null);
+    try {
+      const body: Record<string, unknown> = {
+        studentDbId,
+        guardianLabel: label,
+        restrictedFrom: issueRestricted,
+      };
+      const num = issueNumber.trim();
+      if (num) body.pickupNumber = num;
+      const res = await authFetch(`/api/pickup/authorizations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setMsg(b.error ?? `Issue failed (${res.status})`);
+        return;
+      }
+      setIssueGuardian("");
+      setIssueNumber("");
+      setIssueRestricted(false);
+      await refresh(studentDbId);
+    } finally {
+      setIssueBusy(false);
+    }
+  };
+
   const activeIdsForStudent = () =>
     auths.filter((a) => a.active).map((a) => a.id);
 
@@ -425,61 +587,65 @@ export default function PickupTagsPanel() {
 
   return (
     <div style={wrap}>
-      <h2 style={{ marginTop: 0 }}>Pickup Tags — Print</h2>
+      <h2 style={{ marginTop: 0 }}>Parent Pickup</h2>
       <p style={{ color: "var(--text-subtle, #6b7280)", marginTop: 0 }}>
-        Reprint a single pickup tag, all tags for one student, or every
-        active tag at this school. PDFs open as downloads.
+        Assign pickup numbers, print tags (alphabetical, by teacher, or by
+        student), and manage individual tags — all from this screen. PDFs
+        open as downloads.
       </p>
 
       <div
         style={{
           ...card,
-          display: "flex",
-          flexWrap: "wrap",
-          alignItems: "center",
-          gap: 12,
           borderLeft: "4px solid var(--accent, #1d4ed8)",
         }}
       >
-        <div style={{ flex: "1 1 260px", minWidth: 240 }}>
-          <div style={{ fontWeight: 600, marginBottom: 2 }}>
-            Need to authorize a student for car-rider / parent pickup?
-          </div>
-          <div
-            style={{
-              color: "var(--text-subtle, #6b7280)",
-              fontSize: 13,
-            }}
-          >
-            Assigning a student a 4-digit pickup number happens on the
-            Pickup Admin screen. Open it to search a student and issue a
-            number, then come back here to print the tag.
-          </div>
+        <div style={{ fontWeight: 600, marginBottom: 2 }}>
+          Step 1 · Assign pickup numbers school-wide
         </div>
-        <a
-          href={`${import.meta.env.BASE_URL}pickup/admin`}
+        <div
           style={{
-            ...primaryBtn,
-            display: "inline-block",
-            textDecoration: "none",
-            whiteSpace: "nowrap",
+            color: "var(--text-subtle, #6b7280)",
+            fontSize: 13,
+            marginBottom: 10,
           }}
         >
-          Assign students for pickup →
-        </a>
+          Issues one 4-digit number per emergency contact on file — each
+          number releases exactly one child. Students with no contacts get a
+          single "Family" number. Safe to re-run after a roster import; only
+          missing numbers are filled.
+        </div>
+        <button
+          onClick={runBulkAssign}
+          style={primaryBtn}
+          disabled={bulkBusy}
+        >
+          {bulkBusy ? "Assigning…" : "Assign pickup numbers"}
+        </button>
+        {bulkResult && <div style={infoBox}>{bulkResult}</div>}
       </div>
 
       <div style={card}>
         <div style={{ fontWeight: 600, marginBottom: 8 }}>
-          School-wide
+          Print — school-wide (alphabetical by last name)
+        </div>
+        <div
+          style={{
+            color: "var(--text-subtle, #6b7280)",
+            fontSize: 13,
+            marginBottom: 8,
+          }}
+        >
+          One PDF of every active pickup tag at this school, sorted A→Z by
+          student last name.
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button
             onClick={printAllActive}
             style={primaryBtn}
-            title="Download one PDF containing every active pickup tag at this school."
+            title="Download one PDF containing every active pickup tag, A→Z by last name."
           >
-            Download PDF (school-wide)
+            Download PDF (A→Z)
           </button>
           <button
             onClick={viewAllActive}
@@ -493,7 +659,7 @@ export default function PickupTagsPanel() {
 
       <div style={card}>
         <div style={{ fontWeight: 600, marginBottom: 8 }}>
-          By teacher
+          Print — by teacher
         </div>
         <div
           style={{
@@ -637,7 +803,7 @@ export default function PickupTagsPanel() {
 
       <div style={card}>
         <div style={{ fontWeight: 600, marginBottom: 8 }}>
-          Look up a student
+          Manage / print — by student
         </div>
         <div style={{ display: "flex", gap: 16, alignItems: "end", flexWrap: "wrap" }}>
           <label style={{ ...labelStyle, position: "relative" }}>
@@ -711,8 +877,10 @@ export default function PickupTagsPanel() {
                       {s.lastName}, {s.firstName}
                     </div>
                     <div style={{ fontSize: 12, color: "var(--text-subtle, #6b7280)" }}>
-                      SIS #{s.studentId}
-                      {s.gradeLevel ? ` · grade ${s.gradeLevel}` : ""}
+                      {s.localSisId ? `SIS ${s.localSisId}` : "No SIS id"}
+                      {s.grade !== null && s.grade !== undefined
+                        ? ` · grade ${s.grade}`
+                        : ""}
                     </div>
                   </button>
                 ))}
@@ -790,35 +958,78 @@ export default function PickupTagsPanel() {
                 </tr>
               </thead>
               <tbody>
-                {auths.map((a) => (
-                  <tr key={a.id}>
-                    <td style={td}>{a.pickupNumber}</td>
-                    <td style={td}>{a.guardianLabel}</td>
-                    <td style={td}>
-                      {a.parentDisplayName ?? a.parentId ?? "—"}
-                    </td>
-                    <td style={td}>{a.restrictedFrom ? "yes" : "no"}</td>
-                    <td style={td}>{a.active ? "yes" : "no"}</td>
-                    <td style={td}>
-                      <div style={{ display: "flex", gap: 6 }}>
-                        <button
-                          onClick={() => printOne(a)}
-                          style={smallBtn}
-                          title="Download a single-tag PDF (reprint)."
+                {auths.map((a) => {
+                  const busy = rowBusyId === a.id;
+                  return (
+                    <tr key={a.id}>
+                      <td style={td}>{a.pickupNumber}</td>
+                      <td style={td}>{a.guardianLabel}</td>
+                      <td style={td}>
+                        {a.parentDisplayName ?? a.parentId ?? "—"}
+                      </td>
+                      <td style={td}>{a.restrictedFrom ? "yes" : "no"}</td>
+                      <td style={td}>{a.active ? "yes" : "no"}</td>
+                      <td style={td}>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 6,
+                            flexWrap: "wrap",
+                          }}
                         >
-                          Download
-                        </button>
-                        <button
-                          onClick={() => viewOne(a)}
-                          style={smallBtn}
-                          title="Open the single-tag PDF in a new tab."
-                        >
-                          View
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          <button
+                            onClick={() => printOne(a)}
+                            style={smallBtn}
+                            title="Download a single-tag PDF (same number)."
+                          >
+                            Download
+                          </button>
+                          <button
+                            onClick={() => viewOne(a)}
+                            style={smallBtn}
+                            title="Open the single-tag PDF in a new tab."
+                          >
+                            View
+                          </button>
+                          {a.active && (
+                            <>
+                              <button
+                                onClick={() => void reissueAndPrint(a)}
+                                style={smallBtn}
+                                disabled={busy}
+                                title="Invalidate this number and print a fresh one (lost-tag reprint)."
+                              >
+                                {busy ? "…" : "Reprint (new #)"}
+                              </button>
+                              <button
+                                onClick={() =>
+                                  void patchAuth(a, {
+                                    restrictedFrom: !a.restrictedFrom,
+                                  })
+                                }
+                                style={smallBtn}
+                                disabled={busy}
+                                title="Toggle whether this guardian is blocked from picking up."
+                              >
+                                {a.restrictedFrom ? "Unrestrict" : "Restrict"}
+                              </button>
+                              <button
+                                onClick={() =>
+                                  void patchAuth(a, { active: false })
+                                }
+                                style={smallBtn}
+                                disabled={busy}
+                                title="Deactivate this number (the card stops working)."
+                              >
+                                Deactivate
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
                 {auths.length === 0 && (
                   <tr>
                     <td style={td} colSpan={6}>
@@ -829,6 +1040,68 @@ export default function PickupTagsPanel() {
               </tbody>
             </table>
           )}
+
+          <div
+            style={{
+              marginTop: 14,
+              paddingTop: 12,
+              borderTop: "1px solid var(--border-soft, #f3f4f6)",
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 14 }}>
+              Issue another number for this student
+            </div>
+            <div
+              style={{
+                display: "flex",
+                gap: 12,
+                alignItems: "end",
+                flexWrap: "wrap",
+              }}
+            >
+              <label style={labelStyle}>
+                Guardian label
+                <input
+                  value={issueGuardian}
+                  onChange={(e) => setIssueGuardian(e.target.value)}
+                  style={inputStyle}
+                  placeholder="e.g. Mom, Grandma"
+                />
+              </label>
+              <label style={labelStyle}>
+                Number (optional)
+                <input
+                  value={issueNumber}
+                  onChange={(e) => setIssueNumber(e.target.value)}
+                  style={{ ...inputStyle, minWidth: 140 }}
+                  placeholder="auto"
+                />
+              </label>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 13,
+                  paddingBottom: 8,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={issueRestricted}
+                  onChange={(e) => setIssueRestricted(e.target.checked)}
+                />
+                Restricted (blocked from pickup)
+              </label>
+              <button
+                onClick={() => void issueForStudent()}
+                style={primaryBtn}
+                disabled={issueBusy}
+              >
+                {issueBusy ? "Issuing…" : "Issue number"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
