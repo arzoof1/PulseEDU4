@@ -394,9 +394,7 @@ async function loadDistrictDocumentBranding(
   const key = branding.logoObjectKey;
   if (key && key.startsWith("/objects/")) {
     try {
-      const file = await objectStorageService.getObjectEntityFile(key);
-      const [buf] = await file.download();
-      logo = buf;
+      logo = await objectStorageService.readObjectAsBuffer(key);
     } catch {
       logo = null;
     }

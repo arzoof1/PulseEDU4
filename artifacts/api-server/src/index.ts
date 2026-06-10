@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { s3BucketName, useS3ObjectStorage } from "./lib/storedObject.js";
 import { bootstrapCriticalColumns, runSeed } from "./seedRunner";
 import { recoverSuperUserPasswordOnce } from "./seed";
 import {
@@ -48,6 +49,18 @@ const runScheduledJobs =
   scheduledJobsEnabled(!isProduction);
 
 function startListening(): void {
+  if (useS3ObjectStorage()) {
+    logger.info(
+      {
+        bucket: s3BucketName(),
+        region: process.env.AWS_REGION?.trim() || "us-east-1",
+      },
+      "object storage backend: s3",
+    );
+  } else {
+    logger.info("object storage backend: replit/gcs");
+  }
+
     app.listen(port, (err) => {
       if (err) {
         logger.error({ err }, "Error listening on port");

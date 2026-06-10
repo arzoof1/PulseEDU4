@@ -4327,6 +4327,121 @@ function PlaceholderCard({
   );
 }
 
+// Per-category accommodation chip with fixed-position popover (mirrors
+// TeacherRosterPage ProgramPill) so the panel anchors under the chip, not
+// the student name column.
+function ClassViewAccChip({
+  category,
+  names,
+  color,
+}: {
+  category: string;
+  names: string[];
+  color: string;
+}) {
+  const label =
+    names.length > 1 ? `${category} · ${names.length}` : category;
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLSpanElement | null>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!open || !anchorRef.current) return;
+    const measure = () => {
+      const r = anchorRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const W = 280;
+      let left = r.left;
+      if (left + W > window.innerWidth - 8) left = window.innerWidth - W - 8;
+      if (left < 8) left = 8;
+      setCoords({ top: r.bottom + 4, left });
+    };
+    measure();
+    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("scroll", measure, true);
+      window.removeEventListener("resize", measure);
+    };
+  }, [open]);
+  return (
+    <span
+      style={{ position: "relative", display: "inline-block", marginRight: 4 }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+    >
+      <span
+        ref={anchorRef}
+        tabIndex={0}
+        aria-label={`${category} accommodations`}
+        style={{
+          display: "inline-block",
+          padding: "1px 7px",
+          borderRadius: 999,
+          background: color,
+          color: "white",
+          fontSize: 11,
+          fontWeight: 600,
+          lineHeight: "16px",
+          cursor: "default",
+          outline: "none",
+        }}
+      >
+        {label}
+      </span>
+      {open && coords && (
+        <div
+          role="tooltip"
+          style={{
+            position: "fixed",
+            top: coords.top,
+            left: coords.left,
+            zIndex: 10000,
+            background: "white",
+            border: "1px solid var(--border)",
+            borderTop: `3px solid ${color}`,
+            borderRadius: 6,
+            padding: "0.55rem 0.75rem",
+            boxShadow: "0 6px 18px rgba(0,0,0,0.14)",
+            minWidth: 240,
+            maxWidth: 360,
+            color: "var(--text)",
+            textAlign: "left",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              color,
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+              marginBottom: 6,
+            }}
+          >
+            {category}
+          </div>
+          <ul
+            style={{
+              margin: 0,
+              paddingLeft: 16,
+              fontSize: 12,
+              lineHeight: 1.5,
+            }}
+          >
+            {names.map((n) => (
+              <li key={n}>{n}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </span>
+  );
+}
+
 function App() {
   // Apply per-school branding (header gradient, logo) to the document root
   // so any component reading var(--brand-header-bg) retints automatically.
@@ -4873,7 +4988,6 @@ function App() {
   >("classView");
   const [accStudentId, setAccStudentId] = useState("");
   const [classViewPeriod, setClassViewPeriod] = useState<number | null>(null);
-  const [classViewHoverId, setClassViewHoverId] = useState<string | null>(null);
   const [classViewTeacherId, setClassViewTeacherId] = useState<number | null>(
     null,
   );
@@ -14090,29 +14204,6 @@ function App() {
                       ELL: "#0891b2",
                       Strategy: "#64748b",
                     };
-                    const renderChip = (
-                      label: string,
-                      bg: string,
-                      title?: string,
-                    ) => (
-                      <span
-                        key={label}
-                        title={title}
-                        style={{
-                          display: "inline-block",
-                          padding: "1px 7px",
-                          marginRight: 4,
-                          borderRadius: 999,
-                          background: bg,
-                          color: "white",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          lineHeight: "16px",
-                        }}
-                      >
-                        {label}
-                      </span>
-                    );
                     return (
                       <>
                         <div
@@ -14155,7 +14246,6 @@ function App() {
                                     onClick={() => {
                                       if (disabled) return;
                                       setClassViewPeriod(p);
-                                      setClassViewHoverId(null);
                                     }}
                                     disabled={disabled}
                                     title={
@@ -14226,12 +14316,10 @@ function App() {
                                   if (v === "") {
                                     setClassViewTeacherId(null);
                                     setClassViewPeriod(null);
-                                    setClassViewHoverId(null);
                                     return;
                                   }
                                   setClassViewTeacherId(Number(v));
                                   setClassViewPeriod(null);
-                                  setClassViewHoverId(null);
                                 }}
                                 style={{ minWidth: 220 }}
                               >
@@ -14311,28 +14399,10 @@ function App() {
                                   list.push(name);
                                   byCat.set(cat, list);
                                 }
-                                const isHover =
-                                  classViewHoverId === s.studentId;
                                 return (
                                   <div
                                     key={s.studentId}
-                                    onMouseEnter={() =>
-                                      setClassViewHoverId(s.studentId)
-                                    }
-                                    onMouseLeave={() =>
-                                      setClassViewHoverId((cur) =>
-                                        cur === s.studentId ? null : cur,
-                                      )
-                                    }
-                                    onClick={() =>
-                                      setClassViewHoverId((cur) =>
-                                        cur === s.studentId
-                                          ? null
-                                          : s.studentId,
-                                      )
-                                    }
                                     style={{
-                                      position: "relative",
                                       display: "grid",
                                       gridTemplateColumns:
                                         "minmax(200px, 1.4fr) minmax(160px, 1fr) auto",
@@ -14345,9 +14415,6 @@ function App() {
                                         accs.length > 0
                                           ? "rgba(14,116,144,0.04)"
                                           : "transparent",
-                                      cursor: accs.length > 0
-                                        ? "pointer"
-                                        : "default",
                                     }}
                                   >
                                     <div>
@@ -14375,14 +14442,16 @@ function App() {
                                         </span>
                                       ) : (
                                         Array.from(byCat.entries()).map(
-                                          ([cat, names]) =>
-                                            renderChip(
-                                              names.length > 1
-                                                ? `${cat} · ${names.length}`
-                                                : cat,
-                                              catColor[cat] ?? "#475569",
-                                              names.join(", "),
-                                            ),
+                                          ([cat, names]) => (
+                                            <ClassViewAccChip
+                                              key={cat}
+                                              category={cat}
+                                              names={names}
+                                              color={
+                                                catColor[cat] ?? "#475569"
+                                              }
+                                            />
+                                          ),
                                         )
                                       )}
                                     </div>
@@ -14400,68 +14469,6 @@ function App() {
                                         </button>
                                       )}
                                     </div>
-                                    {isHover && accs.length > 0 && (
-                                      <div
-                                        style={{
-                                          position: "absolute",
-                                          top: "100%",
-                                          left: 8,
-                                          marginTop: 4,
-                                          zIndex: 5,
-                                          background: "white",
-                                          border: "1px solid var(--border)",
-                                          borderRadius: 6,
-                                          padding: "0.5rem 0.7rem",
-                                          boxShadow:
-                                            "0 4px 14px rgba(0,0,0,0.12)",
-                                          minWidth: 240,
-                                          maxWidth: 360,
-                                          color: "var(--text)",
-                                        }}
-                                      >
-                                        <div
-                                          style={{
-                                            fontSize: 11,
-                                            color: "var(--text-subtle)",
-                                            marginBottom: 4,
-                                          }}
-                                        >
-                                          Accommodations
-                                        </div>
-                                        {Array.from(byCat.entries()).map(
-                                          ([cat, names]) => (
-                                            <div
-                                              key={cat}
-                                              style={{ marginBottom: 4 }}
-                                            >
-                                              <div
-                                                style={{
-                                                  fontSize: 10,
-                                                  fontWeight: 700,
-                                                  color:
-                                                    catColor[cat] ?? "#475569",
-                                                  textTransform: "uppercase",
-                                                  letterSpacing: 0.5,
-                                                }}
-                                              >
-                                                {cat}
-                                              </div>
-                                              <ul
-                                                style={{
-                                                  margin: "2px 0 0 0",
-                                                  paddingLeft: 16,
-                                                  fontSize: 12,
-                                                }}
-                                              >
-                                                {names.map((n) => (
-                                                  <li key={n}>{n}</li>
-                                                ))}
-                                              </ul>
-                                            </div>
-                                          ),
-                                        )}
-                                      </div>
-                                    )}
                                   </div>
                                 );
                               })}

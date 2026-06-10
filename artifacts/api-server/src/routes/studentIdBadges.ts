@@ -14,10 +14,7 @@ import {
   type BadgeSize,
   type StudentBadgeInput,
 } from "../lib/studentIdBadgesPdf";
-import {
-  ObjectStorageService,
-  ObjectNotFoundError,
-} from "../lib/objectStorage.js";
+import { ObjectStorageService } from "../lib/objectStorage.js";
 
 const objectStorage = new ObjectStorageService();
 
@@ -28,19 +25,7 @@ const objectStorage = new ObjectStorageService();
 // `downloadObject` (which writes to an Express response) and pipe
 // the GCS readStream directly into a buffer.
 async function fetchObjectBytes(objectPath: string): Promise<Buffer | null> {
-  try {
-    const file = await objectStorage.getObjectEntityFile(objectPath);
-    return await new Promise<Buffer | null>((resolve) => {
-      const chunks: Buffer[] = [];
-      const stream = file.createReadStream();
-      stream.on("data", (c: Buffer) => chunks.push(c));
-      stream.on("end", () => resolve(Buffer.concat(chunks)));
-      stream.on("error", () => resolve(null));
-    });
-  } catch (err) {
-    if (err instanceof ObjectNotFoundError) return null;
-    return null;
-  }
+  return objectStorage.readObjectAsBuffer(objectPath);
 }
 
 const router: IRouter = Router();
