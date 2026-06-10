@@ -180,7 +180,11 @@ router.get("/interventions/owed-today", async (req, res) => {
     ).includes(staff.id),
   );
 
-  const tier2Plans = myPlans.filter((p) => p.tier === 2);
+  // Academic plans (fastSubject set) are driven by the student's
+  // intensive class, not by teacher check-ins. A LIGHT Tier 2 academic
+  // plan therefore never owes a weekly bell entry; only academic Tier 3
+  // (with configured meeting days) generates per-meeting-day check-ins.
+  const tier2Plans = myPlans.filter((p) => p.tier === 2 && !p.fastSubject);
   const tier3Plans = myPlans.filter((p) => p.tier === 3);
 
   // Lookup student names for any owed rows in one round-trip.
@@ -312,8 +316,20 @@ router.get("/interventions/owed-today", async (req, res) => {
       // shouldn't count as "missing" — there's nothing to score.
       const absent = (rec?.absentDays ?? {}) as Record<string, boolean>;
       const dayKeys = ["mon", "tue", "wed", "thu", "fri"] as const;
+      // Academic Tier 3 plans only meet on configured days (e.g. Tue/Thu)
+      // — the intensive teacher isn't expected to log on off days. Behavior
+      // Tier 3 plans (meetingDays null) keep requiring all 5 weekdays.
+      const meetingSet = p.meetingDays
+        ? new Set(
+            p.meetingDays
+              .split(",")
+              .map((d) => d.trim().toLowerCase())
+              .filter(Boolean),
+          )
+        : null;
       let missing = 0;
       for (let i = 0; i <= reachedIdx; i++) {
+        if (meetingSet && !meetingSet.has(dayKeys[i])) continue;
         if (absent[dayKeys[i]]) continue;
         if (dayScores[i] === null || dayScores[i] === undefined) missing++;
       }
@@ -556,9 +572,24 @@ router.get("/interventions/completion-report", async (req, res) => {
         // we still want admins to see "5/5 — 2 absent" not "3/5".
         const absent = (rec?.absentDays ?? {}) as Record<string, boolean>;
         const dayKeys = ["mon", "tue", "wed", "thu", "fri"] as const;
+        // Academic Tier 3 plans are only obligated on their configured
+        // meeting days, so the denominator is meetingDays.length (not 5).
+        // Off days are skipped entirely — never counted as missing or
+        // fulfilled. Behavior Tier 3 (meetingDays null) keeps all 5 days.
+        const meetingSet = p.meetingDays
+          ? new Set(
+              p.meetingDays
+                .split(",")
+                .map((d) => d.trim().toLowerCase())
+                .filter(Boolean),
+            )
+          : null;
         const valid: number[] = [];
         let absentCount = 0;
+        let scheduledDays = 0;
         for (let i = 0; i < dayKeys.length; i++) {
+          if (meetingSet && !meetingSet.has(dayKeys[i])) continue;
+          scheduledDays++;
           if (absent[dayKeys[i]]) {
             absentCount++;
             continue;
@@ -567,7 +598,7 @@ router.get("/interventions/completion-report", async (req, res) => {
           if (typeof v === "number") valid.push(v);
         }
         completed = valid.length + absentCount;
-        expected = 5;
+        expected = meetingSet ? scheduledDays : 5;
         scoreAvg =
           valid.length > 0
             ? valid.reduce((a, b) => a + b, 0) / valid.length

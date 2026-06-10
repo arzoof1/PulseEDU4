@@ -568,8 +568,20 @@ export async function ensureMtssPlansSchema() {
   // writer in the plan editor. Nullable / additive — safe on prod.
   await db.execute(
     sql`ALTER TABLE student_mtss_plans ADD COLUMN IF NOT EXISTS fast_benchmark_code TEXT`,
-    // Academic MTSS: subject-level academic plans ("ela" | "math").
+  );
+  // Academic MTSS: subject-level academic plans ("ela" | "math"). NOTE:
+  // db.execute() takes a SINGLE query — this must be its own call, not a
+  // second argument to the fast_benchmark_code execute above (a second
+  // arg is silently dropped and the column never lands in prod).
+  await db.execute(
     sql`ALTER TABLE student_mtss_plans ADD COLUMN IF NOT EXISTS fast_subject TEXT`,
+  );
+  // Academic Tier 3 monitoring: CSV of scheduled meeting day keys
+  // ("mon".."fri", e.g. "tue,thu"). NULL on behavior plans and on light
+  // Tier 2 academic plans. Drives the per-meeting-day bell + check-in
+  // "save until every scheduled day is logged" cadence.
+  await db.execute(
+    sql`ALTER TABLE student_mtss_plans ADD COLUMN IF NOT EXISTS meeting_days TEXT`,
   );
   // ---- tier3_goals — version-on-edit goal storage for Tier 3 plans.
   await db.execute(sql`

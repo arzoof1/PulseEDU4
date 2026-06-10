@@ -7,7 +7,7 @@
 // API is school-scoped. canManage is computed in App.tsx and mirrors
 // the server's requireCoreTeam gate in routes/mtssPlans.ts.
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
 
 type StatusFilter = "active" | "closed" | "all";
@@ -35,12 +35,25 @@ interface Plan {
   autoAssignScheduleTeachers: boolean;
   excludedTeacherIds: string;
   additionalInterventionistIds: string;
+  // Academic plan wiring: subject (ela|math) and Tier 3 meeting-day CSV.
+  fastSubject?: string | null;
+  meetingDays?: string | null;
   effectiveTeachers: Array<{
     staffId: number;
     displayName: string;
     source: "schedule" | "additional";
   }>;
 }
+
+// Weekday options for the Tier 3 meeting-day picker. Keys match the
+// server's CSV day tokens.
+const MEETING_DAY_OPTIONS: Array<{ key: string; label: string }> = [
+  { key: "mon", label: "Mon" },
+  { key: "tue", label: "Tue" },
+  { key: "wed", label: "Wed" },
+  { key: "thu", label: "Thu" },
+  { key: "fri", label: "Fri" },
+];
 
 interface ScheduleTeacherOption {
   staffId: number;
@@ -126,28 +139,33 @@ function joinGoals(list: string[]): string {
     .join("\n");
 }
 
-interface FastSuggestionWindow {
-  schoolYear: string;
-  window: string;
-  masteryPct: number; // -1 = not administered
-  below: boolean;
+// A single weak FAST standard, shown in the expandable per-row dropdown.
+interface WeakStandard {
+  benchmarkCode: string;
+  category: string | null;
+  strategyCategory: string;
+  belowCount: number;
+  latestPct: number | null;
 }
 
+// One suggestion per (student, subject). The student qualifies when their
+// latest FAST scale score (pm3 → pm2 → pm1) places them at Level 1 or 2.
 interface FastSuggestion {
   studentId: string;
   studentName: string | null;
   studentGrade: number | null;
-  studentLocalSisId?: string | null;
-  subject: string;
-  benchmarkCode: string;
-  benchmarkCategory: string | null;
-  suggestedStrategyCategory: string;
+  subject: string; // "ela" | "math"
+  level: number;
+  subLevel: string;
+  levelLabel: string;
+  score: number;
+  window: string; // "pm1" | "pm2" | "pm3"
+  schoolYear: string;
   suggestedTitle: string;
   suggestedGoal: string;
-  windows: FastSuggestionWindow[];
-  belowCount: number;
-  // Most-recent prior-year PM3 (from the FL Florida historical
-  // importer). Null when no historical data on file.
+  weakStandards: WeakStandard[];
+  // Most-recent prior-year PM3 (from the FL historical importer). Null
+  // when no historical data on file.
   priorYearPm3: { schoolYear: string; pm3: number } | null;
 }
 
@@ -158,10 +176,12 @@ interface FastSuggestionsResp {
   suggestions: FastSuggestion[];
 }
 
-// Prefill payload passed from a FAST suggestion into PlanModal.
+// Prefill payload passed from a FAST suggestion into PlanModal. Academic
+// suggestions carry the subject (ela|math); the resulting plan is a light
+// Tier 2 academic plan wired back to that subject.
 export interface MtssPlanPrefill {
   studentId: string;
-  fastBenchmarkCode: string;
+  fastSubject: string;
   tier: number;
   title: string;
   goal: string;
@@ -180,18 +200,30 @@ export default function MtssPlansAdmin({
   const [editing, setEditing] = useState<Plan | "new" | null>(null);
   const [prefill, setPrefill] = useState<MtssPlanPrefill | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
-  // FAST Phase 5 — Tier 2 auto-suggestions tile.
+  // FAST academic Tier 2 suggestions tile. Off auto-load — the admin
+  // clicks "Generate suggestions" to scan the latest FAST window.
   const [suggestions, setSuggestions] = useState<FastSuggestion[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [suggestionsError, setSuggestionsError] = useState("");
-  const [suggestionsMeta, setSuggestionsMeta] = useState<{
-    thresholdPct: number;
-    minWindows: number;
-  }>({ thresholdPct: 80, minWindows: 2 });
+  const [suggestionsGenerated, setSuggestionsGenerated] = useState(false);
   const [suggestionsOpen, setSuggestionsOpen] = useState(true);
+  // Per-row expanded state for the weak-standards dropdown, keyed
+  // `${studentId}|${subject}`.
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+
+  const pairKey = (s: FastSuggestion) => `${s.studentId}|${s.subject}`;
+
+  const toggleExpanded = (key: string) =>
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   const reloadSuggestions = () => {
     if (!canManage) return;
+    setSuggestionsGenerated(true);
     setSuggestionsLoading(true);
     setSuggestionsError("");
     authFetch("/api/mtss-plans/fast-suggestions")
@@ -204,10 +236,6 @@ export default function MtssPlansAdmin({
       })
       .then((data) => {
         setSuggestions(data.suggestions ?? []);
-        setSuggestionsMeta({
-          thresholdPct: data.thresholdPct,
-          minWindows: data.minWindows,
-        });
       })
       .catch((e: Error) =>
         setSuggestionsError(e.message ?? "Failed to load suggestions"),
@@ -215,16 +243,14 @@ export default function MtssPlansAdmin({
       .finally(() => setSuggestionsLoading(false));
   };
 
-  useEffect(() => {
-    reloadSuggestions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canManage]);
+  const subjectLabel = (subject: string) =>
+    subject === "ela" ? "ELA" : subject === "math" ? "Math" : subject;
 
   const dismissSuggestion = async (s: FastSuggestion) => {
     if (!canManage) return;
     if (
       !window.confirm(
-        `Dismiss FAST suggestion for ${s.studentName ?? s.studentId} on ${s.benchmarkCode}? It will stay hidden for the rest of this school year.`,
+        `Dismiss the ${subjectLabel(s.subject)} suggestion for ${s.studentName ?? s.studentId}? It will stay hidden for the rest of this school year.`,
       )
     ) {
       return;
@@ -234,7 +260,7 @@ export default function MtssPlansAdmin({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         studentId: s.studentId,
-        benchmarkCode: s.benchmarkCode,
+        subject: s.subject,
       }),
     });
     if (!r.ok) {
@@ -245,11 +271,7 @@ export default function MtssPlansAdmin({
     // Optimistic remove; full reload would also work.
     setSuggestions((prev) =>
       prev.filter(
-        (x) =>
-          !(
-            x.studentId === s.studentId &&
-            x.benchmarkCode === s.benchmarkCode
-          ),
+        (x) => !(x.studentId === s.studentId && x.subject === s.subject),
       ),
     );
   };
@@ -258,7 +280,7 @@ export default function MtssPlansAdmin({
     if (!canManage) return;
     setPrefill({
       studentId: s.studentId,
-      fastBenchmarkCode: s.benchmarkCode,
+      fastSubject: s.subject,
       tier: 2,
       title: s.suggestedTitle,
       goal: s.suggestedGoal,
@@ -486,37 +508,48 @@ export default function MtssPlansAdmin({
               marginBottom: "1rem",
             }}
           >
-            <button
-              type="button"
-              onClick={() => setSuggestionsOpen((v) => !v)}
+            <div
               style={{
-                background: "transparent",
-                border: "none",
-                padding: 0,
-                cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
                 gap: 8,
-                fontWeight: 700,
-                color: "#92400e",
-                fontSize: "0.95rem",
+                flexWrap: "wrap",
               }}
             >
-              <span style={{ display: "inline-block", width: 12 }}>
-                {suggestionsOpen ? "▾" : "▸"}
-              </span>
-              Suggested from FAST
-              <span
+              <button
+                type="button"
+                onClick={() => setSuggestionsOpen((v) => !v)}
                 style={{
-                  background: "#f59e0b",
-                  color: "white",
-                  borderRadius: 999,
-                  padding: "1px 8px",
-                  fontSize: "0.72rem",
+                  background: "transparent",
+                  border: "none",
+                  padding: 0,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontWeight: 700,
+                  color: "#92400e",
+                  fontSize: "0.95rem",
                 }}
               >
-                {suggestions.length}
-              </span>
+                <span style={{ display: "inline-block", width: 12 }}>
+                  {suggestionsOpen ? "▾" : "▸"}
+                </span>
+                Suggested from FAST
+                {suggestionsGenerated && (
+                  <span
+                    style={{
+                      background: "#f59e0b",
+                      color: "white",
+                      borderRadius: 999,
+                      padding: "1px 8px",
+                      fontSize: "0.72rem",
+                    }}
+                  >
+                    {suggestions.length}
+                  </span>
+                )}
+              </button>
               <span
                 style={{
                   color: "#a16207",
@@ -524,16 +557,43 @@ export default function MtssPlansAdmin({
                   fontSize: "0.78rem",
                 }}
               >
-                students below {suggestionsMeta.thresholdPct}% on the same
-                benchmark in ≥{suggestionsMeta.minWindows} of the last 3
-                windows
+                Students placing at FAST Level 1 or 2 in ELA / Math — one
+                light Tier 2 plan per subject.
               </span>
-            </button>
+              <button
+                type="button"
+                onClick={reloadSuggestions}
+                disabled={suggestionsLoading}
+                style={{
+                  marginLeft: "auto",
+                  background: suggestionsLoading ? "#fcd34d" : "#d97706",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 6,
+                  padding: "5px 12px",
+                  fontSize: "0.82rem",
+                  fontWeight: 600,
+                  cursor: suggestionsLoading ? "default" : "pointer",
+                }}
+              >
+                {suggestionsLoading
+                  ? "Scanning FAST…"
+                  : suggestionsGenerated
+                    ? "Refresh suggestions"
+                    : "Generate suggestions"}
+              </button>
+            </div>
             {suggestionsOpen && (
               <div style={{ marginTop: 8 }}>
+                {!suggestionsGenerated && !suggestionsLoading && (
+                  <div style={{ color: "#a16207", fontSize: "0.85rem" }}>
+                    Click “Generate suggestions” to scan the latest FAST
+                    window for students placing at Level 1 or 2.
+                  </div>
+                )}
                 {suggestionsLoading && (
                   <div style={{ color: "#a16207", fontSize: "0.85rem" }}>
-                    Looking at recent FAST windows…
+                    Looking at the latest FAST window…
                   </div>
                 )}
                 {suggestionsError && (
@@ -541,12 +601,14 @@ export default function MtssPlansAdmin({
                     {suggestionsError}
                   </div>
                 )}
-                {!suggestionsLoading &&
+                {suggestionsGenerated &&
+                  !suggestionsLoading &&
                   !suggestionsError &&
                   suggestions.length === 0 && (
                     <div style={{ color: "#a16207", fontSize: "0.85rem" }}>
-                      No FAST-driven Tier 2 candidates right now. Re-checks
-                      after each FAST import.
+                      No FAST-driven Tier 2 candidates right now. Students
+                      already on an active academic plan for a subject are
+                      excluded.
                     </div>
                   )}
                 {suggestions.length > 0 && (
@@ -563,201 +625,237 @@ export default function MtssPlansAdmin({
                       <thead>
                         <tr style={{ textAlign: "left", color: "#78350f" }}>
                           <th style={{ padding: "0.4rem" }}>Student</th>
-                          <th style={{ padding: "0.4rem" }}>Subj.</th>
-                          <th style={{ padding: "0.4rem" }}>Benchmark</th>
-                          <th style={{ padding: "0.4rem" }}>Recent windows</th>
+                          <th style={{ padding: "0.4rem" }}>Subject</th>
+                          <th style={{ padding: "0.4rem" }}>FAST placement</th>
+                          <th style={{ padding: "0.4rem" }}>Weak standards</th>
                           <th
                             style={{ padding: "0.4rem", textAlign: "right" }}
                           ></th>
                         </tr>
                       </thead>
                       <tbody>
-                        {suggestions.map((s) => (
-                          <tr
-                            key={`${s.studentId}|${s.benchmarkCode}`}
-                            style={{ borderTop: "1px solid #fde68a" }}
-                          >
-                            <td
-                              style={{
-                                padding: "0.4rem",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              <div style={{ fontWeight: 600 }}>
-                                {s.studentName ?? "(unknown)"}
-                              </div>
-                              <div
-                                style={{
-                                  color: "#92400e",
-                                  fontSize: "0.72rem",
-                                }}
-                              >
-                                ID {s.studentLocalSisId ?? "—"}
-                                {s.studentGrade != null
-                                  ? ` • Gr ${s.studentGrade}`
-                                  : ""}
-                              </div>
-                              {s.priorYearPm3 && (
-                                <div
-                                  title={`Prior-year FAST PM3 (${s.priorYearPm3.schoolYear})`}
+                        {suggestions.map((s) => {
+                          const key = pairKey(s);
+                          const expanded = expandedRows.has(key);
+                          const levelColor =
+                            s.level <= 1 ? "#991b1b" : "#b45309";
+                          const levelBg =
+                            s.level <= 1 ? "#fee2e2" : "#fef3c7";
+                          return (
+                            <Fragment key={key}>
+                              <tr style={{ borderTop: "1px solid #fde68a" }}>
+                                <td
                                   style={{
-                                    marginTop: 2,
-                                    fontSize: "0.7rem",
-                                    color: "#6b7280",
+                                    padding: "0.4rem",
+                                    whiteSpace: "nowrap",
                                   }}
                                 >
-                                  <span style={{ color: "#9ca3af" }}>
-                                    {s.priorYearPm3.schoolYear} PM3
-                                  </span>{" "}
-                                  <span
+                                  <div style={{ fontWeight: 600 }}>
+                                    {s.studentName ?? "(unknown)"}
+                                  </div>
+                                  <div
                                     style={{
-                                      color: "#374151",
-                                      fontWeight: 600,
+                                      color: "#92400e",
+                                      fontSize: "0.72rem",
                                     }}
                                   >
-                                    {s.priorYearPm3.pm3}
-                                  </span>
-                                </div>
-                              )}
-                            </td>
-                            <td
-                              style={{
-                                padding: "0.4rem",
-                                textTransform: "uppercase",
-                                fontSize: "0.75rem",
-                                color: "#78350f",
-                              }}
-                            >
-                              {s.subject}
-                            </td>
-                            <td style={{ padding: "0.4rem" }}>
-                              <div
-                                style={{
-                                  fontFamily:
-                                    "ui-monospace, SFMono-Regular, monospace",
-                                  fontSize: "0.78rem",
-                                  color: "#0f172a",
-                                }}
-                              >
-                                {s.benchmarkCode}
-                              </div>
-                              {s.benchmarkCategory && (
-                                <div
-                                  style={{
-                                    color: "#78350f",
-                                    fontSize: "0.72rem",
-                                  }}
-                                >
-                                  {s.benchmarkCategory}
-                                </div>
-                              )}
-                            </td>
-                            <td style={{ padding: "0.4rem" }}>
-                              <div
-                                style={{
-                                  display: "inline-flex",
-                                  gap: 4,
-                                  alignItems: "center",
-                                }}
-                              >
-                                {s.windows.map((w) => {
-                                  const label = w.window.toUpperCase();
-                                  const naked = w.masteryPct < 0;
-                                  return (
-                                    <span
-                                      key={`${w.schoolYear}-${w.window}`}
-                                      title={`${w.schoolYear} ${label}`}
+                                    ID {s.studentId}
+                                    {s.studentGrade != null
+                                      ? ` • Gr ${s.studentGrade}`
+                                      : ""}
+                                  </div>
+                                  {s.priorYearPm3 && (
+                                    <div
+                                      title={`Prior-year FAST PM3 (${s.priorYearPm3.schoolYear})`}
                                       style={{
-                                        display: "inline-flex",
-                                        flexDirection: "column",
-                                        alignItems: "center",
-                                        background: naked
-                                          ? "#f1f5f9"
-                                          : w.below
-                                            ? "#fee2e2"
-                                            : "#dcfce7",
-                                        color: naked
-                                          ? "#94a3b8"
-                                          : w.below
-                                            ? "#991b1b"
-                                            : "#166534",
-                                        border: `1px solid ${
-                                          naked
-                                            ? "#e2e8f0"
-                                            : w.below
-                                              ? "#fecaca"
-                                              : "#bbf7d0"
-                                        }`,
-                                        borderRadius: 6,
-                                        padding: "2px 6px",
-                                        minWidth: 44,
-                                        fontSize: "0.72rem",
-                                        fontWeight: 600,
+                                        marginTop: 2,
+                                        fontSize: "0.7rem",
+                                        color: "#6b7280",
                                       }}
                                     >
-                                      <span style={{ fontSize: "0.66rem" }}>
-                                        {label}
+                                      <span style={{ color: "#9ca3af" }}>
+                                        {s.priorYearPm3.schoolYear} PM3
+                                      </span>{" "}
+                                      <span
+                                        style={{
+                                          color: "#374151",
+                                          fontWeight: 600,
+                                        }}
+                                      >
+                                        {s.priorYearPm3.pm3}
                                       </span>
-                                      <span>
-                                        {naked ? "—" : `${w.masteryPct}%`}
-                                      </span>
-                                    </span>
-                                  );
-                                })}
-                              </div>
-                            </td>
-                            <td
-                              style={{
-                                padding: "0.4rem",
-                                whiteSpace: "nowrap",
-                                textAlign: "right",
-                              }}
-                            >
-                              <div
-                                style={{
-                                  display: "inline-flex",
-                                  gap: 6,
-                                }}
-                              >
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    createPlanFromSuggestion(s)
-                                  }
+                                    </div>
+                                  )}
+                                </td>
+                                <td
                                   style={{
-                                    background: "#0d9488",
-                                    color: "white",
-                                    border: "none",
-                                    borderRadius: 4,
-                                    padding: "3px 10px",
-                                    fontSize: "0.78rem",
+                                    padding: "0.4rem",
+                                    fontSize: "0.8rem",
                                     fontWeight: 600,
-                                    cursor: "pointer",
+                                    color: "#78350f",
                                   }}
-                                  title="Create a Tier 2 plan prefilled from this benchmark"
                                 >
-                                  Create plan
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => dismissSuggestion(s)}
+                                  {subjectLabel(s.subject)}
+                                </td>
+                                <td style={{ padding: "0.4rem" }}>
+                                  <span
+                                    style={{
+                                      display: "inline-block",
+                                      background: levelBg,
+                                      color: levelColor,
+                                      border: `1px solid ${levelColor}33`,
+                                      borderRadius: 6,
+                                      padding: "2px 8px",
+                                      fontSize: "0.75rem",
+                                      fontWeight: 700,
+                                    }}
+                                  >
+                                    L{s.level} · {s.levelLabel}
+                                  </span>
+                                  <div
+                                    style={{
+                                      marginTop: 2,
+                                      fontSize: "0.72rem",
+                                      color: "#78350f",
+                                    }}
+                                  >
+                                    Score {s.score} ·{" "}
+                                    {s.window.toUpperCase()} {s.schoolYear}
+                                  </div>
+                                </td>
+                                <td style={{ padding: "0.4rem" }}>
+                                  {s.weakStandards.length === 0 ? (
+                                    <span
+                                      style={{
+                                        color: "#a16207",
+                                        fontSize: "0.75rem",
+                                      }}
+                                    >
+                                      None on file
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleExpanded(key)}
+                                      style={{
+                                        background: "transparent",
+                                        border: "1px solid #fcd34d",
+                                        borderRadius: 4,
+                                        padding: "2px 8px",
+                                        fontSize: "0.75rem",
+                                        color: "#92400e",
+                                        cursor: "pointer",
+                                      }}
+                                    >
+                                      {expanded ? "▾" : "▸"}{" "}
+                                      {s.weakStandards.length} standard
+                                      {s.weakStandards.length === 1 ? "" : "s"}
+                                    </button>
+                                  )}
+                                </td>
+                                <td
                                   style={{
-                                    background: "white",
-                                    color: "#92400e",
-                                    border: "1px solid #fcd34d",
-                                    borderRadius: 4,
-                                    padding: "3px 10px",
-                                    fontSize: "0.78rem",
-                                    cursor: "pointer",
+                                    padding: "0.4rem",
+                                    whiteSpace: "nowrap",
+                                    textAlign: "right",
                                   }}
-                                  title="Hide for the rest of this school year"
                                 >
-                                  Dismiss
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
+                                  <div
+                                    style={{
+                                      display: "inline-flex",
+                                      gap: 6,
+                                    }}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        createPlanFromSuggestion(s)
+                                      }
+                                      style={{
+                                        background: "#0d9488",
+                                        color: "white",
+                                        border: "none",
+                                        borderRadius: 4,
+                                        padding: "3px 10px",
+                                        fontSize: "0.78rem",
+                                        fontWeight: 600,
+                                        cursor: "pointer",
+                                      }}
+                                      title="Create a light Tier 2 academic plan for this subject"
+                                    >
+                                      Create plan
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => dismissSuggestion(s)}
+                                      style={{
+                                        background: "white",
+                                        color: "#92400e",
+                                        border: "1px solid #fcd34d",
+                                        borderRadius: 4,
+                                        padding: "3px 10px",
+                                        fontSize: "0.78rem",
+                                        cursor: "pointer",
+                                      }}
+                                      title="Hide for the rest of this school year"
+                                    >
+                                      Dismiss
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                              {expanded && s.weakStandards.length > 0 && (
+                                <tr style={{ background: "#fffdf5" }}>
+                                  <td colSpan={5} style={{ padding: "0.4rem" }}>
+                                    <div
+                                      style={{
+                                        display: "flex",
+                                        flexWrap: "wrap",
+                                        gap: 6,
+                                      }}
+                                    >
+                                      {s.weakStandards.map((w) => (
+                                        <span
+                                          key={w.benchmarkCode}
+                                          title={
+                                            w.category ?? w.strategyCategory
+                                          }
+                                          style={{
+                                            display: "inline-flex",
+                                            flexDirection: "column",
+                                            gap: 1,
+                                            background: "#fef3c7",
+                                            border: "1px solid #fcd34d",
+                                            borderRadius: 6,
+                                            padding: "3px 8px",
+                                            fontSize: "0.72rem",
+                                          }}
+                                        >
+                                          <span
+                                            style={{
+                                              fontFamily:
+                                                "ui-monospace, SFMono-Regular, monospace",
+                                              color: "#0f172a",
+                                              fontWeight: 600,
+                                            }}
+                                          >
+                                            {w.benchmarkCode}
+                                          </span>
+                                          <span style={{ color: "#78350f" }}>
+                                            {w.category ?? w.strategyCategory}
+                                            {w.latestPct != null
+                                              ? ` · ${w.latestPct}%`
+                                              : ""}
+                                          </span>
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -1033,10 +1131,11 @@ export default function MtssPlansAdmin({
             setEditing(null);
             setPrefill(null);
             reload();
-            // A new plan from a FAST suggestion drops that row from
-            // the tile (server filter excludes pairs with an active
-            // plan on the same benchmark code).
-            reloadSuggestions();
+            // A new plan from a FAST suggestion drops that (student,
+            // subject) row from the tile (server filter excludes pairs
+            // with an active academic plan). Only refresh if the admin
+            // already generated suggestions this session.
+            if (suggestionsGenerated) reloadSuggestions();
           }}
         />
       )}
@@ -1046,9 +1145,9 @@ export default function MtssPlansAdmin({
 
 interface PlanModalProps {
   plan: Plan | null;
-  // FAST Phase 5 — when present on a new-plan modal, seeds student,
-  // title, first goal, tier, and the fastBenchmarkCode column so the
-  // resulting plan is wired straight back to the suggestion source.
+  // FAST academic — when present on a new-plan modal, seeds student,
+  // title, first goal, tier, and the fastSubject column so the resulting
+  // light Tier 2 plan is wired straight back to the suggestion subject.
   prefill?: MtssPlanPrefill | null;
   students: Student[];
   existingActivePlanStudentIds: Set<string>;
@@ -1080,10 +1179,31 @@ function PlanModal({
   const [tier, setTier] = useState<number>(
     plan?.tier ?? seed?.tier ?? 2,
   );
-  // Carried straight through to the POST body. Edits keep their existing
-  // fastBenchmarkCode untouched (this modal doesn't surface a writer
-  // for it yet — that's Phase 5 follow-up #28).
-  const fastBenchmarkCode = seed?.fastBenchmarkCode ?? null;
+  // Academic subject (ela|math) carried straight through to the POST
+  // body from a FAST suggestion. Edits keep their existing fastSubject
+  // untouched (this modal doesn't surface a writer for it).
+  const fastSubject = seed?.fastSubject ?? null;
+  // Academic plans (FAST suggestion seed OR an existing plan that already
+  // carries a fastSubject) are the ONLY ones that use meeting days. Behavior
+  // Tier 3 plans always meet every weekday, so the meeting-day schedule is
+  // hidden for them and never written — preventing an accidental Tue/Thu
+  // demotion of a behavior plan's expected cadence.
+  const existingFastSubject =
+    (plan as Plan & { fastSubject?: string | null })?.fastSubject ?? null;
+  const isAcademic = !!(fastSubject || existingFastSubject);
+  // Tier 3 meeting days (CSV "mon".."fri"). Academic Tier 3 plans meet
+  // on configured days; the bell + check-in only fire on those days.
+  // Defaults to Tue/Thu for a fresh academic Tier 3 plan.
+  const [meetingDays, setMeetingDays] = useState<string[]>(() => {
+    const raw = (plan as Plan & { meetingDays?: string | null })?.meetingDays;
+    if (raw) {
+      return raw
+        .split(",")
+        .map((d) => d.trim().toLowerCase())
+        .filter(Boolean);
+    }
+    return isAcademic ? ["tue", "thu"] : [];
+  });
   const [pointMin, setPointMin] = useState<string>(
     plan?.pointRangeMin == null ? "" : String(plan.pointRangeMin),
   );
@@ -1222,9 +1342,14 @@ function PlanModal({
         ...(autoAssign ? {} : { assignedTeacherIds: additionalIds }),
       };
       if (!isEdit) body.studentId = studentId.trim();
-      if (!isEdit && fastBenchmarkCode) {
-        body.fastBenchmarkCode = fastBenchmarkCode;
+      if (!isEdit && fastSubject) {
+        body.fastSubject = fastSubject;
       }
+      // Only academic Tier 3 plans carry a meeting-day schedule (it drives
+      // the bell + per-meeting-day check-in cadence). Behavior plans and
+      // lower tiers send an empty list so an edit that demotes a plan — or
+      // a behavior Tier 3 plan — never picks up a Tue/Thu cadence.
+      body.meetingDays = tier === 3 && isAcademic ? meetingDays : [];
       const r = await authFetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
@@ -1363,6 +1488,57 @@ function PlanModal({
             <option value={3}>Tier 3 — intensive</option>
           </select>
         </div>
+
+        {tier === 3 && isAcademic && (
+          <div style={{ marginBottom: "0.75rem" }}>
+            <label
+              style={{ display: "block", fontWeight: 600, marginBottom: 4 }}
+            >
+              Meeting days
+            </label>
+            <div
+              style={{
+                fontSize: "0.78rem",
+                color: "#64748b",
+                marginBottom: 6,
+              }}
+            >
+              Days this intervention meets. Reminders and check-ins fire only
+              on these days, and the week isn&rsquo;t complete until each is
+              logged. Leave all unchecked to require every weekday.
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {MEETING_DAY_OPTIONS.map((d) => {
+                const checked = meetingDays.includes(d.key);
+                return (
+                  <button
+                    key={d.key}
+                    type="button"
+                    onClick={() =>
+                      setMeetingDays((prev) =>
+                        prev.includes(d.key)
+                          ? prev.filter((x) => x !== d.key)
+                          : [...prev, d.key],
+                      )
+                    }
+                    style={{
+                      padding: "4px 12px",
+                      borderRadius: 999,
+                      border: `1px solid ${checked ? "#0d9488" : "#cbd5e1"}`,
+                      background: checked ? "#0d9488" : "white",
+                      color: checked ? "white" : "#475569",
+                      fontSize: "0.8rem",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {d.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* ---- Teacher assignment block ---- */}
         <div

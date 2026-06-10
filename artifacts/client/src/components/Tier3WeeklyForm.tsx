@@ -42,6 +42,11 @@ interface PlanRow {
   tier: number;
   trackSchoolWideExpectations: boolean;
   tier3GoalSlots: number;
+  // Academic plans set fastSubject (ela|math) and meetingDays (CSV
+  // "mon".."fri"). For those, the form renders only the scheduled
+  // meeting days and hides the behavior-specific PRIDE + strategy grids.
+  fastSubject?: string | null;
+  meetingDays?: string | null;
   closedAt: string | null;
 }
 
@@ -202,6 +207,8 @@ export default function Tier3WeeklyForm({
                   interventionSubType: string | null;
                   trackSchoolWideExpectations: boolean;
                   tier3GoalSlots: number;
+                  fastSubject?: string | null;
+                  meetingDays?: string | null;
                   closedAt: string | null;
                 }
               | null;
@@ -361,7 +368,23 @@ export default function Tier3WeeklyForm({
     return rows;
   }, [goals, plan, today, isCoreTeam]);
 
-  const showPride = plan?.trackSchoolWideExpectations !== false;
+  // Academic Tier 3 plans (fastSubject set) only meet on their configured
+  // meeting days, and skip the behavior-specific PRIDE + strategy grids.
+  const isAcademic = !!plan?.fastSubject;
+  const meetingDaySet = plan?.meetingDays
+    ? new Set(
+        plan.meetingDays
+          .split(",")
+          .map((d) => d.trim().toLowerCase())
+          .filter(Boolean),
+      )
+    : null;
+  const visibleDays: Day[] =
+    isAcademic && meetingDaySet
+      ? DAYS.filter((d) => meetingDaySet.has(d))
+      : [...DAYS];
+  const showPride =
+    !isAcademic && plan?.trackSchoolWideExpectations !== false;
   const visibleStrategies = strategies.filter((s) => s.active);
   const visibleCategories = categories.filter(
     (c) => c.active && visibleStrategies.some((s) => s.categoryId === c.id),
@@ -475,10 +498,12 @@ export default function Tier3WeeklyForm({
   const submit = () => persist("submit");
   const saveDraft = () => persist("draft");
 
-  // True iff every weekday has at least one goal scored OR is marked
-  // absent. Drives whether the "Submit" button is enabled.
+  // True iff every scheduled day has at least one goal scored OR is
+  // marked absent. Drives whether the "Submit" button is enabled. For
+  // academic Tier 3 plans only the configured meeting days count, so the
+  // week can't be completed until each scheduled meeting day is logged.
   const allDaysAccounted = useMemo(() => {
-    for (const d of DAYS) {
+    for (const d of visibleDays) {
       if (absentDays[d]) continue;
       let scoredAtLeastOneGoal = false;
       for (const slot of Object.values(goalScores)) {
@@ -490,7 +515,7 @@ export default function Tier3WeeklyForm({
       if (!scoredAtLeastOneGoal) return false;
     }
     return true;
-  }, [absentDays, goalScores]);
+  }, [absentDays, goalScores, visibleDays]);
 
   const buttonStyle = (active: boolean): React.CSSProperties => ({
     width: 28,
@@ -545,7 +570,7 @@ export default function Tier3WeeklyForm({
         >
           <colgroup>
             <col style={{ width: 220 }} />
-            {DAYS.map((d) => (
+            {visibleDays.map((d) => (
               <col key={d} />
             ))}
           </colgroup>
@@ -561,7 +586,7 @@ export default function Tier3WeeklyForm({
               >
                 Goal
               </th>
-              {DAYS.map((d, i) => (
+              {visibleDays.map((d, i) => (
                 <th
                   key={d}
                   style={{
@@ -569,7 +594,7 @@ export default function Tier3WeeklyForm({
                     borderBottom: "2px solid #cbd5e1",
                     borderLeft: "1px solid #cbd5e1",
                     borderRight:
-                      i === DAYS.length - 1 ? "1px solid #cbd5e1" : undefined,
+                      i === visibleDays.length - 1 ? "1px solid #cbd5e1" : undefined,
                     background: "#f8fafc",
                   }}
                 >
@@ -602,7 +627,7 @@ export default function Tier3WeeklyForm({
                   Won&rsquo;t count toward weekly %
                 </div>
               </td>
-              {DAYS.map((d, i) => (
+              {visibleDays.map((d, i) => (
                 <td
                   key={d}
                   style={{
@@ -610,7 +635,7 @@ export default function Tier3WeeklyForm({
                     borderBottom: "1px solid #e2e8f0",
                     borderLeft: "1px solid #e2e8f0",
                     borderRight:
-                      i === DAYS.length - 1
+                      i === visibleDays.length - 1
                         ? "1px solid #e2e8f0"
                         : undefined,
                     background: absentDays[d] ? "#fef3c7" : "#fafafa",
@@ -719,7 +744,7 @@ export default function Tier3WeeklyForm({
                       </div>
                     )}
                   </td>
-                  {DAYS.map((d, i) => {
+                  {visibleDays.map((d, i) => {
                     const isAbsent = absentDays[d];
                     // No goal text yet means there's nothing to score
                     // against — leave the buttons inert + greyed so it's
@@ -733,7 +758,7 @@ export default function Tier3WeeklyForm({
                           borderBottom: "1px solid #e2e8f0",
                           borderLeft: "1px solid #e2e8f0",
                           borderRight:
-                            i === DAYS.length - 1
+                            i === visibleDays.length - 1
                               ? "1px solid #e2e8f0"
                               : undefined,
                           verticalAlign: "middle",
@@ -829,7 +854,7 @@ export default function Tier3WeeklyForm({
                     {PRIDE_LEGEND.map((l) => l.label).join(" · ")}
                   </div>
                 </td>
-                {DAYS.map((d, i) => (
+                {visibleDays.map((d, i) => (
                   <td
                     key={d}
                     style={{
@@ -837,7 +862,7 @@ export default function Tier3WeeklyForm({
                       borderBottom: "1px solid #e2e8f0",
                       borderLeft: "1px solid #e2e8f0",
                       borderRight:
-                        i === DAYS.length - 1
+                        i === visibleDays.length - 1
                           ? "1px solid #e2e8f0"
                           : undefined,
                     }}
@@ -885,7 +910,7 @@ export default function Tier3WeeklyForm({
               >
                 Day comment
               </td>
-              {DAYS.map((d, i) => (
+              {visibleDays.map((d, i) => (
                 <td
                   key={d}
                   style={{
@@ -893,7 +918,7 @@ export default function Tier3WeeklyForm({
                     borderBottom: "1px solid #e2e8f0",
                     borderLeft: "1px solid #e2e8f0",
                     borderRight:
-                      i === DAYS.length - 1
+                      i === visibleDays.length - 1
                         ? "1px solid #e2e8f0"
                         : undefined,
                   }}
@@ -937,8 +962,8 @@ export default function Tier3WeeklyForm({
         />
       </label>
 
-      {/* Strategy checklist */}
-      {visibleCategories.length > 0 && (
+      {/* Strategy checklist — behavior plans only */}
+      {!isAcademic && visibleCategories.length > 0 && (
         <div>
           <div style={{ fontWeight: 600, marginBottom: "0.4rem" }}>
             Interventions Used This Week
@@ -966,7 +991,7 @@ export default function Tier3WeeklyForm({
                         color: "#64748b",
                       }}
                     />
-                    {DAYS.map((d) => (
+                    {visibleDays.map((d) => (
                       <th
                         key={d}
                         style={{
@@ -989,7 +1014,7 @@ export default function Tier3WeeklyForm({
                         <td style={{ padding: "0.2rem 0.4rem", fontSize: "0.85rem" }}>
                           {s.name}
                         </td>
-                        {DAYS.map((d) => (
+                        {visibleDays.map((d) => (
                           <td
                             key={d}
                             style={{ padding: "0.2rem", textAlign: "center" }}

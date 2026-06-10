@@ -94,6 +94,13 @@ export const studentMtssPlansTable = pgTable(
     // student from re-suggestion once they're on an active academic
     // plan for that subject.
     fastSubject: text("fast_subject"),
+    // Academic Tier 3 monitoring. CSV of scheduled weekday keys the
+    // intensive teacher meets the student on — e.g. "tue,thu". NULL on
+    // behavior plans and on light Tier 2 academic plans (which the
+    // intensive class itself monitors). When set, the "owed today" bell
+    // fires on each scheduled day and the weekly check-in is not
+    // complete until every scheduled day (≤ today, not absent) is logged.
+    meetingDays: text("meeting_days"),
     openedAt: timestamp("opened_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
