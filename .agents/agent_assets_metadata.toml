@@ -104,12 +104,6 @@ type = "image"
 title = "PulseKinetics — static PNG (4×)"
 
 [[outputs]]
-id = "ATdyS5Z5m2NJp7VhFWdHZ"
-uri = "file://attached_assets/logo-presets/pulse-kinetics-favicon.svg"
-type = "image"
-title = "PulseKinetics — 180×180 favicon SVG"
-
-[[outputs]]
 id = "cVGVNM_hHAlx57XOOYdaj"
 uri = "file://attached_assets/logo-presets/pulse-kinetics-favicon.png"
 type = "image"
