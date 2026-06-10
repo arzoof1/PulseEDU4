@@ -272,6 +272,14 @@ export default function InterventionReportsPage({ onBack }: Props) {
 
   return (
     <section style={{ padding: "1rem" }}>
+      <style>{`
+        @media print {
+          .intervention-reports-no-print { display: none !important; }
+          .intervention-reports-grid { grid-template-columns: 1fr !important; }
+          .intervention-reports-grid li { break-inside: avoid; page-break-inside: avoid; }
+          .intervention-reports-print-only { display: block !important; }
+        }
+      `}</style>
       <div
         style={{
           display: "flex",
@@ -281,11 +289,44 @@ export default function InterventionReportsPage({ onBack }: Props) {
         }}
       >
         <h2 style={{ margin: 0 }}>Intervention Reports</h2>
-        <button type="button" onClick={onBack}>
-          ← Back
-        </button>
+        <div
+          className="intervention-reports-no-print"
+          style={{ display: "flex", gap: 8 }}
+        >
+          <button
+            type="button"
+            onClick={() => window.print()}
+            style={{
+              padding: "6px 14px",
+              border: "1px solid #2563eb",
+              borderRadius: 6,
+              background: "#2563eb",
+              color: "white",
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+          >
+            Print to PDF
+          </button>
+          <button type="button" onClick={onBack}>
+            ← Back
+          </button>
+        </div>
       </div>
 
+      <div
+        className="intervention-reports-print-only"
+        style={{
+          display: "none",
+          margin: "0 0 0.5rem",
+          color: "#334155",
+          fontWeight: 600,
+        }}
+      >
+        Weekly fidelity report — week of {week}
+      </div>
+
+      <div className="intervention-reports-no-print">
       <HowToUseHelp title="How to use Intervention Reports">
         <HowToSection title="What this page is">
           Weekly fidelity report — for the chosen Monday, lists every
@@ -300,8 +341,10 @@ export default function InterventionReportsPage({ onBack }: Props) {
           is one week or a pattern.
         </RoleSection>
       </HowToUseHelp>
+      </div>
 
       <div
+        className="intervention-reports-no-print"
         style={{
           display: "flex",
           gap: "0.5rem",
@@ -433,7 +476,10 @@ export default function InterventionReportsPage({ onBack }: Props) {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+      <div
+        className="intervention-reports-grid"
+        style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}
+      >
         <div>
           {loading && <div style={{ color: "#64748b" }}>Loading…</div>}
           {!loading && visibleRows.length === 0 && (
