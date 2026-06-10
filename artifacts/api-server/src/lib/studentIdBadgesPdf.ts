@@ -26,10 +26,10 @@ const PAGE_MARGIN = 10;
 
 export interface StudentBadgeInput {
   studentId: string;
-  // District-level Local SIS ID (6-digit). The badge's barcode + QR still
-  // encode studentId (FLEID) so existing sign-in scanners keep working;
-  // localSisId is currently unused on the visible face but kept on the
-  // type so callers don't break.
+  // District-level Local SIS id (the human-facing id students scan/type at
+  // the kiosk). The visible "ID" line, the QR, and the Code128 barcode all
+  // encode this — the internal FLEID-style student_id never reaches a
+  // student. Falls back to student_id only if a row is missing its SIS id.
   localSisId?: string | null;
   firstName: string;
   lastName: string;
@@ -37,8 +37,9 @@ export interface StudentBadgeInput {
   // End-of-day dismissal mode. Rendered as a human label next to grade.
   dismissalMode?: string | null;
   schoolName: string;
-  // QR points to: `${baseUrl}?signin=<studentId>` — the kiosk reads
-  // `?signin=…` and pre-fills the sign-in field.
+  // QR points to: `${baseUrl}?signin=<localSisId>` — the kiosk reads
+  // `?signin=…` and pre-fills the sign-in field with the same Local SIS id
+  // students type on the keypad.
   baseUrl: string;
   house?: {
     name: string;
@@ -302,7 +303,7 @@ async function renderLanyardBadge(
   const qrBuf = await renderQrBuffer(badge);
   doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
 
-  const barcodePng = await renderBarcodeBuffer(badge.studentId);
+  const barcodePng = await renderBarcodeBuffer(badge.localSisId ?? badge.studentId);
   const bcW = W - PAGE_MARGIN * 2 - 30;
   const bcH = 14;
   const bcX = (W - bcW) / 2;
@@ -472,7 +473,7 @@ async function renderCr80Badge(
   const qrY = 8;
   doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
 
-  const barcodePng = await renderBarcodeBuffer(badge.studentId);
+  const barcodePng = await renderBarcodeBuffer(badge.localSisId ?? badge.studentId);
   const bcW = rightW - 4;
   const bcH = 26;
   const bcX = rightX + (rightW - bcW) / 2;
@@ -617,7 +618,7 @@ function computeInitials(badge: StudentBadgeInput): string {
 }
 
 async function renderQrBuffer(badge: StudentBadgeInput): Promise<Buffer> {
-  const qrUrl = `${badge.baseUrl}?signin=${encodeURIComponent(badge.studentId)}`;
+  const qrUrl = `${badge.baseUrl}?signin=${encodeURIComponent(badge.localSisId ?? badge.studentId)}`;
   const qrDataUrl = await QRCode.toDataURL(qrUrl, {
     margin: 1,
     width: 200,

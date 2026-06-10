@@ -165,17 +165,56 @@ async function clearStaleAndList(act: { id: number; schoolId: number }) {
       ),
     );
   const rows = await db
-    .select()
+    .select({
+      id: hallPassQueueTable.id,
+      schoolId: hallPassQueueTable.schoolId,
+      kioskActivationId: hallPassQueueTable.kioskActivationId,
+      room: hallPassQueueTable.room,
+      studentId: hallPassQueueTable.studentId,
+      firstName: hallPassQueueTable.firstName,
+      lastName: hallPassQueueTable.lastName,
+      destination: hallPassQueueTable.destination,
+      position: hallPassQueueTable.position,
+      addedAt: hallPassQueueTable.addedAt,
+      periodKey: hallPassQueueTable.periodKey,
+      // Joined from the roster so the kiosk's next-up confirm can verify the
+      // student-typed Local SIS id without a second round-trip. The queue row
+      // itself stores the internal student_id; the SIS id is the human-facing
+      // value students scan/type.
+      localSisId: studentsTable.localSisId,
+    })
     .from(hallPassQueueTable)
+    .leftJoin(
+      studentsTable,
+      and(
+        eq(studentsTable.studentId, hallPassQueueTable.studentId),
+        eq(studentsTable.schoolId, hallPassQueueTable.schoolId),
+      ),
+    )
     .where(eq(hallPassQueueTable.kioskActivationId, act.id))
     .orderBy(asc(hallPassQueueTable.position), asc(hallPassQueueTable.id));
   return { periodKey, rows };
 }
 
-function shapeEntry(row: typeof hallPassQueueTable.$inferSelect, idx: number) {
+function shapeEntry(
+  row: {
+    id: number;
+    studentId: string;
+    firstName: string | null;
+    lastName: string | null;
+    destination: string;
+    addedAt: Date | string;
+    localSisId?: string | null;
+  },
+  idx: number,
+) {
   return {
     id: row.id,
     studentId: row.studentId,
+    // Human-facing Local SIS id (null when called from a code path that
+    // doesn't join the roster — e.g. the immediate post-add response, where
+    // the client refetches the joined list anyway).
+    localSisId: row.localSisId ?? null,
     firstName: row.firstName,
     lastName: row.lastName,
     destination: row.destination,
@@ -221,22 +260,25 @@ router.post("/kiosk/queue/:token/add", async (req, res) => {
     res.status(400).json({ error: "destination is required" });
     return;
   }
-  const trimmedId = studentId.trim().toUpperCase();
-
-  // Resolve student to cache name + verify they're in this school.
+  // Students scan/type their human-facing Local SIS id; resolve it to the
+  // canonical roster row so we store the internal student_id on the queue
+  // (and cache the name) while verifying they belong to this school.
   const [student] = await db
     .select()
     .from(studentsTable)
     .where(
       and(
-        eq(studentsTable.studentId, trimmedId),
+        eq(studentsTable.localSisId, studentId.trim()),
         eq(studentsTable.schoolId, act.schoolId),
       ),
     );
   if (!student) {
-    res.status(404).json({ error: `Student ${trimmedId} not found` });
+    res
+      .status(404)
+      .json({ error: "Student not found — check your ID and try again." });
     return;
   }
+  const trimmedId = student.studentId;
 
   // Don't queue someone who's currently out on a pass from this room — they
   // already have one. Saves a footgun and a confusing queue display.
@@ -375,7 +417,10 @@ router.post("/kiosk/queue/:token/skip", async (req, res) => {
     res.status(400).json({ error: "studentId is required" });
     return;
   }
-  const trimmedId = studentId.trim().toUpperCase();
+  // The client sends back the entry's canonical student_id (the value
+  // shapeEntry returned), so match it exactly — no case folding. Queue rows
+  // store the canonical id verbatim; uppercasing here could miss a delete.
+  const trimmedId = studentId.trim();
   await db
     .delete(hallPassQueueTable)
     .where(
@@ -402,12 +447,14 @@ export async function consumeQueueEntry(
   kioskActivationId: number,
   studentId: string,
 ) {
+  // Callers pass the canonical student_id (resolved from local_sis_id in the
+  // kiosk routes). Queue rows store that id verbatim, so match exactly.
   await db
     .delete(hallPassQueueTable)
     .where(
       and(
         eq(hallPassQueueTable.kioskActivationId, kioskActivationId),
-        eq(hallPassQueueTable.studentId, studentId.toUpperCase()),
+        eq(hallPassQueueTable.studentId, studentId),
       ),
     );
 }
@@ -430,6 +477,7 @@ export async function peekNextInQueue(act: {
     if (limit) continue;
     return {
       studentId: row.studentId,
+      localSisId: row.localSisId ?? null,
       firstName: row.firstName,
       lastName: row.lastName,
       destination: row.destination,

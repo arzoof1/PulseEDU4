@@ -140,6 +140,9 @@ type Status =
 interface QueueEntry {
   id: number;
   studentId: string;
+  // Human-facing Local SIS id — the value students scan/type. The internal
+  // studentId stays for queue ops (skip) but is never shown or matched against.
+  localSisId: string | null;
   firstName: string | null;
   lastName: string | null;
   destination: string;
@@ -1827,6 +1830,7 @@ function KioskBody({
                 .catch(() => ({}))) as {
                 nextInQueue?: {
                   studentId: string;
+                  localSisId: string | null;
                   firstName: string | null;
                   lastName: string | null;
                   destination: string;
@@ -1842,6 +1846,7 @@ function KioskBody({
                   entry: {
                     id: -1,
                     studentId: body.nextInQueue.studentId,
+                    localSisId: body.nextInQueue.localSisId,
                     firstName: body.nextInQueue.firstName,
                     lastName: body.nextInQueue.lastName,
                     destination: body.nextInQueue.destination,
@@ -2165,7 +2170,7 @@ function QueueStrip({
               }}
             >
               <div>
-                {e.firstName ?? e.studentId}
+                {e.firstName ?? e.localSisId ?? ""}
                 {e.lastName ? ` ${e.lastName.charAt(0)}.` : ""}
               </div>
               <div
@@ -2460,7 +2465,7 @@ function NextUpScreen({
     e.preventDefault();
     const trimmed = studentId.trim();
     if (!trimmed) return;
-    if (trimmed.toUpperCase() !== entry.studentId.toUpperCase()) {
+    if (trimmed !== (entry.localSisId ?? "")) {
       setError(
         `That ID doesn't match ${entry.firstName ?? "the student"}. Try again or tap Skip.`,
       );
@@ -2553,7 +2558,7 @@ function NextUpScreen({
           marginBottom: "0.25rem",
         }}
       >
-        Welcome, {entry.firstName ?? entry.studentId}!
+        Welcome, {entry.firstName ?? entry.localSisId ?? ""}!
       </div>
       <div
         style={{

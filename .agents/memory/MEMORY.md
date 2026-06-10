@@ -9,3 +9,5 @@
 - [Cross-device data freshness](cross-device-data-freshness.md) — staff-app counts/lists for data kiosks can mutate must POLL (15s), not just refresh on mount + own-action, or kiosk rows go unseen.
 - [Pickup bulk-assign concurrency](pickup-bulk-assign-concurrency.md) — school-wide number minter needs DB partial-unique index + per-school advisory lock + 23505→409 mapping, not just app-level dedup.
 - [Pickup release-undo idempotency](pickup-release-undo.md) — undo must be idempotent (double-tap/already-undone → ok); only terminal events block; never dump raw JSON errors.
+- [Kiosk local_sis_id boundary](kiosk-local-sis-boundary.md) — student-facing kiosk/badge surfaces use local_sis_id; resolve to canonical student_id for FKs; next-up localSisId is JOINed not stored; reprint old badges.
+- [Tooling pitfalls](tooling-pitfalls.md) — never `rg -rn` (= --replace=n, corrupts output); rg recurses by default.

@@ -857,6 +857,31 @@ router.post(
   },
 );
 
+// Resolve a kiosk-entered identifier to the canonical student record for
+// this school. Students scan/type their human-facing Local SIS id (the value
+// the badge QR + Code128 barcode now encode) — never the internal,
+// FLEID-style student_id. We match on local_sis_id, school-scoped (it is
+// 100%-populated and unique per (school_id, local_sis_id)), and hand back the
+// full row so every caller uses the canonical student_id for downstream
+// storage + matching. Returns null when no student matches.
+async function resolveKioskStudent(
+  rawId: string,
+  schoolId: number,
+): Promise<typeof studentsTable.$inferSelect | null> {
+  const sisId = rawId.trim();
+  if (!sisId) return null;
+  const [student] = await db
+    .select()
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.localSisId, sisId),
+        eq(studentsTable.schoolId, schoolId),
+      ),
+    );
+  return student ?? null;
+}
+
 router.post("/kiosk/hall-passes", async (req, res) => {
   const { studentId, destination, token } = req.body ?? {};
 
@@ -987,10 +1012,18 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     return;
   }
 
-  // Normalize the student-typed ID to uppercase so a kid who types "s2003"
-  // matches the canonical "S2003" in the roster (and so the pass row, the
-  // duplicate-active check, and the polarity check all use the same form).
-  const normalizedStudentId = studentId.trim().toUpperCase();
+  // Students scan/type their human-facing Local SIS id. Resolve it to the
+  // canonical roster row up front; every downstream check + insert below uses
+  // the internal student_id (via normalizedStudentId) so foreign keys stay
+  // stable while no FLEID ever surfaces to the student.
+  const student = await resolveKioskStudent(studentId, act.schoolId);
+  if (!student) {
+    res.status(404).json({
+      error: "Student not found — check your ID and try again.",
+    });
+    return;
+  }
+  const normalizedStudentId = student.studentId;
 
   const existingActive = (await db
     .select()
@@ -1005,7 +1038,7 @@ router.post("/kiosk/hall-passes", async (req, res) => {
   if (existingActive.length > 0) {
     const open = existingActive[0];
     res.status(409).json({
-      error: `Student ${normalizedStudentId} already has an active pass to ${open.destination}. End it before issuing another.`,
+      error: `You already have an active pass to ${open.destination}. Tap "I'm back" to end it before starting another.`,
     });
     return;
   }
@@ -1033,18 +1066,6 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     // partner's pass ends, at which point the hold clears automatically.
     // We deliberately don't echo the partner's name in the response.
     try {
-      const [student] = await db
-        .select({
-          firstName: studentsTable.firstName,
-          lastName: studentsTable.lastName,
-        })
-        .from(studentsTable)
-        .where(
-          and(
-            eq(studentsTable.studentId, normalizedStudentId),
-            eq(studentsTable.schoolId, act.schoolId),
-          ),
-        );
       const periodKey = await getCurrentPeriodKey(act.schoolId);
       // Stale-clear before insert so a previous-period queue doesn't count
       // toward this period's cap. Mirrors /kiosk/queue/:token/add.
@@ -1145,16 +1166,6 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     })
     .returning();
 
-  const [student] = await db
-    .select({ firstName: studentsTable.firstName })
-    .from(studentsTable)
-    .where(
-      and(
-        eq(studentsTable.studentId, normalizedStudentId),
-        eq(studentsTable.schoolId, act.schoolId),
-      ),
-    );
-
   // If this student was queued on this kiosk, remove their queue entry now
   // that the pass has started. Safe no-op if they weren't in the queue
   // (e.g. they walked up cold).
@@ -1201,9 +1212,16 @@ router.post("/kiosk/hall-passes/return", async (req, res) => {
     return;
   }
 
-  // Match the kiosk-create flow: uppercase the typed ID so a kid who types
-  // "s2003" still finds their active "S2003" pass.
-  const trimmedId = studentId.trim().toUpperCase();
+  // Students type/scan their human-facing Local SIS id; resolve it to the
+  // canonical student_id stored on the pass row.
+  const student = await resolveKioskStudent(studentId, act.schoolId);
+  if (!student) {
+    res.status(404).json({
+      error: `No active hall pass found from ${act.room}.`,
+    });
+    return;
+  }
+  const trimmedId = student.studentId;
   // Scope to passes that originated from THIS kiosk's room so "I'm back"
   // means "back to the room this kiosk is in." A pass from Room 102 can't
   // be ended from a Cafeteria kiosk — they have to use the right one.
@@ -1221,7 +1239,7 @@ router.post("/kiosk/hall-passes/return", async (req, res) => {
 
   if (activePasses.length === 0) {
     res.status(404).json({
-      error: `No active hall pass found for student ${trimmedId} from ${act.room}.`,
+      error: `No active hall pass found from ${act.room}.`,
     });
     return;
   }
@@ -1240,16 +1258,6 @@ router.post("/kiosk/hall-passes/return", async (req, res) => {
     })
     .where(eq(hallPassesTable.id, target.id))
     .returning();
-
-  const [student] = await db
-    .select({ firstName: studentsTable.firstName })
-    .from(studentsTable)
-    .where(
-      and(
-        eq(studentsTable.studentId, trimmedId),
-        eq(studentsTable.schoolId, act.schoolId),
-      ),
-    );
 
   // Pop the next student off this kiosk's queue (if any) so the kiosk can
   // show a "Welcome [Name] — enter your ID to start your pass" prompt. We
@@ -1670,15 +1678,15 @@ router.post("/kiosk/class-signin", async (req, res) => {
     return;
   }
 
-  // Student must belong to the kiosk's school — students.student_id is
-  // globally unique on the schema but we still enforce the school
-  // filter so a leaked id from another tenant can't trigger a sign-in.
+  // Students scan/type their human-facing Local SIS id (the value the badge
+  // QR encodes). Resolve to the canonical roster row, scoped to the kiosk's
+  // school so a leaked id from another tenant can't trigger a sign-in.
   const [student] = await db
     .select()
     .from(studentsTable)
     .where(
       and(
-        eq(studentsTable.studentId, studentId.trim()),
+        eq(studentsTable.localSisId, studentId.trim()),
         eq(studentsTable.schoolId, act.schoolId),
       ),
     );
