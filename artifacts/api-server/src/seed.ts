@@ -568,6 +568,8 @@ export async function ensureMtssPlansSchema() {
   // writer in the plan editor. Nullable / additive — safe on prod.
   await db.execute(
     sql`ALTER TABLE student_mtss_plans ADD COLUMN IF NOT EXISTS fast_benchmark_code TEXT`,
+    // Academic MTSS: subject-level academic plans ("ela" | "math").
+    sql`ALTER TABLE student_mtss_plans ADD COLUMN IF NOT EXISTS fast_subject TEXT`,
   );
   // ---- tier3_goals — version-on-edit goal storage for Tier 3 plans.
   await db.execute(sql`

@@ -225,6 +225,14 @@ async function main(): Promise<void> {
     return 0.7 + (r - 0.25) * 0.36; // 0.70..0.97 (reliable)
   }
 
+  // A deterministic ~30% subset of teachers intentionally have NOT yet
+  // logged the CURRENT week's check-ins, so the "owed today" bell lights
+  // up for them. Core Team / admins never see the bell — to demo it,
+  // sign in as one of these teachers.
+  function owesCurrentWeek(teacherId: number): boolean {
+    return unit(`owes:${teacherId}`) < 0.3;
+  }
+
   // T2 log-day weights (midweek-heavy).
   const T2_DAY_WEIGHTS: Record<DayKey, number> = {
     mon: 0.12,
@@ -308,11 +316,15 @@ async function main(): Promise<void> {
       if (wk < openMon) continue; // plan not open yet
       // Fidelity ramp: completion improves a touch over the window.
       const ramp = 0.04 * wi;
+      const isCurrentWeek = wi === weeks.length - 1;
 
       if (p.tier === 2) {
         const subType = p.interventionSubType ?? "cico";
         for (const tid of teachers) {
           const rng = mulberry32(hashStr(`t2:${p.id}:${tid}:${wk}`));
+          // Leave this week's check-in unscored for the "owed" subset so
+          // the teacher bell shows.
+          if (isCurrentWeek && owesCurrentWeek(tid)) continue;
           const prob = clamp(teacherFidelity(tid) + ramp, 0, 0.98);
           if (rng() > prob) continue; // not logged this week
           const day = pickLogDay(rng);
@@ -352,6 +364,9 @@ async function main(): Promise<void> {
 
         for (const tid of teachers) {
           const rng = mulberry32(hashStr(`t3:${p.id}:${tid}:${wk}`));
+          // Leave this week's record unscored for the "owed" subset so
+          // the teacher bell shows.
+          if (isCurrentWeek && owesCurrentWeek(tid)) continue;
           // Some weeks a teacher just doesn't submit (rare).
           if (rng() < 0.06) continue;
           const teacherOffset =

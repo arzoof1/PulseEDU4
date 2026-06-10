@@ -24,11 +24,18 @@ import {
   staffTable,
   studentsTable,
   studentFastItemResponsesTable,
+  studentFastScoresTable,
   schoolSettingsTable,
   mtssFastSuggestionDismissalsTable,
 } from "@workspace/db";
 import { and, eq, inArray, sql, asc, isNull } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+import {
+  levelMin,
+  placeOnChart,
+  SUB_LEVEL_LABEL,
+  type Subject,
+} from "../lib/fastCutScores.js";
 import {
   effectiveTeacherIdsForPlan,
   loadScheduleSectionsForStudent,
@@ -372,7 +379,14 @@ router.post("/mtss-plans", async (req, res) => {
     additionalInterventionistIds,
     assignedTeacherIds, // legacy/manual list — only honored when auto=false
     fastBenchmarkCode,
+    fastSubject,
   } = req.body ?? {};
+
+  // Subject-level academic plans created from the condensed FAST
+  // scale-score suggestions. Only "ela" / "math" are accepted; anything
+  // else (including the advanced EOC subjects) stores NULL.
+  const cleanFastSubject =
+    fastSubject === "ela" || fastSubject === "math" ? fastSubject : null;
 
   const cleanStudentId =
     typeof studentId === "string" ? studentId.trim() : "";
@@ -486,6 +500,7 @@ router.post("/mtss-plans", async (req, res) => {
         typeof fastBenchmarkCode === "string" && fastBenchmarkCode.trim()
           ? fastBenchmarkCode.trim().slice(0, 64)
           : null,
+      fastSubject: cleanFastSubject,
     })
     .returning();
 

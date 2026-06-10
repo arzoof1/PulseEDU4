@@ -87,6 +87,13 @@ export const studentMtssPlansTable = pgTable(
     // student. Phase 5 will surface a writer in the plan editor;
     // until then the column stays NULL on every row.
     fastBenchmarkCode: text("fast_benchmark_code"),
+    // Subject-level academic MTSS plans (ELA / Math) created from the
+    // condensed FAST scale-score suggestions. "ela" | "math" | NULL.
+    // NULL on behavior plans and on legacy benchmark-level academic
+    // plans (those carry only fastBenchmarkCode). Used to exclude a
+    // student from re-suggestion once they're on an active academic
+    // plan for that subject.
+    fastSubject: text("fast_subject"),
     openedAt: timestamp("opened_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
