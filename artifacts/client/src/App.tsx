@@ -15693,7 +15693,14 @@ function App() {
       {activeSection === "pbis" && <PbisPointsHub />}
 
       {activeSection === "houseRankings" && (
-        <FeatureGate feature="houses" label="PBIS Houses">
+        // House Rankings is part of the PBIS surface and its nav entry is
+        // gated on `effectiveFeatures.Pbis` (same as the PBIS Points page,
+        // which renders with no page-level FeatureGate). It is intentionally
+        // NOT wrapped in <FeatureGate feature="houses"> — that page-side gate
+        // resolves through /api/me/features while the nav gates through
+        // /api/school-settings, so the two could disagree and leave a visible
+        // "House Rankings" nav item dead-clicking into a blank page.
+        <>
           {/* Admin / Core Team tooling (bulk sort + audit log) renders
               above the public rankings; everyone else gets a 403 from
               those endpoints so the panel's empty/error state is what
@@ -15729,7 +15736,7 @@ function App() {
               the logged-in session, which is what we want for in-app
               embedding. */}
           <HousesSignage schoolId="session" />
-        </FeatureGate>
+        </>
       )}
 
       {/* Read-only School Store catalog — sidebar entry visible to every
