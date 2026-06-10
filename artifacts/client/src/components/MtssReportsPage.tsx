@@ -7,12 +7,17 @@ import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowTo
 //   - Per-plan: pass `planId`. Shows that plan's metadata up top,
 //     and unlocks the "Since plan opened" date preset.
 //
-// Charts:
-//   - Weekly trend line (T2 % completion + T3 % avg score)
-//   - Per-teacher completion bar (with score column)
-//   - Per-subject completion bar (T2)
-//   - Day-of-week heatmap (Mon–Fri)
-//   - T3 weekly average score trend line
+// Tier 2 and Tier 3 are different measurements (T2 = % completion,
+// T3 = 1–5 outcome score), so the report is TABBED: each tier renders
+// its own clean set of charts. There is no combined / "all tiers"
+// view — mixing a completion % with a 1–5 score on one axis is
+// apples-to-oranges.
+//
+// Per-plan mode: both tier tabs render, but a tier is greyed out
+// (disabled with a "No Tier X history" hint) when the student has no
+// plan of that tier. Clicking the other tier loads that student's
+// most-recent plan of that tier. The default tab is the tier of the
+// plan you opened.
 //
 // "Print" uses the browser print dialog plus a print stylesheet
 // that strips away the chrome (filters, back button, etc.) so the
@@ -100,6 +105,20 @@ interface SummaryResponse {
     avgScore: number | null;
     scoredCount: number;
   }>;
+  t3DayOfWeek: Array<{
+    dow: number;
+    label: string;
+    avgScore: number | null;
+    scoredCount: number;
+  }>;
+  studentPlans: Array<{
+    id: number;
+    tier: number;
+    title: string;
+    subType: string | null;
+    openedAt: string;
+    closedAt: string | null;
+  }> | null;
 }
 
 interface StaffOption {
@@ -127,16 +146,59 @@ function fmtScore(v: number | null): string {
   return v.toFixed(2);
 }
 
-// Color the dow heatmap from completion% (0=red, 100=green).
+// Color the T2 dow heatmap from completion% (0=red, 100=green).
 function heatColor(pct: number | null): string {
   if (pct == null) return "#e5e7eb";
-  // simple red→amber→green ramp.
   const clamped = Math.max(0, Math.min(100, pct));
   if (clamped >= 90) return "#16a34a";
   if (clamped >= 80) return "#65a30d";
   if (clamped >= 70) return "#ca8a04";
   if (clamped >= 50) return "#ea580c";
   return "#dc2626";
+}
+
+// Color the T3 dow heatmap from a 1–5 outcome score.
+function scoreColor(avg: number | null): string {
+  if (avg == null) return "#e5e7eb";
+  if (avg >= 4) return "#16a34a";
+  if (avg >= 3.5) return "#65a30d";
+  if (avg >= 3) return "#ca8a04";
+  if (avg >= 2.5) return "#ea580c";
+  return "#dc2626";
+}
+
+type TrendDir = "improving" | "declining" | "plateau" | null;
+
+// Compare the mean of the first third of the series to the mean of the
+// last third. `threshold` is the minimum change that counts as a real
+// move (in the series' own units — %-points for T2, score-points for
+// T3). Fewer than 3 points → not enough signal, returns null.
+function computeTrend(values: number[], threshold: number): TrendDir {
+  if (values.length < 3) return null;
+  const k = Math.max(1, Math.floor(values.length / 3));
+  const head = values.slice(0, k);
+  const tail = values.slice(-k);
+  const mean = (a: number[]) => a.reduce((s, x) => s + x, 0) / a.length;
+  const d = mean(tail) - mean(head);
+  if (d > threshold) return "improving";
+  if (d < -threshold) return "declining";
+  return "plateau";
+}
+
+function trendBadge(t: TrendDir): {
+  label: string;
+  tone: "good" | "warn" | "bad" | "neutral";
+} {
+  switch (t) {
+    case "improving":
+      return { label: "↑ Improving", tone: "good" };
+    case "declining":
+      return { label: "↓ Declining", tone: "bad" };
+    case "plateau":
+      return { label: "→ Plateau", tone: "warn" };
+    default:
+      return { label: "—", tone: "neutral" };
+  }
 }
 
 // ---------------- component ----------------
@@ -148,9 +210,19 @@ export default function MtssReportsPage({
 }: Props) {
   const isPerPlan = planId != null;
 
+  // ---- tier tabs ----
+  // In per-plan mode `viewPlanId` is the plan currently displayed;
+  // clicking the other tier's tab swaps it to that student's
+  // most-recent plan of that tier. In aggregate mode `activeTier`
+  // drives the tier= filter.
+  const [viewPlanId, setViewPlanId] = useState<number | undefined>(planId);
+  useEffect(() => {
+    setViewPlanId(planId);
+  }, [planId]);
+  const [activeTier, setActiveTier] = useState<2 | 3>(2);
+
   // ---- filters ----
-  const [range, setRange] = useState<RangePreset>(isPerPlan ? "30" : "30");
-  const [tier, setTier] = useState<"all" | "2" | "3">("all");
+  const [range, setRange] = useState<RangePreset>("30");
   const [subType, setSubType] = useState<string>("");
   const [grade, setGrade] = useState<string>("");
   const [teacherStaffId, setTeacherStaffId] = useState<number | "">("");
@@ -200,9 +272,10 @@ export default function MtssReportsPage({
       try {
         const params = new URLSearchParams();
         params.set("range", range);
-        if (planId) params.set("planId", String(planId));
-        if (!isPerPlan) {
-          if (tier !== "all") params.set("tier", tier);
+        if (isPerPlan) {
+          if (viewPlanId) params.set("planId", String(viewPlanId));
+        } else {
+          params.set("tier", String(activeTier));
           if (subType) params.set("subType", subType);
           if (grade) params.set("grade", grade);
           if (teacherStaffId !== "")
@@ -228,7 +301,35 @@ export default function MtssReportsPage({
     return () => {
       cancelled = true;
     };
-  }, [range, planId, isPerPlan, tier, subType, grade, teacherStaffId]);
+  }, [range, isPerPlan, viewPlanId, activeTier, subType, grade, teacherStaffId]);
+
+  // In per-plan mode the active tab follows the viewed plan's tier so
+  // the tab highlight stays in sync after the data loads (or after a
+  // tier switch resolves to a different plan).
+  useEffect(() => {
+    if (isPerPlan && data?.planMeta) {
+      setActiveTier(data.planMeta.tier === 3 ? 3 : 2);
+    }
+  }, [isPerPlan, data?.planMeta?.id, data?.planMeta?.tier]);
+
+  // ---- tab state (per-plan gating) ----
+  const studentPlans = data?.studentPlans ?? null;
+  const hasTier2 = isPerPlan ? !!studentPlans?.some((p) => p.tier === 2) : true;
+  const hasTier3 = isPerPlan ? !!studentPlans?.some((p) => p.tier === 3) : true;
+
+  function selectTier(t: 2 | 3) {
+    if (t === activeTier) return;
+    if (isPerPlan) {
+      // studentPlans is sorted most-recent-first, so .find lands on the
+      // newest plan of that tier.
+      const target = studentPlans?.find((p) => p.tier === t);
+      if (!target) return; // tab is disabled — nothing to switch to
+      setActiveTier(t);
+      setViewPlanId(target.id);
+    } else {
+      setActiveTier(t);
+    }
+  }
 
   // ---- derived ----
   const overallT2 = useMemo(() => {
@@ -254,13 +355,9 @@ export default function MtssReportsPage({
 
   // Tier-2 average score:
   //   T2 has no numeric outcome score — the closest equivalent is the
-  //   per-week completion %, averaged across the weeks in range. Lets
-  //   the admin spot a tier where most weeks were OK but one or two
-  //   crashed (the entry-weighted overall would mask that).
+  //   per-week completion %, averaged across the weeks in range.
   // Tier-3 completion:
   //   % of weeks in range where at least one teacher logged scores.
-  //   Acts as the "did anyone show up?" engagement signal that pairs
-  //   naturally with the outcome avg score on the same row.
   const t2AvgWeeklyScore = useMemo(() => {
     if (!data || data.weeklyTrend.length === 0) return null;
     const weeks = data.weeklyTrend.filter((w) => w.t2CompletionPct !== null);
@@ -270,8 +367,50 @@ export default function MtssReportsPage({
   }, [data]);
   const t3Completion = useMemo(() => {
     if (!data || data.weeklyTrend.length === 0) return null;
-    const weeksWithScores = data.weeklyTrend.filter((w) => w.t3Scored > 0).length;
+    const weeksWithScores = data.weeklyTrend.filter(
+      (w) => w.t3Scored > 0,
+    ).length;
     return Math.round((weeksWithScores / data.weeklyTrend.length) * 1000) / 10;
+  }, [data]);
+
+  // Trend direction for the active tier.
+  const trend = useMemo<TrendDir>(() => {
+    if (!data) return null;
+    if (activeTier === 2) {
+      const vals = data.weeklyTrend
+        .map((w) => w.t2CompletionPct)
+        .filter((x): x is number => x != null);
+      return computeTrend(vals, 3);
+    }
+    const vals = data.t3GoalTrend
+      .map((w) => w.avgScore)
+      .filter((x): x is number => x != null);
+    return computeTrend(vals, 0.2);
+  }, [data, activeTier]);
+
+  // In per-plan mode a tier switch sets `activeTier` immediately but the
+  // loaded `data` still belongs to the previous plan until the re-fetch
+  // resolves. Gate the tier content on the loaded plan actually matching
+  // the active tab so we never flash the old tier's (now empty) charts.
+  const tierMatch =
+    !isPerPlan ||
+    !data?.planMeta ||
+    data.planMeta.tier === activeTier;
+
+  // Best / worst weekday for Tier 3 (by avg outcome score).
+  const t3BestWorst = useMemo(() => {
+    if (!data) return null;
+    // Defensive: tolerate an older API response (deployment skew) that
+    // predates the t3DayOfWeek field rather than crashing the page.
+    const days = (data.t3DayOfWeek ?? []).filter((d) => d.avgScore != null);
+    if (days.length === 0) return null;
+    let best = days[0]!;
+    let worst = days[0]!;
+    for (const d of days) {
+      if ((d.avgScore ?? 0) > (best.avgScore ?? 0)) best = d;
+      if ((d.avgScore ?? 0) < (worst.avgScore ?? 0)) worst = d;
+    }
+    return { best, worst };
   }, [data]);
 
   // ---- styles ----
@@ -299,6 +438,25 @@ export default function MtssReportsPage({
     fontSize: "0.9rem",
     minWidth: 120,
   };
+
+  function tabStyle(active: boolean, enabled: boolean): React.CSSProperties {
+    return {
+      padding: "8px 18px",
+      border: "1px solid",
+      borderColor: active ? "#2563eb" : "#cbd5e1",
+      borderRadius: 8,
+      background: active ? "#2563eb" : enabled ? "white" : "#f1f5f9",
+      color: active ? "white" : enabled ? "#0f172a" : "#94a3b8",
+      cursor: enabled ? "pointer" : "not-allowed",
+      fontWeight: 700,
+      fontSize: "0.95rem",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "flex-start",
+      gap: 2,
+      minWidth: 130,
+    };
+  }
 
   // ---- render ----
   return (
@@ -351,27 +509,32 @@ export default function MtssReportsPage({
         </div>
         <HowToUseHelp title="How to use MTSS Reports">
           <HowToSection title="What this page is">
-            Trend lines and completion charts across every Tier 2 and
-            Tier 3 plan in your school (or, if you opened it from a
-            single plan, that plan only). Use the filters in the header
-            to narrow by tier, staff member, strategy, or date window.
+            Trend lines and charts for your Tier 2 and Tier 3 plans. The
+            two tiers measure different things, so they live on separate
+            tabs — switch tiers with the tabs above the filters.
+          </HowToSection>
+          <HowToSection title="Tier 2 vs Tier 3">
+            <ul style={howtoListStyle}>
+              <li><strong>Tier 2</strong> — measured by % completion (check-ins logged ÷ check-ins due). It answers "are we doing the plan?"</li>
+              <li><strong>Tier 3</strong> — measured by a 1–5 daily outcome score. It answers "is the plan working?"</li>
+            </ul>
           </HowToSection>
           <HowToSection title="What the charts mean">
             <ul style={howtoListStyle}>
-              <li><strong>Weekly trend</strong> — Tier 2 % completion (rows logged ÷ rows due) and Tier 3 % avg score (mean of day-of-week scores).</li>
-              <li><strong>By strategy</strong> — which intervention categories are getting used and which are stalled.</li>
-              <li><strong>By staff</strong> — who is keeping up with their assigned check-ins.</li>
+              <li><strong>Weekly trend</strong> — the tier's headline metric over time, with a trend-direction badge.</li>
+              <li><strong>By teacher</strong> — who keeps up with check-ins (T2) and where the student scores best (T3).</li>
+              <li><strong>By weekday</strong> — which day teachers log on (T2) and the student's best/worst day (T3).</li>
             </ul>
           </HowToSection>
           <RoleSection for={["mtssCoordinator", "coreTeam"]} title="MTSS Coordinator workflow">
-            Review weekly. If a staff member's completion drops below
-            60%, open the per-plan view to see which kids are missing
-            entries and reach out before the cycle ends.
+            Review weekly. If Tier 2 completion drops below 60%, open the
+            per-plan view to see which kids are missing entries and reach
+            out before the cycle ends.
           </RoleSection>
           <RoleSection for="admin" title="What admins see here">
-            School-wide MTSS health in one chart. Use the print button
-            to export for board / district reporting; the layout is
-            already tuned for letter paper.
+            School-wide MTSS health, one tier at a time. Use the print
+            button to export for board / district reporting; the layout
+            is already tuned for letter paper.
           </RoleSection>
         </HowToUseHelp>
         <button
@@ -444,6 +607,40 @@ export default function MtssReportsPage({
         </div>
       )}
 
+      {/* ---- tier tabs ---- */}
+      <div
+        className="mtss-reports-no-print"
+        style={{ display: "flex", gap: 10, marginBottom: 12 }}
+      >
+        {([2, 3] as const).map((t) => {
+          const enabled = t === 2 ? hasTier2 : hasTier3;
+          const active = activeTier === t;
+          return (
+            <button
+              key={t}
+              type="button"
+              disabled={!enabled}
+              onClick={() => selectTier(t)}
+              title={
+                !enabled
+                  ? `No Tier ${t} history for this student`
+                  : undefined
+              }
+              style={tabStyle(active, enabled)}
+            >
+              <span>Tier {t}</span>
+              <span style={{ fontSize: "0.7rem", fontWeight: 600, opacity: 0.85 }}>
+                {!enabled
+                  ? `No Tier ${t} history`
+                  : t === 2
+                    ? "% completion"
+                    : "1–5 outcome score"}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
       {/* ---- filters ---- */}
       <div
         className="mtss-reports-card mtss-reports-no-print"
@@ -479,23 +676,6 @@ export default function MtssReportsPage({
 
           {!isPerPlan && (
             <>
-              <div>
-                <label style={labelStyle} htmlFor="rep-tier">
-                  Tier
-                </label>
-                <select
-                  id="rep-tier"
-                  value={tier}
-                  onChange={(e) =>
-                    setTier(e.target.value as "all" | "2" | "3")
-                  }
-                  style={inputStyle}
-                >
-                  <option value="all">All tiers</option>
-                  <option value="2">Tier 2</option>
-                  <option value="3">Tier 3</option>
-                </select>
-              </div>
               <div>
                 <label style={labelStyle} htmlFor="rep-subtype">
                   Subtype
@@ -564,23 +744,14 @@ export default function MtssReportsPage({
           {err}
         </div>
       )}
-      {loading && !data && (
+      {loading && (!data || !tierMatch) && (
         <div className="mtss-reports-card" style={cardStyle}>
           Loading…
         </div>
       )}
 
-      {/* ---- summary tiles ---- */}
-      {/*
-        Three discrete rows so each tier reads as a unit:
-          Row 1 — Date range  +  Plans included
-          Row 2 — Tier 2 completion (overall)  +  Tier 2 completion (this week)
-          Row 3 — Tier 3 avg score (overall)   +  Tier 3 avg score (this week)
-        Each row uses an explicit 2-column grid so the pair stays on
-        the same line on desktop, then collapses to stacked tiles
-        below ~640px via auto-fit minmax for mobile.
-      */}
-      {data && (
+      {/* ---- summary tiles (active tier only) ---- */}
+      {data && tierMatch && (
         <div
           className="mtss-reports-card"
           style={{
@@ -589,9 +760,6 @@ export default function MtssReportsPage({
             gap: 12,
           }}
         >
-          {/* Inline "showing data for…" caption so the student name
-              stays anchored to the tiles even after scrolling past
-              the page header and the plan-meta panel. */}
           {isPerPlan && data.planMeta && (
             <div
               style={{
@@ -629,14 +797,15 @@ export default function MtssReportsPage({
               label="Plans included"
               value={String(data.plansIncluded)}
             />
+            <SummaryTile
+              label={`Tier ${activeTier} trend`}
+              value={trendBadge(trend).label}
+              sub="First third vs last third of range"
+              tone={trendBadge(trend).tone}
+            />
           </div>
 
-          {/*
-            Show full 2-tile pair for each tier. In per-plan mode hide
-            the tier that doesn't apply to this plan (T2 plan → no T3
-            row, T3 plan → no T2 row). Aggregate view shows both rows.
-          */}
-          {(!isPerPlan || data.planMeta?.tier === 2) && (
+          {activeTier === 2 ? (
             <div
               style={{
                 display: "grid",
@@ -659,7 +828,7 @@ export default function MtssReportsPage({
                 }
               />
               <SummaryTile
-                label="Tier 2 avg score"
+                label="Tier 2 avg weekly completion"
                 value={fmtPct(t2AvgWeeklyScore)}
                 sub="Mean of weekly completion %"
                 tone={
@@ -673,9 +842,7 @@ export default function MtssReportsPage({
                 }
               />
             </div>
-          )}
-
-          {(!isPerPlan || data.planMeta?.tier === 3) && (
+          ) : (
             <div
               style={{
                 display: "grid",
@@ -683,20 +850,6 @@ export default function MtssReportsPage({
                 gap: 12,
               }}
             >
-              <SummaryTile
-                label="Tier 3 completion"
-                value={fmtPct(t3Completion)}
-                sub="Weeks with scores ÷ weeks in range"
-                tone={
-                  t3Completion == null
-                    ? "neutral"
-                    : t3Completion >= 80
-                      ? "good"
-                      : t3Completion >= 60
-                        ? "warn"
-                        : "bad"
-                }
-              />
               <SummaryTile
                 label="Tier 3 avg score"
                 value={fmtScore(overallT3)}
@@ -711,15 +864,45 @@ export default function MtssReportsPage({
                         : "bad"
                 }
               />
+              <SummaryTile
+                label="Tier 3 completion"
+                value={fmtPct(t3Completion)}
+                sub="Weeks with scores ÷ weeks in range"
+                tone={
+                  t3Completion == null
+                    ? "neutral"
+                    : t3Completion >= 80
+                      ? "good"
+                      : t3Completion >= 60
+                        ? "warn"
+                        : "bad"
+                }
+              />
+              {t3BestWorst && (
+                <>
+                  <SummaryTile
+                    label="Best day"
+                    value={t3BestWorst.best.label}
+                    sub={`Avg ${fmtScore(t3BestWorst.best.avgScore)} / 5`}
+                    tone="good"
+                  />
+                  <SummaryTile
+                    label="Toughest day"
+                    value={t3BestWorst.worst.label}
+                    sub={`Avg ${fmtScore(t3BestWorst.worst.avgScore)} / 5`}
+                    tone="bad"
+                  />
+                </>
+              )}
             </div>
           )}
         </div>
       )}
 
-      {/* ---- weekly trend chart ---- */}
-      {data && data.weeklyTrend.length > 0 && (
+      {/* ---- weekly trend (active tier) ---- */}
+      {data && tierMatch && activeTier === 2 && data.weeklyTrend.length > 0 && (
         <div className="mtss-reports-card" style={cardStyle}>
-          <h3 style={{ marginTop: 0 }}>Weekly trend</h3>
+          <h3 style={{ marginTop: 0 }}>Tier 2 weekly completion</h3>
           <ResponsiveContainer width="100%" height={240}>
             <LineChart data={data.weeklyTrend}>
               <CartesianGrid strokeDasharray="3 3" />
@@ -739,11 +922,26 @@ export default function MtssReportsPage({
                 connectNulls
                 dot
               />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+      {data && tierMatch && activeTier === 3 && data.t3GoalTrend.length > 0 && (
+        <div className="mtss-reports-card" style={cardStyle}>
+          <h3 style={{ marginTop: 0 }}>Tier 3 weekly average score</h3>
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={data.t3GoalTrend}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="weekStartDate" />
+              <YAxis domain={[0, 5]} />
+              <Tooltip />
+              <Legend />
+              <ReferenceLine y={4.5} stroke="#16a34a" strokeDasharray="4 4" />
               <Line
                 type="monotone"
-                dataKey="t3AvgScorePct"
+                dataKey="avgScore"
                 stroke="#a855f7"
-                name="T3 % avg score"
+                name="Avg score (out of 5)"
                 connectNulls
                 dot
               />
@@ -753,17 +951,27 @@ export default function MtssReportsPage({
       )}
 
       {/* ---- per-teacher chart + table ---- */}
-      {data && data.perTeacher.length > 0 && (
+      {data && tierMatch && data.perTeacher.length > 0 && (
         <div className="mtss-reports-card" style={cardStyle}>
-          <h3 style={{ marginTop: 0 }}>By teacher</h3>
-          <ResponsiveContainer width="100%" height={Math.max(220, data.perTeacher.length * 28)}>
+          <h3 style={{ marginTop: 0 }}>
+            {activeTier === 2
+              ? "By teacher — check-in completion"
+              : "By teacher — outcome score"}
+          </h3>
+          <ResponsiveContainer
+            width="100%"
+            height={Math.max(220, data.perTeacher.length * 28)}
+          >
             <BarChart
               data={data.perTeacher}
               layout="vertical"
               margin={{ left: 80, right: 16, top: 8, bottom: 8 }}
             >
               <CartesianGrid strokeDasharray="3 3" />
-              <XAxis type="number" domain={[0, 100]} />
+              <XAxis
+                type="number"
+                domain={activeTier === 2 ? [0, 100] : [0, 5]}
+              />
               <YAxis
                 type="category"
                 dataKey="teacherName"
@@ -771,56 +979,85 @@ export default function MtssReportsPage({
                 tick={{ fontSize: 11 }}
               />
               <Tooltip />
-              <Bar
-                dataKey="t2CompletionPct"
-                fill="#2563eb"
-                name="T2 % completion"
-              />
+              {activeTier === 2 ? (
+                <Bar
+                  dataKey="t2CompletionPct"
+                  fill="#2563eb"
+                  name="T2 % completion"
+                />
+              ) : (
+                <Bar
+                  dataKey="t3AvgScore"
+                  fill="#a855f7"
+                  name="T3 avg score"
+                />
+              )}
             </BarChart>
           </ResponsiveContainer>
           <div style={{ overflowX: "auto", marginTop: 8 }}>
-            <table className="pulse-table"
+            <table
+              className="pulse-table"
               style={{
                 width: "100%",
                 borderCollapse: "collapse",
                 fontSize: "0.85rem",
-                // tabular-nums keeps digits the same width so column
-                // contents line up cleanly under the right-aligned header.
                 fontVariantNumeric: "tabular-nums",
               }}
             >
-              <thead>
-                <tr style={{ background: "#f8fafc" }}>
-                  <th style={thFirst}>Teacher</th>
-                  <th style={thR}>T2 done</th>
-                  <th style={thR}>T2 expected</th>
-                  <th style={thR}>T2 %</th>
-                  <th style={thR}>T3 scored</th>
-                  <th style={thRLast}>T3 avg</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.perTeacher.map((r) => (
-                  <tr key={r.teacherStaffId}>
-                    <td style={tdFirst}>{r.teacherName}</td>
-                    <td style={tdRMid}>{r.t2Completed}</td>
-                    <td style={tdRMid}>{r.t2Expected}</td>
-                    <td style={tdRMid}>{fmtPct(r.t2CompletionPct)}</td>
-                    <td style={tdRMid}>{r.t3ScoredCount}</td>
-                    <td style={tdRLast}>{fmtScore(r.t3AvgScore)}</td>
-                  </tr>
-                ))}
-              </tbody>
+              {activeTier === 2 ? (
+                <>
+                  <thead>
+                    <tr style={{ background: "#f8fafc" }}>
+                      <th style={thFirst}>Teacher</th>
+                      <th style={thR}>T2 done</th>
+                      <th style={thR}>T2 expected</th>
+                      <th style={thRLast}>T2 %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.perTeacher.map((r) => (
+                      <tr key={r.teacherStaffId}>
+                        <td style={tdFirst}>{r.teacherName}</td>
+                        <td style={tdRMid}>{r.t2Completed}</td>
+                        <td style={tdRMid}>{r.t2Expected}</td>
+                        <td style={tdRLast}>{fmtPct(r.t2CompletionPct)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </>
+              ) : (
+                <>
+                  <thead>
+                    <tr style={{ background: "#f8fafc" }}>
+                      <th style={thFirst}>Teacher</th>
+                      <th style={thR}>Days scored</th>
+                      <th style={thRLast}>Avg score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.perTeacher.map((r) => (
+                      <tr key={r.teacherStaffId}>
+                        <td style={tdFirst}>{r.teacherName}</td>
+                        <td style={tdRMid}>{r.t3ScoredCount}</td>
+                        <td style={tdRLast}>{fmtScore(r.t3AvgScore)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </>
+              )}
             </table>
           </div>
         </div>
       )}
 
-      {/* ---- per-subject chart ---- */}
-      {data && data.perSubject.length > 0 && (
+      {/* ---- per-subject chart (Tier 2 only) ---- */}
+      {data && tierMatch && activeTier === 2 && data.perSubject.length > 0 && (
         <div className="mtss-reports-card" style={cardStyle}>
           <h3 style={{ marginTop: 0 }}>By subject (Tier 2)</h3>
-          <ResponsiveContainer width="100%" height={Math.max(200, data.perSubject.length * 28)}>
+          <ResponsiveContainer
+            width="100%"
+            height={Math.max(200, data.perSubject.length * 28)}
+          >
             <BarChart
               data={data.perSubject}
               layout="vertical"
@@ -845,8 +1082,8 @@ export default function MtssReportsPage({
         </div>
       )}
 
-      {/* ---- day-of-week heatmap ---- */}
-      {data && data.dayOfWeek.length > 0 && (
+      {/* ---- day-of-week (Tier 2: log day) ---- */}
+      {data && tierMatch && activeTier === 2 && data.dayOfWeek.length > 0 && (
         <div className="mtss-reports-card" style={cardStyle}>
           <h3 style={{ marginTop: 0 }}>
             Weekly check-in: which day teachers log on (Tier 2)
@@ -884,40 +1121,57 @@ export default function MtssReportsPage({
         </div>
       )}
 
-      {/* ---- T3 trend ---- */}
-      {data && data.t3GoalTrend.length > 0 && (
+      {/* ---- day-of-week (Tier 3: best/worst day by score) ---- */}
+      {data && tierMatch && activeTier === 3 && (data.t3DayOfWeek?.length ?? 0) > 0 && (
         <div className="mtss-reports-card" style={cardStyle}>
-          <h3 style={{ marginTop: 0 }}>Tier 3 weekly average score</h3>
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={data.t3GoalTrend}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="weekStartDate" />
-              <YAxis domain={[0, 5]} />
-              <Tooltip />
-              <ReferenceLine y={4.5} stroke="#16a34a" strokeDasharray="4 4" />
-              <Line
-                type="monotone"
-                dataKey="avgScore"
-                stroke="#a855f7"
-                name="Avg score (out of 5)"
-                connectNulls
-                dot
-              />
-            </LineChart>
-          </ResponsiveContainer>
+          <h3 style={{ marginTop: 0 }}>
+            Best &amp; worst day: average outcome score (Tier 3)
+          </h3>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(5, 1fr)",
+              gap: 8,
+            }}
+          >
+            {data.t3DayOfWeek.map((d) => (
+              <div
+                key={d.dow}
+                style={{
+                  background: scoreColor(d.avgScore),
+                  color: "white",
+                  borderRadius: 8,
+                  padding: 12,
+                  textAlign: "center",
+                }}
+              >
+                <div style={{ fontWeight: 700 }}>{d.label}</div>
+                <div
+                  style={{ fontSize: "1.6rem", fontWeight: 700, marginTop: 4 }}
+                >
+                  {fmtScore(d.avgScore)}
+                </div>
+                <div style={{ fontSize: "0.78rem", opacity: 0.9 }}>
+                  {d.scoredCount} scored
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
       {/* ---- empty-state nudge ---- */}
       {data &&
+        tierMatch &&
         data.weeklyTrend.length === 0 &&
         data.perTeacher.length === 0 && (
           <div
             className="mtss-reports-card"
             style={{ ...cardStyle, color: "#64748b" }}
           >
-            No intervention activity in this date range for the chosen
-            filters. Try a wider preset or a different filter.
+            No Tier {activeTier} intervention activity in this date range
+            for the chosen filters. Try a wider preset or a different
+            filter.
           </div>
         )}
     </div>
@@ -926,15 +1180,11 @@ export default function MtssReportsPage({
 
 // ---------------- mini bits ----------------
 
-// ---- Columned-table style kit (proposal v1) -------------------------------
-// Goals from the user request:
-//   1. Right-align numeric headers so they sit DIRECTLY above their numbers
-//      instead of being left-aligned while the values are right-aligned.
-//   2. Add a thin vertical divider between columns so the eye can track
-//      across rows in a wide table.
-//   3. Keep the look light — borders are subtle slate, not heavy lines.
-// `*First` / `*Last` variants drop the extra divider on the outer edges
-// so the table doesn't look "boxed in" against the card it lives inside.
+// ---- Columned-table style kit -------------------------------
+// Right-aligned numeric headers sit directly above their numbers; a
+// thin slate divider between columns helps the eye track across wide
+// rows. `*First` / `*Last` variants drop the outer dividers so the
+// table doesn't look "boxed in" against its card.
 const th: React.CSSProperties = {
   textAlign: "left",
   padding: "6px 10px",
@@ -944,9 +1194,6 @@ const th: React.CSSProperties = {
   textTransform: "uppercase",
   letterSpacing: 0.4,
   fontWeight: 800,
-  // Purple → blue gradient applied to the text via background-clip.
-  // `color: transparent` is required for the gradient to show through.
-  // `WebkitBackgroundClip` keeps Safari/Chrome happy.
   backgroundImage: "linear-gradient(90deg, #7c3aed 0%, #2563eb 100%)",
   WebkitBackgroundClip: "text",
   backgroundClip: "text",
@@ -961,8 +1208,8 @@ const td: React.CSSProperties = {
   borderBottom: "1px solid #f1f5f9",
   borderRight: "1px solid #f1f5f9",
 };
-const tdFirst: React.CSSProperties = { ...td };
 const tdR: React.CSSProperties = { ...td, textAlign: "right" };
+const tdFirst: React.CSSProperties = { ...td };
 const tdRMid: React.CSSProperties = { ...tdR };
 const tdRLast: React.CSSProperties = { ...tdR, borderRight: "none" };
 

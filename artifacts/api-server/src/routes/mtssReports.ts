@@ -206,6 +206,24 @@ interface SummaryResponse {
     avgScore: number | null;
     scoredCount: number;
   }>;
+  // Tier 3 best/worst weekday: avg daily score (1..5) grouped by weekday.
+  t3DayOfWeek: Array<{
+    dow: number; // 1=Mon .. 5=Fri
+    label: string;
+    avgScore: number | null;
+    scoredCount: number;
+  }>;
+  // Per-plan mode only: every plan for this student, so the client can
+  // enable/grey the Tier 2 / Tier 3 tabs and swap which plan it loads
+  // when the user switches tier. Null in aggregate mode.
+  studentPlans: Array<{
+    id: number;
+    tier: number;
+    title: string;
+    subType: string | null;
+    openedAt: string;
+    closedAt: string | null;
+  }> | null;
 }
 
 // ---------------- endpoint ----------------
@@ -775,6 +793,46 @@ router.get("/mtss-reports/summary", async (req, res) => {
       scoredCount: v.count,
     }));
 
+  // ---- t3DayOfWeek (best/worst weekday by avg score) ----
+  // Average daily score (1..5) grouped by weekday across every T3
+  // record. Mirrors the Tier-2 day-of-week card but measures the
+  // outcome score rather than whether a teacher logged. Honors the
+  // same single-teacher filter as the trends above.
+  const t3DowAgg = new Map<number, { sum: number; count: number }>();
+  for (const r of t3Records) {
+    if (teacherStaffId && r.teacherStaffId !== teacherStaffId) continue;
+    const days: Array<number | null> = [
+      r.monScore,
+      r.tueScore,
+      r.wedScore,
+      r.thuScore,
+      r.friScore,
+    ];
+    days.forEach((s, i) => {
+      if (s == null) return;
+      const dow = i + 1;
+      let slot = t3DowAgg.get(dow);
+      if (!slot) {
+        slot = { sum: 0, count: 0 };
+        t3DowAgg.set(dow, slot);
+      }
+      slot.sum += s;
+      slot.count += 1;
+    });
+  }
+  const t3DayOfWeek = Array.from({ length: 5 }, (_, i) => i + 1).map((dow) => {
+    const slot = t3DowAgg.get(dow);
+    return {
+      dow,
+      label: dowLabels[dow] ?? String(dow),
+      avgScore:
+        slot && slot.count > 0
+          ? Math.round((slot.sum / slot.count) * 100) / 100
+          : null,
+      scoredCount: slot?.count ?? 0,
+    };
+  });
+
   // ---- planMeta (per-plan view) ----
   let planMeta: SummaryResponse["planMeta"] = null;
   if (planId != null && plans.length === 1) {
@@ -810,6 +868,40 @@ router.get("/mtss-reports/summary", async (req, res) => {
     };
   }
 
+  // ---- studentPlans (per-plan view: drives the Tier 2 / Tier 3 tabs) ----
+  // Hand back every plan for this student so the client can enable/grey
+  // each tier tab and swap which plan it loads when the user switches
+  // tier. Sorted most-recent-first.
+  let studentPlans: SummaryResponse["studentPlans"] = null;
+  if (planId != null && planMeta) {
+    const planRows = await db
+      .select({
+        id: studentMtssPlansTable.id,
+        tier: studentMtssPlansTable.tier,
+        title: studentMtssPlansTable.title,
+        subType: studentMtssPlansTable.interventionSubType,
+        openedAt: studentMtssPlansTable.openedAt,
+        closedAt: studentMtssPlansTable.closedAt,
+      })
+      .from(studentMtssPlansTable)
+      .where(
+        and(
+          eq(studentMtssPlansTable.schoolId, schoolId),
+          eq(studentMtssPlansTable.studentId, planMeta.studentId),
+        ),
+      );
+    studentPlans = planRows
+      .map((r) => ({
+        id: r.id,
+        tier: r.tier,
+        title: r.title,
+        subType: r.subType,
+        openedAt: r.openedAt.toISOString(),
+        closedAt: r.closedAt ? r.closedAt.toISOString() : null,
+      }))
+      .sort((a, b) => (a.openedAt < b.openedAt ? 1 : -1));
+  }
+
   const out: SummaryResponse = {
     rangeStart,
     rangeEnd,
@@ -829,6 +921,8 @@ router.get("/mtss-reports/summary", async (req, res) => {
     perSubject,
     dayOfWeek: dayOfWeekOut,
     t3GoalTrend,
+    t3DayOfWeek,
+    studentPlans,
   };
   res.json(out);
 });
