@@ -9,6 +9,7 @@
 - [Cross-device data freshness](cross-device-data-freshness.md) — staff-app counts/lists for data kiosks can mutate must POLL (15s), not just refresh on mount + own-action, or kiosk rows go unseen.
 - [Pickup bulk-assign concurrency](pickup-bulk-assign-concurrency.md) — school-wide number minter needs DB partial-unique index + per-school advisory lock + 23505→409 mapping, not just app-level dedup.
 - [Pickup release-undo idempotency](pickup-release-undo.md) — undo must be idempotent (double-tap/already-undone → ok); only terminal events block; never dump raw JSON errors.
+- [Tier 3 records not plan-tagged](tier3-records-not-plan-tagged.md) — T3/T2 records are (student,teacher,week) keyed; per-plan reports must scope to the filtered plan's effective teachers across ALL 4 T3 loops.
 - [Kiosk local_sis_id boundary](kiosk-local-sis-boundary.md) — student-facing kiosk/badge surfaces use local_sis_id; resolve to canonical student_id for FKs; next-up localSisId is JOINed not stored; reprint old badges.
 - [Tooling pitfalls](tooling-pitfalls.md) — never `rg -rn` (= --replace=n, corrupts output); rg recurses by default.
 - [Tier 3 status aggregation](tier3-status-aggregation.md) — /interventions/my-tier3-status must collapse to one row per student server-side (MAX owed, not SUM — weekly record is per student/teacher/week).

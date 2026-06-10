@@ -469,6 +469,32 @@ router.get("/mtss-reports/summary", async (req, res) => {
             ),
           );
 
+  // Tier 3 weekly records are keyed by (student, teacher, week) and are
+  // NOT plan-tagged. A student with BOTH a behavior and an academic
+  // Tier 3 plan would otherwise have every teacher's records credited to
+  // each per-plan report — e.g. an academic plan (single named
+  // interventionist) would wrongly show the behavior plan's whole-
+  // schedule teachers. Restrict every T3 panel to the teachers
+  // responsible for the filtered plan(s): their effective teacher list.
+  // Auto-assign plans also keep any teacher who actually logged a record
+  // in range (a past contributor whose schedule has since changed —
+  // preserves historical credit); manual-mode plans (e.g. an academic
+  // plan with a single named interventionist) stay strict to their
+  // assigned list, so the academic report shows only that interventionist.
+  const allowedT3Pairs = new Set<string>();
+  for (const p of tier3Plans) {
+    for (const tid of effectivePlanTeachers.get(p.id) ?? []) {
+      allowedT3Pairs.add(`${p.studentId}::${tid}`);
+    }
+    if (p.autoAssignScheduleTeachers) {
+      for (const r of t3Records) {
+        if (r.studentId === p.studentId) {
+          allowedT3Pairs.add(`${p.studentId}::${r.teacherStaffId}`);
+        }
+      }
+    }
+  }
+
   // ---- build lookup keyed maps ----
   // T2 cadence is WEEKLY: one entry per (student, teacher) per Mon-Fri
   // week. Index entry presence by (studentId, teacherId, subType,
@@ -557,6 +583,7 @@ router.get("/mtss-reports/summary", async (req, res) => {
   // full T3 score line).
   for (const r of t3Records) {
     if (teacherStaffId && r.teacherStaffId !== teacherStaffId) continue;
+    if (!allowedT3Pairs.has(`${r.studentId}::${r.teacherStaffId}`)) continue;
     const slot = bumpWeek(r.weekStartDate);
     const days: Array<number | null> = [
       r.monScore,
@@ -639,6 +666,7 @@ router.get("/mtss-reports/summary", async (req, res) => {
   // T3.
   for (const r of t3Records) {
     if (teacherStaffId && r.teacherStaffId !== teacherStaffId) continue;
+    if (!allowedT3Pairs.has(`${r.studentId}::${r.teacherStaffId}`)) continue;
     const slot = teacherSlot(r.teacherStaffId);
     const days: Array<number | null> = [
       r.monScore,
@@ -828,6 +856,7 @@ router.get("/mtss-reports/summary", async (req, res) => {
   >();
   for (const r of t3Records) {
     if (teacherStaffId && r.teacherStaffId !== teacherStaffId) continue;
+    if (!allowedT3Pairs.has(`${r.studentId}::${r.teacherStaffId}`)) continue;
     let slot = t3WeekMap.get(r.weekStartDate);
     if (!slot) {
       slot = { sum: 0, count: 0 };
@@ -864,6 +893,7 @@ router.get("/mtss-reports/summary", async (req, res) => {
   const t3DowAgg = new Map<number, { sum: number; count: number }>();
   for (const r of t3Records) {
     if (teacherStaffId && r.teacherStaffId !== teacherStaffId) continue;
+    if (!allowedT3Pairs.has(`${r.studentId}::${r.teacherStaffId}`)) continue;
     const days: Array<number | null> = [
       r.monScore,
       r.tueScore,
