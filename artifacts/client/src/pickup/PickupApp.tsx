@@ -1667,6 +1667,7 @@ function TeacherQueuePage({ me }: { me: Me }) {
     entry: TeacherQueueEntry;
     expiresAt: number;
   } | null>(null);
+  const [undoing, setUndoing] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [err, setErr] = useState<string | null>(null);
 
@@ -1811,6 +1812,18 @@ function TeacherQueuePage({ me }: { me: Me }) {
     return entries;
   }, [entries, showMineOnly, viewScope]);
 
+  // Pull a human-readable message out of an error response. The API
+  // returns `{ error: "..." }`; never show the user the raw JSON blob.
+  const readError = async (r: Response, fallback: string) => {
+    try {
+      const data = await r.clone().json();
+      if (data && typeof data.error === "string") return data.error;
+    } catch {
+      // not JSON — fall through
+    }
+    return fallback;
+  };
+
   const release = async (entry: TeacherQueueEntry) => {
     setErr(null);
     setConfirmRelease(null);
@@ -1823,7 +1836,7 @@ function TeacherQueuePage({ me }: { me: Me }) {
       }),
     });
     if (!r.ok) {
-      setErr(await r.text());
+      setErr(await readError(r, "Couldn't release this student. Please try again."));
       return;
     }
     setUndoFor({ entry, expiresAt: Date.now() + 10_000 });
@@ -1831,19 +1844,29 @@ function TeacherQueuePage({ me }: { me: Me }) {
   };
 
   const undo = async () => {
-    if (!undoFor) return;
+    if (!undoFor || undoing) return;
+    setUndoing(true);
     setErr(null);
-    const r = await authFetch("/api/pickup/queue/release-undo", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ studentDbId: undoFor.entry.studentDbId }),
-    });
-    if (!r.ok) {
-      setErr(await r.text());
-      return;
+    try {
+      const r = await authFetch("/api/pickup/queue/release-undo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentDbId: undoFor.entry.studentDbId }),
+      });
+      // The undo is idempotent server-side, so a 2xx (including
+      // "already undone") simply clears the toast. Only a genuine
+      // conflict — the student was already picked up — surfaces a message.
+      if (!r.ok) {
+        setErr(await readError(r, "Couldn't undo the release."));
+        setUndoFor(null);
+        void reload();
+        return;
+      }
+      setUndoFor(null);
+      void reload();
+    } finally {
+      setUndoing(false);
     }
-    setUndoFor(null);
-    void reload();
   };
 
   return (
@@ -2113,6 +2136,7 @@ function TeacherQueuePage({ me }: { me: Me }) {
           <button
             type="button"
             onClick={() => void undo()}
+            disabled={undoing}
             style={{
               padding: "4px 12px",
               borderRadius: 999,
@@ -2120,10 +2144,11 @@ function TeacherQueuePage({ me }: { me: Me }) {
               background: "#f59e0b",
               color: "#111827",
               fontWeight: 700,
-              cursor: "pointer",
+              cursor: undoing ? "default" : "pointer",
+              opacity: undoing ? 0.6 : 1,
             }}
           >
-            Undo
+            {undoing ? "Undoing…" : "Undo"}
           </button>
         </div>
       )}

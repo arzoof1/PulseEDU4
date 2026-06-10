@@ -764,13 +764,13 @@ router.post("/pickup/queue/release-undo", requireStaff, async (req, res) => {
     return;
   }
 
-  // Race guard: only allow undo if the actor's release is still the
-  // latest event for this student. If anyone (including the same actor)
-  // wrote a later event — another release, an in_car, a release_undone,
-  // etc. — the queue state has already moved on and undoing would
-  // incorrectly reverse the newer action.
-  const [later] = await db
-    .select({ id: pickupQueueEventsTable.id })
+  // Look at every event for this student strictly newer than the release
+  // we're about to undo, so we can tell "already done" from a genuine
+  // conflict instead of blanket-blocking on any later row.
+  const newer = await db
+    .select({
+      action: pickupQueueEventsTable.action,
+    })
     .from(pickupQueueEventsTable)
     .where(
       and(
@@ -778,11 +778,23 @@ router.post("/pickup/queue/release-undo", requireStaff, async (req, res) => {
         eq(pickupQueueEventsTable.studentId, studentDbId),
         gt(pickupQueueEventsTable.occurredAt, recent.occurredAt),
       ),
-    )
-    .limit(1);
-  if (later) {
+    );
+
+  // Idempotency: if this release has already been undone — e.g. a quick
+  // double-tap on the Undo button, or another teacher already reversed it —
+  // the caller's intent is already satisfied. Return success, never an
+  // error. Undo should never make someone feel they did something wrong.
+  if (newer.some((e) => e.action === "release_undone")) {
+    res.json({ ok: true, alreadyUndone: true });
+    return;
+  }
+
+  // Genuine conflict: a terminal event means the student has already left
+  // (picked up at the curb / walked out for good), so reversing the
+  // walk-release would be incorrect. This is the only case that blocks.
+  if (newer.some((e) => e.action === "in_car" || e.action === "walker_released")) {
     res.status(409).json({
-      error: "Release was superseded by a newer event — cannot undo",
+      error: "This student has already been picked up, so the release can't be undone.",
     });
     return;
   }
