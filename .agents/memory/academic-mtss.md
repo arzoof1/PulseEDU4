@@ -46,6 +46,12 @@ behavior-plan cadence regression from a shared Tue/Thu default.
   the generic `assessments` table (source ~ iready, name ~ ap1, reading→ela /
   math→math, latest by `administeredAt`) — name matching is brittle but is the
   documented importer path (no schoolYear column on assessments).
+  **GOTCHA: check "math" BEFORE "read" when classifying subject.** Every iReady
+  assessment name starts with "iReady", and "iready" contains the substring
+  "read" — so a `name.includes("read")`-first test misclassifies
+  `iReady Math AP1` as ELA, leaving the math bucket empty and zero math
+  suggestions. Real names seen: `iReady Reading AP1`/`AP2`/`AP3`,
+  `iReady Math AP1`/`AP2`/`AP3`, source `iReady`.
 - `gradesPresent` (response field) = grades among PM1 Level-1 candidates
   collected BEFORE the iReady gate, so the cut-score grid can show a grade that
   needs a cut even when zero suggestions surface yet.

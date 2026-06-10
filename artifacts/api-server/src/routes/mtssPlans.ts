@@ -985,8 +985,11 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
       if (r.score == null) continue;
       const name = r.assessmentName.toLowerCase();
       let subj: "ela" | "math" | null = null;
-      if (name.includes("read") || name.includes("ela")) subj = "ela";
-      else if (name.includes("math")) subj = "math";
+      // Check "math" FIRST: every iReady name starts with "iReady", and
+      // "iready" contains the substring "read", so a "read" test would
+      // misclassify "iReady Math AP1" as ELA.
+      if (name.includes("math")) subj = "math";
+      else if (name.includes("read") || name.includes("ela")) subj = "ela";
       if (!subj) continue;
       const key = `${r.studentId}|${subj}`;
       const at =
