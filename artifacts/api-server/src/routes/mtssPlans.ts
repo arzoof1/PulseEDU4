@@ -933,6 +933,7 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
             firstName: studentsTable.firstName,
             lastName: studentsTable.lastName,
             grade: studentsTable.grade,
+            localSisId: studentsTable.localSisId,
           })
           .from(studentsTable)
           .where(
@@ -944,7 +945,11 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
   const studentMeta = new Map(
     studentRows.map((s) => [
       s.studentId,
-      { name: `${s.firstName} ${s.lastName}`, grade: s.grade ?? null },
+      {
+        name: `${s.firstName} ${s.lastName}`,
+        grade: s.grade ?? null,
+        localSisId: s.localSisId ?? null,
+      },
     ]),
   );
 
@@ -1154,6 +1159,7 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
   // =================================================================
   type Suggestion = {
     studentId: string;
+    studentLocalSisId: string | null;
     studentName: string | null;
     studentGrade: number | null;
     subject: AcademicSubject;
@@ -1204,6 +1210,7 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
     const windowLabel = window.toUpperCase();
     suggestions.push({
       studentId: row.studentId,
+      studentLocalSisId: meta?.localSisId ?? null,
       studentName: meta?.name ?? null,
       studentGrade: grade,
       subject,

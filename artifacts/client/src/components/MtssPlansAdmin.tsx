@@ -183,6 +183,7 @@ interface WeakStandard {
 // latest FAST scale score (pm3 → pm2 → pm1) places them at Level 1 or 2.
 interface FastSuggestion {
   studentId: string;
+  studentLocalSisId?: string | null;
   studentName: string | null;
   studentGrade: number | null;
   subject: string; // "ela" | "math"
@@ -743,7 +744,7 @@ export default function MtssPlansAdmin({
                                       fontSize: "0.72rem",
                                     }}
                                   >
-                                    ID {s.studentId}
+                                    ID {s.studentLocalSisId ?? "—"}
                                     {s.studentGrade != null
                                       ? ` • Gr ${s.studentGrade}`
                                       : ""}
