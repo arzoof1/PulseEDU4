@@ -34,12 +34,28 @@ PulseEDU MTSS plans come in two flavors that share the same tables/routes:
 couldn't complete, Tier 2 academic plans wrongly owing bell entries, and a
 behavior-plan cadence regression from a shared Tue/Thu default.
 
-## Suggestions ("Generate from FAST")
+## Suggestions ("Generate from FAST + iReady" → Tier 3 Academic)
 
-- One row per (student, subject) for ELA + Math. Qualify by `placeOnChart`
-  level ≤ 2 (below-grade L3 cut) using latest FAST scale score pm3→pm2→pm1.
-- No gap inputs. Weak standards live in an expandable per-row dropdown.
-- "Create Plan" → light Tier 2 academic (sets `fastSubject`). Exclude students
-  with an active academic plan for that subject. Dismiss is keyed by
-  (student, subject), stored in the `fast_benchmark_code` dismissal column.
+- DUAL-GATE qualification: a (student, subject) row surfaces ONLY when BOTH
+  FAST **PM1** places at **Level 1** (`placeOnChart` level === 1, PM1
+  specifically — not latest window) AND iReady **AP1** scale score is
+  **strictly below** the configured cut for that (grade, subject).
+- Cut scores are per-grade per-subject, stored in
+  `schoolSettings.ireadyAp1Cuts` jsonb `{ela:{gradeStr:num}, math:{}}`.
+  Missing cut OR missing iReady AP1 ⇒ no suggestion. iReady AP1 is read from
+  the generic `assessments` table (source ~ iready, name ~ ap1, reading→ela /
+  math→math, latest by `administeredAt`) — name matching is brittle but is the
+  documented importer path (no schoolYear column on assessments).
+- `gradesPresent` (response field) = grades among PM1 Level-1 candidates
+  collected BEFORE the iReady gate, so the cut-score grid can show a grade that
+  needs a cut even when zero suggestions surface yet.
+- `saveCuts` (client) merges the draft over persisted `cuts` so cuts for grades
+  not currently shown are preserved (only mutates `gradesPresent` keys).
+- "Create Plan" → **Tier 3** academic (`tier:3` + `fastSubject`); the editor
+  auto-defaults `meetingDays` Tue/Thu via `isAcademic`. Exclude students with
+  an active academic plan for that subject. Dismiss keyed by (student, subject)
+  in the `fast_benchmark_code` dismissal column.
 - Panel does NOT auto-load — gated behind a "Generate suggestions" button.
+- **Tier 2 light list was removed from this panel** — it is Tier 3 only now.
+  (Existing Tier 2 academic plans created earlier still exist and show under
+  the "All" tab; there is no Tier 2 academic tab.)

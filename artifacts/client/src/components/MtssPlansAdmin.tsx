@@ -108,9 +108,9 @@ const TIER_COLORS: Record<number, string> = {
 
 // Tier/track filter tabs for the plans list. Academic plans are
 // distinguished by `fastSubject` being set; behavior plans have it null.
-// "All" keeps every plan reachable (Tier 1 + light Tier 2 academic plans
-// that don't get their own tab). Tier 2 academic is light (no check-ins),
-// so it isn't broken out as its own tab — those show under "All".
+// "All" keeps every plan reachable, including any legacy light Tier 2
+// academic plans (no check-ins) that don't get their own tab. The FAST +
+// iReady suggestion panel now only creates Tier 3 academic plans.
 type TierTab = "all" | "t2b" | "t3b" | "t3a";
 
 const TIER_TABS: Array<{ key: TierTab; label: string; color: string }> = [
@@ -199,18 +199,30 @@ interface FastSuggestion {
   // Most-recent prior-year PM3 (from the FL historical importer). Null
   // when no historical data on file.
   priorYearPm3: { schoolYear: string; pm3: number } | null;
+  // iReady AP1 evidence — the second Tier 3 gate. `ireadyAp1` is the
+  // student's AP1 scale score; `ap1Cut` is the grade/subject cut it fell
+  // below.
+  ireadyAp1?: number;
+  ap1Cut?: number;
+}
+
+interface IreadyAp1Cuts {
+  ela: Record<string, number>;
+  math: Record<string, number>;
 }
 
 interface FastSuggestionsResp {
   thresholdPct: number;
   minWindows: number;
   schoolYear?: string;
+  ireadyAp1Cuts?: IreadyAp1Cuts;
+  gradesPresent?: number[];
   suggestions: FastSuggestion[];
 }
 
 // Prefill payload passed from a FAST suggestion into PlanModal. Academic
-// suggestions carry the subject (ela|math); the resulting plan is a light
-// Tier 2 academic plan wired back to that subject.
+// suggestions carry the subject (ela|math); the resulting plan is a
+// closely-monitored Tier 3 academic plan wired back to that subject.
 export interface MtssPlanPrefill {
   studentId: string;
   fastSubject: string;
@@ -240,6 +252,15 @@ export default function MtssPlansAdmin({
   const [suggestionsError, setSuggestionsError] = useState("");
   const [suggestionsGenerated, setSuggestionsGenerated] = useState(false);
   const [suggestionsOpen, setSuggestionsOpen] = useState(true);
+  // iReady AP1 cut-score grid (per grade, per subject). `cuts` is the
+  // saved server state; `cutDraft` is the editable form keyed
+  // `${subject}-${grade}`; `gradesPresent` are the grades with FAST PM1
+  // Level-1 candidates that need a cut configured.
+  const [cuts, setCuts] = useState<IreadyAp1Cuts>({ ela: {}, math: {} });
+  const [gradesPresent, setGradesPresent] = useState<number[]>([]);
+  const [cutDraft, setCutDraft] = useState<Record<string, string>>({});
+  const [cutSaving, setCutSaving] = useState(false);
+  const [cutMsg, setCutMsg] = useState("");
   // Per-row expanded state for the weak-standards dropdown, keyed
   // `${studentId}|${subject}`.
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
@@ -269,11 +290,67 @@ export default function MtssPlansAdmin({
       })
       .then((data) => {
         setSuggestions(data.suggestions ?? []);
+        const c = data.ireadyAp1Cuts ?? { ela: {}, math: {} };
+        setCuts(c);
+        const gp = data.gradesPresent ?? [];
+        setGradesPresent(gp);
+        const draft: Record<string, string> = {};
+        for (const g of gp) {
+          const e = c.ela?.[String(g)];
+          const m = c.math?.[String(g)];
+          if (e != null) draft[`ela-${g}`] = String(e);
+          if (m != null) draft[`math-${g}`] = String(m);
+        }
+        setCutDraft(draft);
       })
       .catch((e: Error) =>
         setSuggestionsError(e.message ?? "Failed to load suggestions"),
       )
       .finally(() => setSuggestionsLoading(false));
+  };
+
+  // Persist the per-grade per-subject iReady AP1 cut scores, then re-scan
+  // so the suggestion list reflects the new thresholds. Existing cuts for
+  // grades not currently shown are preserved (merged over `cuts`).
+  const saveCuts = () => {
+    if (!canManage) return;
+    setCutSaving(true);
+    setCutMsg("");
+    const build = (subject: "ela" | "math"): Record<string, number> => {
+      const out: Record<string, number> = { ...(cuts[subject] ?? {}) };
+      for (const g of gradesPresent) {
+        const raw = cutDraft[`${subject}-${g}`];
+        if (raw == null || raw.trim() === "") {
+          delete out[String(g)];
+          continue;
+        }
+        const n = parseInt(raw, 10);
+        if (Number.isFinite(n) && n > 0) out[String(g)] = n;
+        else delete out[String(g)];
+      }
+      return out;
+    };
+    const payload = {
+      ireadyAp1Cuts: { ela: build("ela"), math: build("math") },
+    };
+    authFetch("/api/school-settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+      .then(async (r) => {
+        if (!r.ok) {
+          const b = await r.json().catch(() => ({}));
+          throw new Error(b.error ?? `HTTP ${r.status}`);
+        }
+        return r.json();
+      })
+      .then(() => {
+        setCutMsg("Saved — refreshing suggestions…");
+        reloadSuggestions();
+      })
+      .catch((e: Error) => setCutMsg(e.message ?? "Failed to save cut scores"))
+      .finally(() => setCutSaving(false));
   };
 
   const subjectLabel = (subject: string) =>
@@ -314,7 +391,7 @@ export default function MtssPlansAdmin({
     setPrefill({
       studentId: s.studentId,
       fastSubject: s.subject,
-      tier: 2,
+      tier: 3,
       title: s.suggestedTitle,
       goal: s.suggestedGoal,
     });
@@ -620,7 +697,7 @@ export default function MtssPlansAdmin({
                 <span style={{ display: "inline-block", width: 12 }}>
                   {suggestionsOpen ? "▾" : "▸"}
                 </span>
-                Suggested from FAST
+                Tier 3 Academic — suggested
                 {suggestionsGenerated && (
                   <span
                     style={{
@@ -642,8 +719,8 @@ export default function MtssPlansAdmin({
                   fontSize: "0.78rem",
                 }}
               >
-                Students placing at FAST Level 1 or 2 in ELA / Math — one
-                light Tier 2 plan per subject.
+                Students with FAST PM1 = Level 1 AND iReady AP1 below the
+                grade cut — one closely-monitored Tier 3 plan per subject.
               </span>
               <button
                 type="button"
@@ -662,7 +739,7 @@ export default function MtssPlansAdmin({
                 }}
               >
                 {suggestionsLoading
-                  ? "Scanning FAST…"
+                  ? "Scanning FAST + iReady…"
                   : suggestionsGenerated
                     ? "Refresh suggestions"
                     : "Generate suggestions"}
@@ -672,15 +749,169 @@ export default function MtssPlansAdmin({
               <div style={{ marginTop: 8 }}>
                 {!suggestionsGenerated && !suggestionsLoading && (
                   <div style={{ color: "#a16207", fontSize: "0.85rem" }}>
-                    Click “Generate suggestions” to scan the latest FAST
-                    window for students placing at Level 1 or 2.
+                    Click “Generate suggestions” to scan FAST PM1 + iReady
+                    AP1 for Tier 3 academic candidates.
                   </div>
                 )}
                 {suggestionsLoading && (
                   <div style={{ color: "#a16207", fontSize: "0.85rem" }}>
-                    Looking at the latest FAST window…
+                    Looking at FAST PM1 and iReady AP1…
                   </div>
                 )}
+                {suggestionsGenerated &&
+                  !suggestionsLoading &&
+                  !suggestionsError && (
+                    <div
+                      style={{
+                        border: "1px solid #fde68a",
+                        background: "#fff",
+                        borderRadius: 8,
+                        padding: "0.6rem 0.75rem",
+                        marginBottom: 10,
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontWeight: 700,
+                          color: "#92400e",
+                          fontSize: "0.85rem",
+                          marginBottom: 4,
+                        }}
+                      >
+                        iReady AP1 cut scores
+                      </div>
+                      <div
+                        style={{
+                          color: "#a16207",
+                          fontSize: "0.75rem",
+                          marginBottom: 8,
+                        }}
+                      >
+                        Enter the AP1 scale score below which a student
+                        qualifies, per grade and subject. A student is
+                        suggested only when FAST PM1 = Level 1 AND iReady AP1
+                        is below the cut.
+                      </div>
+                      {gradesPresent.length === 0 ? (
+                        <div
+                          style={{ color: "#a16207", fontSize: "0.8rem" }}
+                        >
+                          No students currently place at FAST PM1 Level 1, so
+                          there are no grades to configure yet.
+                        </div>
+                      ) : (
+                        <>
+                          <table
+                            style={{
+                              borderCollapse: "collapse",
+                              fontSize: "0.82rem",
+                            }}
+                          >
+                            <thead>
+                              <tr
+                                style={{
+                                  textAlign: "left",
+                                  color: "#78350f",
+                                }}
+                              >
+                                <th style={{ padding: "0.3rem 0.6rem" }}>
+                                  Grade
+                                </th>
+                                <th style={{ padding: "0.3rem 0.6rem" }}>
+                                  Reading (ELA)
+                                </th>
+                                <th style={{ padding: "0.3rem 0.6rem" }}>
+                                  Math
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {gradesPresent.map((g) => (
+                                <tr key={g}>
+                                  <td
+                                    style={{
+                                      padding: "0.3rem 0.6rem",
+                                      fontWeight: 600,
+                                      color: "#78350f",
+                                    }}
+                                  >
+                                    Gr {g}
+                                  </td>
+                                  {(["ela", "math"] as const).map((subj) => (
+                                    <td
+                                      key={subj}
+                                      style={{ padding: "0.3rem 0.6rem" }}
+                                    >
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        disabled={!canManage || cutSaving}
+                                        value={cutDraft[`${subj}-${g}`] ?? ""}
+                                        onChange={(e) =>
+                                          setCutDraft((d) => ({
+                                            ...d,
+                                            [`${subj}-${g}`]: e.target.value,
+                                          }))
+                                        }
+                                        placeholder="—"
+                                        style={{
+                                          width: 80,
+                                          padding: "3px 6px",
+                                          border: "1px solid #fcd34d",
+                                          borderRadius: 4,
+                                          fontSize: "0.82rem",
+                                        }}
+                                      />
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          {canManage && (
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 10,
+                                marginTop: 8,
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={saveCuts}
+                                disabled={cutSaving}
+                                style={{
+                                  background: cutSaving
+                                    ? "#fcd34d"
+                                    : "#d97706",
+                                  color: "white",
+                                  border: "none",
+                                  borderRadius: 6,
+                                  padding: "5px 12px",
+                                  fontSize: "0.82rem",
+                                  fontWeight: 600,
+                                  cursor: cutSaving ? "default" : "pointer",
+                                }}
+                              >
+                                {cutSaving ? "Saving…" : "Save cut scores"}
+                              </button>
+                              {cutMsg && (
+                                <span
+                                  style={{
+                                    color: "#a16207",
+                                    fontSize: "0.78rem",
+                                  }}
+                                >
+                                  {cutMsg}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
                 {suggestionsError && (
                   <div style={{ color: "#991b1b", fontSize: "0.85rem" }}>
                     {suggestionsError}
@@ -691,9 +922,10 @@ export default function MtssPlansAdmin({
                   !suggestionsError &&
                   suggestions.length === 0 && (
                     <div style={{ color: "#a16207", fontSize: "0.85rem" }}>
-                      No FAST-driven Tier 2 candidates right now. Students
-                      already on an active academic plan for a subject are
-                      excluded.
+                      No Tier 3 academic candidates right now. A student
+                      appears when FAST PM1 = Level 1, iReady AP1 is below the
+                      configured grade cut, and they’re not already on an
+                      active academic plan for that subject.
                     </div>
                   )}
                 {suggestions.length > 0 && (
@@ -711,7 +943,8 @@ export default function MtssPlansAdmin({
                         <tr style={{ textAlign: "left", color: "#78350f" }}>
                           <th style={{ padding: "0.4rem" }}>Student</th>
                           <th style={{ padding: "0.4rem" }}>Subject</th>
-                          <th style={{ padding: "0.4rem" }}>FAST placement</th>
+                          <th style={{ padding: "0.4rem" }}>FAST PM1</th>
+                          <th style={{ padding: "0.4rem" }}>iReady AP1</th>
                           <th style={{ padding: "0.4rem" }}>Weak standards</th>
                           <th
                             style={{ padding: "0.4rem", textAlign: "right" }}
@@ -809,6 +1042,46 @@ export default function MtssPlansAdmin({
                                   </div>
                                 </td>
                                 <td style={{ padding: "0.4rem" }}>
+                                  {s.ireadyAp1 != null ? (
+                                    <>
+                                      <span
+                                        style={{
+                                          display: "inline-block",
+                                          background: "#fee2e2",
+                                          color: "#991b1b",
+                                          border: "1px solid #99181b33",
+                                          borderRadius: 6,
+                                          padding: "2px 8px",
+                                          fontSize: "0.75rem",
+                                          fontWeight: 700,
+                                        }}
+                                      >
+                                        {s.ireadyAp1}
+                                      </span>
+                                      {s.ap1Cut != null && (
+                                        <div
+                                          style={{
+                                            marginTop: 2,
+                                            fontSize: "0.72rem",
+                                            color: "#78350f",
+                                          }}
+                                        >
+                                          cut {s.ap1Cut}
+                                        </div>
+                                      )}
+                                    </>
+                                  ) : (
+                                    <span
+                                      style={{
+                                        color: "#a16207",
+                                        fontSize: "0.75rem",
+                                      }}
+                                    >
+                                      —
+                                    </span>
+                                  )}
+                                </td>
+                                <td style={{ padding: "0.4rem" }}>
                                   {s.weakStandards.length === 0 ? (
                                     <span
                                       style={{
@@ -866,7 +1139,7 @@ export default function MtssPlansAdmin({
                                         fontWeight: 600,
                                         cursor: "pointer",
                                       }}
-                                      title="Create a light Tier 2 academic plan for this subject"
+                                      title="Open a Tier 3 academic plan for this subject"
                                     >
                                       Create plan
                                     </button>
@@ -891,7 +1164,7 @@ export default function MtssPlansAdmin({
                               </tr>
                               {expanded && s.weakStandards.length > 0 && (
                                 <tr style={{ background: "#fffdf5" }}>
-                                  <td colSpan={5} style={{ padding: "0.4rem" }}>
+                                  <td colSpan={6} style={{ padding: "0.4rem" }}>
                                     <div
                                       style={{
                                         display: "flex",

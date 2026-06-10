@@ -27,8 +27,9 @@ import {
   studentFastScoresTable,
   schoolSettingsTable,
   mtssFastSuggestionDismissalsTable,
+  assessmentsTable,
 } from "@workspace/db";
-import { and, eq, inArray, sql, asc, isNull } from "drizzle-orm";
+import { and, eq, inArray, sql, asc, isNull, ilike } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import {
   placeOnChart,
@@ -954,6 +955,65 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
   );
 
   // =================================================================
+  // iReady AP1 — the second qualification gate for Tier 3 Academic
+  // =================================================================
+  // iReady scores land in the generic assessments table via the Data
+  // Importer (free-form name like "iReady Reading AP1", source "iReady").
+  // We pull every AP1 row for the candidate students, map the subject
+  // off the name (reading → ela, math → math), and keep the most recent
+  // by administered date per (student, subject).
+  const ireadyAp1ByPair = new Map<string, number>();
+  if (candidateStudentIds.length > 0) {
+    const ap1Rows = await db
+      .select({
+        studentId: assessmentsTable.studentId,
+        assessmentName: assessmentsTable.assessmentName,
+        score: assessmentsTable.score,
+        administeredAt: assessmentsTable.administeredAt,
+      })
+      .from(assessmentsTable)
+      .where(
+        and(
+          eq(assessmentsTable.schoolId, schoolId),
+          inArray(assessmentsTable.studentId, candidateStudentIds),
+          ilike(assessmentsTable.source, "%iready%"),
+          ilike(assessmentsTable.assessmentName, "%ap1%"),
+        ),
+      );
+    const ap1LatestAt = new Map<string, number>();
+    for (const r of ap1Rows) {
+      if (r.score == null) continue;
+      const name = r.assessmentName.toLowerCase();
+      let subj: "ela" | "math" | null = null;
+      if (name.includes("read") || name.includes("ela")) subj = "ela";
+      else if (name.includes("math")) subj = "math";
+      if (!subj) continue;
+      const key = `${r.studentId}|${subj}`;
+      const at =
+        r.administeredAt instanceof Date
+          ? r.administeredAt.getTime()
+          : new Date(r.administeredAt).getTime();
+      const prevAt = ap1LatestAt.get(key);
+      if (prevAt == null || at > prevAt) {
+        ap1LatestAt.set(key, at);
+        ireadyAp1ByPair.set(key, r.score);
+      }
+    }
+  }
+
+  // Per-grade, per-subject iReady AP1 cut scores configured by the MTSS
+  // coordinator. A missing cut for a (grade, subject) means no Tier 3
+  // suggestion can surface there yet — the coordinator must fill it in.
+  const ireadyCuts = (settings?.ireadyAp1Cuts ?? { ela: {}, math: {} }) as {
+    ela?: Record<string, number>;
+    math?: Record<string, number>;
+  };
+  const cutFor = (subject: "ela" | "math", grade: number): number | null => {
+    const v = ireadyCuts?.[subject]?.[String(grade)];
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+  };
+
+  // =================================================================
   // EXCLUSIONS — active academic plan (by subject) + dismissals
   // =================================================================
   const activePlans = await db
@@ -1169,12 +1229,21 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
     score: number;
     window: string;
     schoolYear: string;
+    // iReady AP1 evidence — the second Tier 3 gate. `ireadyAp1` is the
+    // student's most-recent AP1 scale score; `ap1Cut` is the configured
+    // per-grade per-subject cut it fell below.
+    ireadyAp1: number;
+    ap1Cut: number;
     suggestedTitle: string;
     suggestedGoal: string;
     weakStandards: WeakStandard[];
     priorYearPm3: { schoolYear: string; pm3: number } | null;
   };
   const suggestions: Suggestion[] = [];
+  // Grades among FAST PM1 = Level 1 candidates (BEFORE the iReady gate),
+  // so the cut-score grid in the UI shows exactly the grades that have
+  // students waiting on a cut — even when no cut is configured yet.
+  const gradesPresent = new Set<number>();
 
   for (const [key, row] of latestScoreByPair) {
     if (excludedPairs.has(key) || dismissedPairs.has(key)) continue;
@@ -1184,30 +1253,28 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
     // Need a grade to select the FAST chart; skip if missing.
     if (grade == null) continue;
 
-    // Latest available window: pm3 → pm2 → pm1.
-    let score: number | null = null;
-    let window = "";
-    if (row.pm3 != null) {
-      score = row.pm3;
-      window = "pm3";
-    } else if (row.pm2 != null) {
-      score = row.pm2;
-      window = "pm2";
-    } else if (row.pm1 != null) {
-      score = row.pm1;
-      window = "pm1";
-    }
-    if (score == null) continue;
-
+    // Tier 3 Academic gate #1: FAST PM1 must place the student at
+    // Level 1. PM1 specifically (not the latest window) — this is the
+    // beginning-of-year signal paired with iReady AP1.
+    if (row.pm1 == null) continue;
+    const window = "pm1";
+    const score = row.pm1;
     const chartGrade = chartGradeFor(subject as Subject, grade, window);
     const placement = placeOnChart(score, subject as Subject, chartGrade);
-    // Qualify only when the student places at Level 1 or 2 (below the
-    // grade-level Level 3 cut).
-    if (!placement || placement.level > 2) continue;
+    if (!placement || placement.level !== 1) continue;
+
+    // This student is a PM1 Level-1 candidate — record their grade for
+    // the cut-score grid regardless of whether a cut is configured.
+    gradesPresent.add(grade);
+
+    // Tier 3 Academic gate #2: iReady AP1 present AND strictly below the
+    // configured per-grade per-subject cut. Both gates required (BOTH).
+    const ap1 = ireadyAp1ByPair.get(key);
+    const cut = cutFor(subject, grade);
+    if (ap1 == null || cut == null || ap1 >= cut) continue;
 
     const levelLabel = SUB_LEVEL_LABEL[placement.subLevel];
     const subjLabel = subject === "ela" ? "ELA" : "Math";
-    const windowLabel = window.toUpperCase();
     suggestions.push({
       studentId: row.studentId,
       studentLocalSisId: meta?.localSisId ?? null,
@@ -1220,13 +1287,16 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
       score,
       window,
       schoolYear: row.schoolYear,
-      suggestedTitle: `Tier 2 Academic — ${subjLabel}`,
+      ireadyAp1: ap1,
+      ap1Cut: cut,
+      suggestedTitle: `Tier 3 Academic — ${subjLabel}`,
       suggestedGoal:
-        `Student scored ${score} on FAST ${subjLabel} (${windowLabel}), ` +
-        `placing at Level ${placement.level} (${levelLabel}) — below the ` +
-        `grade-level Level 3 benchmark. Goal: provide targeted Tier 2 ` +
-        `${subjLabel} support through the student's intensive ${subjLabel} ` +
-        `class and re-evaluate placement at the next FAST/iReady window.`,
+        `Student scored ${score} on FAST ${subjLabel} PM1 ` +
+        `(Level 1, ${levelLabel}) and ${ap1} on iReady ${subjLabel} AP1, ` +
+        `below the grade ${grade} cut of ${cut}. Both early-year measures ` +
+        `place the student well below grade level. Goal: provide intensive, ` +
+        `closely-monitored Tier 3 ${subjLabel} intervention and re-evaluate ` +
+        `at the next FAST/iReady window.`,
       weakStandards: weakByPair.get(key) ?? [],
       priorYearPm3: null,
     });
@@ -1256,6 +1326,11 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
     thresholdPct,
     minWindows,
     schoolYear: currentSchoolYear,
+    ireadyAp1Cuts: {
+      ela: ireadyCuts.ela ?? {},
+      math: ireadyCuts.math ?? {},
+    },
+    gradesPresent: Array.from(gradesPresent).sort((a, b) => a - b),
     suggestions,
   });
 });

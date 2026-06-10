@@ -6578,6 +6578,9 @@ export async function ensureKioskWelcomeSchema(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS kiosk_welcome_messages JSONB NOT NULL DEFAULT '{}'::jsonb`,
   );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS iready_ap1_cuts JSONB NOT NULL DEFAULT '{"ela":{},"math":{}}'::jsonb`,
+  );
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS class_signins (
       id SERIAL PRIMARY KEY,

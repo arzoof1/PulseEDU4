@@ -130,6 +130,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     compTimeAuthFormObjectKey,
     fastHistoryYearsVisible,
     restroomAccessControlEnabled,
+    ireadyAp1Cuts,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -778,6 +779,49 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       }
     }
     updates.compTimeAuthFormObjectKey = compTimeAuthFormObjectKey || null;
+  }
+
+  if (ireadyAp1Cuts !== undefined) {
+    // Per-grade, per-subject iReady AP1 cut scores. Shape:
+    // { ela: { "6": 480, ... }, math: { "7": 500, ... } }. Validate
+    // each value is a finite positive integer and keys are plain grade
+    // strings; drop anything malformed so a bad client can't poison the
+    // map. An empty value for a grade clears that cut.
+    if (
+      typeof ireadyAp1Cuts !== "object" ||
+      ireadyAp1Cuts === null ||
+      Array.isArray(ireadyAp1Cuts)
+    ) {
+      res.status(400).json({ error: "ireadyAp1Cuts must be an object" });
+      return;
+    }
+    const clean: { ela: Record<string, number>; math: Record<string, number> } =
+      { ela: {}, math: {} };
+    for (const subject of ["ela", "math"] as const) {
+      const raw = (ireadyAp1Cuts as Record<string, unknown>)[subject];
+      if (raw == null) continue;
+      if (typeof raw !== "object" || Array.isArray(raw)) {
+        res.status(400).json({
+          error: `ireadyAp1Cuts.${subject} must be a grade→score map`,
+        });
+        return;
+      }
+      for (const [grade, value] of Object.entries(
+        raw as Record<string, unknown>,
+      )) {
+        if (!/^\d{1,2}$/.test(grade)) continue;
+        if (
+          typeof value !== "number" ||
+          !Number.isInteger(value) ||
+          value <= 0 ||
+          value > 1000
+        ) {
+          continue;
+        }
+        clean[subject][grade] = value;
+      }
+    }
+    updates.ireadyAp1Cuts = clean;
   }
 
   if (Object.keys(updates).length === 0) {

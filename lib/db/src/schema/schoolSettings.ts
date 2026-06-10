@@ -310,6 +310,17 @@ export const schoolSettingsTable = pgTable(
     .$type<string[]>()
     .notNull()
     .default([]),
+  // iReady AP1 cut scores used by the Tier 3 Academic auto-suggest
+  // engine. Per-grade, per-subject scale-score thresholds the MTSS
+  // coordinator fills in: a student is suggested for a Tier 3 Academic
+  // plan when their FAST PM1 places at Level 1 AND their iReady AP1
+  // score is strictly below the cut for their grade + subject. Keyed by
+  // stringified grade (e.g. "6", "7"). Empty maps = not configured (no
+  // Tier 3 suggestions surface until a cut is entered for that grade).
+  ireadyAp1Cuts: jsonb("iready_ap1_cuts")
+    .$type<{ ela: Record<string, number>; math: Record<string, number> }>()
+    .notNull()
+    .default({ ela: {}, math: {} }),
   schoolWideExpectationLetters: jsonb("school_wide_expectation_letters")
     .$type<Array<{ letter: string; word: string }>>()
     .notNull()
