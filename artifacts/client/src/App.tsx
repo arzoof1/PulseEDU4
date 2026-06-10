@@ -6200,6 +6200,21 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser?.id]);
 
+  // Poll hall passes so passes created on OTHER devices (especially door
+  // kiosks) show up in the staff app's active list + "Currently Active"
+  // count without a manual reload. Without this, loadHallPasses() only ran
+  // on mount and after the signed-in user's own create/end actions, so a
+  // kiosk-issued pass never moved the count here even though the server had
+  // already stored it as active. 15s matches the pullout-count pollers.
+  useEffect(() => {
+    if (!authUser) return;
+    const interval = setInterval(() => {
+      loadHallPasses();
+    }, 15000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser?.id]);
+
   // ---- Reports tab ----
   const loadReportTeachers = () => {
     authFetch("/api/reports/teachers")
