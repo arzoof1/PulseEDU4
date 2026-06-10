@@ -127,12 +127,21 @@ function requireCoreTeam(
 
 // ---------------- types ----------------
 
+// "Behavior" vs academic ("ELA"/"Math") segment label for a plan,
+// derived from fastSubject (ela|math; null/"" = behavior).
+function subjectLabel(fastSubject: string | null): "Behavior" | "ELA" | "Math" {
+  if (fastSubject === "ela") return "ELA";
+  if (fastSubject === "math") return "Math";
+  return "Behavior";
+}
+
 interface PlanRow {
   id: number;
   schoolId: number;
   studentId: string;
   tier: number;
   interventionSubType: string | null;
+  fastSubject: string | null;
   title: string;
   goals: string | null;
   openedAt: Date;
@@ -155,6 +164,8 @@ interface SummaryResponse {
     subType: string | null;
     grade: string | null;
     teacherStaffId: number | null;
+    planType: "behavior" | "academic" | null;
+    academicSubject: "ela" | "math" | null;
   };
   planMeta: {
     id: number;
@@ -163,6 +174,8 @@ interface SummaryResponse {
     grade: string | null;
     tier: number;
     subType: string | null;
+    fastSubject: string | null;
+    subjectLabel: string;
     title: string;
     goals: string | null;
     openedAt: string;
@@ -182,6 +195,7 @@ interface SummaryResponse {
   perTeacher: Array<{
     teacherStaffId: number;
     teacherName: string;
+    subjects: string[];
     t2Completed: number;
     t2Expected: number;
     t2CompletionPct: number | null;
@@ -221,6 +235,8 @@ interface SummaryResponse {
     tier: number;
     title: string;
     subType: string | null;
+    fastSubject: string | null;
+    subjectLabel: string;
     openedAt: string;
     closedAt: string | null;
   }> | null;
@@ -258,6 +274,23 @@ router.get("/mtss-reports/summary", async (req, res) => {
     teacherStaffIdRaw > 0
       ? teacherStaffIdRaw
       : null;
+  // Academic/Behavior segment (aggregate mode only). `planType`
+  // splits behavior plans (fastSubject null/"") from academic plans
+  // (fastSubject set); `academicSubject` further narrows academic to
+  // ELA or Math. Ignored in per-plan mode so the single plan never
+  // gets filtered away.
+  const planTypeRaw = req.query.planType ? String(req.query.planType) : null;
+  const planType: "behavior" | "academic" | null =
+    planTypeRaw === "behavior" || planTypeRaw === "academic"
+      ? planTypeRaw
+      : null;
+  const academicSubjectRaw = req.query.academicSubject
+    ? String(req.query.academicSubject)
+    : null;
+  const academicSubject: "ela" | "math" | null =
+    academicSubjectRaw === "ela" || academicSubjectRaw === "math"
+      ? academicSubjectRaw
+      : null;
 
   // ---- load plans ----
   const baseWhere = [eq(studentMtssPlansTable.schoolId, schoolId)];
@@ -279,6 +312,7 @@ router.get("/mtss-reports/summary", async (req, res) => {
       studentId: studentMtssPlansTable.studentId,
       tier: studentMtssPlansTable.tier,
       interventionSubType: studentMtssPlansTable.interventionSubType,
+      fastSubject: studentMtssPlansTable.fastSubject,
       title: studentMtssPlansTable.title,
       goals: studentMtssPlansTable.goals,
       openedAt: studentMtssPlansTable.openedAt,
@@ -365,6 +399,18 @@ router.get("/mtss-reports/summary", async (req, res) => {
     plans = plans.filter((p) =>
       (effectivePlanTeachers.get(p.id) ?? []).includes(teacherStaffId),
     );
+  }
+  // Academic/Behavior segment — aggregate mode only (per-plan mode
+  // pins a single planId we must not drop). Behavior = fastSubject
+  // null/""; academic = fastSubject set, optionally narrowed to a
+  // single subject.
+  if (planId == null && planType === "behavior") {
+    plans = plans.filter((p) => !p.fastSubject);
+  } else if (planId == null && planType === "academic") {
+    plans = plans.filter((p) => !!p.fastSubject);
+    if (academicSubject) {
+      plans = plans.filter((p) => p.fastSubject === academicSubject);
+    }
   }
 
   // ---- pull entries / records in range ----
@@ -620,10 +666,27 @@ router.get("/mtss-reports/summary", async (req, res) => {
   const teacherNameMap = new Map(
     teacherNameRows.map((t) => [t.id, t.displayName]),
   );
+  // Which subject segments each teacher's filtered plans cover, so the
+  // per-teacher rows can carry "Behavior"/"ELA"/"Math" chips. A teacher
+  // running mixed plans (e.g. behavior + math) shows multiple chips.
+  const teacherSubjects = new Map<number, Set<string>>();
+  for (const p of plans) {
+    const label = subjectLabel(p.fastSubject);
+    for (const tid of effectivePlanTeachers.get(p.id) ?? []) {
+      if (teacherStaffId && tid !== teacherStaffId) continue;
+      let set = teacherSubjects.get(tid);
+      if (!set) {
+        set = new Set();
+        teacherSubjects.set(tid, set);
+      }
+      set.add(label);
+    }
+  }
   const perTeacher = Array.from(perTeacherMap.entries())
     .map(([id, v]) => ({
       teacherStaffId: id,
       teacherName: teacherNameMap.get(id) ?? `Staff #${id}`,
+      subjects: Array.from(teacherSubjects.get(id) ?? []).sort(),
       t2Completed: v.t2Completed,
       t2Expected: v.t2Expected,
       t2CompletionPct:
@@ -856,6 +919,8 @@ router.get("/mtss-reports/summary", async (req, res) => {
       grade: s ? String(s.grade) : null,
       tier: p.tier,
       subType: p.interventionSubType,
+      fastSubject: p.fastSubject,
+      subjectLabel: subjectLabel(p.fastSubject),
       title: p.title,
       goals: p.goals,
       openedAt: p.openedAt.toISOString(),
@@ -880,6 +945,7 @@ router.get("/mtss-reports/summary", async (req, res) => {
         tier: studentMtssPlansTable.tier,
         title: studentMtssPlansTable.title,
         subType: studentMtssPlansTable.interventionSubType,
+        fastSubject: studentMtssPlansTable.fastSubject,
         openedAt: studentMtssPlansTable.openedAt,
         closedAt: studentMtssPlansTable.closedAt,
       })
@@ -896,6 +962,8 @@ router.get("/mtss-reports/summary", async (req, res) => {
         tier: r.tier,
         title: r.title,
         subType: r.subType,
+        fastSubject: r.fastSubject,
+        subjectLabel: subjectLabel(r.fastSubject),
         openedAt: r.openedAt.toISOString(),
         closedAt: r.closedAt ? r.closedAt.toISOString() : null,
       }))
@@ -914,6 +982,8 @@ router.get("/mtss-reports/summary", async (req, res) => {
       subType,
       grade,
       teacherStaffId,
+      planType,
+      academicSubject,
     },
     planMeta,
     weeklyTrend,

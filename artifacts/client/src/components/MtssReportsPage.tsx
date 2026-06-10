@@ -54,6 +54,8 @@ interface SummaryResponse {
     subType: string | null;
     grade: string | null;
     teacherStaffId: number | null;
+    planType: "behavior" | "academic" | null;
+    academicSubject: "ela" | "math" | null;
   };
   planMeta: {
     id: number;
@@ -62,6 +64,8 @@ interface SummaryResponse {
     grade: string | null;
     tier: number;
     subType: string | null;
+    fastSubject: string | null;
+    subjectLabel: string;
     title: string;
     goals: string | null;
     openedAt: string;
@@ -81,6 +85,7 @@ interface SummaryResponse {
   perTeacher: Array<{
     teacherStaffId: number;
     teacherName: string;
+    subjects: string[];
     t2Completed: number;
     t2Expected: number;
     t2CompletionPct: number | null;
@@ -116,6 +121,8 @@ interface SummaryResponse {
     tier: number;
     title: string;
     subType: string | null;
+    fastSubject: string | null;
+    subjectLabel: string;
     openedAt: string;
     closedAt: string | null;
   }> | null;
@@ -144,6 +151,36 @@ function fmtPct(v: number | null): string {
 function fmtScore(v: number | null): string {
   if (v == null) return "—";
   return v.toFixed(2);
+}
+
+// Small color-coded segment chip ("Behavior" / "ELA" / "Math") shown
+// on plan + per-teacher rows so readers can tell a behavior plan from
+// an academic one at a glance.
+function SubjectChip({ label }: { label: string }) {
+  const palette: Record<string, { bg: string; fg: string; bd: string }> = {
+    Behavior: { bg: "#fef2f2", fg: "#991b1b", bd: "#fecaca" },
+    ELA: { bg: "#eff6ff", fg: "#1e40af", bd: "#bfdbfe" },
+    Math: { bg: "#ecfdf5", fg: "#065f46", bd: "#a7f3d0" },
+  };
+  const c = palette[label] ?? { bg: "#f1f5f9", fg: "#334155", bd: "#cbd5e1" };
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        fontSize: "0.68rem",
+        fontWeight: 700,
+        lineHeight: 1.4,
+        padding: "1px 7px",
+        borderRadius: 999,
+        background: c.bg,
+        color: c.fg,
+        border: `1px solid ${c.bd}`,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </span>
+  );
 }
 
 // Color the T2 dow heatmap from completion% (0=red, 100=green).
@@ -226,6 +263,11 @@ export default function MtssReportsPage({
   const [subType, setSubType] = useState<string>("");
   const [grade, setGrade] = useState<string>("");
   const [teacherStaffId, setTeacherStaffId] = useState<number | "">("");
+  // Academic/Behavior segment (Tier 3 aggregate tab only). "" = all.
+  const [planType, setPlanType] = useState<"" | "behavior" | "academic">("");
+  const [academicSubject, setAcademicSubject] = useState<"" | "ela" | "math">(
+    "",
+  );
 
   // ---- data ----
   const [data, setData] = useState<SummaryResponse | null>(null);
@@ -280,6 +322,14 @@ export default function MtssReportsPage({
           if (grade) params.set("grade", grade);
           if (teacherStaffId !== "")
             params.set("teacherStaffId", String(teacherStaffId));
+          // Behavior/Academic split is a Tier 3 concern (Tier 2
+          // academic is "light" with no records), so only send it on
+          // the Tier 3 tab.
+          if (activeTier === 3 && planType) {
+            params.set("planType", planType);
+            if (planType === "academic" && academicSubject)
+              params.set("academicSubject", academicSubject);
+          }
         }
         const r = await authFetch(
           `/api/mtss-reports/summary?${params.toString()}`,
@@ -301,7 +351,24 @@ export default function MtssReportsPage({
     return () => {
       cancelled = true;
     };
-  }, [range, isPerPlan, viewPlanId, activeTier, subType, grade, teacherStaffId]);
+  }, [
+    range,
+    isPerPlan,
+    viewPlanId,
+    activeTier,
+    subType,
+    grade,
+    teacherStaffId,
+    planType,
+    academicSubject,
+  ]);
+
+  // Keep the academic subject sub-choice clean: clear it whenever the
+  // segment isn't "academic" so a stale ELA/Math param can't ride along.
+  useEffect(() => {
+    if (planType !== "academic" && academicSubject !== "")
+      setAcademicSubject("");
+  }, [planType, academicSubject]);
 
   // In per-plan mode the active tab follows the viewed plan's tier so
   // the tab highlight stays in sync after the data loads (or after a
@@ -439,6 +506,20 @@ export default function MtssReportsPage({
     minWidth: 120,
   };
 
+  function segBtnStyle(active: boolean): React.CSSProperties {
+    return {
+      padding: "5px 12px",
+      border: "1px solid",
+      borderColor: active ? "#2563eb" : "#cbd5e1",
+      background: active ? "#2563eb" : "white",
+      color: active ? "white" : "#334155",
+      borderRadius: 999,
+      fontSize: "0.82rem",
+      fontWeight: 600,
+      cursor: "pointer",
+    };
+  }
+
   function tabStyle(active: boolean, enabled: boolean): React.CSSProperties {
     return {
       padding: "8px 18px",
@@ -574,9 +655,14 @@ export default function MtssReportsPage({
             </div>
             <div>
               <div style={labelStyle}>Tier / Subtype</div>
-              <div>
-                T{data.planMeta.tier}
-                {data.planMeta.subType ? ` — ${data.planMeta.subType}` : ""}
+              <div
+                style={{ display: "flex", gap: 8, alignItems: "center" }}
+              >
+                <span>
+                  T{data.planMeta.tier}
+                  {data.planMeta.subType ? ` — ${data.planMeta.subType}` : ""}
+                </span>
+                <SubjectChip label={data.planMeta.subjectLabel} />
               </div>
             </div>
             <div>
@@ -729,6 +815,70 @@ export default function MtssReportsPage({
             </>
           )}
         </div>
+
+        {/* Behavior/Academic segment — Tier 3 aggregate tab only. */}
+        {!isPerPlan && activeTier === 3 && (
+          <div style={{ marginTop: 12 }}>
+            <span style={labelStyle}>Plan type</span>
+            <div
+              style={{
+                display: "flex",
+                gap: 6,
+                flexWrap: "wrap",
+                alignItems: "center",
+              }}
+            >
+              {(
+                [
+                  ["", "All"],
+                  ["behavior", "Behavior"],
+                  ["academic", "Academic"],
+                ] as const
+              ).map(([val, lbl]) => {
+                const active = planType === val;
+                return (
+                  <button
+                    key={val || "all"}
+                    type="button"
+                    onClick={() => setPlanType(val)}
+                    style={segBtnStyle(active)}
+                  >
+                    {lbl}
+                  </button>
+                );
+              })}
+              {planType === "academic" && (
+                <>
+                  <span
+                    style={{ color: "#cbd5e1", margin: "0 2px" }}
+                    aria-hidden="true"
+                  >
+                    |
+                  </span>
+                  {(
+                    [
+                      ["", "All subjects"],
+                      ["ela", "ELA"],
+                      ["math", "Math"],
+                    ] as const
+                  ).map(([val, lbl]) => {
+                    const active = academicSubject === val;
+                    return (
+                      <button
+                        key={val || "allsub"}
+                        type="button"
+                        onClick={() => setAcademicSubject(val)}
+                        style={segBtnStyle(active)}
+                      >
+                        {lbl}
+                      </button>
+                    );
+                  })}
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ---- error / loading ---- */}
@@ -1037,7 +1187,21 @@ export default function MtssReportsPage({
                   <tbody>
                     {data.perTeacher.map((r) => (
                       <tr key={r.teacherStaffId}>
-                        <td style={tdFirst}>{r.teacherName}</td>
+                        <td style={tdFirst}>
+                          <span
+                            style={{
+                              display: "flex",
+                              gap: 6,
+                              alignItems: "center",
+                              flexWrap: "wrap",
+                            }}
+                          >
+                            {r.teacherName}
+                            {r.subjects.map((s) => (
+                              <SubjectChip key={s} label={s} />
+                            ))}
+                          </span>
+                        </td>
                         <td style={tdRMid}>{r.t3ScoredCount}</td>
                         <td style={tdRLast}>{fmtScore(r.t3AvgScore)}</td>
                       </tr>

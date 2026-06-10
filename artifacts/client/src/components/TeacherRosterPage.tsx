@@ -28,6 +28,7 @@ import StudentPhoto from "./StudentPhoto";
 import TeacherBenchmarksTab from "./TeacherBenchmarksTab";
 import GroupInsightsTab from "./GroupInsightsTab";
 import TeacherInstructionLogTab from "./TeacherInstructionLogTab";
+import Tier3WeeklyForm from "./Tier3WeeklyForm";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 // Top-level tab in this page. "roster" is the original FAST PM
@@ -638,6 +639,97 @@ function BucketIcon({ bucket }: { bucket: Bucket }) {
 // vary the color and add a small superscript ("2"/"3") for students
 // who also have an active MTSS plan at that tier so they read as a
 // "more urgent" version of the same indicator.
+// Monday (local) of the week containing `today`, as YYYY-MM-DD.
+// Mirrors LogInterventionLauncher's helper so the roster pill opens the
+// same week the bell-triggered form would.
+function mondayOf(today: Date): string {
+  const d = new Date(today);
+  const dow = d.getDay();
+  const shift = dow === 0 ? -6 : 1 - dow;
+  d.setDate(d.getDate() + shift);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+// Tier 3 MTSS pill shown on roster rows whose highest active plan is
+// Tier 3. When the logged-in user is the assigned interventionist
+// (`actionable`), the pill is a button that opens the weekly tracking
+// form for that student; an amber count badge shows how many scheduled
+// meeting days are still unscored this week. Otherwise it renders as a
+// plain informational badge (e.g. Core Team viewing someone's roster).
+function Tier3Pill({
+  actionable,
+  missingCount,
+  studentName,
+  onOpen,
+}: {
+  actionable: boolean;
+  missingCount: number;
+  studentName: string;
+  onOpen: () => void;
+}) {
+  const behind = missingCount > 0;
+  const label = actionable
+    ? behind
+      ? `Tier 3 weekly tracking for ${studentName} — ${missingCount} meeting ${
+          missingCount === 1 ? "day" : "days"
+        } unscored this week. Click to log.`
+      : `Tier 3 weekly tracking for ${studentName} — up to date this week. Click to view/edit.`
+    : `Active MTSS Tier 3 plan for ${studentName}`;
+  const pillStyle: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    padding: "1px 7px",
+    borderRadius: 999,
+    fontSize: "0.68rem",
+    fontWeight: 700,
+    lineHeight: 1.5,
+    background: "#fef2f2",
+    color: "#991b1b",
+    border: "1px solid #fecaca",
+    whiteSpace: "nowrap",
+  };
+  const badge = behind ? (
+    <span
+      aria-hidden="true"
+      style={{
+        minWidth: 14,
+        height: 14,
+        padding: "0 3px",
+        borderRadius: 7,
+        background: "#dc2626",
+        color: "#fff",
+        fontSize: 9,
+        fontWeight: 800,
+        lineHeight: "14px",
+        textAlign: "center",
+      }}
+    >
+      {missingCount}
+    </span>
+  ) : null;
+  if (!actionable) {
+    return (
+      <span title={label} aria-label={label} style={pillStyle}>
+        T3
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      title={label}
+      aria-label={label}
+      style={{ ...pillStyle, cursor: "pointer" }}
+    >
+      T3{badge}
+    </button>
+  );
+}
+
 function InvisibleEyeIcon({
   tier,
   windowDays,
@@ -1529,6 +1621,53 @@ export default function TeacherRosterPage({
       cancelled = true;
     };
   }, [teacherId, period, reloadTick]);
+
+  // ----- Tier 3 weekly-tracking status (interventionist) -----
+  // Maps studentId -> count of scheduled meeting days this week that
+  // the logged-in user still owes a score for. The map ONLY contains
+  // students for whom the current user is the assigned interventionist
+  // (server-scoped to req staff id), so membership in the map is what
+  // makes a roster Tier 3 pill actionable. Core Team viewers get an
+  // empty list from the server (they aren't an interventionist), so
+  // their pills render as plain informational badges.
+  const [tier3Missing, setTier3Missing] = useState<Map<string, number>>(
+    new Map(),
+  );
+  const [tier3WeekStart, setTier3WeekStart] = useState<string>("");
+  useEffect(() => {
+    let cancelled = false;
+    authFetch("/api/interventions/my-tier3-status")
+      .then(async (r) => {
+        if (!r.ok) return null;
+        return r.json();
+      })
+      .then(
+        (
+          j: {
+            weekStartDate: string;
+            students: Array<{ studentId: string; missingDayCount: number }>;
+          } | null,
+        ) => {
+          if (cancelled || !j) return;
+          const m = new Map<string, number>();
+          for (const s of j.students) m.set(s.studentId, s.missingDayCount);
+          setTier3Missing(m);
+          setTier3WeekStart(j.weekStartDate);
+        },
+      )
+      .catch(() => {
+        /* non-fatal — pills just render informational */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadTick]);
+
+  // Open Tier 3 weekly form for a specific student (roster pill click).
+  const [tier3Modal, setTier3Modal] = useState<{
+    studentId: string;
+    studentName: string;
+  } | null>(null);
 
   const periodOptions = data?.availablePeriods ?? [];
 
@@ -2461,6 +2600,19 @@ export default function TeacherRosterPage({
                           }
                         />
                       )}
+                      {row.mtssTier != null && row.mtssTier >= 3 && (
+                        <Tier3Pill
+                          actionable={tier3Missing.has(row.studentId)}
+                          missingCount={tier3Missing.get(row.studentId) ?? 0}
+                          studentName={`${row.firstName} ${row.lastName}`}
+                          onOpen={() =>
+                            setTier3Modal({
+                              studentId: row.studentId,
+                              studentName: `${row.firstName} ${row.lastName}`,
+                            })
+                          }
+                        />
+                      )}
                       {onOpenSpider && (
                         <button
                           type="button"
@@ -2652,6 +2804,49 @@ export default function TeacherRosterPage({
           onClose={() => setSepTarget(null)}
           onSaved={() => setSepTick((t) => t + 1)}
         />
+      )}
+      {tier3Modal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Tier 3 weekly tracking for ${tier3Modal.studentName}`}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.45)",
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "center",
+            padding: "3vh 16px",
+            overflowY: "auto",
+            zIndex: 1000,
+          }}
+          onClick={() => setTier3Modal(null)}
+        >
+          <div
+            style={{
+              background: "white",
+              borderRadius: 10,
+              padding: "1.25rem",
+              maxWidth: 920,
+              width: "100%",
+              boxShadow: "0 20px 50px rgba(0,0,0,0.25)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Tier3WeeklyForm
+              studentId={tier3Modal.studentId}
+              studentName={tier3Modal.studentName}
+              isCoreTeam={isCoreTeam}
+              weekStartDate={tier3WeekStart || mondayOf(new Date())}
+              onSaved={() => {
+                setTier3Modal(null);
+                refresh();
+              }}
+              onCancel={() => setTier3Modal(null)}
+            />
+          </div>
+        </div>
       )}
     </div>
   );

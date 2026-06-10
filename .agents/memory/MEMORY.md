@@ -11,3 +11,4 @@
 - [Pickup release-undo idempotency](pickup-release-undo.md) — undo must be idempotent (double-tap/already-undone → ok); only terminal events block; never dump raw JSON errors.
 - [Kiosk local_sis_id boundary](kiosk-local-sis-boundary.md) — student-facing kiosk/badge surfaces use local_sis_id; resolve to canonical student_id for FKs; next-up localSisId is JOINed not stored; reprint old badges.
 - [Tooling pitfalls](tooling-pitfalls.md) — never `rg -rn` (= --replace=n, corrupts output); rg recurses by default.
+- [Tier 3 status aggregation](tier3-status-aggregation.md) — /interventions/my-tier3-status must collapse to one row per student server-side (MAX owed, not SUM — weekly record is per student/teacher/week).

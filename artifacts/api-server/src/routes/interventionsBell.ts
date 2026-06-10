@@ -129,6 +129,173 @@ function resolveEffectiveTeachers(
   return Array.from(out);
 }
 
+// ---- shared Tier 3 "behind this week" math ----
+// Both the bell (/owed-today) and the Teacher Roster pill status
+// (/my-tier3-status) measure "how many scheduled check-ins is this
+// teacher missing so far this week?" the SAME way, so the two surfaces
+// never disagree. The day-scoring rule lives in ONE place here.
+const T3_DAY_KEYS = ["mon", "tue", "wed", "thu", "fri"] as const;
+
+// How far into the Mon-Fri week we've reached, as a 0..4 index. On
+// weekends the full week (idx 4) is owed.
+function reachedDayIdx(): number {
+  const dow = todayDowLocal();
+  return dow === 0 ? 4 : dow >= 6 ? 4 : Math.max(0, dow - 1);
+}
+
+// Count the scheduled-but-unscored days for a Tier 3 plan up to today.
+// Academic Tier 3 plans only meet on configured days; behavior plans
+// (meetingDays null) require all 5 weekdays. Days the teacher marked
+// the student absent don't count as missing.
+function tier3MissingDayCount(
+  plan: { meetingDays: string | null },
+  rec:
+    | {
+        monScore: number | null;
+        tueScore: number | null;
+        wedScore: number | null;
+        thuScore: number | null;
+        friScore: number | null;
+        absentDays?: unknown;
+      }
+    | undefined,
+  reachedIdx: number,
+): number {
+  const dayScores = rec
+    ? [rec.monScore, rec.tueScore, rec.wedScore, rec.thuScore, rec.friScore]
+    : [null, null, null, null, null];
+  const absent = (rec?.absentDays ?? {}) as Record<string, boolean>;
+  const meetingSet = plan.meetingDays
+    ? new Set(
+        plan.meetingDays
+          .split(",")
+          .map((d) => d.trim().toLowerCase())
+          .filter(Boolean),
+      )
+    : null;
+  let missing = 0;
+  for (let i = 0; i <= reachedIdx; i++) {
+    if (meetingSet && !meetingSet.has(T3_DAY_KEYS[i])) continue;
+    if (absent[T3_DAY_KEYS[i]]) continue;
+    if (dayScores[i] === null || dayScores[i] === undefined) missing++;
+  }
+  return missing;
+}
+
+interface Tier3StatusRow {
+  studentId: string;
+  studentName: string;
+  grade: string | null;
+  // The student's most-recent active Tier 3 plan id (for callers that
+  // want to deep-link). When a student has more than one active Tier 3
+  // plan (shouldn't, but defended for), this is the highest id.
+  planId: number;
+  weekStartDate: string;
+  // Missing scheduled meeting days this week. The weekly record is keyed
+  // by (student, teacher, week) — NOT by plan — so when a student
+  // carries multiple active Tier 3 plans we take the MAX owed across
+  // them rather than summing (summing would double-count the shared
+  // record's already-scored days).
+  missingDayCount: number;
+}
+
+// Resolve EVERY active Tier 3 plan the given teacher is an
+// interventionist on this week, with each plan's missing-day count
+// (which may be 0 when caught up). The Teacher Roster pill uses this:
+// membership tells it the teacher is an interventionist (so the pill is
+// actionable), and missingDayCount > 0 drives the "behind" badge.
+async function computeTier3StatusForTeacher(
+  schoolId: number,
+  staffId: number,
+): Promise<{ weekStartDate: string; rows: Tier3StatusRow[] }> {
+  const weekStartDate = mondayOf(todayStr());
+
+  const allPlans = await db
+    .select()
+    .from(studentMtssPlansTable)
+    .where(
+      and(
+        eq(studentMtssPlansTable.schoolId, schoolId),
+        sql`${studentMtssPlansTable.closedAt} IS NULL`,
+      ),
+    );
+  const planStudentIds = Array.from(
+    new Set(allPlans.map((p) => p.studentId)),
+  );
+  const scheduleByStudent = await loadScheduleTeacherIdsForStudents(
+    schoolId,
+    planStudentIds,
+  );
+  const tier3Plans = allPlans.filter(
+    (p) =>
+      p.tier === 3 &&
+      resolveEffectiveTeachers(
+        p,
+        scheduleByStudent.get(p.studentId) ?? [],
+      ).includes(staffId),
+  );
+  if (tier3Plans.length === 0) return { weekStartDate, rows: [] };
+
+  const studentIdsT3 = Array.from(
+    new Set(tier3Plans.map((p) => p.studentId)),
+  );
+  const studentRows = await db
+    .select({
+      studentId: studentsTable.studentId,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      grade: studentsTable.grade,
+    })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.schoolId, schoolId),
+        inArray(studentsTable.studentId, studentIdsT3),
+      ),
+    );
+  const studentMap = new Map(studentRows.map((s) => [s.studentId, s]));
+
+  const records = await db
+    .select()
+    .from(tier3WeeklyRecordsTable)
+    .where(
+      and(
+        eq(tier3WeeklyRecordsTable.schoolId, schoolId),
+        eq(tier3WeeklyRecordsTable.teacherStaffId, staffId),
+        eq(tier3WeeklyRecordsTable.weekStartDate, weekStartDate),
+        inArray(tier3WeeklyRecordsTable.studentId, studentIdsT3),
+      ),
+    );
+  const recordByStudent = new Map(records.map((r) => [r.studentId, r]));
+
+  const reachedIdx = reachedDayIdx();
+  // Collapse to one row per student. A student normally has a single
+  // active Tier 3 plan, but if they carry more than one we keep the MAX
+  // owed days (the weekly record is per student/teacher/week, so summing
+  // would double-count) and the highest plan id.
+  const byStudent = new Map<string, Tier3StatusRow>();
+  for (const p of tier3Plans) {
+    const rec = recordByStudent.get(p.studentId);
+    const missing = tier3MissingDayCount(p, rec, reachedIdx);
+    const existing = byStudent.get(p.studentId);
+    if (existing) {
+      existing.missingDayCount = Math.max(existing.missingDayCount, missing);
+      existing.planId = Math.max(existing.planId, p.id);
+      continue;
+    }
+    const s = studentMap.get(p.studentId);
+    byStudent.set(p.studentId, {
+      studentId: p.studentId,
+      studentName: s ? `${s.firstName} ${s.lastName}` : p.studentId,
+      grade: s ? String(s.grade) : null,
+      planId: p.id,
+      weekStartDate,
+      missingDayCount: missing,
+    });
+  }
+  return { weekStartDate, rows: Array.from(byStudent.values()) };
+}
+
 // =================================================================
 // OWED-TODAY
 // =================================================================
@@ -302,37 +469,14 @@ router.get("/interventions/owed-today", async (req, res) => {
 
     // Day-of-week we've reached so far this week. Mon=0..Fri=4. On
     // weekends we still surface Tier 3 because the full week is owed.
-    // Use America/New_York day-of-week so the bell doesn't roll over
-    // at midnight UTC (~7-8pm EST) and surface tomorrow's row early.
-    const dow = todayDowLocal();
-    const reachedIdx = dow === 0 ? 4 : dow >= 6 ? 4 : Math.max(0, dow - 1);
+    // The per-plan missing-day math lives in the shared
+    // `tier3MissingDayCount` helper so the bell and the Teacher Roster
+    // pill status never disagree about what "behind this week" means.
+    const reachedIdx = reachedDayIdx();
 
     for (const p of tier3Plans) {
       const rec = recordByStudent.get(p.studentId);
-      const dayScores = rec
-        ? [rec.monScore, rec.tueScore, rec.wedScore, rec.thuScore, rec.friScore]
-        : [null, null, null, null, null];
-      // Days the teacher explicitly marked the student absent for
-      // shouldn't count as "missing" — there's nothing to score.
-      const absent = (rec?.absentDays ?? {}) as Record<string, boolean>;
-      const dayKeys = ["mon", "tue", "wed", "thu", "fri"] as const;
-      // Academic Tier 3 plans only meet on configured days (e.g. Tue/Thu)
-      // — the intensive teacher isn't expected to log on off days. Behavior
-      // Tier 3 plans (meetingDays null) keep requiring all 5 weekdays.
-      const meetingSet = p.meetingDays
-        ? new Set(
-            p.meetingDays
-              .split(",")
-              .map((d) => d.trim().toLowerCase())
-              .filter(Boolean),
-          )
-        : null;
-      let missing = 0;
-      for (let i = 0; i <= reachedIdx; i++) {
-        if (meetingSet && !meetingSet.has(dayKeys[i])) continue;
-        if (absent[dayKeys[i]]) continue;
-        if (dayScores[i] === null || dayScores[i] === undefined) missing++;
-      }
+      const missing = tier3MissingDayCount(p, rec, reachedIdx);
       if (missing > 0) {
         const s = studentMap.get(p.studentId);
         tier3Owed.push({
@@ -354,6 +498,32 @@ router.get("/interventions/owed-today", async (req, res) => {
     weekStartDate,
     visible: tier2Owed.length + tier3Owed.length > 0,
   });
+});
+
+// =================================================================
+// MY TIER 3 STATUS
+// =================================================================
+// Powers the Teacher Roster Tier 3 pill shortcut. Returns EVERY active
+// Tier 3 plan the signed-in teacher is an interventionist on (including
+// caught-up ones, missingDayCount 0) so the roster can decide which
+// pills are actionable and which show a "behind this week" badge.
+// Core Team callers get an empty list — like the bell, this is a
+// personal-obligation surface, so when Core Team views another
+// teacher's roster the pills stay informational.
+router.get("/interventions/my-tier3-status", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId == null) return;
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (isCoreTeam(staff)) {
+    res.json({ weekStartDate: mondayOf(todayStr()), students: [] });
+    return;
+  }
+  const { weekStartDate, rows } = await computeTier3StatusForTeacher(
+    schoolId,
+    staff.id,
+  );
+  res.json({ weekStartDate, students: rows });
 });
 
 // =================================================================
