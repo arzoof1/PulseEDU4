@@ -306,3 +306,9 @@ id = "WFc5pJBaEo_BW9A8ErTaK"
 uri = "file://exports/hall-pass-demo-runbook.pdf"
 type = "pdf"
 title = "Hall Pass Demo Run-Book (PDF)"
+
+[[outputs]]
+id = "0767g4Kr8xlePWgq1JKjR"
+uri = "file://docs/brochure/PulseEDU-Brochure.pdf"
+type = "pdf"
+title = "PulseEDU — District Evaluation Brochure"
