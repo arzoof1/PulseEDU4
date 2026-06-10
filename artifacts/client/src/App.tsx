@@ -6192,11 +6192,13 @@ function App() {
 
   useEffect(() => {
     import("./lib/authToken").then(({ authFetch, setAuthToken }) => {
+      import("./lib/csrf").then(({ setCsrfToken }) => {
       authFetch("/api/auth/me")
         .then((res) => (res.ok ? res.json() : null))
         .then(
-          (user: (typeof authUser & { authToken?: string }) | null) => {
+          (user: (typeof authUser & { authToken?: string; csrfToken?: string }) | null) => {
             if (user?.authToken) setAuthToken(user.authToken);
+            if (user?.csrfToken) setCsrfToken(user.csrfToken);
             setAuthUser(user);
             // Kick off feature-licensing fetch as soon as auth lands.
             // Idempotent: no-op on repeated calls.
@@ -6205,6 +6207,7 @@ function App() {
         )
         .catch(() => setAuthUser(null))
         .finally(() => setAuthLoading(false));
+      });
     });
   }, []);
 

@@ -123,40 +123,155 @@ export function schoolOwnerKey(schoolId: number) {
   return `school:${schoolId}`;
 }
 
-// Bind a freshly-uploaded object to a school. Called by feature routes
-// (e.g. classroomStore.ts) immediately after persisting the imageUrl, so the
-// `/storage/objects/*` read path can verify the requester has access.
-//
-// Returns true on success, false if the caller is not allowed to claim this
-// object — either because it was already bound to a different school, or
-// because no upload URL was issued to this school for this path. Callers
-// should treat false as "reject the save with 403".
-export async function bindObjectToSchool(
-  objectPath: string,
-  schoolId: number,
-): Promise<boolean> {
-  if (!objectPath || !objectPath.startsWith("/objects/")) return false;
-  let file;
+export type BindObjectFailure =
+  | "invalid_path"
+  | "not_found"
+  | "wrong_school"
+  | "not_claimable";
+
+export type BindObjectResult =
+  | { ok: true }
+  | { ok: false; reason: BindObjectFailure };
+
+/** True when the object exists in private storage (S3/GCS). */
+export async function objectPathExists(objectPath: string): Promise<boolean> {
+  if (!objectPath?.startsWith("/objects/")) return false;
   try {
-    file = await objectStorageService.getObjectEntityFile(objectPath);
-  } catch {
+    await objectStorageService.getObjectEntityFile(objectPath);
+    return true;
+  } catch (err) {
+    if (err instanceof ObjectNotFoundError) return false;
     return false;
   }
-  const existing = await getObjectAclPolicy(file);
-  if (existing) {
-    // Already bound — only succeed if it's the same school. Refuse to
-    // re-assign ownership to a different school, which would otherwise let
-    // any caller hijack a known object path.
-    return existing.owner === schoolOwnerKey(schoolId);
-  }
-  const pending = getPendingUpload(objectPath);
-  if (!pending || pending.schoolId !== schoolId) return false;
+}
+
+async function applySchoolObjectAcl(
+  objectPath: string,
+  schoolId: number,
+): Promise<void> {
   await objectStorageService.trySetObjectEntityAclPolicy(objectPath, {
     owner: schoolOwnerKey(schoolId),
     visibility: "private",
   });
   pendingUploads.delete(objectPath);
-  return true;
+}
+
+// Bind a freshly-uploaded object to a school. Called by feature routes
+// (e.g. classroomStore.ts) immediately after persisting the imageUrl, so the
+// `/storage/objects/*` read path can verify the requester has access.
+export async function bindObjectToSchoolDetailed(
+  objectPath: string,
+  schoolId: number,
+): Promise<BindObjectResult> {
+  if (!objectPath || !objectPath.startsWith("/objects/")) {
+    return { ok: false, reason: "invalid_path" };
+  }
+  let file;
+  try {
+    file = await objectStorageService.getObjectEntityFile(objectPath);
+  } catch (err) {
+    if (err instanceof ObjectNotFoundError) {
+      return { ok: false, reason: "not_found" };
+    }
+    return { ok: false, reason: "not_claimable" };
+  }
+  const existing = await getObjectAclPolicy(file);
+  if (existing) {
+    if (existing.owner === schoolOwnerKey(schoolId)) return { ok: true };
+    return { ok: false, reason: "wrong_school" };
+  }
+  const pending = getPendingUpload(objectPath);
+  if (pending) {
+    if (pending.schoolId !== schoolId) {
+      return { ok: false, reason: "wrong_school" };
+    }
+    await applySchoolObjectAcl(objectPath, schoolId);
+    return { ok: true };
+  }
+  // Object bytes are in storage but the in-memory pending ledger was lost
+  // (PM2 restart / different worker). The path is an unguessable UUID issued
+  // by this API — allow the authenticated school to claim on first save.
+  try {
+    await applySchoolObjectAcl(objectPath, schoolId);
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: "not_claimable" };
+  }
+}
+
+export async function bindObjectToSchool(
+  objectPath: string,
+  schoolId: number,
+): Promise<boolean> {
+  const result = await bindObjectToSchoolDetailed(objectPath, schoolId);
+  return result.ok;
+}
+
+type TourFlyerKey = { key: string };
+
+/**
+ * Claim storage objects referenced on the School Tours brag page. Stale paths
+ * from a prior host (e.g. Replit) that no longer exist in S3 are dropped so
+ * one bad legacy photo does not block the whole save.
+ */
+export async function claimTourBragObjectPaths(
+  schoolId: number,
+  photos: string[],
+  flyers: TourFlyerKey[],
+): Promise<
+  | {
+      ok: true;
+      photos: string[];
+      flyers: TourFlyerKey[];
+      droppedPaths: string[];
+    }
+  | { ok: false; reason: BindObjectFailure; failedPath: string }
+> {
+  const droppedPaths: string[] = [];
+  const keptPhotos: string[] = [];
+
+  for (const path of photos) {
+    if (!path.startsWith("/objects/")) {
+      keptPhotos.push(path);
+      continue;
+    }
+    const result = await bindObjectToSchoolDetailed(path, schoolId);
+    if (result.ok) {
+      keptPhotos.push(path);
+      continue;
+    }
+    if (result.reason === "not_found") {
+      droppedPaths.push(path);
+      continue;
+    }
+    return { ok: false, reason: result.reason, failedPath: path };
+  }
+
+  const keptFlyers: TourFlyerKey[] = [];
+  for (const flyer of flyers) {
+    const path = flyer.key;
+    if (!path.startsWith("/objects/")) {
+      keptFlyers.push(flyer);
+      continue;
+    }
+    const result = await bindObjectToSchoolDetailed(path, schoolId);
+    if (result.ok) {
+      keptFlyers.push(flyer);
+      continue;
+    }
+    if (result.reason === "not_found") {
+      droppedPaths.push(path);
+      continue;
+    }
+    return { ok: false, reason: result.reason, failedPath: path };
+  }
+
+  return {
+    ok: true,
+    photos: keptPhotos,
+    flyers: keptFlyers,
+    droppedPaths,
+  };
 }
 
 // GET /api/storage/objects/*tail — serve a private uploaded entity.

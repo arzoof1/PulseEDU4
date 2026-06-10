@@ -1594,10 +1594,16 @@ function miniBtn(disabled: boolean): React.CSSProperties {
   };
 }
 
+type BragSaveResult =
+  | { ok: true; warnings?: string[]; photos?: string[]; flyers?: TourFlyerItem[] }
+  | { ok: false; error: string };
+
 function BragEditor() {
   const [data, setData] = useState<PageData | null>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveWarning, setSaveWarning] = useState<string | null>(null);
   const [publicUrl, setPublicUrl] = useState("");
 
   useEffect(() => {
@@ -1622,21 +1628,66 @@ function BragEditor() {
     })();
   }, []);
 
-  const persist = async (payload: PageData) => {
+  const persist = async (payload: PageData): Promise<BragSaveResult> => {
     const res = await authFetch("/api/tours/page", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    return res.ok;
+    const body = (await res.json().catch(() => null)) as {
+      error?: string;
+      warnings?: string[];
+      photos?: string[];
+      flyers?: TourFlyerItem[];
+    } | null;
+    if (!res.ok) {
+      return {
+        ok: false,
+        error:
+          body?.error ??
+          "Could not save the brag page. Please try again.",
+      };
+    }
+    return {
+      ok: true,
+      warnings: body?.warnings,
+      photos: body?.photos,
+      flyers: body?.flyers,
+    };
+  };
+
+  const applySaveResult = (result: BragSaveResult) => {
+    if (!result.ok) {
+      setSaveError(result.error);
+      setSaveWarning(null);
+      setSaved(false);
+      return false;
+    }
+    setSaveError(null);
+    setSaveWarning(result.warnings?.[0] ?? null);
+    if (result.photos || result.flyers) {
+      setData((cur) =>
+        cur
+          ? {
+              ...cur,
+              ...(result.photos ? { photos: result.photos } : {}),
+              ...(result.flyers ? { flyers: result.flyers } : {}),
+            }
+          : cur,
+      );
+    }
+    setSaved(true);
+    return true;
   };
 
   const save = async () => {
     if (!data) return;
     setBusy(true);
     setSaved(false);
+    setSaveError(null);
+    setSaveWarning(null);
     try {
-      if (await persist(data)) setSaved(true);
+      applySaveResult(await persist(data));
     } finally {
       setBusy(false);
     }
@@ -1646,16 +1697,19 @@ function BragEditor() {
   // publishes (or hides) the page right away — no separate Save needed.
   const togglePublished = async () => {
     if (!data || busy) return;
+    const prev = data;
     const next = { ...data, published: !data.published };
     setData(next);
     setBusy(true);
     setSaved(false);
+    setSaveError(null);
+    setSaveWarning(null);
     try {
-      const ok = await persist(next);
-      if (ok) setSaved(true);
-      else setData(data); // revert on failure
+      const result = await persist(next);
+      if (!applySaveResult(result)) setData(prev);
     } catch {
-      setData(data);
+      setData(prev);
+      setSaveError("Could not save the brag page. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -1917,7 +1971,7 @@ function BragEditor() {
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <button
             type="button"
             onClick={() => void save()}
@@ -1927,6 +1981,12 @@ function BragEditor() {
             {busy ? "Saving…" : "Save brag page"}
           </button>
           {saved && <span style={{ color: "#059669" }}>✓ Saved</span>}
+          {saveError && (
+            <span style={{ color: "#f87171", fontSize: 13 }}>{saveError}</span>
+          )}
+          {saveWarning && !saveError && (
+            <span style={{ color: "#fbbf24", fontSize: 13 }}>{saveWarning}</span>
+          )}
         </div>
       </div>
     </div>
