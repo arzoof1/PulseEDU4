@@ -8,6 +8,7 @@ import PickupApp from "./pickup/PickupApp";
 import TourApp from "./tour/TourApp";
 import ScannerApp from "./scan/ScannerApp";
 import StaffResetApp from "./StaffResetApp";
+import SignApp from "./sign/SignApp";
 import "./index.css";
 
 const path = window.location.pathname;
@@ -33,6 +34,10 @@ const isTour = path.includes("/tour");
 //   /scan             — staff scanner (requires staff session)
 //   /scan/<linkToken> — no-login volunteer scanner
 const isScan = path.includes("/scan");
+// Public, unauthenticated document e-sign page (/sign/<token>). Must be
+// checked AFTER isSignage — "/signage" also contains the "/sign" substring,
+// and the signage player must win that dispatch.
+const isSign = !isSignage && path.includes("/sign");
 
 createRoot(document.getElementById("root")!).render(
   isSignage ? <SignageApp />
@@ -43,5 +48,6 @@ createRoot(document.getElementById("root")!).render(
     : isPickup ? <PickupApp />
     : isTour ? <TourApp />
     : isScan ? <ScannerApp />
+    : isSign ? <SignApp />
     : <App />,
 );

@@ -37,6 +37,7 @@ import PickupSettingsPage from "./components/PickupSettingsPage";
 import TourAdminPage, { TourLeadBanner } from "./components/TourAdminPage";
 import TicketingAdminPage from "./components/TicketingAdminPage";
 import SchoolGradeCalculatorPage from "./components/SchoolGradeCalculatorPage";
+import EsignManagerPage from "./components/EsignManagerPage";
 import PickupTagsPanel from "./components/PickupTagsPanel";
 import FastCoveragePage from "./components/FastCoveragePage";
 import CameraRegistryPage from "./components/CameraRegistryPage";
@@ -4415,6 +4416,7 @@ function App() {
     capManageDisplays?: boolean;
     capManageDismissal?: boolean;
     capTourNotify?: boolean;
+    capManageEsign?: boolean;
     canApproveAst?: boolean;
     canApproveCompTime?: boolean;
     exemptStatus?: string | null;
@@ -8223,6 +8225,14 @@ function App() {
     authUser?.isGuidanceCounselor === true ||
     authUser?.capManageDismissal === true ||
     authUser?.canApproveAst === true;
+  // Document e-Sign gate — mirrors canManageEsign() in lib/coreTeam.ts
+  // (admin/SuperUser OR the assignable capManageEsign flag). Documents are
+  // private to the creator; drives the Settings tile.
+  const canManageEsign =
+    isAdmin ||
+    authUser?.isDistrictAdmin === true ||
+    authUser?.isSuperUser === true ||
+    authUser?.capManageEsign === true;
   // School Grade Calculator gate — mirrors canManageSchoolGrade() in
   // lib/coreTeam.ts (admin + Core Team only; this is an accountability
   // planning tool, not a classroom one).
@@ -20531,6 +20541,10 @@ function App() {
         <TicketingAdminPage />
       )}
 
+      {activeSection === "settings" && canManageEsign && settingsTile === "e-sign" && (
+        <EsignManagerPage />
+      )}
+
       {activeSection === "settings" && canManageSchoolGrade && settingsTile === "school-grade" && (
         <SchoolGradeCalculatorPage />
       )}
@@ -20820,6 +20834,19 @@ function App() {
                 subtitle:
                   "Free-ticket events · allocate by grade, email QR tickets, scan at the gate.",
                 group: "family-signage",
+              });
+            }
+            // Document e-Sign — upload a PDF/image, share a signing link
+            // (copy or email), collect the signed copy back. Documents are
+            // private to the creator. Office-side gate.
+            if (canManageEsign) {
+              tiles.push({
+                id: "e-sign",
+                icon: "✍️",
+                title: "Document e-Sign",
+                subtitle:
+                  "Upload a PDF or image · share a signing link · collect the signed copy.",
+                group: "admin-tenancy",
               });
             }
             // School Grade Estimated Calculator — admin/Core-Team tool that

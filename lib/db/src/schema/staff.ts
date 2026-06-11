@@ -168,6 +168,13 @@ export const staffTable = pgTable("staff", {
   // the lead pipeline without granting the rest of the admin surface.
   capTourNotify: boolean("cap_tour_notify").notNull().default(false),
 
+  // Document e-Signing — grants access to the e-Sign manager (upload a
+  // PDF/image, share a signing link, collect the signed copy). Office-side
+  // tool assignable to a registrar or confidential secretary without the
+  // rest of the admin surface. Admins / SuperUser get it implicitly via the
+  // route gate (admin OR this flag). Documents are private to the creator.
+  capManageEsign: boolean("cap_manage_esign").notNull().default(false),
+
   // Comp Time (FLSA compensatory time) per-staff capabilities. Mirrors
   // the AST gate above so the role-management UI can sit them side by
   // side under "Time Tracking."

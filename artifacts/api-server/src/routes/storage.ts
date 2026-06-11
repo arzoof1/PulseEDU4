@@ -115,6 +115,41 @@ router.post("/storage/uploads/request-url", async (req, res) => {
   }
 });
 
+// Issue a presigned upload URL on behalf of a specific school, recording it
+// in the pending-uploads ledger so a later `bindObjectToSchool(path, schoolId)`
+// succeeds. Used by feature routes that must mint an upload URL for an
+// UNAUTHENTICATED caller (e.g. the public e-sign signing page, where the
+// recipient is an outside party identified only by a share token — they have
+// no `req.schoolId` of their own, so the document's school is supplied).
+export async function issueSchoolUploadUrl(
+  schoolId: number,
+): Promise<{ uploadURL: string; objectPath: string }> {
+  const uploadURL = await objectStorageService.getObjectEntityUploadURL();
+  const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+  rememberPendingUpload(objectPath, schoolId);
+  return { uploadURL, objectPath };
+}
+
+// Stream a stored object to an Express response WITHOUT any per-request auth
+// check. The CALLER is responsible for authorizing access first (the e-sign
+// signing page authorizes via an unguessable share token before calling this).
+// Returns false if the object does not exist so the caller can 404.
+export async function streamObjectToResponse(
+  objectPath: string,
+  res: Response,
+): Promise<boolean> {
+  let file;
+  try {
+    file = await objectStorageService.getObjectEntityFile(objectPath);
+  } catch (err) {
+    if (err instanceof ObjectNotFoundError) return false;
+    throw err;
+  }
+  const r = await objectStorageService.downloadObject(file);
+  await pipeResponse(r, res);
+  return true;
+}
+
 // Synthetic ACL "owner" used to scope private uploads to a single school.
 // We intentionally use the string form `school:<id>` instead of a per-staff
 // owner so that any staffer in the same school can fetch the thumbnail

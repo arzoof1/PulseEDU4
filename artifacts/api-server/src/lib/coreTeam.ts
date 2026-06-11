@@ -279,6 +279,22 @@ export function canManageSchoolGrade(staff: {
   return isCoreTeam(staff);
 }
 
+// Document e-Signing gate. Per product decision the audience is the
+// admin tier plus anyone an admin explicitly grants the assignable
+// `capManageEsign` flag (typically a registrar or confidential
+// secretary). Kept narrow on purpose — this is an office-side tool and
+// documents are private to the creator, so we don't fold in Core Team
+// or counselors the way pickup/tours do. Mirrors `canManageDismissal`'s
+// shape (admin OR explicit cap).
+export function canManageEsign(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  capManageEsign?: boolean | null;
+}): boolean {
+  return isAdminOrSuperUser(staff) || Boolean(staff.capManageEsign);
+}
+
 // Student photo manager gate. Per spec: admin / front-office staff /
 // core team (BS, MTSS, school psych, district admin, super user) /
 // counselor (school OR guidance) / social worker. We don't have a

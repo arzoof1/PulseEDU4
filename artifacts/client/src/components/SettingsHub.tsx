@@ -27,6 +27,7 @@ export type SettingsTileId =
   | "pickup"
   | "school-tours"
   | "event-tickets"
+  | "e-sign"
   | "school-grade"
   | "staff-preview"
   | "separation-tags"

@@ -17,3 +17,4 @@
 - [Kiosk local_sis_id boundary](kiosk-local-sis-boundary.md) — student-facing kiosk/badge surfaces use local_sis_id; resolve to canonical student_id for FKs; next-up localSisId is JOINed not stored; reprint old badges.
 - [Tooling pitfalls](tooling-pitfalls.md) — never `rg -rn` (= --replace=n, corrupts output); rg recurses by default.
 - [Tier 3 status aggregation](tier3-status-aggregation.md) — /interventions/my-tier3-status must collapse to one row per student server-side (MAX owed, not SUM — weekly record is per student/teacher/week).
+- [E-sign document tenancy](esign-tenancy.md) — e-sign docs are creator-private (school_id AND created_by); public /sign/:token is unauthenticated by design, gated by 192-bit token + race-safe 409.
