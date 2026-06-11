@@ -187,9 +187,10 @@ interface RosterResponse {
   teacher: { id: number; displayName: string | null };
   availablePeriods: number[];
   selectedPeriod: number | null;
-  // Days of school used for the invisible-student window (mirrors PBIS
-  // Needs Attention so the teacher sees the same definition).
-  invisibleDays?: number;
+  // Tier-aware invisible-student windows (school days), keyed by MTSS tier
+  // ("1" = no active plan). Mirrors PBIS Needs Attention so the teacher
+  // sees the same definition.
+  invisibleDaysByTier?: { "1": number; "2": number; "3": number };
   students: RosterRow[];
 }
 
@@ -728,6 +729,18 @@ function Tier3Pill({
       T3{badge}
     </button>
   );
+}
+
+// Resolve the invisible-student window (school days) for a student's
+// highest active MTSS tier from the tier-keyed map (no plan → tier 1).
+function invisibleWindowForTier(
+  byTier: { "1": number; "2": number; "3": number } | undefined,
+  tier: number | null,
+): number | null {
+  if (!byTier) return null;
+  if (tier && tier >= 3) return byTier["3"];
+  if (tier === 2) return byTier["2"];
+  return byTier["1"];
 }
 
 function InvisibleEyeIcon({
@@ -2172,16 +2185,26 @@ export default function TeacherRosterPage({
           })}
         </span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <InvisibleEyeIcon tier={null} windowDays={data?.invisibleDays ?? null} />
-          Invisible (0 PBIS in last {data?.invisibleDays ?? 10} school days)
+          <InvisibleEyeIcon
+            tier={null}
+            windowDays={data?.invisibleDaysByTier?.["1"] ?? null}
+          />
+          Invisible (0 PBIS in last {data?.invisibleDaysByTier?.["1"] ?? 8}{" "}
+          school days)
         </span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <InvisibleEyeIcon tier={2} windowDays={data?.invisibleDays ?? null} />
-          + active MTSS Tier 2
+          <InvisibleEyeIcon
+            tier={2}
+            windowDays={data?.invisibleDaysByTier?.["2"] ?? null}
+          />
+          + active MTSS Tier 2 ({data?.invisibleDaysByTier?.["2"] ?? 5} days)
         </span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <InvisibleEyeIcon tier={3} windowDays={data?.invisibleDays ?? null} />
-          + active MTSS Tier 3
+          <InvisibleEyeIcon
+            tier={3}
+            windowDays={data?.invisibleDaysByTier?.["3"] ?? null}
+          />
+          + active MTSS Tier 3 ({data?.invisibleDaysByTier?.["3"] ?? 3} days)
         </span>
         <span
           style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
@@ -2561,7 +2584,10 @@ export default function TeacherRosterPage({
                       {row.isInvisible && (
                         <InvisibleEyeIcon
                           tier={row.mtssTier}
-                          windowDays={data.invisibleDays ?? null}
+                          windowDays={invisibleWindowForTier(
+                            data.invisibleDaysByTier,
+                            row.mtssTier,
+                          )}
                         />
                       )}
                     </td>

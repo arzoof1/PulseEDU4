@@ -36,9 +36,26 @@ export const schoolSettingsTable = pgTable(
   issCapacityBehavior: text("iss_capacity_behavior").notNull().default("soft"),
   // PBIS Hub "Needs Attention" thresholds
   pbisQuietTeacherDays: integer("pbis_quiet_teacher_days").notNull().default(5),
+  // DEPRECATED (kept for back-compat, no longer read): the single flat
+  // "Invisible Student" window. Superseded by the three tier-aware windows
+  // below. Left in place to avoid a destructive migration.
   pbisInvisibleStudentDays: integer("pbis_invisible_student_days")
     .notNull()
     .default(10),
+  // Tier-aware "Invisible Student" alert windows (school days). A student
+  // is "invisible" when they have 0 non-voided PBIS recognitions within
+  // the window for their highest active MTSS tier. Higher-need students
+  // surface faster. Tier 1 = no active MTSS plan (general population);
+  // Tier 2 / Tier 3 = most intensive open plan.
+  pbisInvisibleDaysTier1: integer("pbis_invisible_days_tier1")
+    .notNull()
+    .default(8),
+  pbisInvisibleDaysTier2: integer("pbis_invisible_days_tier2")
+    .notNull()
+    .default(5),
+  pbisInvisibleDaysTier3: integer("pbis_invisible_days_tier3")
+    .notNull()
+    .default(3),
   pbisReasonImbalancePct: integer("pbis_reason_imbalance_pct")
     .notNull()
     .default(60),

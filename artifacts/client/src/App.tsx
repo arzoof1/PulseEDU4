@@ -4692,6 +4692,9 @@ function App() {
     globalDailyHallPassLimit: number | null;
     pbisQuietTeacherDays: number;
     pbisInvisibleStudentDays: number;
+    pbisInvisibleDaysTier1: number;
+    pbisInvisibleDaysTier2: number;
+    pbisInvisibleDaysTier3: number;
     pbisReasonImbalancePct: number;
     pbisColdPeriodMultiple: number;
     finderShowAbsentBanner: boolean;
@@ -4747,6 +4750,9 @@ function App() {
     globalDailyHallPassLimit: null,
     pbisQuietTeacherDays: 5,
     pbisInvisibleStudentDays: 10,
+    pbisInvisibleDaysTier1: 8,
+    pbisInvisibleDaysTier2: 5,
+    pbisInvisibleDaysTier3: 3,
     pbisReasonImbalancePct: 60,
     pbisColdPeriodMultiple: 5,
     finderShowAbsentBanner: false,
@@ -6469,6 +6475,18 @@ function App() {
             typeof data.pbisInvisibleStudentDays === "number"
               ? data.pbisInvisibleStudentDays
               : 10,
+          pbisInvisibleDaysTier1:
+            typeof data.pbisInvisibleDaysTier1 === "number"
+              ? data.pbisInvisibleDaysTier1
+              : 8,
+          pbisInvisibleDaysTier2:
+            typeof data.pbisInvisibleDaysTier2 === "number"
+              ? data.pbisInvisibleDaysTier2
+              : 5,
+          pbisInvisibleDaysTier3:
+            typeof data.pbisInvisibleDaysTier3 === "number"
+              ? data.pbisInvisibleDaysTier3
+              : 3,
           pbisReasonImbalancePct:
             typeof data.pbisReasonImbalancePct === "number"
               ? data.pbisReasonImbalancePct
@@ -6580,6 +6598,18 @@ function App() {
           typeof data.pbisInvisibleStudentDays === "number"
             ? data.pbisInvisibleStudentDays
             : 10,
+        pbisInvisibleDaysTier1:
+          typeof data.pbisInvisibleDaysTier1 === "number"
+            ? data.pbisInvisibleDaysTier1
+            : 8,
+        pbisInvisibleDaysTier2:
+          typeof data.pbisInvisibleDaysTier2 === "number"
+            ? data.pbisInvisibleDaysTier2
+            : 5,
+        pbisInvisibleDaysTier3:
+          typeof data.pbisInvisibleDaysTier3 === "number"
+            ? data.pbisInvisibleDaysTier3
+            : 3,
         pbisReasonImbalancePct:
           typeof data.pbisReasonImbalancePct === "number"
             ? data.pbisReasonImbalancePct
@@ -21808,9 +21838,25 @@ function App() {
             unit: "days",
           },
           {
-            field: "pbisInvisibleStudentDays" as const,
-            label: "Invisible Student window (school days)",
-            help: 'Students with 0 points in this many school days appear in "invisible students" alert.',
+            field: "pbisInvisibleDaysTier1" as const,
+            label: "Invisible Student — Tier 1 (no active MTSS plan)",
+            help: 'General-population students with 0 points in this many school days appear in the "invisible students" alert. Default 8.',
+            min: 1,
+            max: 180,
+            unit: "days",
+          },
+          {
+            field: "pbisInvisibleDaysTier2" as const,
+            label: "Invisible Student — Tier 2 (active MTSS plan)",
+            help: "Students with an active Tier 2 MTSS plan surface after this many school days with 0 points. Default 5.",
+            min: 1,
+            max: 180,
+            unit: "days",
+          },
+          {
+            field: "pbisInvisibleDaysTier3" as const,
+            label: "Invisible Student — Tier 3 (active MTSS plan)",
+            help: "Students with an active Tier 3 MTSS plan surface fastest — this many school days with 0 points. Default 3.",
             min: 1,
             max: 180,
             unit: "days",

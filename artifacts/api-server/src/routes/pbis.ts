@@ -10,6 +10,7 @@ import {
   schoolSettingsTable,
   bellSchedulesTable,
   bellSchedulePeriodsTable,
+  studentMtssPlansTable,
 } from "@workspace/db";
 import { eq, and, isNull, gte, lt, inArray } from "drizzle-orm";
 import {
@@ -781,7 +782,10 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     .from(schoolSettingsTable)
     .where(eq(schoolSettingsTable.schoolId, req.schoolId!));
   const QUIET_DAYS = settingsRow?.pbisQuietTeacherDays ?? 5;
-  const INVISIBLE_DAYS = settingsRow?.pbisInvisibleStudentDays ?? 10;
+  // Tier-aware "Invisible Student" windows. Tier 1 = no active MTSS plan.
+  const INVISIBLE_DAYS_TIER1 = settingsRow?.pbisInvisibleDaysTier1 ?? 8;
+  const INVISIBLE_DAYS_TIER2 = settingsRow?.pbisInvisibleDaysTier2 ?? 5;
+  const INVISIBLE_DAYS_TIER3 = settingsRow?.pbisInvisibleDaysTier3 ?? 3;
   const IMBALANCE_PCT = settingsRow?.pbisReasonImbalancePct ?? 60;
   const COLD_MULTIPLE = settingsRow?.pbisColdPeriodMultiple ?? 5;
 
@@ -874,24 +878,73 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     .slice(0, 3)
     .map((s) => s.displayName);
 
-  // ---------- 2. Invisible students ----------
-  // Students with 0 non-voided entries in the last INVISIBLE_DAYS school days.
-  const invisibleWindow = subtractSchoolDays(INVISIBLE_DAYS);
+  // ---------- 2. Invisible students (tier-aware) ----------
+  // A student is "invisible" when they have 0 non-voided PBIS entries
+  // within the window for their highest active MTSS tier. Tier 1 (no open
+  // plan) uses the widest window; Tier 3 the tightest, so the highest-need
+  // students surface fastest. Fetch recognitions once since the WIDEST of
+  // the three windows, then compare each student's most-recent recognition
+  // against their own tier window.
+  const widestInvisibleDays = Math.max(
+    INVISIBLE_DAYS_TIER1,
+    INVISIBLE_DAYS_TIER2,
+    INVISIBLE_DAYS_TIER3,
+  );
+  const widestInvisibleWindow = subtractSchoolDays(widestInvisibleDays);
+
+  // Highest active MTSS tier per student (most intensive open plan). A plan
+  // is "active" when it has no closedAt — mirrors the Teacher Roster query.
+  const invisibleTierRows = await db
+    .select({
+      studentId: studentMtssPlansTable.studentId,
+      tier: studentMtssPlansTable.tier,
+    })
+    .from(studentMtssPlansTable)
+    .where(
+      and(
+        eq(studentMtssPlansTable.schoolId, req.schoolId!),
+        isNull(studentMtssPlansTable.closedAt),
+      ),
+    );
+  const invisibleTierByStudent = new Map<string, number>();
+  for (const r of invisibleTierRows) {
+    const cur = invisibleTierByStudent.get(r.studentId) ?? 0;
+    if (r.tier > cur) invisibleTierByStudent.set(r.studentId, r.tier);
+  }
+
   const recentStudentEntries = await db
-    .select({ studentId: pbisEntriesTable.studentId })
+    .select({
+      studentId: pbisEntriesTable.studentId,
+      createdAt: pbisEntriesTable.createdAt,
+    })
     .from(pbisEntriesTable)
     .where(
       and(
         eq(pbisEntriesTable.schoolId, req.schoolId!),
         isNull(pbisEntriesTable.voidedAt),
-        gte(pbisEntriesTable.createdAt, invisibleWindow.toISOString()),
+        gte(pbisEntriesTable.createdAt, widestInvisibleWindow.toISOString()),
       ),
     );
-  const recognizedStudentIds = new Set<string>();
-  for (const r of recentStudentEntries) recognizedStudentIds.add(r.studentId);
-  const invisibleStudents = allStudents.filter(
-    (s) => !recognizedStudentIds.has(s.studentId),
-  );
+  // Most-recent recognition timestamp per student (ms since epoch).
+  const lastSeenByStudent = new Map<string, number>();
+  for (const r of recentStudentEntries) {
+    const t = new Date(r.createdAt).getTime();
+    const cur = lastSeenByStudent.get(r.studentId) ?? 0;
+    if (t > cur) lastSeenByStudent.set(r.studentId, t);
+  }
+  // Pre-compute each tier's window cutoff once (tier 1/2/3).
+  const tierWindowCutoff = new Map<number, number>([
+    [1, subtractSchoolDays(INVISIBLE_DAYS_TIER1).getTime()],
+    [2, subtractSchoolDays(INVISIBLE_DAYS_TIER2).getTime()],
+    [3, subtractSchoolDays(INVISIBLE_DAYS_TIER3).getTime()],
+  ]);
+  const invisibleStudents = allStudents.filter((s) => {
+    const tier = invisibleTierByStudent.get(s.studentId) ?? 1;
+    const cutoff =
+      tierWindowCutoff.get(tier >= 3 ? 3 : tier === 2 ? 2 : 1) ?? 0;
+    const lastSeen = lastSeenByStudent.get(s.studentId);
+    return lastSeen === undefined || lastSeen < cutoff;
+  });
   const invisibleStudentSample = invisibleStudents
     .slice(0, 3)
     .map((s) => studentNameById.get(s.studentId) ?? s.studentId);
@@ -1087,7 +1140,12 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
   res.json({
     thresholds: {
       quietTeacherDays: QUIET_DAYS,
-      invisibleStudentDays: INVISIBLE_DAYS,
+      // Tier-aware invisible windows (school days). Tier 1 = no active plan.
+      invisibleStudentDaysByTier: {
+        tier1: INVISIBLE_DAYS_TIER1,
+        tier2: INVISIBLE_DAYS_TIER2,
+        tier3: INVISIBLE_DAYS_TIER3,
+      },
       reasonImbalancePct: IMBALANCE_PCT,
       coldPeriodMultiple: COLD_MULTIPLE,
     },

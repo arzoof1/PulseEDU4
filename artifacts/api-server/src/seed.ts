@@ -6899,6 +6899,27 @@ export async function ensureKioskWelcomeSchema(): Promise<void> {
 }
 
 // -----------------------------------------------------------------------------
+// Tier-aware "Invisible Student" alert windows. Replaces the single
+// pbis_invisible_student_days threshold with three per-tier windows so a
+// higher-need student (Tier 3) surfaces as "invisible" after fewer school
+// days without a PBIS recognition than a general-population (Tier 1)
+// student. Additive + idempotent — defaults (8/5/3) apply to every existing
+// school. The legacy pbis_invisible_student_days column is left in place
+// (unused) to avoid a destructive migration.
+// -----------------------------------------------------------------------------
+export async function ensurePbisInvisibleTierColumns(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS pbis_invisible_days_tier1 INTEGER NOT NULL DEFAULT 8`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS pbis_invisible_days_tier2 INTEGER NOT NULL DEFAULT 5`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS pbis_invisible_days_tier3 INTEGER NOT NULL DEFAULT 3`,
+  );
+}
+
+// -----------------------------------------------------------------------------
 // Badge print event audit ledger (Phase 4 — badge reissue audit).
 //
 // One row per student per batch when an admin generates a badges PDF.

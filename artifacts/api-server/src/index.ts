@@ -30,6 +30,7 @@ import {
   ensureAstSchema,
   ensureKioskCardsSchema,
   ensureKioskWelcomeSchema,
+  ensurePbisInvisibleTierColumns,
   ensureBadgePrintEventsSchema,
   ensureFastItemResponsesSchema,
   ensureSchoolsTimezoneColumn,
@@ -225,6 +226,9 @@ async function runSeed(): Promise<void> {
   // Phase 3 — Kiosk "Sign in to class" welcome messages + class_signins
   // append-only ledger. Idempotent.
   await ensureKioskWelcomeSchema();
+  // Tier-aware "Invisible Student" alert windows (8/5/3 defaults).
+  // Additive + idempotent.
+  await ensurePbisInvisibleTierColumns();
   // Phase 4 — Badge print event audit ledger. Idempotent.
   await ensureBadgePrintEventsSchema();
   // Class Composer "Master Plans" — saved/finalized plan tables for the

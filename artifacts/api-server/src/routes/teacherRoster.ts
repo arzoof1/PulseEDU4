@@ -470,9 +470,23 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     .select()
     .from(schoolSettingsTable)
     .where(eq(schoolSettingsTable.schoolId, schoolId));
-  const invisibleDays = settingsRow?.pbisInvisibleStudentDays ?? 10;
-  const invisibleWindow = subtractSchoolDays(invisibleDays);
-  const invisibleWindowIso = invisibleWindow.toISOString();
+  // Tier-aware "Invisible Student" windows (school days). Tier 1 = no
+  // active MTSS plan (general population); Tier 2 / Tier 3 = most intensive
+  // open plan. A student is invisible when they have 0 non-voided PBIS
+  // recognitions within their tier's window. Pull entries since the WIDEST
+  // window, then compare each student's latest recognition to their own
+  // tier cutoff below.
+  const invisibleDaysTier1 = settingsRow?.pbisInvisibleDaysTier1 ?? 8;
+  const invisibleDaysTier2 = settingsRow?.pbisInvisibleDaysTier2 ?? 5;
+  const invisibleDaysTier3 = settingsRow?.pbisInvisibleDaysTier3 ?? 3;
+  const widestInvisibleDays = Math.max(
+    invisibleDaysTier1,
+    invisibleDaysTier2,
+    invisibleDaysTier3,
+  );
+  const invisibleWindowIso = subtractSchoolDays(
+    widestInvisibleDays,
+  ).toISOString();
 
   // Pull demographics + FAST scores + recent PBIS entries + active MTSS
   // plans in parallel. The PBIS query only returns studentId since
@@ -520,7 +534,10 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
         ),
       ),
     db
-      .select({ studentId: pbisEntriesTable.studentId })
+      .select({
+        studentId: pbisEntriesTable.studentId,
+        createdAt: pbisEntriesTable.createdAt,
+      })
       .from(pbisEntriesTable)
       .where(
         and(
@@ -705,9 +722,21 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     accommodationsByStudent.set(a.studentId, list);
   }
 
-  // Set of students with at least one non-voided PBIS entry in the window.
-  const recognizedIds = new Set<string>();
-  for (const r of recentPbis) recognizedIds.add(r.studentId);
+  // Most-recent non-voided PBIS recognition per student (ms since epoch),
+  // within the widest tier window. Combined with the per-tier cutoffs below
+  // to decide invisibility per student.
+  const lastSeenByStudent = new Map<string, number>();
+  for (const r of recentPbis) {
+    const t = new Date(r.createdAt).getTime();
+    const cur = lastSeenByStudent.get(r.studentId) ?? 0;
+    if (t > cur) lastSeenByStudent.set(r.studentId, t);
+  }
+  // Per-tier window cutoffs (tier 1/2/3) as ms since epoch.
+  const tierWindowCutoff = new Map<number, number>([
+    [1, subtractSchoolDays(invisibleDaysTier1).getTime()],
+    [2, subtractSchoolDays(invisibleDaysTier2).getTime()],
+    [3, subtractSchoolDays(invisibleDaysTier3).getTime()],
+  ]);
 
   // Highest active MTSS tier per student (a student can have multiple
   // active plans — we surface the most intensive one).
@@ -739,7 +768,14 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     const elaRow = scoreMap.get(scoreKey(stu.studentId, "ela"));
     const mathRow = scoreMap.get(scoreKey(stu.studentId, "math"));
     const mtssTier = mtssTierByStudent.get(stu.studentId) ?? null;
-    const isInvisible = !recognizedIds.has(stu.studentId);
+    // Resolve the student's invisible window from their highest active tier
+    // (no plan → tier 1). Invisible when their most-recent recognition (if
+    // any) falls before that tier's cutoff.
+    const invisibleTier =
+      mtssTier && mtssTier >= 3 ? 3 : mtssTier === 2 ? 2 : 1;
+    const invisibleCutoff = tierWindowCutoff.get(invisibleTier) ?? 0;
+    const lastSeen = lastSeenByStudent.get(stu.studentId);
+    const isInvisible = lastSeen === undefined || lastSeen < invisibleCutoff;
     return {
       studentId: stu.studentId,
       // District-level Local SIS ID (6-digit). Co-exists with FLEID in
@@ -822,7 +858,13 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     },
     availablePeriods,
     selectedPeriod: periodFilter,
-    invisibleDays,
+    // Tier-aware invisible windows (school days) for the legend + per-row
+    // eye-icon tooltip. Tier 1 = no active MTSS plan.
+    invisibleDaysByTier: {
+      "1": invisibleDaysTier1,
+      "2": invisibleDaysTier2,
+      "3": invisibleDaysTier3,
+    },
     students: out,
   });
 });
