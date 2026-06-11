@@ -135,6 +135,25 @@ function subjectLabel(fastSubject: string | null): "Behavior" | "ELA" | "Math" {
   return "Behavior";
 }
 
+// Per-day academic-minutes map (e.g. { mon: 15, wed: 20 }) → total minutes.
+function sumMinutes(m: unknown): number {
+  if (!m || typeof m !== "object") return 0;
+  let total = 0;
+  for (const v of Object.values(m as Record<string, unknown>)) {
+    if (typeof v === "number" && Number.isFinite(v)) total += v;
+  }
+  return total;
+}
+
+// Academic minutes day-key → weekday number (1=Mon .. 5=Fri).
+const ACADEMIC_DAY_DOW: Record<string, number> = {
+  mon: 1,
+  tue: 2,
+  wed: 3,
+  thu: 4,
+  fri: 5,
+};
+
 interface PlanRow {
   id: number;
   schoolId: number;
@@ -142,6 +161,7 @@ interface PlanRow {
   tier: number;
   interventionSubType: string | null;
   fastSubject: string | null;
+  academicMinutesTarget: number;
   title: string;
   goals: string | null;
   openedAt: Date;
@@ -176,6 +196,7 @@ interface SummaryResponse {
     subType: string | null;
     fastSubject: string | null;
     subjectLabel: string;
+    academicMinutesTarget: number | null;
     title: string;
     goals: string | null;
     openedAt: string;
@@ -201,6 +222,12 @@ interface SummaryResponse {
     t2CompletionPct: number | null;
     t3ScoredCount: number;
     t3AvgScore: number | null;
+    // Academic (minutes) columns — 0/null for behavior-only teachers.
+    acadMet: number;
+    acadOwed: number;
+    acadExcused: number;
+    acadMinutes: number;
+    acadAvgMinutes: number | null;
   }>;
   perSubject: Array<{
     courseName: string;
@@ -227,6 +254,29 @@ interface SummaryResponse {
     avgScore: number | null;
     scoredCount: number;
   }>;
+  // Academic (minutes-based) Tier 3 reporting. Populated from academic
+  // plans (fastSubject set); empty when there are no academic plans in
+  // scope. A week is met (>= target), owed (0 < mins < target) or
+  // excused ("no group provided").
+  t3Academic: {
+    target: number | null;
+    completion: {
+      met: number;
+      owed: number;
+      excused: number;
+      total: number;
+    };
+    trend: Array<{
+      weekStartDate: string;
+      minutesSum: number;
+      recordCount: number;
+      avgMinutes: number | null;
+      met: number;
+      owed: number;
+      excused: number;
+    }>;
+    dayOfWeek: Array<{ dow: number; label: string; minutes: number }>;
+  };
   // Per-plan mode only: every plan for this student, so the client can
   // enable/grey the Tier 2 / Tier 3 tabs and swap which plan it loads
   // when the user switches tier. Null in aggregate mode.
@@ -313,6 +363,7 @@ router.get("/mtss-reports/summary", async (req, res) => {
       tier: studentMtssPlansTable.tier,
       interventionSubType: studentMtssPlansTable.interventionSubType,
       fastSubject: studentMtssPlansTable.fastSubject,
+      academicMinutesTarget: studentMtssPlansTable.academicMinutesTarget,
       title: studentMtssPlansTable.title,
       goals: studentMtssPlansTable.goals,
       openedAt: studentMtssPlansTable.openedAt,
@@ -682,6 +733,160 @@ router.get("/mtss-reports/summary", async (req, res) => {
       }
     }
   }
+
+  // ---- t3Academic (minutes-based academic Tier 3) ----
+  // Academic plans store per-day minutes in `academicMinutes` (not the
+  // 1..5 behavior scores) with a per-plan weekly target. A week is
+  // EXCUSED when released, MET when sum(minutes) >= target, otherwise
+  // OWED (this includes a week with zero minutes logged — matching the
+  // bell, which treats sum(minutes) < target as unresolved).
+  //
+  // De-contamination: a student can hold BOTH a behavior and an academic
+  // Tier 3 plan at once. We therefore (a) restrict the academic tally to
+  // (student, teacher) pairs that belong to an ACADEMIC plan, and
+  // (b) skip any record that carries 1..5 day scores — those are behavior
+  // records and must never be counted as academic "owed".
+  const academicPlanByStudent = new Map<
+    string,
+    { target: number; subject: string }
+  >();
+  const academicAllowedPairs = new Set<string>();
+  for (const p of tier3Plans) {
+    if (!p.fastSubject) continue;
+    academicPlanByStudent.set(p.studentId, {
+      target: p.academicMinutesTarget,
+      subject: p.fastSubject,
+    });
+    for (const tid of effectivePlanTeachers.get(p.id) ?? []) {
+      academicAllowedPairs.add(`${p.studentId}::${tid}`);
+    }
+    if (p.autoAssignScheduleTeachers) {
+      // Auto-assign academic plans also keep any teacher who actually logged
+      // an academic-looking record (minutes or a release) — never a
+      // behavior-only contributor on the same student's schedule.
+      for (const r of t3Records) {
+        if (
+          r.studentId === p.studentId &&
+          (sumMinutes(r.academicMinutes) > 0 || r.releasedNoIntervention)
+        ) {
+          academicAllowedPairs.add(`${p.studentId}::${r.teacherStaffId}`);
+        }
+      }
+    }
+  }
+  const acadDowLabels = ["", "Mon", "Tue", "Wed", "Thu", "Fri"];
+  const acadWeekMap = new Map<
+    string,
+    {
+      minutesSum: number;
+      recordCount: number;
+      met: number;
+      owed: number;
+      excused: number;
+    }
+  >();
+  const acadDow = new Map<number, number>();
+  const acadTeacherMap = new Map<
+    number,
+    { met: number; owed: number; excused: number; minutes: number }
+  >();
+  let acadMet = 0;
+  let acadOwed = 0;
+  let acadExcused = 0;
+  for (const r of t3Records) {
+    if (teacherStaffId && r.teacherStaffId !== teacherStaffId) continue;
+    if (!academicAllowedPairs.has(`${r.studentId}::${r.teacherStaffId}`))
+      continue;
+    // Behavior records carry 1..5 day scores; academic records never do.
+    if (
+      r.monScore != null ||
+      r.tueScore != null ||
+      r.wedScore != null ||
+      r.thuScore != null ||
+      r.friScore != null
+    )
+      continue;
+    const acad = academicPlanByStudent.get(r.studentId);
+    if (!acad) continue;
+    let wk = acadWeekMap.get(r.weekStartDate);
+    if (!wk) {
+      wk = { minutesSum: 0, recordCount: 0, met: 0, owed: 0, excused: 0 };
+      acadWeekMap.set(r.weekStartDate, wk);
+    }
+    let tslot = acadTeacherMap.get(r.teacherStaffId);
+    if (!tslot) {
+      tslot = { met: 0, owed: 0, excused: 0, minutes: 0 };
+      acadTeacherMap.set(r.teacherStaffId, tslot);
+    }
+    if (r.releasedNoIntervention) {
+      wk.excused += 1;
+      tslot.excused += 1;
+      acadExcused += 1;
+      continue;
+    }
+    const mins = sumMinutes(r.academicMinutes);
+    wk.minutesSum += mins;
+    wk.recordCount += 1;
+    tslot.minutes += mins;
+    if (mins >= acad.target) {
+      wk.met += 1;
+      tslot.met += 1;
+      acadMet += 1;
+    } else {
+      wk.owed += 1;
+      tslot.owed += 1;
+      acadOwed += 1;
+    }
+    const minutesMap = (r.academicMinutes ?? {}) as Record<string, unknown>;
+    for (const [k, v] of Object.entries(minutesMap)) {
+      const dow = ACADEMIC_DAY_DOW[k.toLowerCase()];
+      if (dow && typeof v === "number" && Number.isFinite(v)) {
+        acadDow.set(dow, (acadDow.get(dow) ?? 0) + v);
+      }
+    }
+  }
+  const t3AcademicTrend = Array.from(acadWeekMap.entries())
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([weekStartDate, v]) => ({
+      weekStartDate,
+      minutesSum: v.minutesSum,
+      recordCount: v.recordCount,
+      avgMinutes:
+        v.recordCount > 0
+          ? Math.round((v.minutesSum / v.recordCount) * 10) / 10
+          : null,
+      met: v.met,
+      owed: v.owed,
+      excused: v.excused,
+    }));
+  const t3AcademicDayOfWeek = Array.from({ length: 5 }, (_, i) => i + 1).map(
+    (dow) => ({
+      dow,
+      label: acadDowLabels[dow] ?? String(dow),
+      minutes: acadDow.get(dow) ?? 0,
+    }),
+  );
+  let academicTarget: number | null = null;
+  {
+    const freq = new Map<number, number>();
+    for (const a of academicPlanByStudent.values()) {
+      freq.set(a.target, (freq.get(a.target) ?? 0) + 1);
+    }
+    const top = Array.from(freq.entries()).sort((a, b) => b[1] - a[1])[0];
+    academicTarget = top ? top[0] : null;
+  }
+  const t3Academic = {
+    target: academicTarget,
+    completion: {
+      met: acadMet,
+      owed: acadOwed,
+      excused: acadExcused,
+      total: acadMet + acadOwed + acadExcused,
+    },
+    trend: t3AcademicTrend,
+    dayOfWeek: t3AcademicDayOfWeek,
+  };
+
   // Resolve display names.
   const teacherIds = Array.from(perTeacherMap.keys());
   const teacherNameRows =
@@ -711,22 +916,33 @@ router.get("/mtss-reports/summary", async (req, res) => {
     }
   }
   const perTeacher = Array.from(perTeacherMap.entries())
-    .map(([id, v]) => ({
-      teacherStaffId: id,
-      teacherName: teacherNameMap.get(id) ?? `Staff #${id}`,
-      subjects: Array.from(teacherSubjects.get(id) ?? []).sort(),
-      t2Completed: v.t2Completed,
-      t2Expected: v.t2Expected,
-      t2CompletionPct:
-        v.t2Expected > 0
-          ? Math.round((v.t2Completed / v.t2Expected) * 1000) / 10
-          : null,
-      t3ScoredCount: v.t3ScoredCount,
-      t3AvgScore:
-        v.t3ScoredCount > 0
-          ? Math.round((v.t3ScoreSum / v.t3ScoredCount) * 100) / 100
-          : null,
-    }))
+    .map(([id, v]) => {
+      const a = acadTeacherMap.get(id);
+      return {
+        teacherStaffId: id,
+        teacherName: teacherNameMap.get(id) ?? `Staff #${id}`,
+        subjects: Array.from(teacherSubjects.get(id) ?? []).sort(),
+        t2Completed: v.t2Completed,
+        t2Expected: v.t2Expected,
+        t2CompletionPct:
+          v.t2Expected > 0
+            ? Math.round((v.t2Completed / v.t2Expected) * 1000) / 10
+            : null,
+        t3ScoredCount: v.t3ScoredCount,
+        t3AvgScore:
+          v.t3ScoredCount > 0
+            ? Math.round((v.t3ScoreSum / v.t3ScoredCount) * 100) / 100
+            : null,
+        acadMet: a?.met ?? 0,
+        acadOwed: a?.owed ?? 0,
+        acadExcused: a?.excused ?? 0,
+        acadMinutes: a?.minutes ?? 0,
+        acadAvgMinutes:
+          a && a.met + a.owed > 0
+            ? Math.round((a.minutes / (a.met + a.owed)) * 10) / 10
+            : null,
+      };
+    })
     .sort((a, b) => a.teacherName.localeCompare(b.teacherName));
 
   // ---- perSubject (T2 only — uses class section join) ----
@@ -951,6 +1167,7 @@ router.get("/mtss-reports/summary", async (req, res) => {
       subType: p.interventionSubType,
       fastSubject: p.fastSubject,
       subjectLabel: subjectLabel(p.fastSubject),
+      academicMinutesTarget: p.fastSubject ? p.academicMinutesTarget : null,
       title: p.title,
       goals: p.goals,
       openedAt: p.openedAt.toISOString(),
@@ -1022,6 +1239,7 @@ router.get("/mtss-reports/summary", async (req, res) => {
     dayOfWeek: dayOfWeekOut,
     t3GoalTrend,
     t3DayOfWeek,
+    t3Academic,
     studentPlans,
   };
   res.json(out);

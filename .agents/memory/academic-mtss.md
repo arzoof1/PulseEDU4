@@ -60,6 +60,15 @@ behavior-plan cadence regression from a shared Tue/Thu default.
   such students). Any future merge that lets a student hold both a behavior
   and academic Tier 3 plan must split the record by plan or reconcile the
   shared row.
+- **Aggregate-report academic tally must self-defend against the shared
+  row.** `mtssReports.ts` cannot trust `studentId` alone to label a record
+  academic. The academic block (a) builds `academicAllowedPairs` from
+  ACADEMIC plans' effective teachers only (auto-assign academic plans expand
+  only to teachers who logged an academic-looking record — minutes>0 or a
+  release, never behavior-only contributors), and (b) skips any record with a
+  non-null `monScore..friScore` (those are behavior records). Without both,
+  a behavior record for a both-plans student counts as a phantom academic
+  "owed". Mirror this guard in any new academic aggregate surface.
 
 ## Suggestions ("Generate from FAST + iReady" → Tier 3 Academic)
 

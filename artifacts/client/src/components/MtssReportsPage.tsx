@@ -66,6 +66,7 @@ interface SummaryResponse {
     subType: string | null;
     fastSubject: string | null;
     subjectLabel: string;
+    academicMinutesTarget: number | null;
     title: string;
     goals: string | null;
     openedAt: string;
@@ -91,6 +92,11 @@ interface SummaryResponse {
     t2CompletionPct: number | null;
     t3ScoredCount: number;
     t3AvgScore: number | null;
+    acadMet: number;
+    acadOwed: number;
+    acadExcused: number;
+    acadMinutes: number;
+    acadAvgMinutes: number | null;
   }>;
   perSubject: Array<{
     courseName: string;
@@ -116,6 +122,25 @@ interface SummaryResponse {
     avgScore: number | null;
     scoredCount: number;
   }>;
+  t3Academic: {
+    target: number | null;
+    completion: {
+      met: number;
+      owed: number;
+      excused: number;
+      total: number;
+    };
+    trend: Array<{
+      weekStartDate: string;
+      minutesSum: number;
+      recordCount: number;
+      avgMinutes: number | null;
+      met: number;
+      owed: number;
+      excused: number;
+    }>;
+    dayOfWeek: Array<{ dow: number; label: string; minutes: number }>;
+  };
   studentPlans: Array<{
     id: number;
     tier: number;
@@ -440,6 +465,31 @@ export default function MtssReportsPage({
     return Math.round((weeksWithScores / data.weeklyTrend.length) * 1000) / 10;
   }, [data]);
 
+  // Academic (minutes) Tier 3 view: per-plan when the loaded plan has a
+  // fastSubject; aggregate when the user picked the Academic segment.
+  const isAcademicView = isPerPlan
+    ? !!data?.planMeta?.fastSubject
+    : data?.filters.planType === "academic";
+  const acadMetPct = useMemo(() => {
+    const c = data?.t3Academic?.completion;
+    if (!c) return null;
+    const denom = c.met + c.owed;
+    return denom > 0 ? Math.round((c.met / denom) * 1000) / 10 : null;
+  }, [data]);
+  const acadAvgMinutes = useMemo(() => {
+    const t = data?.t3Academic?.trend;
+    if (!t || t.length === 0) return null;
+    let sum = 0;
+    let n = 0;
+    for (const w of t) {
+      sum += w.minutesSum;
+      n += w.recordCount;
+    }
+    return n > 0 ? Math.round((sum / n) * 10) / 10 : null;
+  }, [data]);
+  const acadTarget =
+    data?.t3Academic?.target ?? data?.planMeta?.academicMinutesTarget ?? 30;
+
   // Trend direction for the active tier.
   const trend = useMemo<TrendDir>(() => {
     if (!data) return null;
@@ -449,11 +499,17 @@ export default function MtssReportsPage({
         .filter((x): x is number => x != null);
       return computeTrend(vals, 3);
     }
+    if (isAcademicView) {
+      const vals = (data.t3Academic?.trend ?? [])
+        .map((w) => w.avgMinutes)
+        .filter((x): x is number => x != null);
+      return computeTrend(vals, 2);
+    }
     const vals = data.t3GoalTrend
       .map((w) => w.avgScore)
       .filter((x): x is number => x != null);
     return computeTrend(vals, 0.2);
-  }, [data, activeTier]);
+  }, [data, activeTier, isAcademicView]);
 
   // In per-plan mode a tier switch sets `activeTier` immediately but the
   // loaded `data` still belongs to the previous plan until the re-fetch
@@ -992,6 +1048,50 @@ export default function MtssReportsPage({
                 }
               />
             </div>
+          ) : activeTier === 3 && isAcademicView ? (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: 12,
+              }}
+            >
+              <SummaryTile
+                label="Minutes target met"
+                value={fmtPct(acadMetPct)}
+                sub="Weeks met ÷ weeks with a group"
+                tone={
+                  acadMetPct == null
+                    ? "neutral"
+                    : acadMetPct >= 80
+                      ? "good"
+                      : acadMetPct >= 60
+                        ? "warn"
+                        : "bad"
+                }
+              />
+              <SummaryTile
+                label="Avg minutes / week"
+                value={acadAvgMinutes == null ? "—" : `${acadAvgMinutes} min`}
+                sub={`Target ${acadTarget} min/wk`}
+                tone={
+                  acadAvgMinutes == null
+                    ? "neutral"
+                    : acadAvgMinutes >= acadTarget
+                      ? "good"
+                      : acadAvgMinutes >= acadTarget * 0.6
+                        ? "warn"
+                        : "bad"
+                }
+              />
+              <SummaryTile
+                label="Weeks met"
+                value={String(data.t3Academic?.completion.met ?? 0)}
+                sub={`${data.t3Academic?.completion.owed ?? 0} owed · ${
+                  data.t3Academic?.completion.excused ?? 0
+                } excused`}
+              />
+            </div>
           ) : (
             <div
               style={{
@@ -1076,7 +1176,34 @@ export default function MtssReportsPage({
           </ResponsiveContainer>
         </div>
       )}
-      {data && tierMatch && activeTier === 3 && data.t3GoalTrend.length > 0 && (
+      {data && tierMatch && activeTier === 3 && isAcademicView && (data.t3Academic?.trend.length ?? 0) > 0 && (
+        <div className="mtss-reports-card" style={cardStyle}>
+          <h3 style={{ marginTop: 0 }}>Tier 3 weekly minutes</h3>
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={data.t3Academic?.trend ?? []}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="weekStartDate" />
+              <YAxis />
+              <Tooltip />
+              <Legend />
+              <ReferenceLine
+                y={acadTarget}
+                stroke="#16a34a"
+                strokeDasharray="4 4"
+              />
+              <Line
+                type="monotone"
+                dataKey="avgMinutes"
+                stroke="#0ea5e9"
+                name="Avg minutes / week"
+                connectNulls
+                dot
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+      {data && tierMatch && activeTier === 3 && !isAcademicView && data.t3GoalTrend.length > 0 && (
         <div className="mtss-reports-card" style={cardStyle}>
           <h3 style={{ marginTop: 0 }}>Tier 3 weekly average score</h3>
           <ResponsiveContainer width="100%" height={240}>
@@ -1106,7 +1233,9 @@ export default function MtssReportsPage({
           <h3 style={{ marginTop: 0 }}>
             {activeTier === 2
               ? "By teacher — check-in completion"
-              : "By teacher — outcome score"}
+              : isAcademicView
+                ? "By teacher — group minutes"
+                : "By teacher — outcome score"}
           </h3>
           <ResponsiveContainer
             width="100%"
@@ -1120,7 +1249,13 @@ export default function MtssReportsPage({
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis
                 type="number"
-                domain={activeTier === 2 ? [0, 100] : [0, 5]}
+                domain={
+                  activeTier === 2
+                    ? [0, 100]
+                    : isAcademicView
+                      ? [0, "dataMax"]
+                      : [0, 5]
+                }
               />
               <YAxis
                 type="category"
@@ -1134,6 +1269,12 @@ export default function MtssReportsPage({
                   dataKey="t2CompletionPct"
                   fill="#2563eb"
                   name="T2 % completion"
+                />
+              ) : isAcademicView ? (
+                <Bar
+                  dataKey="acadMinutes"
+                  fill="#0ea5e9"
+                  name="Total group minutes"
                 />
               ) : (
                 <Bar
@@ -1171,6 +1312,45 @@ export default function MtssReportsPage({
                         <td style={tdRMid}>{r.t2Completed}</td>
                         <td style={tdRMid}>{r.t2Expected}</td>
                         <td style={tdRLast}>{fmtPct(r.t2CompletionPct)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </>
+              ) : isAcademicView ? (
+                <>
+                  <thead>
+                    <tr style={{ background: "#f8fafc" }}>
+                      <th style={thFirst}>Teacher</th>
+                      <th style={thR}>Met</th>
+                      <th style={thR}>Owed</th>
+                      <th style={thR}>Excused</th>
+                      <th style={thRLast}>Avg min/wk</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.perTeacher.map((r) => (
+                      <tr key={r.teacherStaffId}>
+                        <td style={tdFirst}>
+                          <span
+                            style={{
+                              display: "flex",
+                              gap: 6,
+                              alignItems: "center",
+                              flexWrap: "wrap",
+                            }}
+                          >
+                            {r.teacherName}
+                            {r.subjects.map((s) => (
+                              <SubjectChip key={s} label={s} />
+                            ))}
+                          </span>
+                        </td>
+                        <td style={tdRMid}>{r.acadMet}</td>
+                        <td style={tdRMid}>{r.acadOwed}</td>
+                        <td style={tdRMid}>{r.acadExcused}</td>
+                        <td style={tdRLast}>
+                          {r.acadAvgMinutes == null ? "—" : r.acadAvgMinutes}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1285,8 +1465,43 @@ export default function MtssReportsPage({
         </div>
       )}
 
+      {/* ---- day-of-week (Tier 3 academic: minutes by weekday) ---- */}
+      {data && tierMatch && activeTier === 3 && isAcademicView && (data.t3Academic?.dayOfWeek.length ?? 0) > 0 && (
+        <div className="mtss-reports-card" style={cardStyle}>
+          <h3 style={{ marginTop: 0 }}>Group minutes by weekday (Tier 3)</h3>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(5, 1fr)",
+              gap: 8,
+            }}
+          >
+            {data.t3Academic?.dayOfWeek.map((d) => (
+              <div
+                key={d.dow}
+                style={{
+                  background: "#0ea5e9",
+                  color: "white",
+                  borderRadius: 8,
+                  padding: 12,
+                  textAlign: "center",
+                }}
+              >
+                <div style={{ fontWeight: 700 }}>{d.label}</div>
+                <div
+                  style={{ fontSize: "1.6rem", fontWeight: 700, marginTop: 4 }}
+                >
+                  {d.minutes}
+                </div>
+                <div style={{ fontSize: "0.78rem", opacity: 0.9 }}>minutes</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ---- day-of-week (Tier 3: best/worst day by score) ---- */}
-      {data && tierMatch && activeTier === 3 && (data.t3DayOfWeek?.length ?? 0) > 0 && (
+      {data && tierMatch && activeTier === 3 && !isAcademicView && (data.t3DayOfWeek?.length ?? 0) > 0 && (
         <div className="mtss-reports-card" style={cardStyle}>
           <h3 style={{ marginTop: 0 }}>
             Best &amp; worst day: average outcome score (Tier 3)
@@ -1328,7 +1543,8 @@ export default function MtssReportsPage({
       {data &&
         tierMatch &&
         data.weeklyTrend.length === 0 &&
-        data.perTeacher.length === 0 && (
+        data.perTeacher.length === 0 &&
+        (data.t3Academic?.trend.length ?? 0) === 0 && (
           <div
             className="mtss-reports-card"
             style={{ ...cardStyle, color: "#64748b" }}
