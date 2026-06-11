@@ -8,6 +8,7 @@ import PickupApp from "./pickup/PickupApp";
 import TourApp from "./tour/TourApp";
 import ScannerApp from "./scan/ScannerApp";
 import StaffResetApp from "./StaffResetApp";
+import SmsPolicyPage from "./SmsPolicyPage";
 import "./index.css";
 
 const path = window.location.pathname;
@@ -33,6 +34,8 @@ const isTour = path.includes("/tour");
 //   /scan             — staff scanner (requires staff session)
 //   /scan/<linkToken> — no-login volunteer scanner
 const isScan = path.includes("/scan");
+// Public SMS opt-in / policy page for AWS SNS registration (no auth).
+const isSmsPolicy = path.includes("/sms-policy");
 
 createRoot(document.getElementById("root")!).render(
   isSignage ? <SignageApp />
@@ -43,5 +46,6 @@ createRoot(document.getElementById("root")!).render(
     : isPickup ? <PickupApp />
     : isTour ? <TourApp />
     : isScan ? <ScannerApp />
+    : isSmsPolicy ? <SmsPolicyPage />
     : <App />,
 );

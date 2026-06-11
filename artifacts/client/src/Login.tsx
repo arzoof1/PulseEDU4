@@ -386,6 +386,13 @@ export default function Login({
           >
             pulsekinetics.us
           </a>
+          {" · "}
+          <a
+            href="/sms-policy"
+            style={{ color: "#93c5fd", textDecoration: "none" }}
+          >
+            SMS policy
+          </a>
         </div>
       </form>
     </div>
