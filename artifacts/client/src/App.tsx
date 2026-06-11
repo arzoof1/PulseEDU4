@@ -437,7 +437,8 @@ function RequestPulloutSection({
           (s) =>
             s.firstName.toLowerCase().includes(q) ||
             s.lastName.toLowerCase().includes(q) ||
-            s.studentId.toLowerCase().includes(q),
+            s.studentId.toLowerCase().includes(q) ||
+            (s.localSisId?.toLowerCase().includes(q) ?? false),
         )
       : students;
     // Admins/SuperUsers see all matches; non-admins keep the original 50-cap
@@ -591,10 +592,17 @@ function RequestPulloutSection({
             onChange={(e) => {
               const v = e.target.value;
               setStudentSearch(v);
+              const typed = v.trim();
               const match = sortedStudents.find(
                 (s) =>
-                  `${s.firstName} ${s.lastName} (${s.studentId})` === v ||
-                  s.studentId === v.trim(),
+                  // Must mirror the <option> value rendered below — it
+                  // uses localSisId, so matching on studentId here never
+                  // fired and the form's studentId stayed empty (submit
+                  // button permanently disabled).
+                  `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})` ===
+                    v ||
+                  s.studentId === typed ||
+                  (s.localSisId != null && s.localSisId === typed),
               );
               setStudentId(match ? match.studentId : "");
             }}
