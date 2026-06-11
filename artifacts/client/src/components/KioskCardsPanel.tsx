@@ -39,14 +39,23 @@ interface AuthUserLite {
 
 export function KioskCardsPanel({
   authUser,
+  originLocations = [],
+  onRoomSaved,
 }: {
   authUser: AuthUserLite | null;
+  /** Active origin rooms, used to drive every room dropdown in this panel. */
+  originLocations?: string[];
+  /** Fired after a teacher's default room changes (inline edit or CSV import). */
+  onRoomSaved?: () => void;
 }) {
   const [rows, setRows] = useState<TokenRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("");
+  // Per-row "saving room" spinner keyed by staffId.
+  const [savingRoom, setSavingRoom] = useState<number | null>(null);
+  const [showImport, setShowImport] = useState(false);
   // After a regenerate, we show the raw token + PIN in a "print
   // immediately" modal — it's the only time this data is visible.
   const [reveal, setReveal] = useState<{
@@ -89,6 +98,36 @@ export function KioskCardsPanel({
   useEffect(() => {
     void load();
   }, []);
+
+  // Inline-save a teacher's default room straight from the cards table, so
+  // an admin sets the room and issues the card in one place.
+  async function saveRoom(staffId: number, room: string) {
+    setSavingRoom(staffId);
+    setError("");
+    try {
+      const res = await authFetch("/api/staff-defaults", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ staffId, defaultLocationName: room }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        throw new Error(b.error ?? `Save failed (${res.status})`);
+      }
+      setRows((prev) =>
+        prev.map((r) =>
+          r.staffId === staffId
+            ? { ...r, defaultRoom: room.trim() ? room : null }
+            : r,
+        ),
+      );
+      onRoomSaved?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingRoom(null);
+    }
+  }
 
   async function bulkGenerate() {
     if (
@@ -325,6 +364,14 @@ export function KioskCardsPanel({
           </button>
           <button
             type="button"
+            onClick={() => setShowImport(true)}
+            disabled={busy}
+            title="Bulk-assign teacher rooms from a CSV file"
+          >
+            Import rooms (CSV)
+          </button>
+          <button
+            type="button"
             onClick={printAll}
             disabled={busy || rows.length === 0}
           >
@@ -389,13 +436,43 @@ export function KioskCardsPanel({
             {filtered.map((r) => (
               <tr key={r.staffId} style={{ borderTop: "1px solid var(--border)" }}>
                 <td style={{ padding: "0.5rem" }}>{r.displayName}</td>
-                <td
-                  style={{
-                    padding: "0.5rem",
-                    color: r.defaultRoom ? undefined : "var(--text-subtle)",
-                  }}
-                >
-                  {r.defaultRoom ?? "—"}
+                <td style={{ padding: "0.5rem" }}>
+                  <select
+                    value={r.defaultRoom ?? ""}
+                    disabled={savingRoom === r.staffId || busy}
+                    onChange={(e) => void saveRoom(r.staffId, e.target.value)}
+                    style={{
+                      padding: "0.3rem 0.4rem",
+                      maxWidth: 200,
+                      color: r.defaultRoom ? undefined : "var(--text-subtle)",
+                    }}
+                  >
+                    <option value="">(none — roaming)</option>
+                    {/* Legacy/off-list value: keep it selectable so we never
+                        silently drop a room that isn't in the origin list. */}
+                    {r.defaultRoom &&
+                      !originLocations.includes(r.defaultRoom) && (
+                        <option value={r.defaultRoom}>
+                          {r.defaultRoom} (legacy)
+                        </option>
+                      )}
+                    {originLocations.map((loc) => (
+                      <option key={loc} value={loc}>
+                        {loc}
+                      </option>
+                    ))}
+                  </select>
+                  {savingRoom === r.staffId && (
+                    <span
+                      style={{
+                        marginLeft: 6,
+                        fontSize: 11,
+                        color: "var(--text-subtle)",
+                      }}
+                    >
+                      Saving…
+                    </span>
+                  )}
                 </td>
                 <td style={{ padding: "0.5rem" }}>
                   {r.tokenId ? (
@@ -498,10 +575,23 @@ export function KioskCardsPanel({
       {subDraft && (
         <SubModal
           draft={subDraft}
+          originLocations={originLocations}
           onChange={setSubDraft}
           onCancel={() => setSubDraft(null)}
           onSubmit={() => void submitProxy()}
           busy={busy}
+        />
+      )}
+
+      {showImport && (
+        <ImportRoomsModal
+          originLocations={originLocations}
+          onClose={() => setShowImport(false)}
+          onCommitted={() => {
+            setShowImport(false);
+            void load();
+            onRoomSaved?.();
+          }}
         />
       )}
     </div>
@@ -607,6 +697,7 @@ function RevealModal({
 function SubModal({
   draft,
   onChange,
+  originLocations,
   onCancel,
   onSubmit,
   busy,
@@ -617,6 +708,7 @@ function SubModal({
     room: string;
     durationKind: "today" | "14d";
   };
+  originLocations: string[];
   onChange: (
     next: {
       forStaffId: number;
@@ -668,14 +760,25 @@ function SubModal({
         </div>
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span style={{ fontSize: "0.85rem", color: "#555" }}>Room</span>
-          <input
-            type="text"
+          <select
             value={draft.room}
             onChange={(e) => onChange({ ...draft, room: e.target.value })}
             disabled={busy}
             style={{ padding: "0.5rem" }}
             autoFocus
-          />
+          >
+            <option value="">Select a room…</option>
+            {/* Pre-filled default room may pre-date the current origin list;
+                keep it selectable so the sub activation never breaks. */}
+            {draft.room && !originLocations.includes(draft.room) && (
+              <option value={draft.room}>{draft.room}</option>
+            )}
+            {originLocations.map((loc) => (
+              <option key={loc} value={loc}>
+                {loc}
+              </option>
+            ))}
+          </select>
         </label>
         <fieldset
           style={{
@@ -721,6 +824,336 @@ function SubModal({
             {busy ? "Activating…" : "Activate & open kiosk"}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Minimal two-column CSV parser. Handles quoted fields with embedded
+// commas/quotes and CRLF line endings. Returns string[][] (rows of cells).
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') {
+          cell += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cell += c;
+      }
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += c;
+    }
+  }
+  if (cell.length > 0 || row.length > 0) {
+    row.push(cell);
+    rows.push(row);
+  }
+  return rows.filter((r) => r.some((c) => c.trim() !== ""));
+}
+
+const TEACHER_HEADERS = ["teacher", "name", "staff", "email", "teacher_name"];
+const ROOM_HEADERS = ["room", "location", "default_room", "homeroom", "home_room"];
+
+// CSV bulk room-assignment. The admin uploads a file with a teacher column
+// (name or email) and a room column. We parse client-side, send the rows to
+// the bulk endpoint for a dry-run preview, then commit on confirm.
+function ImportRoomsModal({
+  originLocations,
+  onClose,
+  onCommitted,
+}: {
+  originLocations: string[];
+  onClose: () => void;
+  onCommitted: () => void;
+}) {
+  const [rows, setRows] = useState<Array<{ teacher: string; room: string }>>([]);
+  const [fileName, setFileName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [preview, setPreview] = useState<{
+    matched: Array<{ staffId: number; staffName: string; room: string | null }>;
+    unmatchedTeachers: string[];
+    invalidRooms: Array<{ teacher: string; room: string }>;
+  } | null>(null);
+  const [done, setDone] = useState<number | null>(null);
+
+  function handleFile(file: File) {
+    setError("");
+    setPreview(null);
+    setDone(null);
+    setFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        // Strip a UTF-8 BOM so the first header cell (often "teacher")
+        // matches; Excel/Sheets exports frequently prepend one.
+        const text = String(reader.result ?? "").replace(/^\uFEFF/, "");
+        const grid = parseCsv(text);
+        if (grid.length < 2) {
+          throw new Error("CSV needs a header row and at least one data row.");
+        }
+        const header = grid[0].map((h) => h.trim().toLowerCase());
+        const teacherIdx = header.findIndex((h) => TEACHER_HEADERS.includes(h));
+        const roomIdx = header.findIndex((h) => ROOM_HEADERS.includes(h));
+        if (teacherIdx < 0 || roomIdx < 0) {
+          throw new Error(
+            "Couldn't find a teacher column (name/email) and a room column. Header names like 'teacher' or 'email' and 'room' are required.",
+          );
+        }
+        const parsed = grid
+          .slice(1)
+          .map((r) => ({
+            teacher: (r[teacherIdx] ?? "").trim(),
+            room: (r[roomIdx] ?? "").trim(),
+          }))
+          .filter((r) => r.teacher);
+        if (parsed.length === 0) throw new Error("No teacher rows found.");
+        setRows(parsed);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        setRows([]);
+      }
+    };
+    reader.onerror = () => setError("Could not read the file.");
+    reader.readAsText(file);
+  }
+
+  async function runPreview() {
+    if (rows.length === 0) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await authFetch("/api/staff-defaults/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows, commit: false }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        throw new Error(b.error ?? `Preview failed (${res.status})`);
+      }
+      const data = await res.json();
+      setPreview({
+        matched: data.matched ?? [],
+        unmatchedTeachers: data.unmatchedTeachers ?? [],
+        invalidRooms: data.invalidRooms ?? [],
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function commit() {
+    if (!preview || preview.matched.length === 0) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await authFetch("/api/staff-defaults/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows, commit: true }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        throw new Error(b.error ?? `Import failed (${res.status})`);
+      }
+      const data = await res.json();
+      setDone(data.applied ?? 0);
+      setTimeout(onCommitted, 900);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.65)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "1.5rem",
+        zIndex: 50,
+      }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "white",
+          color: "#111",
+          borderRadius: 12,
+          padding: "1.5rem",
+          width: "min(640px, 94vw)",
+          maxHeight: "88vh",
+          overflowY: "auto",
+          display: "flex",
+          flexDirection: "column",
+          gap: "1rem",
+        }}
+      >
+        <div>
+          <h3 style={{ margin: 0 }}>Import teacher rooms (CSV)</h3>
+          <p style={{ color: "#555", fontSize: "0.85rem", marginTop: 4 }}>
+            Upload a CSV with a <b>teacher</b> column (name or email) and a{" "}
+            <b>room</b> column. We match teachers to your staff list and to your
+            origin rooms, show a preview, then save. Blank/“none” clears a
+            teacher’s room (roaming).
+          </p>
+        </div>
+
+        {error && (
+          <div
+            style={{
+              background: "rgba(239,68,68,0.1)",
+              border: "1px solid rgba(239,68,68,0.4)",
+              color: "#b91c1c",
+              padding: "0.5rem 0.75rem",
+              borderRadius: 6,
+            }}
+          >
+            {error}
+          </div>
+        )}
+
+        {done != null ? (
+          <div style={{ color: "#15803d", fontWeight: 600 }}>
+            Saved {done} teacher {done === 1 ? "room" : "rooms"}. Refreshing…
+          </div>
+        ) : (
+          <>
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              disabled={busy}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) handleFile(f);
+              }}
+            />
+            {fileName && rows.length > 0 && (
+              <div style={{ fontSize: "0.85rem", color: "#555" }}>
+                {fileName} — {rows.length} row{rows.length === 1 ? "" : "s"} read.
+              </div>
+            )}
+            {originLocations.length === 0 && (
+              <div style={{ fontSize: "0.85rem", color: "#b45309" }}>
+                No origin rooms exist yet — add rooms first or every row will be
+                flagged as an invalid room.
+              </div>
+            )}
+
+            {preview && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ color: "#15803d", fontWeight: 600 }}>
+                  {preview.matched.length} teacher
+                  {preview.matched.length === 1 ? "" : "s"} ready to save
+                </div>
+                {preview.matched.length > 0 && (
+                  <div
+                    style={{
+                      maxHeight: 180,
+                      overflowY: "auto",
+                      border: "1px solid #e5e5e5",
+                      borderRadius: 6,
+                      fontSize: "0.85rem",
+                    }}
+                  >
+                    {preview.matched.map((m) => (
+                      <div
+                        key={m.staffId}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          padding: "0.3rem 0.6rem",
+                          borderBottom: "1px solid #f0f0f0",
+                        }}
+                      >
+                        <span>{m.staffName}</span>
+                        <span style={{ color: m.room ? "#111" : "#999" }}>
+                          {m.room ?? "(none — roaming)"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {preview.unmatchedTeachers.length > 0 && (
+                  <div style={{ fontSize: "0.85rem", color: "#b45309" }}>
+                    <b>{preview.unmatchedTeachers.length} unmatched</b> (no staff
+                    with that name/email):{" "}
+                    {preview.unmatchedTeachers.slice(0, 8).join(", ")}
+                    {preview.unmatchedTeachers.length > 8 ? "…" : ""}
+                  </div>
+                )}
+                {preview.invalidRooms.length > 0 && (
+                  <div style={{ fontSize: "0.85rem", color: "#b45309" }}>
+                    <b>{preview.invalidRooms.length} invalid room
+                    {preview.invalidRooms.length === 1 ? "" : "s"}</b> (not an
+                    origin room):{" "}
+                    {preview.invalidRooms
+                      .slice(0, 8)
+                      .map((r) => `${r.teacher}→${r.room}`)
+                      .join(", ")}
+                    {preview.invalidRooms.length > 8 ? "…" : ""}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button type="button" onClick={onClose} disabled={busy}>
+                Cancel
+              </button>
+              {!preview ? (
+                <button
+                  type="button"
+                  onClick={() => void runPreview()}
+                  disabled={busy || rows.length === 0}
+                >
+                  {busy ? "Checking…" : "Preview matches"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void commit()}
+                  disabled={busy || preview.matched.length === 0}
+                >
+                  {busy
+                    ? "Saving…"
+                    : `Save ${preview.matched.length} room${preview.matched.length === 1 ? "" : "s"}`}
+                </button>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

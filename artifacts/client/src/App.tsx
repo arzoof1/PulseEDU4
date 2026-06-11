@@ -20581,7 +20581,8 @@ function App() {
                 id: "kiosk-setup",
                 icon: "🔗",
                 title: "Kiosk Setup",
-                subtitle: "URL, PIN, and QR code for kiosk activation.",
+                subtitle:
+                  "One place: kiosk URL, rooms, teacher rooms, cards & activation.",
                 group: "hall-pass-locations",
               },
               {
@@ -21763,57 +21764,125 @@ function App() {
       )}
 
       {activeSection === "kioskCards" && canManageSettings && (
-        <KioskCardsPanel authUser={authUser} />
+        <KioskCardsPanel
+          authUser={authUser}
+          originLocations={Object.keys(effectiveDestinationsByRoom).sort((a, b) =>
+            a.localeCompare(b),
+          )}
+        />
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "kiosk-setup" && (() => {
         const kioskUrl = `${window.location.origin}${import.meta.env.BASE_URL}kiosk`;
+        const originLocations = Object.keys(effectiveDestinationsByRoom).sort(
+          (a, b) => a.localeCompare(b),
+        );
+        const refreshDestinations = () => {
+          authFetch("/api/location-allowed-destinations")
+            .then((r) => r.json())
+            .then((data: { originName: string; destinationName: string }[]) => {
+              const map: Record<string, string[]> = {};
+              for (const row of data) {
+                if (!map[row.originName]) map[row.originName] = [];
+                map[row.originName].push(row.destinationName);
+              }
+              for (const k of Object.keys(map)) {
+                map[k].sort((a, b) => a.localeCompare(b));
+              }
+              setApiDestinationMap(map);
+            })
+            .catch(() => {});
+        };
+        const refreshStaffDefaults = () => {
+          authFetch("/api/staff-defaults")
+            .then((r) => (r.ok ? r.json() : []))
+            .then(
+              (
+                rows: Array<{
+                  staffName: string;
+                  defaultLocationName: string | null;
+                }>,
+              ) => {
+                const map: Record<string, string> = {};
+                for (const r of rows) {
+                  if (r.defaultLocationName)
+                    map[r.staffName] = r.defaultLocationName;
+                }
+                setStaffDefaults(map);
+              },
+            )
+            .catch(() => {});
+        };
         return (
-          <div className="card" style={{ marginBottom: "1rem" }}>
-            <h2>Kiosk URL</h2>
-            <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
-              Open this on a classroom Chromebook (full-screen). The teacher
-              in the room signs in once to activate the device — the room is
-              picked up from their default location, or from a one-time
-              picker if they don't have one set yet.
-            </p>
-            <div
-              style={{
-                display: "flex",
-                gap: "0.5rem",
-                alignItems: "center",
-                flexWrap: "wrap",
-              }}
-            >
-              <code
+          <div style={{ display: "grid", gap: "1rem", marginBottom: "1rem" }}>
+            <div className="card">
+              <h2>Kiosk URL</h2>
+              <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+                Open this on a classroom Chromebook (full-screen). The teacher
+                in the room signs in once to activate the device — the room is
+                picked up from their default location, or from a one-time
+                picker if they don't have one set yet.
+              </p>
+              <div
                 style={{
-                  fontSize: "0.9rem",
-                  wordBreak: "break-all",
-                  background: "var(--surface-subtle, rgba(0,0,0,0.04))",
-                  padding: "0.5rem 0.75rem",
-                  borderRadius: 6,
-                  flex: "1 1 320px",
+                  display: "flex",
+                  gap: "0.5rem",
+                  alignItems: "center",
+                  flexWrap: "wrap",
                 }}
               >
-                {kioskUrl}
-              </code>
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(kioskUrl);
-                    setCopiedRoom("__kiosk__");
-                    setTimeout(() => setCopiedRoom(null), 1500);
-                  } catch {
-                    setCopiedRoom(null);
-                  }
-                }}
-              >
-                {copiedRoom === "__kiosk__" ? "Copied!" : "Copy"}
-              </button>
-              <a href={kioskUrl} target="_blank" rel="noreferrer">
-                Open
-              </a>
+                <code
+                  style={{
+                    fontSize: "0.9rem",
+                    wordBreak: "break-all",
+                    background: "var(--surface-subtle, rgba(0,0,0,0.04))",
+                    padding: "0.5rem 0.75rem",
+                    borderRadius: 6,
+                    flex: "1 1 320px",
+                  }}
+                >
+                  {kioskUrl}
+                </code>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(kioskUrl);
+                      setCopiedRoom("__kiosk__");
+                      setTimeout(() => setCopiedRoom(null), 1500);
+                    } catch {
+                      setCopiedRoom(null);
+                    }
+                  }}
+                >
+                  {copiedRoom === "__kiosk__" ? "Copied!" : "Copy"}
+                </button>
+                <a href={kioskUrl} target="_blank" rel="noreferrer">
+                  Open
+                </a>
+              </div>
+            </div>
+
+            <div className="card">
+              <h2 style={{ marginTop: 0 }}>Step 1 · Rooms</h2>
+              <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+                Define the rooms (origin locations) students leave from. These
+                feed the room dropdowns below and on the kiosk itself.
+              </p>
+              <LocationsAdmin onChanged={refreshDestinations} />
+            </div>
+
+            <div className="card">
+              <h2 style={{ marginTop: 0 }}>Step 2 · Teacher rooms &amp; cards</h2>
+              <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+                Assign each teacher their default room (one click, or bulk-import
+                from a CSV), print activation cards, and activate sub kiosks.
+              </p>
+              <KioskCardsPanel
+                authUser={authUser}
+                originLocations={originLocations}
+                onRoomSaved={refreshStaffDefaults}
+              />
             </div>
           </div>
         );
