@@ -1,0 +1,56 @@
+Here's the data model and contract captured. Below is a self-contained prompt you can paste into the agent in your school-management app. It describes the whole feature, the tricky implementation details that took us iterations to get right, and — importantly — how to adapt it for your multitenant + authenticated environment rather than copying this app's no-auth design.
+
+PROMPT — paste this into your school-management app's agent
+
+I want to add a built-in document e-signing feature to this app, modeled on a small standalone app I already have. Do NOT just copy that app — build it natively here, reusing this app's existing stack, auth, multitenancy, database, file storage, and design system. Below is the complete spec of how the feature behaves and the implementation details that matter. First, explore my current codebase and tell me how you'll fit each piece into what already exists (auth, tenant scoping, DB, file storage, UI components) before writing code.
+
+What the feature does
+A staff user (within a tenant/school) uploads a document — a PDF or an image — and gets a shareable link. A recipient (e.g., a parent or student) opens that link on their phone, can pinch-zoom/pan to position the document, signs it with their finger, types their name, and submits. The signed document then appears back in the staff user's list for download. One signature per document, page 1 only. No separate email system is required — sharing is link-based — but you should integrate with whatever notification mechanism this app already has if available.
+
+Critical multitenant/auth adaptations (this is the main difference from my standalone version)
+My standalone version has NO accounts and a fully public dashboard — that was an intentional scope choice there, but it is WRONG for this app. Here you must:
+
+Scope every document to the tenant and to the creating user, using this app's existing tenancy and auth. The staff-facing list/create/get/delete endpoints must be authenticated and filtered by tenant — a user must never see another tenant's documents.
+Keep ONLY the two recipient endpoints public (view-by-token and submit-signature), authorized purely by an unguessable share token. The recipient is an unauthenticated outside party, so the token is the access control. Generate it with a cryptographically secure random (24 bytes, base64url).
+Add tenant_id (and created_by user id) columns to the documents table and enforce them in every query.
+Data model (adapt names/types to this app's ORM and conventions; add tenant/user scoping):
+
+documents: id (uuid pk), tenant_id (fk), created_by (user fk), title (text), file_type (enum: 'pdf' | 'image'), object_path (text — the stored original), share_token (text, unique), status (enum: 'pending' | 'signed', default 'pending'), signer_name (text, nullable), signed_object_path (text, nullable — the stored signed file), created_at (timestamptz), signed_at (timestamptz, nullable).
+API endpoints (match this app's routing/validation style; validate all input with the app's schema/validation tool):
+
+GET /documents — list current tenant's documents (auth required, tenant-scoped), newest first.
+GET /documents/stats — summary counts {total, pending, signed} for the tenant (auth required).
+POST /documents — create a document record AFTER the file is uploaded to storage; body {title, fileType, objectPath}; server generates share_token. (auth required, sets tenant_id + created_by).
+GET /documents/:id — single document, tenant-scoped (auth required).
+DELETE /documents/:id — delete, tenant-scoped (auth required).
+GET /sign/:token — PUBLIC — return the document for the signing page (look up by share_token).
+POST /sign/:token — PUBLIC — body {signerName, signedObjectPath}; record the signature.
+Race-safe signing (important): the submit endpoint must do a conditional update — UPDATE ... SET status='signed', signer_name, signed_object_path, signed_at=now() WHERE share_token = ? AND status='pending' — and return HTTP 409 if no row was updated (i.e., it was already signed). Do not read-then-write without the conditional guard.
+
+Object-path injection guard (important): any object path coming from a client (objectPath on create, signedObjectPath on submit) must be validated server-side to start with your storage prefix (in my version "/objects/") and contain no ".." before being persisted. Reject otherwise with 400.
+
+File storage: reuse this app's existing file storage / upload mechanism (presigned uploads or whatever this app uses). The client uploads the file directly to storage and only sends the resulting object path to the API — the API stores metadata only, never the file bytes. Serve files back through the app's existing authenticated/file-serving route.
+
+The signing page — these details took real iteration, implement them carefully:
+
+Render the document inside a pinch-zoom/pan container (I used react-zoom-pan-pinch). For PDFs, render page 1 to a canvas with pdfjs-dist. For images, show the image.
+Provide an explicit Move / Sign mode toggle, defaulting to Move. In Move mode, panning/pinch/wheel are enabled and the signature canvas ignores pointer input (pointer-events: none) so the user can position the document. In Sign mode, panning/pinch/wheel are DISABLED (the page is frozen) and the signature canvas captures drawing. This prevents the finger from fighting between dragging and drawing — without it, users can't reposition vs. sign cleanly.
+For drawing, do NOT rely on signature_pad inside the zoom container — its coordinate space ignores the ancestor CSS transform scale, so strokes land in the wrong place when zoomed. Instead implement a small custom pointer-based drawer that normalizes coordinates against the canvas's live getBoundingClientRect: x = (clientX - rect.left) / rect.width * (canvas.width / devicePixelRatio), same for y. This stays accurate at any zoom level and on high-DPI screens.
+Preserve the document's true aspect ratio (e.g., 8.5×11). Size the document wrapper with CSS aspect-ratio from the intrinsic dimensions and use object-contain; the signature canvas must overlay it at the exact same aspect ratio. Earlier I had skew bugs from stretching the page — avoid that.
+Provide a Clear button to redo the signature, a name field, and a Submit button (disabled until there's both a signature and a name).
+Friendly states for invalid/expired links and for an already-signed link.
+Signature compositing happens client-side:
+
+Images: draw the original image + the signature strokes onto one canvas at the image's natural dimensions, export as PNG.
+PDFs: use pdf-lib to embed the signature PNG onto page 1. Because the signature canvas shares the page's aspect ratio, stamping it across the full page keeps strokes positioned correctly.
+Upload the composited file to storage, then call POST /sign/:token with signerName + the new signedObjectPath. The server records metadata only.
+Libraries used in my version (use these or this app's equivalents): pdfjs-dist (render PDF), pdf-lib (stamp signature into PDF), react-zoom-pan-pinch (pinch/zoom/pan). Signature capture is custom (no signature_pad). Frontend was React; backend Express + Postgres + Drizzle — but match whatever this app already uses.
+
+Acceptance criteria:
+
+A staff user can upload a PDF or image and get a copyable signing link; they only ever see their own tenant's documents.
+Opening the link on a phone shows the document at correct aspect ratio, lets the user switch to Sign mode, sign accurately even when zoomed in, clear and redo, and submit with a name.
+The signed document (with the signature burned in) appears in the staff user's list and downloads correctly.
+Submitting the same link twice returns a conflict and never overwrites an existing signature.
+All staff endpoints are authenticated and tenant-scoped; only the two recipient endpoints are public and gated solely by the share token.
+Start by reviewing my existing auth, tenancy, database schema, file-storage, and UI components, then propose how each part maps in before implementing.
