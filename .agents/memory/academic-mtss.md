@@ -49,6 +49,18 @@ PulseEDU MTSS plans come in two flavors that share the same tables/routes:
 couldn't complete, Tier 2 academic plans wrongly owing bell entries, and a
 behavior-plan cadence regression from a shared Tue/Thu default.
 
+- **`tier3_weekly_records` rows are NOT plan-tagged — one row per
+  (school, student, teacher, week) is shared by EVERY Tier 3 plan that
+  student has.** So an academic minutes record (academic_minutes set,
+  behavior scores null) for a student who also carries a behavior Tier 3
+  plan surfaces a phantom unscored/"owed" behavior week for that teacher,
+  and vice-versa. **How to apply:** when writing/seeding academic Tier 3
+  records, only do so for students with no other Tier 3 plan or existing
+  weekly record (the demo seed `seedAcademicMinutesDemoIfEmpty` excludes
+  such students). Any future merge that lets a student hold both a behavior
+  and academic Tier 3 plan must split the record by plan or reconcile the
+  shared row.
+
 ## Suggestions ("Generate from FAST + iReady" → Tier 3 Academic)
 
 - DUAL-GATE qualification: a (student, subject) row surfaces ONLY when BOTH

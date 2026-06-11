@@ -6,6 +6,7 @@ import {
   seedTenancy,
   seedMtssPlansIfEmpty,
   seedTieredInterventionsIfEmpty,
+  seedAcademicMinutesDemoIfEmpty,
   seedFastScoresIfEmpty,
   seedHousesIfEmpty,
   seedIreadyAndSciIfEmpty,
@@ -127,6 +128,12 @@ async function runSeed(): Promise<void> {
   // skipped if any plan with `opened_by_name = 'Tiered Demo Seed'`
   // already exists for that school.
   await seedTieredInterventionsIfEmpty();
+  // Academic Tier 3 "minutes" demo: up to 20 students per school get an
+  // academic Tier 3 plan (fastSubject ela|math, 30-min weekly target) plus
+  // per-week minutes records where ~90% reach the target and the rest are
+  // owed or released (excused). Idempotent: skipped per school once a plan
+  // with `opened_by_name = 'Academic Minutes Demo Seed'` exists.
+  await seedAcademicMinutesDemoIfEmpty();
   // Same pattern: ensure schema + skip-if-non-empty per school. Required
   // before the Teacher Roster API has anything to render.
   await seedFastScoresIfEmpty();

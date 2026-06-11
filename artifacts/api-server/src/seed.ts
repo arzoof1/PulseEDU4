@@ -32,6 +32,7 @@ import {
   interventionEntriesTable,
   studentMtssPlansTable,
   tier3GoalsTable,
+  tier3WeeklyRecordsTable,
   studentFastScoresTable,
   housesTable,
   assessmentsTable,
@@ -55,6 +56,13 @@ import { eq, sql, and, inArray, isNull, asc, desc } from "drizzle-orm";
 import { logger } from "./lib/logger";
 import { fetchWeatherForLocation } from "./lib/weatherFetcher";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./lib/schoolYear.js";
+import {
+  mondayOf,
+  enumerateWeeks,
+  academicStartMonday,
+  academicVisibleDays,
+  type AcademicDayKey,
+} from "./lib/academicMinutes.js";
 import benchmarkDeliveriesSeedJson from "./seedData/benchmarkDeliveriesSeed.json" with { type: "json" };
 
 // =============================================================================
@@ -963,6 +971,264 @@ export async function seedTieredInterventionsIfEmpty() {
         goalsSeeded: goals.length,
       },
       "[seed] tiered intervention plans seeded (~10% of students)",
+    );
+  }
+}
+
+// =============================================================================
+// ACADEMIC TIER 3 "MINUTES" DEMO SEED
+// =============================================================================
+// Replaces the old score-style academic seeding with a realistic
+// minutes-of-intervention snapshot for the academic Tier 3 small-group model.
+// Per school it wires up to 20 students with academic Tier 3 plans
+// (fastSubject ela|math, 30-minute weekly target) plus per-week minutes
+// records. Distribution: ~90% of students reach the 30-minute target each
+// week, the rest fall short (owed) or are released ("no group provided" →
+// excused), driven by the deterministic RNG so the spread looks natural but
+// stays stable across re-seeds. Idempotent: skipped per school once a plan
+// with `opened_by_name = 'Academic Minutes Demo Seed'` exists.
+const ACADEMIC_DEMO_MARKER = "Academic Minutes Demo Seed";
+const ACADEMIC_PLAN_COUNT = 20;
+const ACADEMIC_MEETING_DAY_SETS = [
+  "mon,wed",
+  "tue,thu",
+  "mon,wed,fri",
+  "tue,fri",
+];
+const ACADEMIC_MET_TOTALS = [30, 30, 35, 35, 40, 45, 50, 60];
+const ACADEMIC_OWED_TOTALS = [5, 10, 15, 20, 25];
+const ACADEMIC_RELEASE_REASONS = [
+  "No group this week — state testing window",
+  "Interventionist absent; no sub coverage",
+  "Schedule conflict — schoolwide assembly",
+  "Short week (holiday) — group not held",
+];
+
+export async function seedAcademicMinutesDemoIfEmpty() {
+  await ensureMtssPlansSchema();
+
+  const today = new Date().toISOString().slice(0, 10);
+  const currentMonday = mondayOf(today);
+  const startMonday = academicStartMonday(currentMonday);
+  let weeks = enumerateWeeks(startMonday, currentMonday);
+  if (weeks.length === 0) weeks = [currentMonday];
+
+  const schools = await db.select().from(schoolsTable);
+  for (const school of schools) {
+    // Idempotency marker: skip schools that already have the academic seed.
+    const [{ c }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM student_mtss_plans
+            WHERE school_id = ${school.id}
+              AND opened_by_name = ${ACADEMIC_DEMO_MARKER}`,
+      )
+    ).rows as { c: number }[];
+    if (c > 0) continue;
+
+    const studentRows = await db
+      .select({ studentId: studentsTable.studentId })
+      .from(studentsTable)
+      .where(eq(studentsTable.schoolId, school.id));
+    if (studentRows.length === 0) continue;
+
+    // Staff pool (fallback interventionist when a student has no scheduled
+    // teacher) — the weekly record needs a teacherStaffId.
+    const staffRows = await db
+      .select({ id: staffTable.id })
+      .from(staffTable)
+      .where(eq(staffTable.schoolId, school.id));
+    const staffPool = staffRows.map((s) => s.id);
+    if (staffPool.length === 0) continue;
+
+    // Scheduled teachers per student (preferred interventionist).
+    const rosterRows = (
+      await db.execute(
+        sql`SELECT sr.student_id, cs.teacher_staff_id
+            FROM section_roster sr
+            JOIN class_sections cs ON cs.id = sr.section_id
+            WHERE cs.school_id = ${school.id}
+              AND cs.is_planning = false`,
+      )
+    ).rows as { student_id: string; teacher_staff_id: number }[];
+    const teachersByStudent = new Map<string, number[]>();
+    for (const r of rosterRows) {
+      const arr = teachersByStudent.get(r.student_id) ?? [];
+      if (!arr.includes(r.teacher_staff_id)) arr.push(r.teacher_staff_id);
+      teachersByStudent.set(r.student_id, arr);
+    }
+
+    // tier3_weekly_records is keyed by (school, student, teacher, week) and is
+    // NOT plan-tagged, so a single record row is shared by every Tier 3 plan a
+    // student has. Seeding an academic minutes record for a student who also
+    // carries a behavior Tier 3 plan would leave that record's behavior scores
+    // null and surface a phantom "owed" behavior week. Exclude any student who
+    // already has a Tier 3 plan or an existing weekly record so the academic
+    // record we insert is the only one for that student — no cross-context bleed.
+    const existingTier3Students = new Set(
+      (
+        (
+          await db.execute(
+            sql`SELECT DISTINCT student_id FROM student_mtss_plans
+                WHERE school_id = ${school.id} AND tier = 3`,
+          )
+        ).rows as { student_id: string }[]
+      ).map((r) => r.student_id),
+    );
+    const existingRecordStudents = new Set(
+      (
+        (
+          await db.execute(
+            sql`SELECT DISTINCT student_id FROM tier3_weekly_records
+                WHERE school_id = ${school.id}`,
+          )
+        ).rows as { student_id: string }[]
+      ).map((r) => r.student_id),
+    );
+
+    // Deterministic shuffle (distinct seed from the behavior seed) so the
+    // academic sample is stable across re-seeds.
+    const rng = makeRng(0xac4de3 + school.id * 6173);
+    const ids = studentRows
+      .map((s) => s.studentId)
+      .filter(
+        (id) =>
+          !existingTier3Students.has(id) && !existingRecordStudents.has(id),
+      );
+    for (let i = ids.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+    }
+    const sampled = ids.slice(0, Math.min(ACADEMIC_PLAN_COUNT, ids.length));
+
+    // Spread total minutes over 1–2 of the plan's visible days, keeping
+    // every value on the 5-minute grid.
+    const distribute = (
+      total: number,
+      days: AcademicDayKey[],
+    ): Record<string, number> => {
+      const out: Record<string, number> = {};
+      if (days.length === 0 || total <= 0) return out;
+      const shuffled = [...days];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      const useTwo = days.length >= 2 && total >= 20 && rng() < 0.7;
+      if (!useTwo) {
+        out[shuffled[0]] = Math.min(total, 240);
+        return out;
+      }
+      let half = Math.round(total / 2 / 5) * 5;
+      if (half <= 0) half = 5;
+      if (half >= total) half = total - 5;
+      out[shuffled[0]] = half;
+      out[shuffled[1]] = total - half;
+      return out;
+    };
+
+    type PlanInsert = typeof studentMtssPlansTable.$inferInsert;
+    type RecordInsert = typeof tier3WeeklyRecordsTable.$inferInsert;
+    const plans: PlanInsert[] = [];
+    const records: RecordInsert[] = [];
+
+    let idx = 0;
+    for (const studentId of sampled) {
+      idx += 1;
+      const subject = idx % 2 === 0 ? "math" : "ela";
+      const subjectLabel = subject === "math" ? "Math" : "Reading";
+      const interventionist =
+        (teachersByStudent.get(studentId) ?? [])[0] ??
+        staffPool[idx % staffPool.length];
+      const anyDay = rng() < 0.3;
+      const meetingDays = anyDay
+        ? null
+        : pick(rng, ACADEMIC_MEETING_DAY_SETS);
+
+      plans.push({
+        schoolId: school.id,
+        studentId,
+        title: `Tier 3 Academic — ${subjectLabel} Small Group`,
+        goals: `Tier 3 academic small-group intervention (${subjectLabel}); target 30 minutes/week.`,
+        tier: 3,
+        pointRangeMin: null,
+        pointRangeMax: null,
+        notes:
+          "Auto-seeded academic minutes plan. Remove or replace before live use.",
+        interventionSubType: null,
+        assignedTeacherIds: String(interventionist),
+        autoAssignScheduleTeachers: false,
+        trackSchoolWideExpectations: false,
+        tier3GoalSlots: 2,
+        fastSubject: subject,
+        meetingDays,
+        academicMinutesTarget: 30,
+        academicAnyDay: anyDay,
+        openedByName: ACADEMIC_DEMO_MARKER,
+      });
+
+      const visibleDays = academicVisibleDays({
+        academicAnyDay: anyDay,
+        meetingDays,
+      });
+
+      for (const week of weeks) {
+        // ~90% met; the rest split between owed and excused (released).
+        const roll = rng();
+        let academicMinutes: Record<string, number> = {};
+        let released = false;
+        let releaseReason: string | null = null;
+        let releasedByStaffId: number | null = null;
+        let releasedAt: Date | null = null;
+
+        if (roll < 0.9) {
+          academicMinutes = distribute(pick(rng, ACADEMIC_MET_TOTALS), visibleDays);
+        } else if (rng() < 0.5) {
+          academicMinutes = distribute(pick(rng, ACADEMIC_OWED_TOTALS), visibleDays);
+        } else {
+          released = true;
+          releaseReason = pick(rng, ACADEMIC_RELEASE_REASONS);
+          releasedByStaffId = interventionist;
+          releasedAt = new Date(`${week}T15:00:00Z`);
+        }
+
+        records.push({
+          schoolId: school.id,
+          studentId,
+          teacherStaffId: interventionist,
+          weekStartDate: week,
+          academicMinutes,
+          releasedNoIntervention: released,
+          releaseReason,
+          releasedByStaffId,
+          releasedAt,
+          submittedAt: new Date(`${week}T16:00:00Z`),
+        });
+      }
+    }
+
+    if (plans.length === 0) continue;
+    // Atomic per school: if record inserts fail after the plans land, the
+    // whole batch rolls back so the marker-based skip never sees a
+    // half-seeded school on the next boot.
+    await db.transaction(async (tx) => {
+      for (let i = 0; i < plans.length; i += 500) {
+        await tx.insert(studentMtssPlansTable).values(plans.slice(i, i + 500));
+      }
+      for (let i = 0; i < records.length; i += 500) {
+        await tx
+          .insert(tier3WeeklyRecordsTable)
+          .values(records.slice(i, i + 500));
+      }
+    });
+
+    logger.info(
+      {
+        schoolId: school.id,
+        academicPlans: plans.length,
+        weeklyRecords: records.length,
+        weeks: weeks.length,
+      },
+      "[seed] academic Tier 3 minutes demo seeded (~20 students, ~90% meeting target)",
     );
   }
 }
