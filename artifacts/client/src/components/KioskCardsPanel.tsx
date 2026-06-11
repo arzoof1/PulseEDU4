@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
 
 // Per-school admin panel for managing teacher kiosk activation cards.
@@ -437,31 +437,13 @@ export function KioskCardsPanel({
               <tr key={r.staffId} style={{ borderTop: "1px solid var(--border)" }}>
                 <td style={{ padding: "0.5rem" }}>{r.displayName}</td>
                 <td style={{ padding: "0.5rem" }}>
-                  <select
+                  <RoomCombobox
                     value={r.defaultRoom ?? ""}
+                    options={originLocations}
                     disabled={savingRoom === r.staffId || busy}
-                    onChange={(e) => void saveRoom(r.staffId, e.target.value)}
-                    style={{
-                      padding: "0.3rem 0.4rem",
-                      maxWidth: 200,
-                      color: r.defaultRoom ? undefined : "var(--text-subtle)",
-                    }}
-                  >
-                    <option value="">(none — roaming)</option>
-                    {/* Legacy/off-list value: keep it selectable so we never
-                        silently drop a room that isn't in the origin list. */}
-                    {r.defaultRoom &&
-                      !originLocations.includes(r.defaultRoom) && (
-                        <option value={r.defaultRoom}>
-                          {r.defaultRoom} (legacy)
-                        </option>
-                      )}
-                    {originLocations.map((loc) => (
-                      <option key={loc} value={loc}>
-                        {loc}
-                      </option>
-                    ))}
-                  </select>
+                    onSelect={(room) => void saveRoom(r.staffId, room)}
+                    compact
+                  />
                   {savingRoom === r.staffId && (
                     <span
                       style={{
@@ -694,6 +676,198 @@ function RevealModal({
   );
 }
 
+const ROAMING_LABEL = "(none — roaming)";
+
+// Searchable room picker. Behaves like a constrained combobox: the admin can
+// type to filter the origin-room list, but can only commit a value that is a
+// real origin room, the existing (legacy) room, or blank (= roaming). We use a
+// custom listbox instead of a native <datalist> to avoid the datalist
+// onChange-matcher pitfalls and to keep selection strictly constrained.
+function RoomCombobox({
+  value,
+  options,
+  onSelect,
+  disabled,
+  compact,
+}: {
+  value: string;
+  options: string[];
+  onSelect: (room: string) => void;
+  disabled?: boolean;
+  compact?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [activeIdx, setActiveIdx] = useState(0);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const legacy = value && !options.includes(value) ? value : null;
+  const all: Array<{ label: string; val: string; hint?: string }> = [
+    { label: ROAMING_LABEL, val: "" },
+    ...(legacy ? [{ label: legacy, val: legacy, hint: "legacy" }] : []),
+    ...options.map((o) => ({ label: o, val: o })),
+  ];
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? all.filter((o) => o.label.toLowerCase().includes(q))
+    : all;
+
+  const displayLabel = value || ROAMING_LABEL;
+
+  function choose(val: string) {
+    onSelect(val);
+    setOpen(false);
+    setQuery("");
+    inputRef.current?.blur();
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!open && (e.key === "ArrowDown" || e.key === "Enter")) {
+      setOpen(true);
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.min(i + 1, filtered.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const pick = filtered[activeIdx];
+      if (pick) choose(pick.val);
+    } else if (e.key === "Escape") {
+      setOpen(false);
+      setQuery("");
+    }
+  }
+
+  return (
+    <div
+      ref={wrapRef}
+      style={{ position: "relative", maxWidth: compact ? 220 : undefined }}
+    >
+      <input
+        ref={inputRef}
+        type="text"
+        role="combobox"
+        aria-expanded={open}
+        autoComplete="off"
+        disabled={disabled}
+        value={open ? query : displayLabel}
+        placeholder={open ? "Type to search rooms…" : undefined}
+        onFocus={() => {
+          setOpen(true);
+          setQuery("");
+          setActiveIdx(0);
+        }}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setOpen(true);
+          setActiveIdx(0);
+        }}
+        onKeyDown={onKeyDown}
+        style={{
+          padding: compact ? "0.3rem 0.4rem" : "0.5rem",
+          width: "100%",
+          color: value ? undefined : "var(--text-subtle, #64748b)",
+        }}
+      />
+      {open && (
+        <ul
+          role="listbox"
+          style={{
+            position: "absolute",
+            zIndex: 60,
+            top: "calc(100% + 2px)",
+            left: 0,
+            right: 0,
+            minWidth: compact ? 180 : undefined,
+            maxHeight: 240,
+            overflowY: "auto",
+            margin: 0,
+            padding: "0.25rem 0",
+            listStyle: "none",
+            background: "var(--surface, #fff)",
+            color: "var(--text, #111)",
+            border: "1px solid var(--border, #d1d5db)",
+            borderRadius: 6,
+            boxShadow: "0 6px 20px rgba(0,0,0,0.18)",
+          }}
+        >
+          {filtered.length === 0 && (
+            <li
+              style={{
+                padding: "0.4rem 0.6rem",
+                color: "var(--text-subtle, #64748b)",
+                fontSize: "0.85rem",
+              }}
+            >
+              No matching room
+            </li>
+          )}
+          {filtered.map((o, idx) => {
+            const selected = o.val === value;
+            const active = idx === activeIdx;
+            return (
+              <li
+                key={`${o.val}-${o.label}`}
+                role="option"
+                aria-selected={selected}
+                onMouseEnter={() => setActiveIdx(idx)}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  choose(o.val);
+                }}
+                style={{
+                  padding: "0.4rem 0.6rem",
+                  cursor: "pointer",
+                  fontSize: "0.9rem",
+                  background: active
+                    ? "var(--surface-subtle, rgba(0,0,0,0.06))"
+                    : "transparent",
+                  color: o.val
+                    ? undefined
+                    : "var(--text-subtle, #64748b)",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  fontWeight: selected ? 600 : 400,
+                }}
+              >
+                <span>{o.label}</span>
+                {o.hint && (
+                  <span
+                    style={{
+                      fontSize: "0.75rem",
+                      color: "var(--text-subtle, #64748b)",
+                    }}
+                  >
+                    {o.hint}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function SubModal({
   draft,
   onChange,
@@ -760,25 +934,12 @@ function SubModal({
         </div>
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span style={{ fontSize: "0.85rem", color: "#555" }}>Room</span>
-          <select
+          <RoomCombobox
             value={draft.room}
-            onChange={(e) => onChange({ ...draft, room: e.target.value })}
+            options={originLocations}
             disabled={busy}
-            style={{ padding: "0.5rem" }}
-            autoFocus
-          >
-            <option value="">Select a room…</option>
-            {/* Pre-filled default room may pre-date the current origin list;
-                keep it selectable so the sub activation never breaks. */}
-            {draft.room && !originLocations.includes(draft.room) && (
-              <option value={draft.room}>{draft.room}</option>
-            )}
-            {originLocations.map((loc) => (
-              <option key={loc} value={loc}>
-                {loc}
-              </option>
-            ))}
-          </select>
+            onSelect={(room) => onChange({ ...draft, room })}
+          />
         </label>
         <fieldset
           style={{
