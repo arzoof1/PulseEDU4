@@ -241,7 +241,7 @@ export default function SafetyPlanEditor({
               SAFETY PLAN
             </div>
             <div style={{ fontSize: 18, fontWeight: 700, color: "#111827" }}>
-              {studentName ?? studentId}
+              {studentName ?? "Student"}
             </div>
           </div>
           <button

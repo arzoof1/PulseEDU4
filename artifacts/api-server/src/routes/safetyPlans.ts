@@ -521,6 +521,7 @@ router.get(
         firstName: studentsTable.firstName,
         lastName: studentsTable.lastName,
         grade: studentsTable.grade,
+        localSisId: studentsTable.localSisId,
       })
       .from(safetyPlansTable)
       .leftJoin(
@@ -535,6 +536,7 @@ router.get(
       plans: rows.map((r) => ({
         id: r.id,
         studentId: r.studentId,
+        localSisId: r.localSisId ?? null,
         studentName:
           r.firstName || r.lastName
             ? `${r.lastName ?? ""}, ${r.firstName ?? ""}`.replace(

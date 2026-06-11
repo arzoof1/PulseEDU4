@@ -37,3 +37,17 @@ opaque state id they don't know. They scan/type their SIS id.
 
 **Operational note:** Any badges printed before this change encode the FLEID in
 their QR/barcode and must be **reprinted** to scan correctly at the kiosk.
+
+## App-wide rule (not just kiosk)
+
+The boundary above is the SPECIAL CASE of a hard, app-wide product rule: the
+FLEID `student_id` must NEVER be rendered forward-facing ANYWHERE — staff UI,
+parent portal, signage, tooltips, @mention tokens, graph nodes, table cells,
+and CSV/PDF exports all included. Display ID is ALWAYS `local_sis_id`
+(render `localSisId ?? "—"`, never fall back to `studentId`). This recurs
+because `studentId` is the convenient FK already in scope — when adding any
+student-facing surface, the server response must carry `localSisId` and the UI
+must use it. Codified in `replit.md` Gotchas. Confirmed fixed so far:
+kiosk/badges, safety-plan module (`/safety-plans/list` carries `localSisId`).
+Known remaining offenders surface in watchlist/case tools, tardy + @mention
+search, admin-hub activity logs, and some exports — sweep these when touched.
