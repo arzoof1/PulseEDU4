@@ -23,6 +23,7 @@ import {
   ObjectNotFoundError,
 } from "../lib/objectStorage.js";
 import { getObjectAclPolicy } from "../lib/objectAcl.js";
+import type { TourFlyer } from "@workspace/db";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
@@ -207,8 +208,6 @@ export async function bindObjectToSchool(
   return result.ok;
 }
 
-type TourFlyerKey = { key: string };
-
 /**
  * Claim storage objects referenced on the School Tours brag page. Stale paths
  * from a prior host (e.g. Replit) that no longer exist in S3 are dropped so
@@ -217,12 +216,12 @@ type TourFlyerKey = { key: string };
 export async function claimTourBragObjectPaths(
   schoolId: number,
   photos: string[],
-  flyers: TourFlyerKey[],
+  flyers: TourFlyer[],
 ): Promise<
   | {
       ok: true;
       photos: string[];
-      flyers: TourFlyerKey[];
+      flyers: TourFlyer[];
       droppedPaths: string[];
     }
   | { ok: false; reason: BindObjectFailure; failedPath: string }
@@ -247,7 +246,7 @@ export async function claimTourBragObjectPaths(
     return { ok: false, reason: result.reason, failedPath: path };
   }
 
-  const keptFlyers: TourFlyerKey[] = [];
+  const keptFlyers: TourFlyer[] = [];
   for (const flyer of flyers) {
     const path = flyer.key;
     if (!path.startsWith("/objects/")) {
