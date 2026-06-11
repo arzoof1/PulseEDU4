@@ -12,9 +12,14 @@ PulseEDU MTSS plans come in two flavors that share the same tables/routes:
 - **Academic plans**: marked by `fastSubject` (`ela`|`math`) on the plan row.
   - Tier 2 academic = LIGHT: the student's intensive class IS the monitoring.
     NO bell, NO scheduled check-ins.
-  - Tier 3 academic = closely monitored on configurable `meetingDays` (CSV
-    "mon".."fri"). Bell + check-ins fire ONLY on meeting days; the week isn't
-    "complete" until each scheduled meeting day is logged.
+  - Tier 3 academic = **minutes-based small group** (reworked 2026-06-08, was
+    per-day 1–5 scoring). The plan carries a weekly `academicMinutesTarget`
+    (default 30) and an `academicAnyDay` flag. Day-mode: `academicAnyDay=false`
+    → log only on `meetingDays`; `true` → any weekday. Completion is driven by
+    the WEEKLY minutes total vs target, never per-day. Per-day minutes live in
+    `tier3WeeklyRecords.academicMinutes` jsonb `{mon:30,tue:0,...}`. A week is
+    `met` (minutes≥target) / `owed` (below) / `excused` (released "no group").
+    Release valve: `releasedNoIntervention` + `releaseReason`/`releasedBy`/`At`.
 
 ## Invariants (don't break these)
 
@@ -24,11 +29,21 @@ PulseEDU MTSS plans come in two flavors that share the same tables/routes:
   `meetingDays` for behavior plans (send `[]`) and only default Tue/Thu for
   academic — otherwise a behavior Tier 3 plan silently drops from 5 expected
   days to Tue/Thu.
-- **Weekly-form day rendering vs storage diverge on purpose.** The Tier 3 form
-  renders/gates completion on `visibleDays` (meeting days for academic, all 5
-  for behavior), but the save/hydrate loops still iterate all 5 days so off-day
-  cells stay null. Completion gating (`allDaysAccounted`) MUST use `visibleDays`
-  or academic Tue/Thu weeks can never be submitted.
+- **Weekly-form day rendering vs storage diverge on purpose (BEHAVIOR Tier 3).**
+  The behavior Tier 3 form renders/gates completion on `visibleDays` (all 5),
+  but the save/hydrate loops still iterate all 5 days so off-day cells stay null.
+  (Academic Tier 3 now uses a separate minutes form, see below — this invariant
+  is behavior-only post-rework.)
+- **Academic Tier 3 renders a SEPARATE minutes form, not the score grid.**
+  `Tier3WeeklyForm` early-returns `Tier3AcademicMinutesForm` when
+  `isAcademic` (tier3 + fastSubject). It has its own week selector (met/owed/
+  excused badges), needs-attention strip of owed weeks, per-day 5-min minutes
+  dropdowns, running X/target bar, and release valve. Completion = weekly
+  minutes ≥ target OR released. The bell/report met-owed-excused math lives in
+  shared `lib/academicMinutes.ts` — bell, completion-report, and the form must
+  all agree via that helper (don't reimplement the verdict in any one surface).
+  Bell owed-week backlog floors at the rework ship date (2026-06-08) so
+  pre-rework academic weeks never retroactively show as owed.
 
 **Why:** these three were real bugs caught in review — academic weeks that
 couldn't complete, Tier 2 academic plans wrongly owing bell entries, and a

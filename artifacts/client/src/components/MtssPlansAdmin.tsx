@@ -38,6 +38,10 @@ interface Plan {
   // Academic plan wiring: subject (ela|math) and Tier 3 meeting-day CSV.
   fastSubject?: string | null;
   meetingDays?: string | null;
+  // Academic Tier 3 minutes model: weekly minutes target + whether the
+  // group can meet on any weekday (vs the fixed meeting-day schedule).
+  academicMinutesTarget?: number | null;
+  academicAnyDay?: boolean | null;
   effectiveTeachers: Array<{
     staffId: number;
     displayName: string;
@@ -1581,6 +1585,23 @@ function PlanModal({
     }
     return isAcademic ? ["tue", "thu"] : [];
   });
+  // Academic Tier 3 minutes model. The weekly minutes target snaps to a
+  // 5-minute grid on the server (default 30). `academicAnyDay` lets the
+  // group meet on any weekday — when true the meeting-day picker is hidden
+  // and the weekly form accepts minutes on all five days.
+  const [academicMinutesTarget, setAcademicMinutesTarget] = useState<string>(
+    () => {
+      const raw = (plan as Plan & { academicMinutesTarget?: number | null })
+        ?.academicMinutesTarget;
+      return raw == null ? "30" : String(raw);
+    },
+  );
+  const [academicAnyDay, setAcademicAnyDay] = useState<boolean>(
+    () =>
+      Boolean(
+        (plan as Plan & { academicAnyDay?: boolean | null })?.academicAnyDay,
+      ),
+  );
   const [pointMin, setPointMin] = useState<string>(
     plan?.pointRangeMin == null ? "" : String(plan.pointRangeMin),
   );
@@ -1726,7 +1747,18 @@ function PlanModal({
       // the bell + per-meeting-day check-in cadence). Behavior plans and
       // lower tiers send an empty list so an edit that demotes a plan — or
       // a behavior Tier 3 plan — never picks up a Tue/Thu cadence.
-      body.meetingDays = tier === 3 && isAcademic ? meetingDays : [];
+      // Academic Tier 3 "any day" plans never carry a fixed meeting-day
+      // schedule — they're driven purely by the weekly minutes target.
+      body.meetingDays =
+        tier === 3 && isAcademic && !academicAnyDay ? meetingDays : [];
+      // Persist the minutes model for academic Tier 3 plans only.
+      if (tier === 3 && isAcademic) {
+        const parsedTarget = Number(academicMinutesTarget);
+        body.academicMinutesTarget = Number.isFinite(parsedTarget)
+          ? parsedTarget
+          : 30;
+        body.academicAnyDay = academicAnyDay;
+      }
       const r = await authFetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
@@ -1874,10 +1906,11 @@ function PlanModal({
 
         {tier === 3 && isAcademic && (
           <div style={{ marginBottom: "0.75rem" }}>
+            {/* Weekly minutes target — the small group's completion bar. */}
             <label
               style={{ display: "block", fontWeight: 600, marginBottom: 4 }}
             >
-              Meeting days
+              Weekly minutes target
             </label>
             <div
               style={{
@@ -1886,40 +1919,125 @@ function PlanModal({
                 marginBottom: 6,
               }}
             >
-              Days this intervention meets. Reminders and check-ins fire only
-              on these days, and the week isn&rsquo;t complete until each is
-              logged. Leave all unchecked to require every weekday.
+              Total small-group minutes this student should receive each week.
+              Snaps to 5-minute steps. The weekly log shows progress toward
+              this target.
             </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {MEETING_DAY_OPTIONS.map((d) => {
-                const checked = meetingDays.includes(d.key);
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                marginBottom: "0.9rem",
+              }}
+            >
+              <input
+                type="number"
+                min={5}
+                max={240}
+                step={5}
+                value={academicMinutesTarget}
+                onChange={(e) => setAcademicMinutesTarget(e.target.value)}
+                style={{
+                  width: 90,
+                  padding: "0.4rem 0.6rem",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 6,
+                }}
+              />
+              <span style={{ fontSize: "0.85rem", color: "#475569" }}>
+                minutes / week
+              </span>
+            </div>
+
+            {/* Day mode — fixed schedule vs any weekday. */}
+            <label
+              style={{ display: "block", fontWeight: 600, marginBottom: 4 }}
+            >
+              When does the group meet?
+            </label>
+            <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+              {[
+                { val: false, label: "Specific days" },
+                { val: true, label: "Any day" },
+              ].map((opt) => {
+                const active = academicAnyDay === opt.val;
                 return (
                   <button
-                    key={d.key}
+                    key={String(opt.val)}
                     type="button"
-                    onClick={() =>
-                      setMeetingDays((prev) =>
-                        prev.includes(d.key)
-                          ? prev.filter((x) => x !== d.key)
-                          : [...prev, d.key],
-                      )
-                    }
+                    onClick={() => setAcademicAnyDay(opt.val)}
                     style={{
-                      padding: "4px 12px",
+                      padding: "4px 14px",
                       borderRadius: 999,
-                      border: `1px solid ${checked ? "#0d9488" : "#cbd5e1"}`,
-                      background: checked ? "#0d9488" : "white",
-                      color: checked ? "white" : "#475569",
+                      border: `1px solid ${active ? "#0d9488" : "#cbd5e1"}`,
+                      background: active ? "#0d9488" : "white",
+                      color: active ? "white" : "#475569",
                       fontSize: "0.8rem",
                       fontWeight: 600,
                       cursor: "pointer",
                     }}
                   >
-                    {d.label}
+                    {opt.label}
                   </button>
                 );
               })}
             </div>
+
+            {academicAnyDay ? (
+              <div
+                style={{
+                  fontSize: "0.78rem",
+                  color: "#64748b",
+                }}
+              >
+                Minutes can be logged on any weekday — only the weekly total
+                matters.
+              </div>
+            ) : (
+              <>
+                <div
+                  style={{
+                    fontSize: "0.78rem",
+                    color: "#64748b",
+                    marginBottom: 6,
+                  }}
+                >
+                  Days this group meets. The weekly log opens these days for
+                  minute entry. Leave all unchecked to allow every weekday.
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {MEETING_DAY_OPTIONS.map((d) => {
+                    const checked = meetingDays.includes(d.key);
+                    return (
+                      <button
+                        key={d.key}
+                        type="button"
+                        onClick={() =>
+                          setMeetingDays((prev) =>
+                            prev.includes(d.key)
+                              ? prev.filter((x) => x !== d.key)
+                              : [...prev, d.key],
+                          )
+                        }
+                        style={{
+                          padding: "4px 12px",
+                          borderRadius: 999,
+                          border: `1px solid ${checked ? "#0d9488" : "#cbd5e1"}`,
+                          background: checked ? "#0d9488" : "white",
+                          color: checked ? "white" : "#475569",
+                          fontSize: "0.8rem",
+                          fontWeight: 600,
+                          cursor: "pointer",
+                        }}
+                      >
+                        {d.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
           </div>
         )}
 

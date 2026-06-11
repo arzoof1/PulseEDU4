@@ -34,8 +34,77 @@ import { and, eq, sql, inArray } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { loadScheduleTeacherIdsForStudents } from "../lib/effectiveTeachers.js";
+import {
+  isAcademicTier3,
+  sumAcademicMinutes,
+  academicWeekState,
+  academicStartMonday,
+  enumerateWeeks,
+  type AcademicWeekState,
+} from "../lib/academicMinutes.js";
 
 const router: IRouter = Router();
+
+// Status of one academic Tier 3 plan, for one teacher, for one week.
+export interface AcademicWeekStatus {
+  weekStartDate: string;
+  minutes: number;
+  target: number;
+  released: boolean;
+  releaseReason: string | null;
+  releasedAt: string | null;
+  state: AcademicWeekState;
+}
+
+// Compute the academic-minutes status for one teacher on one academic
+// Tier 3 plan, for every week from the plan's start (floored at the rework
+// ship date) through `currentMonday`. Shared by the bell (/owed-today),
+// the weekly form's week selector, and the roster pill so all three agree
+// on met / owed / excused. One DB round-trip per call.
+export async function computeAcademicWeeksForTeacher(
+  schoolId: number,
+  staffId: number,
+  plan: {
+    studentId: string;
+    openedAt: Date | null;
+    academicMinutesTarget: number;
+  },
+  currentMonday: string,
+): Promise<AcademicWeekStatus[]> {
+  const openedLocal = plan.openedAt
+    ? plan.openedAt.toLocaleDateString("en-CA", { timeZone: SCHOOL_TZ })
+    : currentMonday;
+  const startMonday = academicStartMonday(mondayOf(openedLocal));
+  const weeks = enumerateWeeks(startMonday, currentMonday);
+  if (weeks.length === 0) return [];
+  const records = await db
+    .select()
+    .from(tier3WeeklyRecordsTable)
+    .where(
+      and(
+        eq(tier3WeeklyRecordsTable.schoolId, schoolId),
+        eq(tier3WeeklyRecordsTable.teacherStaffId, staffId),
+        eq(tier3WeeklyRecordsTable.studentId, plan.studentId),
+        inArray(tier3WeeklyRecordsTable.weekStartDate, weeks),
+      ),
+    );
+  const byWeek = new Map(records.map((r) => [r.weekStartDate, r]));
+  const target = plan.academicMinutesTarget;
+  return weeks.map((wk) => {
+    const rec = byWeek.get(wk);
+    const minutes = sumAcademicMinutes(rec?.academicMinutes);
+    const released = Boolean(rec?.releasedNoIntervention);
+    return {
+      weekStartDate: wk,
+      minutes,
+      target,
+      released,
+      releaseReason: rec?.releaseReason ?? null,
+      releasedAt: rec?.releasedAt ? rec.releasedAt.toISOString() : null,
+      state: academicWeekState(minutes, target, released),
+    };
+  });
+}
 
 async function loadStaff(
   req: import("express").Request,
@@ -276,7 +345,16 @@ async function computeTier3StatusForTeacher(
   const byStudent = new Map<string, Tier3StatusRow>();
   for (const p of tier3Plans) {
     const rec = recordByStudent.get(p.studentId);
-    const missing = tier3MissingDayCount(p, rec, reachedIdx);
+    // Academic Tier 3 is minutes-based: the pill is "behind" when this
+    // week's logged minutes are under target and the week isn't released.
+    // (The bell carries any prior-week backlog; the roster pill mirrors
+    // behavior plans and stays scoped to the current week.)
+    const missing = isAcademicTier3(p)
+      ? Boolean(rec?.releasedNoIntervention) ||
+        sumAcademicMinutes(rec?.academicMinutes) >= p.academicMinutesTarget
+        ? 0
+        : 1
+      : tier3MissingDayCount(p, rec, reachedIdx);
     const existing = byStudent.get(p.studentId);
     if (existing) {
       existing.missingDayCount = Math.max(existing.missingDayCount, missing);
@@ -440,10 +518,14 @@ router.get("/interventions/owed-today", async (req, res) => {
   }
 
   // ----- Tier 3 (weekly) -----
-  // Owed when the teacher hasn't created the row for this week yet OR
-  // has the row but a score is missing for today's day-of-week. We surface
-  // a single "todo" per student-week regardless of how many days remain
-  // unscored — the form lets them fill in any/all.
+  // Behavior Tier 3 is owed when the teacher hasn't scored today's
+  // day-of-week yet (one "todo" per student-week). Academic Tier 3 is a
+  // minutes-based small group: it's owed when the week's logged minutes
+  // are below target AND the week hasn't been released — surfaced for the
+  // current week AND every still-unresolved prior week (floored at the
+  // rework ship date), each deep-linking to its own week.
+  const behaviorT3Plans = tier3Plans.filter((p) => !isAcademicTier3(p));
+  const academicT3Plans = tier3Plans.filter((p) => isAcademicTier3(p));
   let tier3Owed: Array<{
     studentId: string;
     studentName: string;
@@ -451,9 +533,14 @@ router.get("/interventions/owed-today", async (req, res) => {
     planId: number;
     weekStartDate: string;
     missingDayCount: number;
+    kind: "behavior" | "academic";
+    minutesLogged?: number;
+    minutesTarget?: number;
   }> = [];
-  if (tier3Plans.length > 0) {
-    const studentIdsT3 = tier3Plans.map((p) => p.studentId);
+
+  // Behavior Tier 3 — current week per-day scoring.
+  if (behaviorT3Plans.length > 0) {
+    const studentIdsT3 = behaviorT3Plans.map((p) => p.studentId);
     const records = await db
       .select()
       .from(tier3WeeklyRecordsTable)
@@ -474,7 +561,7 @@ router.get("/interventions/owed-today", async (req, res) => {
     // pill status never disagree about what "behind this week" means.
     const reachedIdx = reachedDayIdx();
 
-    for (const p of tier3Plans) {
+    for (const p of behaviorT3Plans) {
       const rec = recordByStudent.get(p.studentId);
       const missing = tier3MissingDayCount(p, rec, reachedIdx);
       if (missing > 0) {
@@ -486,8 +573,34 @@ router.get("/interventions/owed-today", async (req, res) => {
           planId: p.id,
           weekStartDate,
           missingDayCount: missing,
+          kind: "behavior",
         });
       }
+    }
+  }
+
+  // Academic Tier 3 — minutes per week, with prior-week backlog.
+  for (const p of academicT3Plans) {
+    const weeks = await computeAcademicWeeksForTeacher(
+      schoolId,
+      staff.id,
+      p,
+      weekStartDate,
+    );
+    const s = studentMap.get(p.studentId);
+    for (const wk of weeks) {
+      if (wk.state !== "owed") continue;
+      tier3Owed.push({
+        studentId: p.studentId,
+        studentName: s ? `${s.firstName} ${s.lastName}` : p.studentId,
+        grade: s ? String(s.grade) : null,
+        planId: p.id,
+        weekStartDate: wk.weekStartDate,
+        missingDayCount: 0,
+        kind: "academic",
+        minutesLogged: wk.minutes,
+        minutesTarget: wk.target,
+      });
     }
   }
 
@@ -718,6 +831,9 @@ router.get("/interventions/completion-report", async (req, res) => {
       let completed = 0;
       let expected = 0;
       let scoreAvg: number | null = null;
+      let academic = false;
+      let released = false;
+      let academicState: AcademicWeekState | null = null;
       if (p.tier === 2) {
         // Tier 2 is one-per-week-per-(student, teacher). Either the
         // teacher has at least one entry this week (1/1) or they don't
@@ -725,6 +841,21 @@ router.get("/interventions/completion-report", async (req, res) => {
         // for the per-day report.
         expected = 1;
         completed = (t2Counts.get(key)?.size ?? 0) > 0 ? 1 : 0;
+      } else if (isAcademicTier3(p)) {
+        // Academic Tier 3 is a minutes-based small group. Completion =
+        // minutes logged this week vs the plan's weekly target. A
+        // released week ("no group provided") reads as excused, not owed.
+        academic = true;
+        const rec = t3ByKey.get(key);
+        const minutes = sumAcademicMinutes(rec?.academicMinutes);
+        released = Boolean(rec?.releasedNoIntervention);
+        expected = p.academicMinutesTarget;
+        completed = minutes;
+        academicState = academicWeekState(
+          minutes,
+          p.academicMinutesTarget,
+          released,
+        );
       } else {
         const rec = t3ByKey.get(key);
         const scores = rec
@@ -780,6 +911,9 @@ router.get("/interventions/completion-report", async (req, res) => {
         completed,
         expected,
         scoreAvg,
+        academic,
+        released,
+        academicState,
       };
     });
     return {

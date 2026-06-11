@@ -625,6 +625,39 @@ export async function ensureMtssPlansSchema() {
   await db.execute(
     sql`ALTER TABLE tier3_weekly_records ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ`,
   );
+  // ---- Academic Tier 3 minutes-model rework. Academic Tier 3 plans
+  // (fast_subject set) switched from per-day 1..5 goal scoring to a
+  // weekly minutes-based small-group model. These columns are additive
+  // and nullable/defaulted, so behavior plans and existing academic
+  // records are untouched. ALTER … IF NOT EXISTS keeps prod idempotent.
+  // Weekly minutes target the academic small group must reach to "meet"
+  // the week (default 30).
+  await db.execute(
+    sql`ALTER TABLE student_mtss_plans ADD COLUMN IF NOT EXISTS academic_minutes_target INTEGER NOT NULL DEFAULT 30`,
+  );
+  // Day-mode: FALSE = log only on meeting_days; TRUE = log on any weekday.
+  await db.execute(
+    sql`ALTER TABLE student_mtss_plans ADD COLUMN IF NOT EXISTS academic_any_day BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  // Per-day minutes delivered { mon: 30, tue: 0, ... }. Behavior records
+  // leave the empty default and keep using mon_score..fri_score.
+  await db.execute(
+    sql`ALTER TABLE tier3_weekly_records ADD COLUMN IF NOT EXISTS academic_minutes JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  );
+  // Release valve: mark the week "no group provided" → counts EXCUSED
+  // rather than owed on the bell + reports. Captures who/why/when.
+  await db.execute(
+    sql`ALTER TABLE tier3_weekly_records ADD COLUMN IF NOT EXISTS released_no_intervention BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tier3_weekly_records ADD COLUMN IF NOT EXISTS release_reason TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tier3_weekly_records ADD COLUMN IF NOT EXISTS released_by_staff_id INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tier3_weekly_records ADD COLUMN IF NOT EXISTS released_at TIMESTAMPTZ`,
+  );
 }
 
 export async function seedMtssPlansIfEmpty() {

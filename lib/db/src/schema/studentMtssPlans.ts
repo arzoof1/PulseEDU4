@@ -101,6 +101,20 @@ export const studentMtssPlansTable = pgTable(
     // fires on each scheduled day and the weekly check-in is not
     // complete until every scheduled day (≤ today, not absent) is logged.
     meetingDays: text("meeting_days"),
+    // --- Academic Tier 3 minutes model (rework) ---
+    // Weekly small-group minutes target for academic Tier 3 plans
+    // (fastSubject set). The week is "met" when the sum of the weekly
+    // record's academicMinutes reaches this target (or the week is
+    // released as "no group"). Behavior plans ignore this column.
+    academicMinutesTarget: integer("academic_minutes_target")
+      .notNull()
+      .default(30),
+    // Day-mode for academic Tier 3 logging. When FALSE (default) the plan
+    // uses `meetingDays` to decide which weekday columns the weekly form
+    // exposes for minute entry. When TRUE the group may be logged on ANY
+    // weekday (all five columns shown). Either way completion is driven by
+    // the WEEKLY minutes total vs target, never per-day.
+    academicAnyDay: boolean("academic_any_day").notNull().default(false),
     openedAt: timestamp("opened_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

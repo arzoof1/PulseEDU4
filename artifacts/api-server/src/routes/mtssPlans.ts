@@ -45,6 +45,7 @@ import {
 } from "../lib/effectiveTeachers.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 import { loadFastHistory, pickHistory } from "../lib/fastHistory.js";
+import { DEFAULT_ACADEMIC_MINUTES_TARGET } from "../lib/academicMinutes.js";
 
 const router: IRouter = Router();
 
@@ -385,10 +386,19 @@ router.post("/mtss-plans", async (req, res) => {
     fastBenchmarkCode,
     fastSubject,
     meetingDays,
+    academicMinutesTarget,
+    academicAnyDay,
   } = req.body ?? {};
 
   // Academic Tier 3 monitoring meeting days (validated CSV, "" → null).
   const cleanMeetingDays = normalizeMeetingDays(meetingDays) || null;
+
+  // Academic Tier 3 minutes model. Target snaps to the 5-minute grid in
+  // [5, 240]; falls back to the default when absent/invalid. `anyDay`
+  // lets the group be logged on any weekday regardless of meetingDays.
+  const cleanMinutesTarget = normalizeMinutesTarget(academicMinutesTarget);
+  const cleanAnyDay =
+    typeof academicAnyDay === "boolean" ? academicAnyDay : false;
 
   // Subject-level academic plans created from the condensed FAST
   // scale-score suggestions. Only "ela" / "math" are accepted; anything
@@ -510,6 +520,8 @@ router.post("/mtss-plans", async (req, res) => {
           : null,
       fastSubject: cleanFastSubject,
       meetingDays: cleanMeetingDays,
+      academicMinutesTarget: cleanMinutesTarget,
+      academicAnyDay: cleanAnyDay,
     })
     .returning();
 
@@ -559,9 +571,20 @@ router.patch("/mtss-plans/:id", async (req, res) => {
     fastBenchmarkCode,
     fastSubject,
     meetingDays,
+    academicMinutesTarget,
+    academicAnyDay,
   } = req.body ?? {};
 
   const updates: Partial<typeof studentMtssPlansTable.$inferInsert> = {};
+
+  if (academicMinutesTarget !== undefined) {
+    updates.academicMinutesTarget = normalizeMinutesTarget(
+      academicMinutesTarget,
+    );
+  }
+  if (typeof academicAnyDay === "boolean") {
+    updates.academicAnyDay = academicAnyDay;
+  }
 
   if (fastBenchmarkCode !== undefined) {
     if (fastBenchmarkCode === null || fastBenchmarkCode === "") {
@@ -855,6 +878,18 @@ function normalizeMeetingDays(input: unknown): string {
     }
   }
   return MEETING_DAY_KEYS.filter((d) => set.has(d)).join(",");
+}
+
+// Snap an incoming academic-minutes weekly target to the 5-minute grid in
+// [5, 240]. Falls back to the default (30) when absent or invalid so a
+// missing field never zeroes a plan's target.
+function normalizeMinutesTarget(input: unknown): number {
+  const n = typeof input === "number" ? input : Number(input);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_ACADEMIC_MINUTES_TARGET;
+  let v = Math.round(n / 5) * 5;
+  if (v < 5) v = 5;
+  if (v > 240) v = 240;
+  return v;
 }
 
 router.get("/mtss-plans/fast-suggestions", async (req, res) => {

@@ -10,12 +10,20 @@ import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
+type AcademicState = "met" | "owed" | "excused";
+
 interface TeacherStat {
   teacherStaffId: number;
   teacherName: string;
   completed: number;
   expected: number;
   scoreAvg: number | null;
+  // Academic Tier 3 (minutes-based small group). When `academic` is true
+  // `completed`/`expected` are minutes-logged / weekly-minutes-target and
+  // `academicState` is the met/owed/excused verdict for the week.
+  academic?: boolean;
+  released?: boolean;
+  academicState?: AcademicState | null;
 }
 interface ReportRow {
   planId: number;
@@ -49,6 +57,10 @@ interface Tier3Rec {
   prideThu: number | null;
   prideFri: number | null;
   strategyUsage?: Array<{ strategyId: number; day: string; used: boolean }>;
+  // Academic Tier 3 minutes model.
+  academicMinutes?: Record<string, number> | null;
+  releasedNoIntervention?: boolean | null;
+  releaseReason?: string | null;
 }
 
 interface Tier2Entry {
@@ -58,6 +70,54 @@ interface Tier2Entry {
   teacherStaffId: number;
   notes: string | null;
 }
+
+// Plan-level academic verdict from its per-teacher rows. A plan is
+// excused only when every academic interventionist released the week;
+// met if any reached target; otherwise owed. Returns null for behavior
+// plans (no academic teacher rows).
+function rowAcademicState(teachers: TeacherStat[]): AcademicState | null {
+  const academic = teachers.filter((t) => t.academic);
+  if (academic.length === 0) return null;
+  if (academic.every((t) => t.academicState === "excused")) return "excused";
+  if (academic.some((t) => t.academicState === "met")) return "met";
+  return "owed";
+}
+
+const ACADEMIC_STATE_STYLE: Record<
+  AcademicState,
+  { bg: string; fg: string; label: string }
+> = {
+  met: { bg: "#dcfce7", fg: "#166534", label: "Met" },
+  owed: { bg: "#fef3c7", fg: "#92400e", label: "Owed" },
+  excused: { bg: "#e2e8f0", fg: "#475569", label: "Excused" },
+};
+
+function academicBadge(state: AcademicState): React.ReactNode {
+  const st = ACADEMIC_STATE_STYLE[state];
+  return (
+    <span
+      style={{
+        background: st.bg,
+        color: st.fg,
+        borderRadius: 999,
+        padding: "1px 8px",
+        fontSize: "0.75rem",
+        fontWeight: 600,
+      }}
+    >
+      {st.label}
+    </span>
+  );
+}
+
+const MINUTE_DAYS = ["mon", "tue", "wed", "thu", "fri"] as const;
+const MINUTE_DAY_LABELS: Record<string, string> = {
+  mon: "Mon",
+  tue: "Tue",
+  wed: "Wed",
+  thu: "Thu",
+  fri: "Fri",
+};
 
 function mondayOf(d: Date): string {
   const x = new Date(d);
@@ -169,6 +229,10 @@ export default function InterventionReportsPage({ onBack }: Props) {
         t3ScoreWeight: 0,
         t3Avg: null as number | null,
         t3Plans: 0,
+        acMet: 0,
+        acOwed: 0,
+        acExcused: 0,
+        acPlans: 0,
         totalPlans: 0,
       };
     }
@@ -178,6 +242,10 @@ export default function InterventionReportsPage({ onBack }: Props) {
     let t3ScoreSum = 0;
     let t3ScoreWeight = 0;
     let t3Plans = 0;
+    let acMet = 0;
+    let acOwed = 0;
+    let acExcused = 0;
+    let acPlans = 0;
     for (const r of data.rows) {
       if (r.tier === 2) {
         t2Plans += 1;
@@ -186,11 +254,21 @@ export default function InterventionReportsPage({ onBack }: Props) {
           t2Expected += t.expected;
         }
       } else if (r.tier === 3) {
-        t3Plans += 1;
-        for (const t of r.teachers) {
-          if (t.scoreAvg !== null && t.completed > 0) {
-            t3ScoreSum += t.scoreAvg * t.completed;
-            t3ScoreWeight += t.completed;
+        const acState = rowAcademicState(r.teachers);
+        if (acState) {
+          // Academic Tier 3 (minutes small group) — counted by
+          // met/owed/excused, kept out of the behavior avg-score tile.
+          acPlans += 1;
+          if (acState === "met") acMet += 1;
+          else if (acState === "excused") acExcused += 1;
+          else acOwed += 1;
+        } else {
+          t3Plans += 1;
+          for (const t of r.teachers) {
+            if (t.scoreAvg !== null && t.completed > 0) {
+              t3ScoreSum += t.scoreAvg * t.completed;
+              t3ScoreWeight += t.completed;
+            }
           }
         }
       }
@@ -204,6 +282,10 @@ export default function InterventionReportsPage({ onBack }: Props) {
       t3ScoreWeight,
       t3Avg: t3ScoreWeight > 0 ? t3ScoreSum / t3ScoreWeight : null,
       t3Plans,
+      acMet,
+      acOwed,
+      acExcused,
+      acPlans,
       totalPlans: data.rows.length,
     };
   }, [data]);
@@ -213,18 +295,27 @@ export default function InterventionReportsPage({ onBack }: Props) {
     const q = search.trim().toLowerCase();
     return data.rows.filter((r) => {
       if (tierFilter !== "all" && String(r.tier) !== tierFilter) return false;
-      const totalCompleted = r.teachers.reduce(
-        (a, t) => a + t.completed,
-        0,
-      );
-      const totalExpected = r.teachers.reduce((a, t) => a + t.expected, 0);
-      if (completionFilter === "complete" && totalCompleted < totalExpected)
-        return false;
-      if (
-        completionFilter === "behind" &&
-        (totalExpected === 0 || totalCompleted >= totalExpected)
-      )
-        return false;
+      const acState = rowAcademicState(r.teachers);
+      if (acState) {
+        // Academic plans are graded by verdict, not raw minutes math: an
+        // excused (released) week counts as complete, only "owed" is behind.
+        const complete = acState === "met" || acState === "excused";
+        if (completionFilter === "complete" && !complete) return false;
+        if (completionFilter === "behind" && acState !== "owed") return false;
+      } else {
+        const totalCompleted = r.teachers.reduce(
+          (a, t) => a + t.completed,
+          0,
+        );
+        const totalExpected = r.teachers.reduce((a, t) => a + t.expected, 0);
+        if (completionFilter === "complete" && totalCompleted < totalExpected)
+          return false;
+        if (
+          completionFilter === "behind" &&
+          (totalExpected === 0 || totalCompleted >= totalExpected)
+        )
+          return false;
+      }
       if (q && !r.studentName.toLowerCase().includes(q)) return false;
       return true;
     });
@@ -467,10 +558,24 @@ export default function InterventionReportsPage({ onBack }: Props) {
                     : "bad"
             }
           />
+          {summary.acPlans > 0 && (
+            <SummaryTile
+              label="Academic small groups (minutes)"
+              value={`${summary.acMet}/${summary.acPlans} met`}
+              sub={`${summary.acOwed} owed · ${summary.acExcused} excused`}
+              tone={
+                summary.acOwed === 0
+                  ? "good"
+                  : summary.acMet >= summary.acOwed
+                    ? "warn"
+                    : "bad"
+              }
+            />
+          )}
           <SummaryTile
             label="Active plans this week"
             value={String(summary.totalPlans)}
-            sub={`${summary.t2Plans} Tier 2 · ${summary.t3Plans} Tier 3`}
+            sub={`${summary.t2Plans} Tier 2 · ${summary.t3Plans} Tier 3${summary.acPlans > 0 ? ` · ${summary.acPlans} academic` : ""}`}
             tone="neutral"
           />
         </div>
@@ -491,6 +596,7 @@ export default function InterventionReportsPage({ onBack }: Props) {
             {visibleRows.map((r) => {
               const completed = r.teachers.reduce((a, t) => a + t.completed, 0);
               const expected = r.teachers.reduce((a, t) => a + t.expected, 0);
+              const acState = rowAcademicState(r.teachers);
               const isSel = selected?.studentId === r.studentId;
               return (
                 <li
@@ -521,7 +627,7 @@ export default function InterventionReportsPage({ onBack }: Props) {
                       </span>
                     )}
                     <span style={{ marginLeft: "auto" }}>
-                      {pill(completed, expected)}
+                      {acState ? academicBadge(acState) : pill(completed, expected)}
                     </span>
                   </div>
                   <div
@@ -531,9 +637,13 @@ export default function InterventionReportsPage({ onBack }: Props) {
                       marginTop: 2,
                     }}
                   >
+                    {acState ? "Academic · " : ""}
                     {r.subType ? `${r.subType.toUpperCase()} · ` : ""}
                     {r.assignedTeacherCount} teacher
                     {r.assignedTeacherCount === 1 ? "" : "s"}
+                    {acState
+                      ? ` · ${completed}/${expected} min`
+                      : ""}
                     {r.title ? ` · ${r.title}` : ""}
                   </div>
                 </li>
@@ -557,7 +667,11 @@ export default function InterventionReportsPage({ onBack }: Props) {
               recent comments.
             </div>
           )}
-          {selected && (
+          {selected &&
+            (() => {
+              const selectedIsAcademic =
+                rowAcademicState(selected.teachers) !== null;
+              return (
             <>
               <div style={{ marginBottom: "0.5rem" }}>
                 {tierBadge(selected.tier)}
@@ -597,7 +711,7 @@ export default function InterventionReportsPage({ onBack }: Props) {
                         fontSize: "0.8rem",
                       }}
                     >
-                      Completed
+                      {selectedIsAcademic ? "Minutes" : "Completed"}
                     </th>
                     <th
                       style={{
@@ -606,7 +720,7 @@ export default function InterventionReportsPage({ onBack }: Props) {
                         fontSize: "0.8rem",
                       }}
                     >
-                      Avg score
+                      {selectedIsAcademic ? "Status" : "Avg score"}
                     </th>
                   </tr>
                 </thead>
@@ -617,15 +731,31 @@ export default function InterventionReportsPage({ onBack }: Props) {
                         {t.teacherName}
                       </td>
                       <td style={{ padding: "0.3rem" }}>
-                        {pill(t.completed, t.expected)}
+                        {t.academic ? (
+                          <span style={{ fontSize: "0.85rem" }}>
+                            {t.completed}/{t.expected} min
+                          </span>
+                        ) : (
+                          pill(t.completed, t.expected)
+                        )}
                       </td>
                       <td style={{ padding: "0.3rem", fontSize: "0.85rem" }}>
-                        {t.scoreAvg !== null ? t.scoreAvg.toFixed(2) : "—"}
+                        {t.academic
+                          ? t.academicState
+                            ? academicBadge(t.academicState)
+                            : "—"
+                          : t.scoreAvg !== null
+                            ? t.scoreAvg.toFixed(2)
+                            : "—"}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+
+              {selectedIsAcademic && (
+                <AcademicMinutesGraph records={detailT3} />
+              )}
 
               {selected.tier === 3 && detailT3.length > 0 && (
                 <>
@@ -689,10 +819,108 @@ export default function InterventionReportsPage({ onBack }: Props) {
                 </>
               )}
             </>
-          )}
+              );
+            })()}
         </div>
       </div>
     </section>
+  );
+}
+
+// Minutes-per-day bar graph for an academic small group. Sums minutes
+// across all interventionists' records for the selected week so a plan
+// shared by two co-teachers shows the combined contact time per day.
+// Also surfaces any "no group provided" release reason for the week.
+function AcademicMinutesGraph({ records }: { records: Tier3Rec[] }) {
+  const perDay = MINUTE_DAYS.map((d) =>
+    records.reduce((a, rec) => a + (rec.academicMinutes?.[d] ?? 0), 0),
+  );
+  const total = perDay.reduce((a, b) => a + b, 0);
+  const max = Math.max(...perDay, 1);
+  const released = records.filter((r) => r.releasedNoIntervention);
+  return (
+    <>
+      <h4 style={{ margin: "0.75rem 0 0.4rem" }}>
+        Minutes per day · {total} total this week
+      </h4>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-end",
+          gap: 10,
+          height: 110,
+          padding: "0 0.25rem",
+        }}
+      >
+        {MINUTE_DAYS.map((d, i) => {
+          const mins = perDay[i];
+          const h = Math.round((mins / max) * 80);
+          return (
+            <div
+              key={d}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                flex: 1,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: "0.7rem",
+                  color: "#475569",
+                  marginBottom: 2,
+                  fontWeight: 600,
+                }}
+              >
+                {mins}
+              </div>
+              <div
+                style={{
+                  width: "100%",
+                  height: Math.max(h, mins > 0 ? 4 : 0),
+                  background: mins > 0 ? "#2563eb" : "transparent",
+                  borderRadius: "3px 3px 0 0",
+                  minHeight: mins > 0 ? 4 : 0,
+                }}
+              />
+              <div
+                style={{
+                  fontSize: "0.7rem",
+                  color: "#64748b",
+                  marginTop: 4,
+                  borderTop: "1px solid #e2e8f0",
+                  width: "100%",
+                  textAlign: "center",
+                  paddingTop: 2,
+                }}
+              >
+                {MINUTE_DAY_LABELS[d]}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {released.length > 0 && (
+        <div
+          style={{
+            marginTop: 8,
+            fontSize: "0.8rem",
+            color: "#475569",
+            background: "#f1f5f9",
+            border: "1px solid #e2e8f0",
+            borderRadius: 6,
+            padding: "0.4rem 0.6rem",
+          }}
+        >
+          <strong>Excused — no group provided.</strong>{" "}
+          {released
+            .map((r) => r.releaseReason)
+            .filter(Boolean)
+            .join(" · ") || "(no reason given)"}
+        </div>
+      )}
+    </>
   );
 }
 
