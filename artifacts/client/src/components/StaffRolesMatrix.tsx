@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
+import StudentPhoto from "./StudentPhoto";
 
 type BoolKey = string;
 
@@ -454,6 +455,12 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
     }
   }
 
+  function setStaffPhoto(id: number, key: string | null) {
+    setStaff((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, photoObjectKey: key } : s)),
+    );
+  }
+
   async function exportCsv() {
     setExporting(true);
     setError("");
@@ -685,9 +692,25 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                       minWidth: 220,
                     }}
                   >
-                    <div style={{ fontWeight: 600 }}>{s.displayName}</div>
-                    <div style={{ fontSize: 11, color: "var(--text-subtle)" }}>
-                      {s.email}
+                    <div
+                      style={{ display: "flex", gap: 8, alignItems: "flex-start" }}
+                    >
+                      <StaffPhotoControl
+                        staffId={s.id}
+                        displayName={s.displayName}
+                        photoObjectKey={
+                          (s.photoObjectKey as string | null | undefined) ?? null
+                        }
+                        onChange={(key) => setStaffPhoto(s.id, key)}
+                      />
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600 }}>{s.displayName}</div>
+                        <div
+                          style={{ fontSize: 11, color: "var(--text-subtle)" }}
+                        >
+                          {s.email}
+                        </div>
+                      </div>
                     </div>
                     {canResetPasswords &&
                       // Self-reset uses the user-pill "Change password" flow
@@ -1460,6 +1483,158 @@ function DefaultRoomCell({
           if (dirty) onSave(draft);
         }}
       />
+    </div>
+  );
+}
+
+// Square teacher avatar + upload/remove controls, shown in the Staff &
+// Roles name cell. The uploaded photo feeds both this avatar and the
+// teacher ID badge PDF. Upload pipeline mirrors the student-photo flow:
+//   1) POST /api/storage/uploads/request-url
+//   2) PUT  uploadURL  (file body)
+//   3) POST /api/staff/:staffId/photo  { objectPath }
+// No photo-consent toggle for staff (admins manage their own roster).
+function StaffPhotoControl({
+  staffId,
+  displayName,
+  photoObjectKey,
+  onChange,
+}: {
+  staffId: number;
+  displayName: string;
+  photoObjectKey: string | null;
+  onChange: (key: string | null) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const parts = displayName.trim().split(/\s+/);
+  const firstName = parts[0] ?? "";
+  const lastName = parts.length > 1 ? parts.slice(1).join(" ") : "";
+
+  async function upload(file: File) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const reqRes = await authFetch("/api/storage/uploads/request-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: file.name || `staff-${staffId}.jpg`,
+          size: file.size,
+          contentType: file.type || "image/jpeg",
+        }),
+      });
+      if (!reqRes.ok) throw new Error("Could not start upload");
+      const { uploadURL, objectPath } = (await reqRes.json()) as {
+        uploadURL: string;
+        objectPath: string;
+      };
+      const putRes = await fetch(uploadURL, {
+        method: "PUT",
+        headers: { "Content-Type": file.type || "image/jpeg" },
+        body: file,
+      });
+      if (!putRes.ok) throw new Error("Upload failed");
+      const saveRes = await authFetch(`/api/staff/${staffId}/photo`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ objectPath }),
+      });
+      if (!saveRes.ok) {
+        const j = (await saveRes.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(j.error ?? "Could not save photo");
+      }
+      const j = (await saveRes.json().catch(() => ({}))) as {
+        photoObjectKey?: string;
+      };
+      onChange(j.photoObjectKey ?? objectPath);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm(`Remove ${displayName}'s photo?`)) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authFetch(`/api/staff/${staffId}/photo`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error ?? "Could not remove photo");
+      }
+      onChange(null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 4,
+      }}
+    >
+      <StudentPhoto
+        firstName={firstName}
+        lastName={lastName}
+        photoObjectKey={photoObjectKey}
+        photoConsent={true}
+        size={44}
+        style={{ borderRadius: 8 }}
+      />
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void upload(f);
+        }}
+      />
+      <div style={{ display: "flex", gap: 4 }}>
+        <button
+          type="button"
+          className="ghost"
+          disabled={busy}
+          onClick={() => inputRef.current?.click()}
+          style={{ fontSize: 10, padding: "1px 5px" }}
+          title="Upload a photo for this teacher's ID badge"
+        >
+          {busy ? "…" : photoObjectKey ? "Replace" : "Photo"}
+        </button>
+        {photoObjectKey && (
+          <button
+            type="button"
+            className="ghost"
+            disabled={busy}
+            onClick={() => void remove()}
+            style={{ fontSize: 10, padding: "1px 5px" }}
+          >
+            Remove
+          </button>
+        )}
+      </div>
+      {err && (
+        <div style={{ fontSize: 10, color: "#b91c1c", maxWidth: 80 }}>
+          {err}
+        </div>
+      )}
     </div>
   );
 }

@@ -253,6 +253,97 @@ export function KioskCardsPanel({
     void downloadCardsPdf({ all: true }, `kiosk-cards-all.pdf`);
   }
 
+  // Teacher ID badges share the kiosk activation secret (QR + barcode +
+  // PIN) so one lanyard card both IDs the teacher and activates their
+  // room kiosk. Same endpoint contract as cards.pdf (all/staffIds/
+  // presupplied) — the "all"/"staffIds" modes ROTATE tokens.
+  async function downloadBadgesPdf(
+    payload:
+      | { all: true }
+      | { staffIds: number[] }
+      | {
+          presupplied: Array<{
+            staffId: number;
+            enrollToken: string;
+            pin: string;
+          }>;
+        },
+    filename: string,
+  ) {
+    setBusy(true);
+    setError("");
+    try {
+      const res = await authFetch("/api/kiosk/teacher-badges.pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        throw new Error(b.error ?? `PDF generation failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function printBadgesAll() {
+    if (
+      !window.confirm(
+        "Print ID badges for EVERY active teacher? Each badge carries that teacher's live kiosk QR, barcode, and PIN — generating this ROTATES every token, so any card or badge already handed out stops working. Only do this when you're ready to distribute the new badges.",
+      )
+    )
+      return;
+    void downloadBadgesPdf({ all: true }, `teacher-id-badges-all.pdf`);
+  }
+
+  function printBadgeOne(row: TokenRow) {
+    // Reuse freshly-revealed raw values when available (no rotation) so
+    // the printed badge PIN matches what's on screen.
+    if (
+      reveal &&
+      reveal.staffId === row.staffId &&
+      reveal.enrollToken &&
+      reveal.pin
+    ) {
+      void downloadBadgesPdf(
+        {
+          presupplied: [
+            {
+              staffId: row.staffId,
+              enrollToken: reveal.enrollToken,
+              pin: reveal.pin,
+            },
+          ],
+        },
+        `teacher-id-badge-${row.staffId}.pdf`,
+      );
+      return;
+    }
+    if (
+      !window.confirm(
+        `Print an ID badge for ${row.displayName}? The badge carries their live kiosk QR, barcode, and PIN — this rotates their token, so their previous card or badge stops working.`,
+      )
+    )
+      return;
+    void downloadBadgesPdf(
+      { staffIds: [row.staffId] },
+      `teacher-id-badge-${row.staffId}.pdf`,
+    );
+  }
+
   function printOne(row: TokenRow) {
     // If we still have the freshly-revealed raw values for this row
     // (typically right after "Reissue"), print THOSE — no rotation, so
@@ -376,6 +467,14 @@ export function KioskCardsPanel({
             disabled={busy || rows.length === 0}
           >
             Print all cards (PDF)
+          </button>
+          <button
+            type="button"
+            onClick={printBadgesAll}
+            disabled={busy || rows.length === 0}
+            title="Lanyard ID badges (teacher photo + name + house) that also activate the room kiosk"
+          >
+            Teacher ID badges (PDF)
           </button>
         </div>
       </div>
@@ -507,6 +606,17 @@ export function KioskCardsPanel({
                       style={{ marginRight: 4 }}
                     >
                       Print card
+                    </button>
+                  )}
+                  {r.tokenId && (
+                    <button
+                      type="button"
+                      onClick={() => printBadgeOne(r)}
+                      disabled={busy}
+                      style={{ marginRight: 4 }}
+                      title="Lanyard ID badge (photo + name + house) that also activates the kiosk"
+                    >
+                      Badge
                     </button>
                   )}
                   {isCoreTeam && (

@@ -212,6 +212,13 @@ export const staffTable = pgTable("staff", {
   // so existing staff rows and non-house schools stay valid.
   houseId: integer("house_id"),
 
+  // Optional staff photo for ID badges + staff-facing avatars. Bytes go
+  // through the same school-scoped /api/storage/* pipeline as student
+  // photos (bindObjectToSchool records the resulting object key here).
+  // Nullable — falls back to an initials bubble. Admin-managed (no
+  // per-staff consent toggle; these are professional staff photos).
+  photoObjectKey: text("photo_object_key"),
+
   // Staff Directory phone numbers, surfaced in the Finder ("Where is
   // this teacher right now?") and on student-finder schedule rows.
   // - workExtension: low-sensitivity (school extension or classroom

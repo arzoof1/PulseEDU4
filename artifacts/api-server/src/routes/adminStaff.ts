@@ -14,6 +14,7 @@ import {
   getSchoolIdsForDistrict,
 } from "../lib/scope";
 import { generateAndHashTempPassword } from "../lib/tempPassword";
+import { bindObjectToSchool } from "./storage.js";
 
 const router: IRouter = Router();
 
@@ -172,6 +173,7 @@ const STAFF_SELECT = {
   defaultRoom: staffTable.defaultRoom,
   houseId: staffTable.houseId,
   department: staffTable.department,
+  photoObjectKey: staffTable.photoObjectKey,
   schoolId: staffTable.schoolId,
 } as const;
 
@@ -972,6 +974,106 @@ router.post(
       displayName: target.displayName,
       email: target.email,
     });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Staff photo manager — mirrors the student photo flow (routes/students.ts).
+// Bytes go through the existing /api/storage/* pipeline (so the ACL is
+// school-scoped automatically); we just record the resulting objectKey on
+// the staff row. Used for ID badges + staff-facing avatars. Admin-gated.
+// Bytes are NEVER deleted on replace/clear — the previous object stays in
+// storage (orphaned) so an accidental delete can be recovered.
+// ---------------------------------------------------------------------------
+router.post(
+  "/staff/:staffId/photo",
+  requireAdminOrSuper(),
+  async (req: Request, res: Response): Promise<void> => {
+    const actor = (req as Request & { staff: StaffRow }).staff;
+    const staffId = Number(req.params.staffId);
+    const objectPath: string =
+      typeof req.body?.objectPath === "string"
+        ? req.body.objectPath.trim()
+        : "";
+    if (!Number.isInteger(staffId) || staffId <= 0) {
+      res.status(400).json({ error: "staffId required" });
+      return;
+    }
+    if (!objectPath || !objectPath.startsWith("/objects/")) {
+      res.status(400).json({ error: "objectPath required (/objects/...)" });
+      return;
+    }
+    // Cross-school safety — the target staff member must be in the actor's
+    // school. (SuperUsers manage their whole district, so we allow any
+    // school in their district; everyone else is pinned to their own.)
+    const allowedSchoolIds = actor.isSuperUser
+      ? await (async () => {
+          const districtId = await getDistrictIdForSchool(actor.schoolId);
+          return districtId !== null
+            ? await getSchoolIdsForDistrict(districtId)
+            : [actor.schoolId];
+        })()
+      : [actor.schoolId];
+    const [target] = await db
+      .select({ id: staffTable.id, schoolId: staffTable.schoolId })
+      .from(staffTable)
+      .where(
+        and(
+          eq(staffTable.id, staffId),
+          inArray(staffTable.schoolId, allowedSchoolIds),
+        ),
+      );
+    if (!target) {
+      res.status(404).json({ error: "Staff member not found" });
+      return;
+    }
+    // Bind the freshly-uploaded object to the target's school. Returns
+    // false if the path was issued to a different school or already bound
+    // elsewhere — both reject so a hostile client can't reassign someone
+    // else's image to one of our staff.
+    const ok = await bindObjectToSchool(objectPath, target.schoolId);
+    if (!ok) {
+      res
+        .status(403)
+        .json({ error: "Object not bound — re-upload and try again" });
+      return;
+    }
+    await db
+      .update(staffTable)
+      .set({ photoObjectKey: objectPath })
+      .where(eq(staffTable.id, target.id));
+    res.json({ ok: true, photoObjectKey: objectPath });
+  },
+);
+
+router.delete(
+  "/staff/:staffId/photo",
+  requireAdminOrSuper(),
+  async (req: Request, res: Response): Promise<void> => {
+    const actor = (req as Request & { staff: StaffRow }).staff;
+    const staffId = Number(req.params.staffId);
+    if (!Number.isInteger(staffId) || staffId <= 0) {
+      res.status(400).json({ error: "staffId required" });
+      return;
+    }
+    const allowedSchoolIds = actor.isSuperUser
+      ? await (async () => {
+          const districtId = await getDistrictIdForSchool(actor.schoolId);
+          return districtId !== null
+            ? await getSchoolIdsForDistrict(districtId)
+            : [actor.schoolId];
+        })()
+      : [actor.schoolId];
+    const result = await db
+      .update(staffTable)
+      .set({ photoObjectKey: null })
+      .where(
+        and(
+          eq(staffTable.id, staffId),
+          inArray(staffTable.schoolId, allowedSchoolIds),
+        ),
+      );
+    res.json({ ok: true, updated: result.rowCount ?? 0 });
   },
 );
 

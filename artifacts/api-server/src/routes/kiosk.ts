@@ -23,6 +23,15 @@ import {
   teacherDestinationAllowlistTable,
 } from "@workspace/db";
 import { renderKioskCardsPdf } from "../lib/kioskCardsPdf.js";
+import {
+  renderTeacherBadgesPdf,
+  type TeacherBadgeInput,
+  type CardDesign,
+} from "../lib/teacherBadgesPdf.js";
+import {
+  ObjectStorageService,
+  ObjectNotFoundError,
+} from "../lib/objectStorage.js";
 import { and, eq, inArray, isNull, gt, desc, sql, ne, asc } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
@@ -2590,6 +2599,356 @@ router.post("/kiosk/cards.pdf", requireAdmin, async (req, res) => {
   res.setHeader(
     "Content-Disposition",
     `attachment; filename="kiosk-cards-${new Date().toISOString().slice(0, 10)}.pdf"`,
+  );
+  res.send(pdf);
+});
+
+// ---- Admin: printable TEACHER ID BADGE PDF -------------------------
+// Lanyard-style staff ID badge that ALSO carries the live kiosk
+// activation payload (QR + Code 128 + 6-digit PIN), so one worn card
+// both identifies the teacher and activates their room kiosk. Shares
+// the per-school CardDesign + photo pipeline with student badges, and
+// the same enroll-token modes (presupplied / all / staffIds) as
+// /kiosk/cards.pdf above. POST so the mutating (rotation) modes can't
+// be triggered by a cross-site navigation.
+const teacherBadgeObjectStorage = new ObjectStorageService();
+
+// Fetch raw object bytes for embedding in the PDF. Returns null on any
+// failure (missing object, network glitch) — the renderer falls back
+// to the initials disc silently.
+async function fetchTeacherPhotoBytes(
+  objectPath: string,
+): Promise<Buffer | null> {
+  try {
+    const file =
+      await teacherBadgeObjectStorage.getObjectEntityFile(objectPath);
+    return await new Promise<Buffer | null>((resolve) => {
+      const chunks: Buffer[] = [];
+      const stream = file.createReadStream();
+      stream.on("data", (c: Buffer) => chunks.push(c));
+      stream.on("end", () => resolve(Buffer.concat(chunks)));
+      stream.on("error", () => resolve(null));
+    });
+  } catch (err) {
+    if (err instanceof ObjectNotFoundError) return null;
+    return null;
+  }
+}
+
+// Resolve the per-school card design once per batch (shared with the
+// student badge route). Image-mode top background is fetched a single
+// time; SVG is filtered out (pdfkit can't rasterize it).
+async function buildTeacherCardDesign(schoolId: number): Promise<CardDesign> {
+  const b = await loadBrandingForSchool(schoolId);
+  let bgImageBytes: Buffer | null = null;
+  if (b.cardBgMode === "image" && b.cardBgObjectPath) {
+    const MAX_BG_BYTES = 5 * 1024 * 1024;
+    const bytes = await fetchTeacherPhotoBytes(b.cardBgObjectPath);
+    if (bytes && bytes.length <= MAX_BG_BYTES) {
+      const head = bytes.slice(0, 16).toString("utf8").trimStart();
+      if (!head.startsWith("<")) bgImageBytes = bytes;
+    }
+  }
+  return {
+    orientation: b.cardOrientation,
+    bgMode: b.cardBgMode,
+    bgColors: b.cardBgColors.slice(0, 2),
+    bgAngle: b.cardBgAngle,
+    bgImageBytes,
+    headerTextMode: b.cardHeaderTextMode,
+    headerTextColor: b.cardHeaderTextColor,
+    showHouse: b.cardShowHouse,
+    houseBgMode: b.cardHouseBgMode,
+    houseBgColor: b.cardHouseBgColor,
+    houseTextMode: b.cardHouseTextMode,
+    houseTextColor: b.cardHouseTextColor,
+  };
+}
+
+router.post("/kiosk/teacher-badges.pdf", requireAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const actor = (req as Request & {
+    staff: typeof staffTable.$inferSelect;
+  }).staff;
+
+  const body = (req.body ?? {}) as {
+    all?: boolean;
+    staffIds?: number[];
+    presupplied?: Array<{
+      staffId?: unknown;
+      enrollToken?: unknown;
+      pin?: unknown;
+    }>;
+  };
+
+  // Mode 1: presupplied raw token/PIN values — validate shape + verify
+  // each maps to a LIVE row with a matching PIN (same gate as cards.pdf).
+  type Presupplied = { staffId: number; enrollToken: string; pin: string };
+  const presupplied: Presupplied[] = [];
+  if (Array.isArray(body.presupplied) && body.presupplied.length > 0) {
+    for (const raw of body.presupplied) {
+      if (
+        typeof raw.staffId !== "number" ||
+        !Number.isInteger(raw.staffId) ||
+        raw.staffId <= 0 ||
+        typeof raw.enrollToken !== "string" ||
+        raw.enrollToken.length === 0 ||
+        typeof raw.pin !== "string" ||
+        !/^\d{6}$/.test(raw.pin)
+      ) {
+        res.status(400).json({ error: "Invalid presupplied entry shape" });
+        return;
+      }
+      presupplied.push({
+        staffId: raw.staffId,
+        enrollToken: raw.enrollToken,
+        pin: raw.pin,
+      });
+    }
+    for (const p of presupplied) {
+      // eslint-disable-next-line no-await-in-loop
+      const [row] = await db
+        .select({
+          id: kioskEnrollTokensTable.id,
+          pinHash: kioskEnrollTokensTable.pinHash,
+        })
+        .from(kioskEnrollTokensTable)
+        .where(
+          and(
+            eq(kioskEnrollTokensTable.schoolId, schoolId),
+            eq(kioskEnrollTokensTable.staffId, p.staffId),
+            eq(kioskEnrollTokensTable.tokenHash, hashToken(p.enrollToken)),
+            isNull(kioskEnrollTokensTable.revokedAt),
+          ),
+        );
+      if (!row || !row.pinHash) {
+        res.status(409).json({
+          error:
+            "One of the supplied cards has been revoked or rotated. Reissue and try again.",
+        });
+        return;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      const pinOk = await bcrypt.compare(p.pin, row.pinHash);
+      if (!pinOk) {
+        res.status(400).json({
+          error: "Supplied PIN does not match the live card for this teacher.",
+        });
+        return;
+      }
+    }
+  }
+
+  const all =
+    body.all === true || req.query.all === "1" || req.query.all === "true";
+  const bodyIds = Array.isArray(body.staffIds)
+    ? body.staffIds.filter((n): n is number => Number.isInteger(n) && n > 0)
+    : [];
+  const queryIdsRaw =
+    typeof req.query.staffIds === "string" ? req.query.staffIds : "";
+  const queryIds = queryIdsRaw
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  const staffIds = bodyIds.length ? bodyIds : queryIds;
+
+  if (presupplied.length === 0 && !all && staffIds.length === 0) {
+    res
+      .status(400)
+      .json({ error: "Provide presupplied=[...], staffIds=1,2,3, or all=1" });
+    return;
+  }
+
+  const filterStaffIds =
+    presupplied.length > 0 ? presupplied.map((p) => p.staffId) : staffIds;
+  const useAllFilter = presupplied.length === 0 && all;
+  const teachers = await db
+    .select()
+    .from(staffTable)
+    .where(
+      and(
+        eq(staffTable.schoolId, schoolId),
+        eq(staffTable.active, true),
+        ...(useAllFilter ? [] : [inArray(staffTable.id, filterStaffIds)]),
+      ),
+    )
+    .orderBy(asc(staffTable.displayName));
+
+  if (teachers.length === 0) {
+    res.status(404).json({ error: "No matching teachers" });
+    return;
+  }
+
+  const [school] = await db
+    .select({ name: schoolsTable.name })
+    .from(schoolsTable)
+    .where(eq(schoolsTable.id, schoolId));
+  const schoolName = school?.name ?? "PulseEDU";
+
+  // Per-teacher default room.
+  const teacherIds = teachers.map((t) => t.id);
+  const roomByStaffId = new Map<number, string | null>();
+  if (teacherIds.length) {
+    const defaults = await db
+      .select({
+        staffId: staffDefaultsTable.staffId,
+        defaultLocationName: staffDefaultsTable.defaultLocationName,
+      })
+      .from(staffDefaultsTable)
+      .where(inArray(staffDefaultsTable.staffId, teacherIds));
+    for (const d of defaults) {
+      if (d.staffId == null) continue;
+      roomByStaffId.set(d.staffId, d.defaultLocationName ?? null);
+    }
+  }
+
+  // Per-teacher house (color + name + icon + optional uploaded logo bytes).
+  const houseIds = Array.from(
+    new Set(
+      teachers
+        .map((t) => (t as { houseId: number | null }).houseId)
+        .filter((id): id is number => typeof id === "number"),
+    ),
+  );
+  const houseById = new Map<
+    number,
+    {
+      name: string;
+      color: string;
+      iconKey: string | null;
+      logoObjectPath: string | null;
+    }
+  >();
+  if (houseIds.length) {
+    const rows = await db
+      .select({
+        id: housesTable.id,
+        name: housesTable.name,
+        color: housesTable.color,
+        iconKey: housesTable.iconKey,
+        iconObjectKey: housesTable.iconObjectKey,
+      })
+      .from(housesTable)
+      .where(
+        and(
+          eq(housesTable.schoolId, schoolId),
+          inArray(housesTable.id, houseIds),
+        ),
+      );
+    for (const r of rows) {
+      // SVG house logos can't be rasterized by pdfkit — skip them so the
+      // renderer falls back to the colored letter emblem.
+      const logoPath =
+        r.iconObjectKey && !r.iconObjectKey.toLowerCase().endsWith(".svg")
+          ? r.iconObjectKey
+          : null;
+      houseById.set(r.id, {
+        name: r.name,
+        color: r.color,
+        iconKey: r.iconKey,
+        logoObjectPath: logoPath,
+      });
+    }
+  }
+
+  // Resolve the shared card design + house logo bytes once for the batch.
+  const design = await buildTeacherCardDesign(schoolId);
+  const houseLogoBytesByPath = new Map<string, Buffer | null>();
+  for (const h of houseById.values()) {
+    if (h.logoObjectPath && !houseLogoBytesByPath.has(h.logoObjectPath)) {
+      // eslint-disable-next-line no-await-in-loop
+      const bytes = await fetchTeacherPhotoBytes(h.logoObjectPath);
+      const MAX = 4 * 1024 * 1024;
+      let usable: Buffer | null = null;
+      if (bytes && bytes.length <= MAX) {
+        const head = bytes.slice(0, 16).toString("utf8").trimStart();
+        if (!head.startsWith("<")) usable = bytes;
+      }
+      houseLogoBytesByPath.set(h.logoObjectPath, usable);
+    }
+  }
+
+  // Fetch teacher photos with bounded concurrency (cap 6, max 4MB each).
+  const photoByStaffId = new Map<number, Buffer | null>();
+  const withPhotos = teachers.filter(
+    (t) => (t as { photoObjectKey: string | null }).photoObjectKey,
+  );
+  const CONCURRENCY = 6;
+  const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
+  for (let i = 0; i < withPhotos.length; i += CONCURRENCY) {
+    const slice = withPhotos.slice(i, i + CONCURRENCY);
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.all(
+      slice.map(async (t) => {
+        const key = (t as { photoObjectKey: string | null }).photoObjectKey;
+        if (!key) return;
+        const bytes = await fetchTeacherPhotoBytes(key);
+        photoByStaffId.set(
+          t.id,
+          bytes && bytes.length <= MAX_PHOTO_BYTES ? bytes : null,
+        );
+      }),
+    );
+  }
+
+  const baseUrl = kioskBaseUrl(req);
+  const bulkContext = `teacher_badge:${randomBytes(6).toString("hex")}`;
+  const presuppliedByStaffId = new Map<number, Presupplied>();
+  for (const p of presupplied) presuppliedByStaffId.set(p.staffId, p);
+
+  const badges: TeacherBadgeInput[] = [];
+  for (const t of teachers) {
+    const pre = presuppliedByStaffId.get(t.id);
+    let rawToken: string;
+    let rawPin: string;
+    if (pre) {
+      rawToken = pre.enrollToken;
+      rawPin = pre.pin;
+    } else {
+      // eslint-disable-next-line no-await-in-loop
+      const issued = await issueEnrollToken({
+        schoolId,
+        staffId: t.id,
+        actorStaffId: actor.id,
+        reason: "card_print",
+        bulkContext,
+      });
+      rawToken = issued.rawToken;
+      rawPin = issued.rawPin;
+    }
+    const teacherHouseId = (t as { houseId: number | null }).houseId;
+    const house =
+      teacherHouseId !== null && teacherHouseId !== undefined
+        ? houseById.get(teacherHouseId) ?? null
+        : null;
+    badges.push({
+      teacherName: t.displayName,
+      room: roomByStaffId.get(t.id) ?? null,
+      schoolName,
+      enrollToken: rawToken,
+      pin: rawPin,
+      baseUrl,
+      house: house
+        ? {
+            name: house.name,
+            color: house.color,
+            iconKey: house.iconKey,
+            logoBytes: house.logoObjectPath
+              ? houseLogoBytesByPath.get(house.logoObjectPath) ?? null
+              : null,
+          }
+        : null,
+      photoBytes: photoByStaffId.get(t.id) ?? null,
+      design,
+    });
+  }
+
+  const pdf = await renderTeacherBadgesPdf(badges);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="teacher-id-badges-${new Date().toISOString().slice(0, 10)}.pdf"`,
   );
   res.send(pdf);
 });
