@@ -1254,9 +1254,9 @@ ul[style*="listStyle: none"] li button:hover {
   max-height: calc(100vh - 6rem);
 }
 .tdp-overlay {
-  justify-content: flex-end;
-  align-items: flex-start;
-  padding: 5rem 1.5rem 1.5rem;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem 1.5rem;
   background: transparent;
 }
 .tdp-card {
