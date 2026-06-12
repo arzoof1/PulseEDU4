@@ -276,43 +276,32 @@ function csvCell(value: unknown): string {
   return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
 }
 
-// List staff with full role + capability flags. SuperUsers see every school
-// in their own district (the role is district-wide, not cross-district —
-// before D6 the SuperUser branch was unscoped, which leaked across
-// districts the moment Pasco was added). Everyone else — including school
-// admins and cap_staff_roles holders — sees only their own school.
+// List staff with full role + capability flags. Scoped to the active school
+// (`req.schoolId`) for everyone, including SuperUsers — a SuperUser sees the
+// school they're currently switched into, and switches schools to manage
+// another. District-wide reporting lives on dedicated district routes
+// (e.g. districtOverview.ts), gated by capability, not this roster surface.
 router.get(
   "/admin/staff",
   requireAdminOrSuper(),
   async (req: Request, res: Response) => {
-    const actor = (req as Request & { staff: StaffRow }).staff;
-    if (actor.isSuperUser) {
-      const districtId = await getDistrictIdForSchool(actor.schoolId);
-      const districtSchoolIds =
-        districtId !== null ? await getSchoolIdsForDistrict(districtId) : [];
-      const rows =
-        districtSchoolIds.length === 0
-          ? []
-          : await db
-              .select(STAFF_SELECT)
-              .from(staffTable)
-              .where(inArray(staffTable.schoolId, districtSchoolIds))
-              .orderBy(asc(staffTable.displayName));
-      res.json(rows);
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(400).json({ error: "No active school" });
       return;
     }
     const rows = await db
       .select(STAFF_SELECT)
       .from(staffTable)
-      .where(eq(staffTable.schoolId, actor.schoolId))
+      .where(eq(staffTable.schoolId, schoolId))
       .orderBy(asc(staffTable.displayName));
     res.json(rows);
   },
 );
 
 // Export the full staff roster as a CSV (opens in Excel). Same scoping as the
-// list endpoint: SuperUsers get their whole district, everyone else their own
-// school. Cell phone is admin-gated (admin / district admin / super only).
+// list endpoint: the active school only (SuperUsers switch schools to export
+// another). Cell phone is admin-gated (admin / district admin / super only).
 router.get(
   "/admin/staff/export.csv",
   requireAdminOrSuper(),
@@ -321,26 +310,16 @@ router.get(
     const canSeeCell =
       actor.isAdmin || actor.isDistrictAdmin || actor.isSuperUser;
 
-    let rows: StaffRow[];
-    if (actor.isSuperUser) {
-      const districtId = await getDistrictIdForSchool(actor.schoolId);
-      const districtSchoolIds =
-        districtId !== null ? await getSchoolIdsForDistrict(districtId) : [];
-      rows =
-        districtSchoolIds.length === 0
-          ? []
-          : await db
-              .select()
-              .from(staffTable)
-              .where(inArray(staffTable.schoolId, districtSchoolIds))
-              .orderBy(asc(staffTable.displayName));
-    } else {
-      rows = await db
-        .select()
-        .from(staffTable)
-        .where(eq(staffTable.schoolId, actor.schoolId))
-        .orderBy(asc(staffTable.displayName));
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(400).json({ error: "No active school" });
+      return;
     }
+    const rows: StaffRow[] = await db
+      .select()
+      .from(staffTable)
+      .where(eq(staffTable.schoolId, schoolId))
+      .orderBy(asc(staffTable.displayName));
 
     // Resolve school + house names in two small lookups (avoids a join).
     const schoolIds = [...new Set(rows.map((r) => r.schoolId))];
@@ -989,7 +968,6 @@ router.post(
   "/staff/:staffId/photo",
   requireAdminOrSuper(),
   async (req: Request, res: Response): Promise<void> => {
-    const actor = (req as Request & { staff: StaffRow }).staff;
     const staffId = Number(req.params.staffId);
     const objectPath: string =
       typeof req.body?.objectPath === "string"
@@ -1003,43 +981,27 @@ router.post(
       res.status(400).json({ error: "objectPath required (/objects/...)" });
       return;
     }
-    // Cross-school safety — the target staff member must be in the actor's
-    // school. (SuperUsers manage their whole district, so we allow any
-    // school in their district; everyone else is pinned to their own.)
-    const allowedSchoolIds = actor.isSuperUser
-      ? await (async () => {
-          const districtId = await getDistrictIdForSchool(actor.schoolId);
-          return districtId !== null
-            ? await getSchoolIdsForDistrict(districtId)
-            : [actor.schoolId];
-        })()
-      : [actor.schoolId];
+    // Cross-school safety — the target staff member must be in the active
+    // school (the one the actor is currently switched into). SuperUsers
+    // switch schools to manage another school's staff.
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(400).json({ error: "No active school" });
+      return;
+    }
     const [target] = await db
       .select({ id: staffTable.id, schoolId: staffTable.schoolId })
       .from(staffTable)
-      .where(
-        and(
-          eq(staffTable.id, staffId),
-          inArray(staffTable.schoolId, allowedSchoolIds),
-        ),
-      );
+      .where(and(eq(staffTable.id, staffId), eq(staffTable.schoolId, schoolId)));
     if (!target) {
       res.status(404).json({ error: "Staff member not found" });
       return;
     }
-    // Bind the freshly-uploaded object to the TARGET's school (so that
-    // school's staff can read the badge photo). The upload URL was minted
-    // under the ACTOR's own req.schoolId, which may differ from the target's
-    // school for a SuperUser/district admin editing another school's staff —
-    // so accept any school the actor is authorized to manage as the uploader.
-    // Returns false if the path was issued to an out-of-scope school or is
-    // already bound elsewhere, so a hostile client can't reassign someone
+    // Bind the freshly-uploaded object to the target's school. Returns
+    // false if the path was issued to a different school or already bound
+    // elsewhere — both reject so a hostile client can't reassign someone
     // else's image to one of our staff.
-    const ok = await bindObjectToSchool(
-      objectPath,
-      target.schoolId,
-      allowedSchoolIds,
-    );
+    const ok = await bindObjectToSchool(objectPath, target.schoolId);
     if (!ok) {
       res
         .status(403)
@@ -1058,29 +1020,20 @@ router.delete(
   "/staff/:staffId/photo",
   requireAdminOrSuper(),
   async (req: Request, res: Response): Promise<void> => {
-    const actor = (req as Request & { staff: StaffRow }).staff;
     const staffId = Number(req.params.staffId);
     if (!Number.isInteger(staffId) || staffId <= 0) {
       res.status(400).json({ error: "staffId required" });
       return;
     }
-    const allowedSchoolIds = actor.isSuperUser
-      ? await (async () => {
-          const districtId = await getDistrictIdForSchool(actor.schoolId);
-          return districtId !== null
-            ? await getSchoolIdsForDistrict(districtId)
-            : [actor.schoolId];
-        })()
-      : [actor.schoolId];
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(400).json({ error: "No active school" });
+      return;
+    }
     const result = await db
       .update(staffTable)
       .set({ photoObjectKey: null })
-      .where(
-        and(
-          eq(staffTable.id, staffId),
-          inArray(staffTable.schoolId, allowedSchoolIds),
-        ),
-      );
+      .where(and(eq(staffTable.id, staffId), eq(staffTable.schoolId, schoolId)));
     res.json({ ok: true, updated: result.rowCount ?? 0 });
   },
 );

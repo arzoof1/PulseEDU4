@@ -1,5 +1,5 @@
 - [api-server stale bundle](api-server-stale-bundle.md) — api-server dev is `build && start` (no watch); restart to pick up merged/edited server code before suspecting an app bug.
-- [Object bind uploader vs owner](object-bind-uploader-vs-owner.md) — bindObjectToSchool owner=target school, but pending match must accept the uploader's req.schoolId (cross-school admin) via uploaderSchoolIds; else 403 "Object not bound".
+- [Staff & Roles active-school scope](object-bind-uploader-vs-owner.md) — roster list/export/photo scope to req.schoolId (active school) for ALL incl SuperUser; object bind/read are same-school only; district reach lives on capability-gated district routes.
 - [Display live remote control](display-live-control.md) — bump revision atomically in SQL (sole TV change-detector); public signage-by-id is unauthenticated by design.
 - [Mutating production data](prod-data-mutation.md) — agent tools are read-only on prod; change prod rows via an idempotent boot one-shot (marker in `app_one_shot_markers`) that runs on Publish.
 - [Prod deployment identity](prod-deployment-identity.md) — live pulseedu.pulsekinetics.us is a SEPARATE nginx/Helmet host with its own DB; this workspace + executeSql(production) don't reach it. Verify before assuming prod==workspace.

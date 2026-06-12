@@ -1,39 +1,40 @@
 ---
-name: Object bind — uploader school vs owner school
-description: Why bindObjectToSchool separates the ACL owner school from the school that minted the upload URL.
+name: Staff & Roles is active-school scoped
+description: Staff & Roles roster (list/export/photo) follows the active school, not the whole district; district reach is a separate capability surface.
 ---
 
-`/api/storage/uploads/request-url` records a pending upload under the
-**uploader's** `req.schoolId` (in-memory ledger). `bindObjectToSchool` later
-claims the object: it sets the ACL **owner** and verifies a matching pending
-entry exists.
+# Staff & Roles scopes to the ACTIVE school, not the district
 
-**Rule:** when an actor uploads on behalf of a *different* school they manage
-(e.g. a SuperUser/district admin setting another school's teacher photo), the
-ACL owner must be the **target's** school but the pending match must accept the
-**actor's** upload school. Pass the actor's authorized schools as
-`bindObjectToSchool(objectPath, ownerSchoolId, uploaderSchoolIds)`. When owner
-and uploader are the same school (the common case, e.g. student photos), call
-it with two args — the 3rd defaults to `[ownerSchoolId]`.
+Staff & Roles is an **operational** surface: its list, CSV export, and
+per-staff photo upload/delete all scope to the actor's **active school**
+(`req.schoolId`, set by the tenancy switcher / `activeSchoolOverride`) —
+for everyone, including SuperUsers. A SuperUser switches schools to
+manage another school's staff.
 
-**Why:** the staff photo route originally called
-`bindObjectToSchool(objectPath, target.schoolId)`; for a SuperUser whose
-`req.schoolId` ≠ target school, `pending.schoolId !== target.schoolId` → bind
-returned false → 403 "Object not bound". The student route never hit this
-because it binds with the same `req.schoolId` it uploaded under.
+**Why:** A SuperUser reported the roster showing every school in the
+district. The earlier design fanned the SuperUser branch out over
+`getSchoolIdsForDistrict`, which is wrong for an operational roster.
 
-**Invariant kept:** the already-bound branch still only succeeds when
-`existing.owner === schoolOwnerKey(ownerSchoolId)`, so a bound object can never
-be re-owned by another school, regardless of `uploaderSchoolIds`.
+**How to apply:**
+- Scope operational/management surfaces (rosters, kiosks, hall passes,
+  PBIS, per-staff mutations) by `req.schoolId`. Guard with a 400 when
+  there's no active school.
+- Keep **district-wide reach** as a *capability*, exposed only on
+  dedicated reporting routes (e.g. `districtOverview.ts`), gated by
+  `canActAsDistrict` + `getSchoolIdsForDistrict` — never bolted onto a
+  per-school roster. Adding a future "District PM1 report" belongs there.
 
-**Read-path corollary:** the bind fix alone leaves the photo invisible — the
-object is owned by the target school but a district admin views from a
-*different* active school, so `GET /storage/objects/*` (owner === viewer
-req.schoolId) 404s → initials fallback. Fix: on the slow path (after the
-same-school check fails) a SuperUser/District Admin may read an object owned by
-any school in their **own district** (`viewerMayReadAcrossSchool`). Keep the
-fast same-school check first so the common avatar render stays one lookup.
+# Object storage bind/read are same-school only
 
-**Lesson:** cross-school object scoping has TWO sides — the write/bind owner
-AND the per-viewer read ACL. Fixing one without the other yields a silent
-display failure, not an error.
+`bindObjectToSchool(objectPath, schoolId)` is 2-arg and same-school: the
+pending upload's school must equal the owner school, and the
+`/storage/objects/*` read path allows only `policy.owner ===
+school:<req.schoolId>`. There is **no** cross-school/district read or
+bind widening — an earlier `uploaderSchoolIds` 3rd arg +
+`viewerMayReadAcrossSchool` slow path were tried and **reverted** once
+the roster became single-school (the upload target is always in the
+active school, so owner == req.schoolId == pending.schoolId).
+
+**How to apply:** if a *future* district surface needs to read another
+school's object, add the widening **there**, gated by `canActAsDistrict`
+— don't reintroduce it globally in `storage.ts`.
