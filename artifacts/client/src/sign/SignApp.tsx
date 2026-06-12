@@ -28,7 +28,13 @@ type DocMeta = {
   fileUrl: string;
 };
 
-type Phase = "loading" | "ready" | "signed-already" | "invalid" | "done";
+type Phase =
+  | "loading"
+  | "ready"
+  | "signed-already"
+  | "invalid"
+  | "render-error"
+  | "done";
 
 function tokenFromPath(): string {
   // /sign/<token>
@@ -55,6 +61,8 @@ export default function SignApp() {
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
   // Kept for PDF compositing: the original PDF bytes.
   const pdfBytesRef = useRef<ArrayBuffer | null>(null);
+  // Guards the render effect so the document is rasterized exactly once.
+  const renderedRef = useRef(false);
 
   const drawing = useRef(false);
   const last = useRef<{ x: number; y: number } | null>(null);
@@ -79,12 +87,11 @@ export default function SignApp() {
         const m = (await res.json()) as DocMeta;
         if (cancelled) return;
         setMeta(m);
-        if (m.status !== "pending") {
-          setPhase("signed-already");
-          return;
-        }
-        await renderDocument(m);
-        if (!cancelled) setPhase("ready");
+        // Flip to the document UI first so the base/signature <canvas>
+        // elements actually mount. renderDocument writes to those refs and
+        // they don't exist on the loading screen — rasterizing happens in
+        // the render effect below, once the refs are in the DOM.
+        setPhase(m.status === "pending" ? "ready" : "signed-already");
       } catch {
         if (!cancelled) setPhase("invalid");
       }
@@ -94,6 +101,30 @@ export default function SignApp() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  // Rasterize the document only after the canvases are mounted (phase
+  // "ready"). Running this inside the fetch effect crashed with a null canvas
+  // ref and surfaced as a misleading "Link not valid" message.
+  useEffect(() => {
+    if (phase !== "ready" || !meta || renderedRef.current) return;
+    renderedRef.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        await renderDocument(meta);
+      } catch (err) {
+        console.error("[sign] render failed", err);
+        if (!cancelled) {
+          renderedRef.current = false;
+          setPhase("render-error");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, meta]);
 
   async function renderDocument(m: DocMeta) {
     const fileRes = await fetch(m.fileUrl);
@@ -113,7 +144,7 @@ export default function SignApp() {
       canvas.width = Math.floor(viewport.width);
       canvas.height = Math.floor(viewport.height);
       const ctx = canvas.getContext("2d")!;
-      await page.render({ canvasContext: ctx, viewport, canvas }).promise;
+      await page.render({ canvasContext: ctx, viewport }).promise;
       prepareSignatureCanvas(canvas.width, canvas.height);
     } else {
       const blob = await fileRes.blob();
@@ -313,6 +344,17 @@ export default function SignApp() {
           This signing link isn&rsquo;t valid. The link may have been cut off
           when it was copied or sent &mdash; please ask the sender to share it
           again.
+        </p>
+      </Centered>
+    );
+  }
+  if (phase === "render-error") {
+    return (
+      <Centered>
+        <h2>Couldn&rsquo;t open this document</h2>
+        <p>
+          The link is valid, but this document couldn&rsquo;t be displayed.
+          Please ask the sender to re-upload it and share a new link.
         </p>
       </Centered>
     );
