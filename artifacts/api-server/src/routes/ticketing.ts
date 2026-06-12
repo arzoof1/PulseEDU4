@@ -18,7 +18,8 @@ import {
   type TicketEventRow,
 } from "@workspace/db";
 import { and, eq, inArray, sql, desc } from "drizzle-orm";
-import { randomBytes, createHash } from "crypto";
+import { createHash } from "crypto";
+import { genUrlSafeToken } from "../lib/urlSafeToken.js";
 import { requireSchool } from "../lib/scope.js";
 import { canManageTickets } from "../lib/coreTeam.js";
 import { sendTicketEmailForGrant } from "../lib/ticketEmail.js";
@@ -48,11 +49,14 @@ const EVENT_STATUSES = new Set(["draft", "published", "closed"]);
 
 type StaffRow = typeof staffTable.$inferSelect;
 
-// Generate an unguessable QR payload token. base64url of 24 random bytes
-// (~32 chars, 192 bits) — not derived from any student id, so a leaked code
-// reveals nothing and cannot be forged or guessed.
+// Generate an unguessable QR payload token (~32 chars, ~190 bits) — not derived
+// from any student id, so a leaked code reveals nothing and cannot be forged or
+// guessed.
 function genTicketToken(): string {
-  return randomBytes(24).toString("base64url");
+  // base62, not base64url: this token rides in the ticket URL / QR payload that
+  // families open from email, where a trailing '-'/'_' would be stripped by
+  // linkifiers. See lib/urlSafeToken.
+  return genUrlSafeToken(32); // ~190 bits, parity with randomBytes(24)
 }
 
 async function requireStaff(
@@ -1861,7 +1865,7 @@ router.post(
       typeof body.gateLabel === "string" && body.gateLabel.trim()
         ? body.gateLabel.trim()
         : label;
-    const plaintext = randomBytes(18).toString("base64url");
+    const plaintext = genUrlSafeToken(24); // linkifier-safe scanner link token
     const [created] = await db
       .insert(ticketScannerLinksTable)
       .values({

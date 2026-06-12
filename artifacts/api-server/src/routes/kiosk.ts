@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import bcrypt from "bcryptjs";
 import { randomBytes, createHash } from "node:crypto";
+import { genUrlSafeToken } from "../lib/urlSafeToken.js";
 import {
   db,
   hallPassesTable,
@@ -254,7 +255,7 @@ async function resolveActivation(args: {
   // lock turns that error path into a clean serialized flow. Filter on
   // schoolId AND room so "Room 204" in two different schools never
   // collide.
-  const token = randomBytes(32).toString("base64url");
+  const token = genUrlSafeToken(43); // ~256 bits, linkifier-safe (lib/urlSafeToken)
   const tokenHash = hashToken(token);
   const expiresAt = new Date(Date.now() + ttlMs);
 
@@ -1359,7 +1360,9 @@ function generatePin(): string {
 }
 
 function generateEnrollToken(): string {
-  return randomBytes(24).toString("base64url");
+  // base62, not base64url: this token rides in the kiosk-enroll QR/URL, where a
+  // trailing '-'/'_' would be stripped by linkifiers. See lib/urlSafeToken.
+  return genUrlSafeToken(32); // ~190 bits, parity with randomBytes(24)
 }
 
 // Compute the public-facing kiosk URL the QR should encode. We trust

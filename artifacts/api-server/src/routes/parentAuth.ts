@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request } from "express";
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
+import { genUrlSafeToken } from "../lib/urlSafeToken.js";
 import {
   db,
   parentsTable,
@@ -528,7 +529,9 @@ const GENERIC_RESET_ERROR =
 const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 function newResetToken(): string {
-  return crypto.randomBytes(32).toString("base64url");
+  // base62, not base64url: this raw token rides in the reset-email URL, where a
+  // trailing '-'/'_' would be stripped by linkifiers. See lib/urlSafeToken.
+  return genUrlSafeToken(43); // ~256 bits, parity with randomBytes(32)
 }
 
 // We persist only a SHA-256 hash of the reset token, never the raw value.

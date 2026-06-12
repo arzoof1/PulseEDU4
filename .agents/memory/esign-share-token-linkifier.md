@@ -19,9 +19,15 @@ exact token → HTTP 200; same token with the trailing `-` dropped → HTTP 404.
 the "expired" wording was a red herring.
 
 **How to apply:** For any externally-opened link token, generate
-pure-alphanumeric base62 (`A-Za-z0-9`) via rejection sampling (discard bytes
-≥ 248 = 4×62 to avoid modulo bias); 32 chars ≈ 190 bits. Exact TEXT-column
-lookups mean legacy base64url tokens keep resolving — no migration needed.
-Same base64url-in-URL risk still lives in other routes that email/QR links:
-`parentInvites`, `ticketing` QR, `kiosk`, and `auth`/`parentAuth` reset raw
-tokens — fix them the same way if those links start failing.
+pure-alphanumeric base62 via the shared `genUrlSafeToken(len)` helper
+(`artifacts/api-server/src/lib/urlSafeToken.ts`) — rejection-sampled
+(discard bytes ≥ 248 = 4×62, no modulo bias). Char-length sets entropy:
+43 ≈ 256 bits, 32 ≈ 190, 24 ≈ 143 (parity with randomBytes 32/24/18).
+base62 ⊆ base64url, so existing exact-TEXT lookups, format validators, and
+`hash*` digests keep working — no migration; legacy tokens still resolve.
+Only swap the RAW token generator, NEVER the stored `hash*(...).digest(...)`
+(those never ride in a URL; changing them invalidates in-flight links).
+All known external-link generators now route through the helper: e-sign
+share, staff + parent password reset, parent invites, ticket QR + gate
+scanner, kiosk activation + enroll, hall-pass queue viewer. New
+external/emailed/QR link tokens must use the helper too.

@@ -19,7 +19,7 @@ import {
   schoolsTable,
 } from "@workspace/db";
 import { and, eq, inArray, isNull, gt, asc, ne, sql } from "drizzle-orm";
-import { randomBytes } from "node:crypto";
+import { genUrlSafeToken } from "../lib/urlSafeToken.js";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { findPolarityConflict } from "./polarityPairs";
@@ -782,7 +782,7 @@ router.post("/kiosk/viewer-token", requireStaff, async (req, res) => {
     return;
   }
 
-  const token = randomBytes(24).toString("base64url");
+  const token = genUrlSafeToken(32); // ~190 bits, linkifier-safe (lib/urlSafeToken)
   const tokenHash = createHash("sha256").update(token).digest("hex");
   const expiresAt = new Date(
     Math.min(
