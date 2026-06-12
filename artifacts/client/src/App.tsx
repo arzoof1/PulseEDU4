@@ -9387,6 +9387,10 @@ function App() {
         <div
           role="status"
           style={{
+            // Span the full app-shell grid width (sidebar + main) so the
+            // bar is full-bleed across the top like the header — otherwise
+            // it gets trapped in the 240px sidebar column and wraps.
+            gridColumn: "1 / -1",
             // Sticky so the Exit button is always reachable even if the
             // user has scrolled or the page header tries to overlap.
             position: "sticky",
