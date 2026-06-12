@@ -898,6 +898,192 @@ function EnrollConfirmScreen({
 
 /* ----------------------------- Activation screen ----------------------------- */
 
+// Searchable, click-to-select room picker for the kiosk activation screen.
+// Replaces the old free-text <input list=datalist>, which let staff type a
+// room name that didn't exactly match a real room (silent activation failure)
+// and rendered an awkward native dropdown. A room is only ever set by picking
+// it from the list — there is no free-text fallback — so typos can't slip
+// through. Works with mouse, trackpad, and keyboard (arrow keys + Enter) for
+// laptop kiosks.
+function RoomPicker({
+  value,
+  options,
+  defaultRoom,
+  onSelect,
+  disabled,
+}: {
+  value: string;
+  options: string[];
+  defaultRoom: string | null;
+  onSelect: (room: string) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [activeIdx, setActiveIdx] = useState(0);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? options.filter((o) => o.toLowerCase().includes(q))
+    : options;
+
+  useEffect(() => {
+    setActiveIdx(0);
+  }, [query]);
+
+  function labelFor(r: string) {
+    return r === defaultRoom ? `${r} (your room)` : r;
+  }
+
+  function choose(r: string) {
+    onSelect(r);
+    setOpen(false);
+    setQuery("");
+    inputRef.current?.blur();
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!open && (e.key === "ArrowDown" || e.key === "Enter")) {
+      e.preventDefault();
+      setOpen(true);
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.min(i + 1, Math.max(filtered.length - 1, 0)));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const pick = filtered[activeIdx];
+      if (pick) choose(pick);
+    } else if (e.key === "Escape") {
+      setOpen(false);
+      setQuery("");
+    }
+  }
+
+  const displayValue = open ? query : value ? labelFor(value) : "";
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <input
+        ref={inputRef}
+        type="text"
+        role="combobox"
+        aria-expanded={open}
+        autoComplete="off"
+        disabled={disabled}
+        value={displayValue}
+        placeholder={
+          defaultRoom ? `${defaultRoom} (your room)` : "Tap to pick a room…"
+        }
+        onFocus={() => {
+          setOpen(true);
+          setQuery("");
+          setActiveIdx(0);
+        }}
+        onChange={(e) => {
+          // Editing the query un-commits any current selection so the user
+          // can never type a different room, skip clicking it, and still
+          // activate the previously-picked (e.g. default) room by mistake.
+          // The submit button stays disabled until a real option is chosen.
+          if (value) onSelect("");
+          setQuery(e.target.value);
+          setOpen(true);
+        }}
+        onKeyDown={onKeyDown}
+        style={inputStyle}
+      />
+      {open && (
+        <ul
+          role="listbox"
+          style={{
+            position: "absolute",
+            zIndex: 60,
+            top: "calc(100% + 4px)",
+            left: 0,
+            right: 0,
+            maxHeight: 260,
+            overflowY: "auto",
+            margin: 0,
+            padding: "0.25rem 0",
+            listStyle: "none",
+            background: "#0f172a",
+            border: "1px solid rgba(255,255,255,0.2)",
+            borderRadius: 8,
+            boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
+          }}
+        >
+          {filtered.length === 0 ? (
+            <li
+              style={{
+                padding: "0.65rem 0.9rem",
+                color: "rgba(255,255,255,0.6)",
+                fontSize: "0.95rem",
+              }}
+            >
+              No matching rooms
+            </li>
+          ) : (
+            filtered.map((r, idx) => {
+              const active = idx === activeIdx;
+              const isDefault = r === defaultRoom;
+              return (
+                <li
+                  key={r}
+                  role="option"
+                  aria-selected={r === value}
+                  onMouseEnter={() => setActiveIdx(idx)}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    choose(r);
+                  }}
+                  style={{
+                    padding: "0.65rem 0.9rem",
+                    cursor: "pointer",
+                    fontSize: "1.05rem",
+                    color: "#fff",
+                    background: active
+                      ? "rgba(59,130,246,0.35)"
+                      : "transparent",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  <span>{r}</span>
+                  {isDefault && (
+                    <span style={{ opacity: 0.6, fontSize: "0.8rem" }}>
+                      your room
+                    </span>
+                  )}
+                </li>
+              );
+            })
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 // The activation screen has three "modes" baked into one form:
 //
 //  - default mode: email + password → use the staff's default room (one tap)
@@ -1136,26 +1322,16 @@ function ActivationScreen({
                 : "Pick the room this kiosk is in"
             }
           >
-            <input
-              type="text"
-              list="kiosk-room-list"
+            <RoomPicker
               value={room}
-              onChange={(e) => setRoom(e.target.value)}
+              options={sortedRooms}
+              defaultRoom={defaultRoom}
+              onSelect={(r) => {
+                setRoom(r);
+                setError("");
+              }}
               disabled={busy}
-              placeholder={
-                defaultRoom
-                  ? `${defaultRoom} (your room)`
-                  : "Type or pick a room…"
-              }
-              style={inputStyle}
             />
-            <datalist id="kiosk-room-list">
-              {sortedRooms.map((r) => (
-                <option key={r} value={r}>
-                  {r === defaultRoom ? `${r} (your room)` : r}
-                </option>
-              ))}
-            </datalist>
           </Field>
           {defaultRoom && (
             <button
