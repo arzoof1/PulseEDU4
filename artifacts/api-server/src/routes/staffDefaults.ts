@@ -137,7 +137,12 @@ router.put("/staff-defaults", requireAdmin(), async (req, res) => {
       defaultLocationName: normalizedRoom,
     })
     .onConflictDoUpdate({
+      // The unique index on staff_id is PARTIAL (WHERE staff_id IS NOT NULL),
+      // so the conflict target must carry the same predicate or Postgres
+      // can't infer the index ("no unique or exclusion constraint matching
+      // the ON CONFLICT specification").
       target: staffDefaultsTable.staffId,
+      targetWhere: sql`${staffDefaultsTable.staffId} IS NOT NULL`,
       set: {
         schoolId,
         defaultLocationName: normalizedRoom,
@@ -277,7 +282,10 @@ router.post("/staff-defaults/bulk", requireAdmin(), async (req, res) => {
           defaultLocationName: m.room,
         })
         .onConflictDoUpdate({
+          // Partial unique index on staff_id (WHERE staff_id IS NOT NULL) —
+          // the conflict target must repeat the predicate to be inferable.
           target: staffDefaultsTable.staffId,
+          targetWhere: sql`${staffDefaultsTable.staffId} IS NOT NULL`,
           set: {
             schoolId,
             defaultLocationName: m.room,

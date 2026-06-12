@@ -6846,6 +6846,40 @@ export async function ensureKioskCardsSchema(): Promise<void> {
     sql`CREATE UNIQUE INDEX IF NOT EXISTS kiosk_enroll_tokens_one_live_per_staff ON kiosk_enroll_tokens(school_id, staff_id) WHERE revoked_at IS NULL`,
   );
 
+  // Default-room upsert (PUT /staff-defaults) keys ON CONFLICT (staff_id),
+  // which requires this PARTIAL unique index to exist. It was created
+  // ad-hoc in some environments but never in code, so fresh/prod DBs could
+  // be missing it — making every room assignment fail with "no unique or
+  // exclusion constraint matching the ON CONFLICT specification". Create it
+  // here so every boot guarantees it.
+  //
+  // Dedupe first so the unique index can't fail to build on a DB that
+  // already accumulated duplicate non-null staff_id rows. Survivor choice is
+  // deterministic and value-aware: keep the row that actually has a room
+  // assigned (non-null default_location_name) over an empty one, then the
+  // most-recent (highest id) — never blindly the lowest id, which could
+  // discard the admin's real assignment in favor of an empty legacy row.
+  // This is self-limiting: once the unique index exists it blocks new
+  // duplicates, so on every subsequent boot this DELETE matches nothing.
+  await db.execute(sql`
+    DELETE FROM staff_defaults
+    WHERE id IN (
+      SELECT id FROM (
+        SELECT id,
+          ROW_NUMBER() OVER (
+            PARTITION BY staff_id
+            ORDER BY (default_location_name IS NOT NULL) DESC, id DESC
+          ) AS rn
+        FROM staff_defaults
+        WHERE staff_id IS NOT NULL
+      ) ranked
+      WHERE ranked.rn > 1
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS staff_defaults_staff_id_unique ON staff_defaults(staff_id) WHERE staff_id IS NOT NULL`,
+  );
+
   // Provenance / sub-flow columns on kiosk_activations. The new columns
   // are all NULL-tolerant so legacy rows (password-activated kiosks)
   // remain valid without backfill.
