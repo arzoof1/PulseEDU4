@@ -271,6 +271,9 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
   // a server round-trip.
   const [houses, setHouses] = useState<HouseOption[]>([]);
   const [filter, setFilter] = useState("");
+  const [staffScope, setStaffScope] = useState<
+    "current" | "historical" | "all"
+  >("current");
   const [savingId, setSavingId] = useState<number | null>(null);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
@@ -416,14 +419,17 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
   }, []);
 
   const filtered = useMemo(() => {
+    let rows = staff;
+    if (staffScope === "current") rows = rows.filter((s) => s.active);
+    else if (staffScope === "historical") rows = rows.filter((s) => !s.active);
     const q = filter.trim().toLowerCase();
-    if (!q) return staff;
-    return staff.filter(
+    if (!q) return rows;
+    return rows.filter(
       (s) =>
         s.displayName.toLowerCase().includes(q) ||
         s.email.toLowerCase().includes(q),
     );
-  }, [filter, staff]);
+  }, [filter, staff, staffScope]);
 
   async function patchStaff(
     id: number,
@@ -465,7 +471,9 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
     setExporting(true);
     setError("");
     try {
-      const res = await authFetch("/api/admin/staff/export.csv");
+      const res = await authFetch(
+        `/api/admin/staff/export.csv?status=${staffScope}`,
+      );
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || `Export failed (${res.status})`);
@@ -476,7 +484,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `staff-roster-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.download = `staff-roster-${staffScope}-${new Date().toISOString().slice(0, 10)}.csv`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -545,6 +553,19 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
           </HowToUseHelp>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
+          <select
+            value={staffScope}
+            onChange={(e) =>
+              setStaffScope(
+                e.target.value as "current" | "historical" | "all",
+              )
+            }
+            title="Filter by employment status. Historical staff are retired/inactive accounts kept for the student history tied to them."
+          >
+            <option value="current">Current staff</option>
+            <option value="historical">Historical staff</option>
+            <option value="all">All staff</option>
+          </select>
           <input
             type="search"
             placeholder="Search name or email…"
@@ -907,7 +928,11 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={PAGES.length + 5} style={{ padding: 16 }}>
-                  No staff match.
+                  {staffScope === "current"
+                    ? "No current staff match."
+                    : staffScope === "historical"
+                      ? "No historical (retired) staff match."
+                      : "No staff match."}
                 </td>
               </tr>
             )}

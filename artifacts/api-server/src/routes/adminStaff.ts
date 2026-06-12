@@ -315,10 +315,24 @@ router.get(
       res.status(400).json({ error: "No active school" });
       return;
     }
+    // status filter mirrors the on-screen roster filter so the CSV matches
+    // what the admin is viewing. "current" = active staff (default),
+    // "historical" = retired/inactive, "all" = both.
+    const status = typeof req.query.status === "string" ? req.query.status : "";
+    const activeCond =
+      status === "historical"
+        ? eq(staffTable.active, false)
+        : status === "all"
+          ? undefined
+          : eq(staffTable.active, true);
     const rows: StaffRow[] = await db
       .select()
       .from(staffTable)
-      .where(eq(staffTable.schoolId, schoolId))
+      .where(
+        activeCond
+          ? and(eq(staffTable.schoolId, schoolId), activeCond)
+          : eq(staffTable.schoolId, schoolId),
+      )
       .orderBy(asc(staffTable.displayName));
 
     // Resolve school + house names in two small lookups (avoids a join).
