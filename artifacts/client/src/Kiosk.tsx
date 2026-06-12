@@ -91,6 +91,9 @@ type Phase =
       staffId: number;
       staffName: string;
       previewRoom: string | null;
+      // Valid origin rooms for this school, so the confirm screen can
+      // render the same searchable RoomPicker as the password path.
+      locations: string[];
       ttlDays: number;
       // Set when we tried to auto-confirm with the previewRoom and it
       // failed (e.g., the default room is no longer a valid origin).
@@ -311,6 +314,7 @@ export default function Kiosk() {
             staffId: data.staffId,
             staffName: data.staffName,
             previewRoom: data.previewRoom ?? null,
+            locations: Array.isArray(data.locations) ? data.locations : [],
             ttlDays: data.ttlDays ?? 14,
             autoConfirmError:
               confirmData.error ??
@@ -325,6 +329,7 @@ export default function Kiosk() {
           staffId: data.staffId,
           staffName: data.staffName,
           previewRoom: data.previewRoom ?? null,
+          locations: Array.isArray(data.locations) ? data.locations : [],
           ttlDays: data.ttlDays ?? 14,
         });
         return { ok: true };
@@ -390,6 +395,7 @@ export default function Kiosk() {
         <EnrollConfirmScreen
           staffName={phase.staffName}
           previewRoom={phase.previewRoom}
+          locations={phase.locations}
           ttlDays={phase.ttlDays}
           initialError={phase.autoConfirmError ?? null}
           onCancel={() => setPhase({ kind: "activate" })}
@@ -801,6 +807,7 @@ function PinEntry({
 function EnrollConfirmScreen({
   staffName,
   previewRoom,
+  locations,
   ttlDays,
   initialError,
   onCancel,
@@ -808,12 +815,17 @@ function EnrollConfirmScreen({
 }: {
   staffName: string;
   previewRoom: string | null;
+  locations: string[];
   ttlDays: number;
   initialError?: string | null;
   onCancel: () => void;
   onConfirm: (room: string) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const [room, setRoom] = useState(previewRoom ?? "");
+  const sortedRooms = useMemo(
+    () => [...locations].sort((a, b) => a.localeCompare(b)),
+    [locations],
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(initialError ?? "");
   async function submit(e: React.FormEvent) {
@@ -858,14 +870,15 @@ function EnrollConfirmScreen({
         </div>
       </div>
       <Field label="Room this kiosk is in">
-        <input
-          type="text"
-          autoFocus
+        <RoomPicker
           value={room}
-          onChange={(e) => setRoom(e.target.value)}
+          options={sortedRooms}
+          defaultRoom={previewRoom}
+          onSelect={(r) => {
+            setRoom(r);
+            setError("");
+          }}
           disabled={busy}
-          placeholder={previewRoom ? `${previewRoom} (your room)` : "Room name…"}
-          style={inputStyle}
         />
       </Field>
       {error && <ErrorBox>{error}</ErrorBox>}

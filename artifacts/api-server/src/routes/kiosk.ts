@@ -1420,12 +1420,41 @@ async function activateForTeacher(args: {
       .select()
       .from(staffDefaultsTable)
       .where(eq(staffDefaultsTable.staffId, teacher.id));
-    const previewRoom = (room && room.trim()) || defaultRow?.defaultLocationName || null;
+    // Resolve the preview room with the SAME fallback chain as
+    // resolveActivation (kiosk default-room picker → admin staff-editor
+    // room). Without the staff.default_room fallback, a teacher whose
+    // room was only set in the staff editor gets previewRoom:null here,
+    // the client can't auto-confirm, and the QR/PIN scan drops to the
+    // manual room-entry screen — even though the password sign-in path
+    // (which calls resolveActivation) already knows the room. This kept
+    // the four sign-in methods from agreeing on the room assignment.
+    const previewRoom =
+      (room && room.trim()) ||
+      defaultRow?.defaultLocationName?.trim() ||
+      teacher.defaultRoom?.trim() ||
+      null;
+    // Ship the valid origin rooms too, so when manual entry IS needed
+    // (no default configured, or a sub) the QR/PIN confirm screen can
+    // render the SAME searchable room picker as the password sign-in
+    // path instead of a free-text box.
+    const locations = (
+      await db
+        .select()
+        .from(locationsTable)
+        .where(
+          and(
+            eq(locationsTable.isOrigin, true),
+            eq(locationsTable.active, true),
+            eq(locationsTable.schoolId, teacher.schoolId),
+          ),
+        )
+    ).map((l) => l.name);
     res.status(200).json({
       requiresConfirm: true,
       staffId: teacher.id,
       staffName: teacher.displayName,
       previewRoom,
+      locations,
       ttlDays: Math.round(ttlMs / (24 * 60 * 60 * 1000)),
       sessionKind,
     });
