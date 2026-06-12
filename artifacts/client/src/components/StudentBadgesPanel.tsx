@@ -45,6 +45,7 @@ export function StudentBadgesPanel() {
   // deliberate decision, never an accidental tap. 0 = closed, 1 = first
   // "compile" warning, 2 = final "print" confirmation.
   const [confirmAllStage, setConfirmAllStage] = useState<0 | 1 | 2>(0);
+  const [allBtnHover, setAllBtnHover] = useState(false);
   const allCount = students.length;
 
   const [events, setEvents] = useState<PrintEvent[]>([]);
@@ -171,17 +172,25 @@ export function StudentBadgesPanel() {
           type="button"
           disabled={busy || allCount === 0}
           onClick={() => setConfirmAllStage(1)}
+          onMouseEnter={() => setAllBtnHover(true)}
+          onMouseLeave={() => setAllBtnHover(false)}
           title="Generates a PDF of every student's badge"
           style={{
-            background: "transparent",
-            color: "var(--text)",
-            border: "1px solid var(--border, rgba(0,0,0,0.25))",
+            background:
+              allBtnHover && !busy && allCount > 0 ? "#2563eb" : "transparent",
+            color:
+              allBtnHover && !busy && allCount > 0 ? "#fff" : "var(--text)",
+            border:
+              allBtnHover && !busy && allCount > 0
+                ? "1px solid #2563eb"
+                : "1px solid var(--border, rgba(0,0,0,0.25))",
             borderRadius: 6,
             padding: "0.4rem 0.8rem",
             fontWeight: 500,
             fontSize: "0.85rem",
             cursor: busy || allCount === 0 ? "not-allowed" : "pointer",
             opacity: busy || allCount === 0 ? 0.55 : 1,
+            transition: "background 0.15s ease, color 0.15s ease, border-color 0.15s ease",
           }}
         >
           {busy ? "Generating…" : `Print all student badges (${allCount})`}
