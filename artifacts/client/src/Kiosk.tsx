@@ -160,6 +160,19 @@ interface QueueEntry {
 // — they have to either be re-queued or walk up cold).
 const NEXT_UP_TIMEOUT_MS = 60_000;
 
+// Extract a student id from a scanned barcode. Two forms supported:
+//   1. raw id (hardware scanner or QR encoded as just "12345")
+//   2. signin URL (badge QR points at /kiosk?signin=12345)
+// Anything else is passed through verbatim — server-side validation
+// will reject if it's bogus. Module-scoped so both the main kiosk form
+// and the next-up handoff screen share identical decode logic.
+function extractStudentIdFromScan(text: string): string {
+  const trimmed = text.trim();
+  const match = trimmed.match(/[?&]signin=([^&\s]+)/);
+  if (match) return decodeURIComponent(match[1]);
+  return trimmed;
+}
+
 // Grace window before the queue poll is allowed to clear this device's
 // TimerScreen on the basis of "the pass id is no longer active server-side".
 // Set comfortably above the 10s poll interval so a legitimately-active pass
@@ -1920,18 +1933,6 @@ function KioskBody({
     return () => clearTimeout(id);
   }, [welcome]);
 
-  // Extract a student id from a scanned barcode. Two forms supported:
-  //   1. raw id (hardware scanner or QR encoded as just "12345")
-  //   2. signin URL (badge QR points at /kiosk?signin=12345)
-  // Anything else is passed through verbatim — server-side validation
-  // will reject if it's bogus.
-  function extractStudentIdFromScan(text: string): string {
-    const trimmed = text.trim();
-    const match = trimmed.match(/[?&]signin=([^&\s]+)/);
-    if (match) return decodeURIComponent(match[1]);
-    return trimmed;
-  }
-
   async function handleSignin(rawStudentId: string) {
     const id = rawStudentId.trim();
     if (!id) return;
@@ -2824,15 +2825,20 @@ function NextUpScreen({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(Date.now());
+  // Camera-scanner modal — lets the queued student scan their badge instead
+  // of typing. Lazy-loaded so kiosks without a camera never pay the cost.
+  const [scannerOpen, setScannerOpen] = useState(false);
   useEffect(() => {
     const id = setInterval(() => setTick(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
   const secondsLeft = Math.max(0, Math.ceil((expiresAt - tick) / 1000));
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = studentId.trim();
+  // `idOverride` lets a successful scan submit immediately without waiting for
+  // the `studentId` state to flush (avoids a stale-state auto-submit race).
+  async function submit(e?: React.FormEvent, idOverride?: string) {
+    e?.preventDefault();
+    const trimmed = (idOverride ?? studentId).trim();
     if (!trimmed) return;
     if (trimmed !== (entry.localSisId ?? "")) {
       setError(
@@ -2961,17 +2967,43 @@ function NextUpScreen({
         >
           Enter your Student ID to start your pass
         </div>
-        <input
-          type="text"
-          inputMode="numeric"
-          autoComplete="off"
-          autoFocus
-          value={studentId}
-          onChange={(e) => setStudentId(e.target.value)}
-          placeholder="e.g. 12345"
-          style={{ ...inputStyle, fontSize: "1.4rem", textAlign: "center" }}
-          disabled={submitting}
-        />
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          <input
+            type="text"
+            inputMode="numeric"
+            autoComplete="off"
+            autoFocus
+            value={studentId}
+            onChange={(e) => setStudentId(e.target.value)}
+            placeholder="e.g. 12345"
+            style={{
+              ...inputStyle,
+              flex: 1,
+              fontSize: "1.4rem",
+              textAlign: "center",
+            }}
+            disabled={submitting}
+          />
+          <button
+            type="button"
+            onClick={() => setScannerOpen(true)}
+            disabled={submitting}
+            aria-label="Scan badge with camera"
+            title="Scan badge with camera"
+            style={{
+              background: "rgba(255,255,255,0.1)",
+              border: "1px solid rgba(255,255,255,0.2)",
+              borderRadius: 8,
+              color: "#fff",
+              width: 56,
+              fontSize: "1.5rem",
+              cursor: submitting ? "not-allowed" : "pointer",
+              flexShrink: 0,
+            }}
+          >
+            📷
+          </button>
+        </div>
         {error && <ErrorBox>{error}</ErrorBox>}
         <button
           type="submit"
@@ -3000,6 +3032,21 @@ function NextUpScreen({
           Skip / not here ({secondsLeft}s)
         </button>
       </form>
+      {scannerOpen && (
+        <CameraScanner
+          onScan={(text) => {
+            const id = extractStudentIdFromScan(text);
+            setScannerOpen(false);
+            if (!id) return;
+            setStudentId(id);
+            // The whole point of this screen is to walk up and tap your
+            // badge — auto-start the pass on a successful scan. The identity
+            // check inside submit() still guards against a mismatched badge.
+            void submit(undefined, id);
+          }}
+          onCancel={() => setScannerOpen(false)}
+        />
+      )}
     </div>
   );
 }
