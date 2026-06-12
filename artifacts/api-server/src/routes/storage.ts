@@ -166,9 +166,19 @@ export function schoolOwnerKey(schoolId: number) {
 // object — either because it was already bound to a different school, or
 // because no upload URL was issued to this school for this path. Callers
 // should treat false as "reject the save with 403".
+// `ownerSchoolId` is the school the object will be OWNED by (its ACL owner —
+// the school whose staff may later read it). `uploaderSchoolIds`, when given,
+// is the set of schools whose pending upload is allowed to claim this object;
+// it defaults to `[ownerSchoolId]` so existing two-arg callers are unchanged.
+// The two diverge only when an authorized actor uploads on behalf of a
+// DIFFERENT school they manage (e.g. a SuperUser/district admin sets a photo
+// for a teacher in another school in their district): the upload URL was
+// minted under the actor's own `req.schoolId`, but ownership must land on the
+// target's school.
 export async function bindObjectToSchool(
   objectPath: string,
-  schoolId: number,
+  ownerSchoolId: number,
+  uploaderSchoolIds?: number[],
 ): Promise<boolean> {
   if (!objectPath || !objectPath.startsWith("/objects/")) return false;
   let file;
@@ -182,12 +192,13 @@ export async function bindObjectToSchool(
     // Already bound — only succeed if it's the same school. Refuse to
     // re-assign ownership to a different school, which would otherwise let
     // any caller hijack a known object path.
-    return existing.owner === schoolOwnerKey(schoolId);
+    return existing.owner === schoolOwnerKey(ownerSchoolId);
   }
+  const allowedUploaders = uploaderSchoolIds ?? [ownerSchoolId];
   const pending = getPendingUpload(objectPath);
-  if (!pending || pending.schoolId !== schoolId) return false;
+  if (!pending || !allowedUploaders.includes(pending.schoolId)) return false;
   await objectStorageService.trySetObjectEntityAclPolicy(objectPath, {
-    owner: schoolOwnerKey(schoolId),
+    owner: schoolOwnerKey(ownerSchoolId),
     visibility: "private",
   });
   pendingUploads.delete(objectPath);

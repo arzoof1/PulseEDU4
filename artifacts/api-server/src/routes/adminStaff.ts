@@ -1027,11 +1027,19 @@ router.post(
       res.status(404).json({ error: "Staff member not found" });
       return;
     }
-    // Bind the freshly-uploaded object to the target's school. Returns
-    // false if the path was issued to a different school or already bound
-    // elsewhere — both reject so a hostile client can't reassign someone
+    // Bind the freshly-uploaded object to the TARGET's school (so that
+    // school's staff can read the badge photo). The upload URL was minted
+    // under the ACTOR's own req.schoolId, which may differ from the target's
+    // school for a SuperUser/district admin editing another school's staff —
+    // so accept any school the actor is authorized to manage as the uploader.
+    // Returns false if the path was issued to an out-of-scope school or is
+    // already bound elsewhere, so a hostile client can't reassign someone
     // else's image to one of our staff.
-    const ok = await bindObjectToSchool(objectPath, target.schoolId);
+    const ok = await bindObjectToSchool(
+      objectPath,
+      target.schoolId,
+      allowedSchoolIds,
+    );
     if (!ok) {
       res
         .status(403)
