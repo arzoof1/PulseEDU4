@@ -38,6 +38,7 @@ import {
   ensureStudentLocalSisIdBackfill,
   ensureStudentAccommodationsBackfill,
   ensureLocationAllowedDestinationsBackfill,
+  backfillStaffRoomLocationsAtParrottOnce,
   ensureBenchmarkDeliveriesSchema,
   ensureSchoolBenchmarksCatalogBackfill,
   seedBenchmarkDeliveriesOnce,
@@ -306,6 +307,16 @@ async function runSeed(): Promise<void> {
   // picker is blank for legacy tenants. Idempotent: schools with any
   // existing pair are skipped.
   await ensureLocationAllowedDestinationsBackfill();
+  // Demo-data repair (Parrott / school 1 only): create kiosk origin
+  // locations for teacher rooms that were never set up as locations, so
+  // Hall Pass kiosk activation never fails with "… is not a valid kiosk
+  // room". Idempotent via a marker; own try/catch so a failure can't block
+  // the witness backfill below.
+  try {
+    await backfillStaffRoomLocationsAtParrottOnce();
+  } catch (err) {
+    logger.error({ err }, "[boot] Parrott staff-room locations backfill failed");
+  }
   // Packet A — One-shot backfill of ws_seq for legacy witness
   // statements that were attached to cases before the per-case
   // numbering shipped. Idempotent: skips rows that already have a

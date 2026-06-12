@@ -7173,6 +7173,131 @@ export async function ensureLocationAllowedDestinationsBackfill(): Promise<void>
 }
 
 // -----------------------------------------------------------------------------
+// backfillStaffRoomLocationsAtParrottOnce
+//
+// Demo-data repair (Parrott / school_id = 1 ONLY). The Parrott demo roster
+// assigns ~33 teachers to rooms (e.g. "Parrott Room 203", "Parrott Art Room 1")
+// that were never created as kiosk origin locations, so Hall Pass kiosk
+// activation for those teachers fails with "… is not a valid kiosk room".
+// Every other demo school is already internally consistent. This one-shot
+// creates each missing room as an active ORIGIN location whose name MATCHES the
+// teacher's saved default_room verbatim (the exact string the kiosk compares
+// against), then wires each new origin to every existing active destination so
+// passes can actually be issued from those rooms (ensureLocation… backfill
+// above only fires for schools with ZERO pairs, and Parrott already has pairs).
+//
+// Idempotent via a marker row + ON CONFLICT guards. Deliberately scoped to
+// school 1 so it never invents rooms for a real tenant — auto-provisioning a
+// kiosk room from a teacher's SIS room assignment is intentionally deferred to
+// the future ClassLink integration. SAFE TO DELETE (function + boot call +
+// marker constant) once Parrott demo data is reseeded with matching locations.
+// -----------------------------------------------------------------------------
+const PARROTT_ROOM_LOC_MARKER = "parrott_staff_room_locations_v1";
+
+export async function backfillStaffRoomLocationsAtParrottOnce(): Promise<void> {
+  const SCHOOL_ID = 1;
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS app_one_shot_markers (
+      name text PRIMARY KEY,
+      ran_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  const marker = await db.execute<{ name: string }>(
+    sql`SELECT name FROM app_one_shot_markers WHERE name = ${PARROTT_ROOM_LOC_MARKER}`,
+  );
+  if (marker.rows.length > 0) return; // already applied in this environment
+
+  // Distinct teacher rooms that have NO matching active origin location.
+  const missing = await db.execute<{ room: string }>(sql`
+    SELECT DISTINCT btrim(s.default_room) AS room
+      FROM staff s
+      LEFT JOIN locations l
+        ON l.school_id = s.school_id
+       AND l.name = s.default_room
+       AND l.is_origin = true
+       AND l.active = true
+     WHERE s.school_id = ${SCHOOL_ID}
+       AND s.default_room IS NOT NULL
+       AND btrim(s.default_room) <> ''
+       AND l.id IS NULL
+  `);
+
+  if (missing.rows.length === 0) {
+    await db.execute(
+      sql`INSERT INTO app_one_shot_markers (name) VALUES (${PARROTT_ROOM_LOC_MARKER}) ON CONFLICT DO NOTHING`,
+    );
+    return;
+  }
+
+  const createdIds: number[] = [];
+  await db.transaction(async (tx) => {
+    for (const { room } of missing.rows) {
+      const kind = /gym|cafeteria/i.test(room) ? "common_area" : "classroom";
+      // locations.name has a GLOBAL unique index. Try the insert; on a name
+      // collision (only possible from another school given the school-prefixed
+      // names) fall back to a school-1-scoped lookup + activate, never touching
+      // another tenant's row.
+      const ins = await tx.execute<{ id: number }>(sql`
+        INSERT INTO locations
+          (school_id, name, kind, is_origin, is_destination, student_visible, active)
+        VALUES
+          (${SCHOOL_ID}, ${room}, ${kind}, true, false, false, true)
+        ON CONFLICT (name) DO NOTHING
+        RETURNING id
+      `);
+      let id: number | null = ins.rows[0]?.id ?? null;
+      if (id == null) {
+        const found = await tx.execute<{ id: number }>(sql`
+          SELECT id FROM locations
+           WHERE school_id = ${SCHOOL_ID} AND name = ${room}
+           LIMIT 1
+        `);
+        id = found.rows[0]?.id ?? null;
+        if (id != null) {
+          await tx.execute(sql`
+            UPDATE locations SET is_origin = true, active = true
+             WHERE id = ${id} AND school_id = ${SCHOOL_ID}
+          `);
+        } else {
+          logger.warn(
+            { room },
+            "[seed] Parrott room backfill: name owned by another school, skipped",
+          );
+        }
+      }
+      if (id != null) createdIds.push(id);
+    }
+
+    // Wire each new origin to every existing active destination so the kiosk
+    // destination picker isn't blank for passes issued from these rooms.
+    const dests = await tx.execute<{ id: number }>(sql`
+      SELECT id FROM locations
+       WHERE school_id = ${SCHOOL_ID} AND is_destination = true AND active = true
+    `);
+    for (const originId of createdIds) {
+      for (const d of dests.rows) {
+        await tx.execute(sql`
+          INSERT INTO location_allowed_destinations
+            (school_id, origin_location_id, destination_location_id)
+          VALUES (${SCHOOL_ID}, ${originId}, ${d.id})
+          ON CONFLICT (origin_location_id, destination_location_id) DO NOTHING
+        `);
+      }
+    }
+
+    await tx.execute(
+      sql`INSERT INTO app_one_shot_markers (name) VALUES (${PARROTT_ROOM_LOC_MARKER}) ON CONFLICT DO NOTHING`,
+    );
+  });
+
+  logger.info(
+    { schoolId: SCHOOL_ID, rooms: createdIds.length },
+    "[seed] Parrott staff-room locations one-shot backfill complete",
+  );
+}
+
+// -----------------------------------------------------------------------------
 // ensureBenchmarkDeliveriesSchema
 //
 // Creates school_benchmarks (per-school standards catalog) and

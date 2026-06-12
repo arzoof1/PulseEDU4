@@ -35,3 +35,24 @@ the generic student-centric data importer (its snapshot/rollback machinery is
 overkill and student-shaped). Room dropdowns everywhere are fed from active
 origin locations; keep any legacy off-list value selectable so an existing room
 is never silently dropped.
+
+# Activation requires the room to exist as an origin location
+
+A teacher's saved room (`staff_defaults.default_location_name` / free-text
+`staff.default_room`) is NOT constrained to the `locations` list, so the two can
+diverge. Kiosk activation rejects any room that isn't an **active origin
+location** for that school ("… is not a valid kiosk room"), regardless of which
+sign-in method resolved it — so resolution parity is necessary but not
+sufficient; the resolved name must also exist as an origin location.
+
+**Why:** free-text room entry (admin staff editor / roster import) can name a
+room that was never set up as a location. The product decision is that kiosks
+NEVER invent rooms on their own; valid rooms mirror the source of truth
+(admin-curated locations today, the future ClassLink/SIS sync later).
+
+**How to apply:** if teachers are blocked at activation, check for staff rooms
+with no matching active origin location before assuming a code bug — it is
+usually a data/setup gap. Repair demo gaps with a school-scoped, marker-guarded
+boot one-shot that creates the missing origin (name verbatim) + wires LAD pairs;
+do NOT auto-provision from rooms generally (that behavior is deferred to
+ClassLink).
