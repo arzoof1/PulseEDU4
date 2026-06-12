@@ -61,6 +61,12 @@ export function CardDesignPanel() {
   // Local preview URL for a freshly-picked (not-yet-uploaded) image.
   const [localBgUrl, setLocalBgUrl] = useState<string | null>(null);
   const [localBgBlob, setLocalBgBlob] = useState<Blob | null>(null);
+  // Blob URL for a SAVED background image, fetched through authFetch. The
+  // preview runs inside the Replit preview iframe where the session cookie is
+  // blocked, so a CSS background-image pointing straight at the auth-gated
+  // /api/storage/objects/* URL would 401 and render blank. We fetch the bytes
+  // with the Bearer token and paint them from a local object URL instead.
+  const [bgFetchedUrl, setBgFetchedUrl] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   // Header text
@@ -139,6 +145,38 @@ export function CardDesignPanel() {
       if (localBgUrl) URL.revokeObjectURL(localBgUrl);
     };
   }, [localBgUrl]);
+
+  // Fetch a SAVED background image through authFetch and expose it as a local
+  // blob URL the preview can paint. A freshly-picked image (localBgUrl) wins
+  // and needs no fetch; anything else clears the fetched URL.
+  useEffect(() => {
+    if (bgMode !== "image" || !bgObjectPath || localBgUrl) {
+      setBgFetchedUrl(null);
+      return;
+    }
+    let cancelled = false;
+    let created: string | null = null;
+    (async () => {
+      try {
+        const url = resolveLogoUrl(bgObjectPath);
+        if (!url) return;
+        const res = await authFetch(url);
+        if (!res.ok || cancelled) return;
+        const blob = await res.blob();
+        if (cancelled) return;
+        created = URL.createObjectURL(blob);
+        setBgFetchedUrl(created);
+      } catch {
+        // Fetch failed — clear any stale URL so the preview deterministically
+        // falls back to the school-colors background.
+        if (!cancelled) setBgFetchedUrl(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (created) URL.revokeObjectURL(created);
+    };
+  }, [bgMode, bgObjectPath, localBgUrl]);
 
   function onPickImage(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -349,9 +387,7 @@ export function CardDesignPanel() {
     [bgColors, previewHouseColor],
   );
   const bgImageUrl =
-    bgMode === "image"
-      ? localBgUrl ?? resolveLogoUrl(bgObjectPath)
-      : null;
+    bgMode === "image" ? localBgUrl ?? bgFetchedUrl : null;
   const topBackground =
     bgMode === "image" && bgImageUrl
       ? `center / cover no-repeat url("${bgImageUrl}")`
