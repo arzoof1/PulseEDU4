@@ -679,6 +679,7 @@ export function CardDesignPanel() {
             schoolName={schoolName}
             topBackground={topBackground}
             headerColor={headerColor}
+            carColor={isHex(topColors[0] ?? "") ? (topColors[0] as string) : previewHouseColor}
             showHouse={showHouse}
             footerBg={footerBg}
             footerText={footerText}
@@ -690,6 +691,7 @@ export function CardDesignPanel() {
             schoolName={schoolName}
             topBackground={topBackground}
             headerColor={headerColor}
+            carColor={isHex(topColors[0] ?? "") ? (topColors[0] as string) : previewHouseColor}
             showHouse={showHouse}
             footerBg={footerBg}
             footerText={footerText}
@@ -705,13 +707,26 @@ export function CardDesignPanel() {
   );
 }
 
+// Side-profile car glyph (school-colored), used inside the white car-rider
+// corner badge on the photo so the preview matches the PDF's vector car. An
+// emoji can't be tinted, so we draw an SVG filled with the primary top color.
+function CarGlyph({ color, size }: { color: string; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={color} aria-hidden="true">
+      <path d="M5,11L6.5,6.5H17.5L19,11M17.5,16A1.5,1.5 0 0,1 16,14.5A1.5,1.5 0 0,1 17.5,13A1.5,1.5 0 0,1 19,14.5A1.5,1.5 0 0,1 17.5,16M6.5,16A1.5,1.5 0 0,1 5,14.5A1.5,1.5 0 0,1 6.5,13A1.5,1.5 0 0,1 8,14.5A1.5,1.5 0 0,1 6.5,16M18.92,6C18.72,5.42 18.16,5 17.5,5H6.5C5.84,5 5.28,5.42 5.08,6L3,12V20A1,1 0 0,0 4,21H5A1,1 0 0,0 6,20V19H18V20A1,1 0 0,0 19,21H20A1,1 0 0,0 21,20V12L18.92,6Z" />
+    </svg>
+  );
+}
+
 // HTML mock of the printed CR80 card (scaled up 1.5× from 243×153 for
 // on-screen legibility). Mirrors the PDF layout: colored/image top region,
-// white QR plate, white barcode strip, optional house footer.
+// photo (with a car-rider corner badge), white QR plate, white barcode strip,
+// optional house footer.
 function CardPreview(props: {
   schoolName: string;
   topBackground: string;
   headerColor: string;
+  carColor: string;
   showHouse: boolean;
   footerBg: string;
   footerText: string;
@@ -768,6 +783,25 @@ function CardPreview(props: {
           }}
         >
           JS
+          {/* car-rider corner badge (car riders only) */}
+          <span
+            style={{
+              position: "absolute",
+              left: 3,
+              bottom: 3,
+              width: 26,
+              height: 26,
+              borderRadius: "50%",
+              background: "#fff",
+              border: "1px solid #cbd5e1",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+            title="Car rider"
+          >
+            <CarGlyph color={props.carColor} size={16} />
+          </span>
         </div>
         {/* Name + grade */}
         <div style={{ position: "absolute", top: 52, left: 110, right: 132, color: props.headerColor }}>
@@ -835,12 +869,14 @@ function CardPreview(props: {
 
 // HTML mock of the PORTRAIT lanyard badge (scaled from 153×243). Mirrors the
 // PDF portrait renderer: lanyard slot, diagonal school-color corner ribbons,
-// centered school name, photo + QR, icon rows (Car Rider / name+grade /
-// teacher), house emblem band, barcode below it, navy crisis strip.
+// centered school name, photo (with a car-rider corner badge) + QR, icon rows
+// (name+grade / teacher), house emblem band, tall barcode below it, navy
+// crisis strip.
 function CardPreviewPortrait(props: {
   schoolName: string;
   topBackground: string;
   headerColor: string;
+  carColor: string;
   showHouse: boolean;
   footerBg: string;
   footerText: string;
@@ -942,6 +978,7 @@ function CardPreviewPortrait(props: {
       <div style={{ display: "flex", gap: 10, padding: "10px 12px 6px" }}>
         <div
           style={{
+            position: "relative",
             flex: "0 0 auto",
             width: 96,
             height: 96,
@@ -956,6 +993,25 @@ function CardPreviewPortrait(props: {
           }}
         >
           JS
+          {/* car-rider corner badge (car riders only) */}
+          <span
+            style={{
+              position: "absolute",
+              left: 4,
+              bottom: 4,
+              width: 30,
+              height: 30,
+              borderRadius: "50%",
+              background: "#fff",
+              border: "1px solid #cbd5e1",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+            title="Car rider"
+          >
+            <CarGlyph color={props.carColor} size={18} />
+          </span>
         </div>
         <div
           style={{
@@ -974,13 +1030,9 @@ function CardPreviewPortrait(props: {
           QR
         </div>
       </div>
-      {/* icon rows */}
+      {/* icon rows (no dismissal row — car riders are flagged by the photo badge) */}
       <div style={{ padding: "0 12px" }}>
-        <div style={rowStyle}>
-          <span style={iconBubble}>🚗</span>
-          <span style={{ fontWeight: 700, fontSize: 14, color: "#1e293b" }}>CAR RIDER</span>
-        </div>
-        <div style={rowStyle}>
+        <div style={{ ...rowStyle, borderTop: "none" }}>
           <span style={iconBubble}>👤</span>
           <span style={{ fontWeight: 700, fontSize: 14, color: "#1e293b", flex: 1 }}>Jordan Sample</span>
           <span
@@ -1030,7 +1082,7 @@ function CardPreviewPortrait(props: {
         <div
           style={{
             marginTop: props.showHouse ? 8 : 0,
-            height: 20,
+            height: 34,
             background:
               "repeating-linear-gradient(90deg,#111 0 2px,#fff 2px 4px,#111 4px 7px,#fff 7px 9px)",
           }}

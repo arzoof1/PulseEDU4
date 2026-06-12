@@ -108,23 +108,9 @@ const LEGACY_DESIGN: CardDesign = {
   houseTextColor: null,
 };
 
-// Human label for a stored dismissal_mode value. `car_rider` is rendered
-// as a small vector car icon instead of text (see drawCarIcon).
-function dismissalLabel(mode: string | null | undefined): string | null {
-  if (!mode) return null;
-  switch (mode) {
-    case "car_rider": return null; // drawn as an icon, not text
-    case "walker": return "Walker";
-    case "bus": return "Bus";
-    case "aftercare": return "Aftercare";
-    case "parent_pickup_only": return "Parent Pickup";
-    default: return null;
-  }
-}
-
-// Tiny side-profile car icon — body + roof + two wheels. Used in place of
-// the "Car Rider" text in the badge header so the dismissal mode reads at
-// a glance without crowding the layout.
+// Tiny side-profile car icon — body + roof + two wheels. Used inside the
+// white corner badge that flags car riders on the student photo (both
+// orientations).
 function drawCarIcon(
   doc: PDFKit.PDFDocument,
   x: number,
@@ -163,6 +149,29 @@ function drawCarIcon(
   doc.circle(x + w * 0.25, wheelY, wheelR * 0.4).fill();
   doc.circle(x + w * 0.75, wheelY, wheelR * 0.4).fill();
   doc.restore();
+}
+
+// Small circular "Car Rider" badge overlaid on the bottom-left corner of a
+// student photo: a white disc (thin slate border) with the car silhouette
+// inside, tinted to the school's primary top color so it pops off the photo.
+// Used in BOTH orientations and ONLY for car riders — other dismissal modes
+// show nothing (per product decision).
+function drawCarRiderCornerBadge(
+  doc: PDFKit.PDFDocument,
+  photoX: number,
+  photoBottomY: number,
+  carColor: string,
+): void {
+  const r = 11;
+  // Hug the inside of the photo's bottom-left corner.
+  const cx = photoX + r + 1.5;
+  const cy = photoBottomY - r - 1.5;
+  doc.save();
+  doc.fillColor("#ffffff").circle(cx, cy, r).fill();
+  doc.lineWidth(0.8).strokeColor("#cbd5e1").circle(cx, cy, r).stroke();
+  doc.restore();
+  const carW = r * 1.4;
+  drawCarIcon(doc, cx - carW / 2, cy - (carW * 0.55) / 2, carW, carColor);
 }
 
 export async function renderStudentBadgesPdf(
@@ -340,19 +349,6 @@ async function renderCardBadgeLandscape(
       lineBreak: false,
     });
 
-  // Dismissal indicator (car icon / short label) under the school name,
-  // tinted to match the header text color so it reads on any background.
-  const isCarRider = badge.dismissalMode === "car_rider";
-  const dLabel = dismissalLabel(badge.dismissalMode);
-  if (isCarRider) {
-    drawCarIcon(doc, headerX, 22, 20, headerText);
-  } else if (dLabel) {
-    doc.fillColor(headerText).fontSize(7).text(dLabel, headerX, 24, {
-      width: headerW,
-      lineBreak: false,
-    });
-  }
-
   // --- Square photo on the left ----------------------------------------
   const photoSize = 58;
   const photoX = 10;
@@ -360,6 +356,18 @@ async function renderCardBadgeLandscape(
   // Frame the photo in white when over a colored/image background so it
   // never blends into the top region.
   drawPhotoSlot(doc, badge, photoX, photoY, photoSize, "#ffffff");
+
+  // Car-rider badge overlaid on the photo's bottom-left corner (car riders
+  // only; other dismissal modes show nothing). Car tinted to the school's
+  // primary top color.
+  if (badge.dismissalMode === "car_rider") {
+    drawCarRiderCornerBadge(
+      doc,
+      photoX,
+      photoY + photoSize,
+      topColors[0] ?? houseColor,
+    );
+  }
 
   // --- Name + grade between the photo and the QR plate -----------------
   const txtX = photoX + photoSize + 8;
@@ -483,10 +491,11 @@ async function renderCardBadgeLandscape(
 //   [ diagonal school-color corner ribbons (colors mode) OR a top banner
 //     image (image mode) ]
 //   centered school name + divider diamond
-//   square-ish portrait photo (left) · enlarged QR on a WHITE plate (right)
-//   icon rows: dismissal (car icon / label) · student name + grade · teacher
+//   square-ish portrait photo (left, with a corner car-rider badge for car
+//     riders) · enlarged QR on a WHITE plate (right)
+//   icon rows: student name + grade · teacher (no dismissal row)
 //   optional house emblem + "HOUSE NAME" band
-//   full-width Code 128 barcode BELOW the band (cafeteria swipe)
+//   tall full-width Code 128 barcode BELOW the band (cafeteria swipe)
 //   FL HB 383 crisis bar pinned to the very bottom
 // ---------------------------------------------------------------------------
 async function renderCardBadgePortrait(
@@ -617,6 +626,13 @@ async function renderCardBadgePortrait(
   const photoH = 60;
   drawPhotoRect(doc, badge, photoX, photoY, photoW, photoH, "#e2e8f0");
 
+  // Car-rider badge overlaid on the photo's bottom-left corner (car riders
+  // only; other dismissal modes show nothing). Car tinted to the school's
+  // primary top color.
+  if (badge.dismissalMode === "car_rider") {
+    drawCarRiderCornerBadge(doc, photoX, photoY + photoH, c0);
+  }
+
   const qrSize = 60;
   const qrPad = 3;
   const qrX = W - 12 - qrSize;
@@ -633,9 +649,12 @@ async function renderCardBadgePortrait(
   doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
 
   // --- Bottom-anchored elements (crisis bar, barcode, house band) ------
+  // Barcode is intentionally TALL here — the dismissal row was dropped (car
+  // riders now get a corner badge on the photo), so the reclaimed space goes
+  // to a taller barcode for more reliable cafeteria-reader scans.
   const crisisBarH = 16;
   const crisisBarY = H - 2 - crisisBarH;
-  const bcH = 13;
+  const bcH = 22;
   const bcY = crisisBarY - 4 - bcH;
   const showFooter = design.showHouse && !!badge.house;
   const bandH = 24;
@@ -645,12 +664,10 @@ async function renderCardBadgePortrait(
   const rowsTop = Math.max(photoY + photoH, qrY + qrSize) + 8;
   const rowsBottom = (showFooter ? bandY : bcY) - 6;
 
-  type IconRow = { kind: "car" | "person" | "teacher"; text: string; grade?: number | null };
+  // Name + optional teacher only. The dismissal row was removed — car riders
+  // are flagged by the corner badge on the photo; other modes show nothing.
+  type IconRow = { kind: "person" | "teacher"; text: string; grade?: number | null };
   const rows: IconRow[] = [];
-  const isCarRider = badge.dismissalMode === "car_rider";
-  const dLabel = dismissalLabel(badge.dismissalMode);
-  if (isCarRider) rows.push({ kind: "car", text: "Car Rider" });
-  else if (dLabel) rows.push({ kind: "person", text: dLabel });
   rows.push({
     kind: "person",
     text: `${badge.firstName} ${badge.lastName}`.trim() || "Student",
@@ -669,9 +686,7 @@ async function renderCardBadgePortrait(
     const discCx = M + 6 + discR;
     // Icon disc.
     doc.save().fillColor(ink).circle(discCx, cy, discR).fill().restore();
-    if (row.kind === "car") {
-      drawCarIcon(doc, discCx - discR * 0.7, cy - discR * 0.55, discR * 1.4, "#ffffff");
-    } else if (row.kind === "teacher") {
+    if (row.kind === "teacher") {
       drawTeacherIcon(doc, discCx, cy, discR, "#ffffff");
     } else {
       drawPersonIcon(doc, discCx, cy, discR, "#ffffff");
