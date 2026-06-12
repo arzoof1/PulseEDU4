@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { CardDesignPanel } from "./CardDesignPanel";
 
 // Admin tool — print Student ID badges (PDF, a single landscape
 // credit-card / CR80 ID, with a rectangle photo on the badge when consent
@@ -456,6 +457,19 @@ export function StudentBadgesPanel() {
             </button>
           </div>
         </div>
+      </details>
+
+      <details style={{ marginTop: "1rem" }}>
+        <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+          Card design
+        </summary>
+        <p style={{ color: "var(--text-subtle)", fontSize: "0.85rem", marginBottom: 0 }}>
+          Customize the printed badge: a school-color or uploaded background
+          across the top (behind the header + photo), header text contrast,
+          and an optional house footer band. The QR, barcode, and crisis line
+          always stay on clean white so they scan and read reliably.
+        </p>
+        <CardDesignPanel />
       </details>
 
       <details style={{ marginTop: "1rem" }}>

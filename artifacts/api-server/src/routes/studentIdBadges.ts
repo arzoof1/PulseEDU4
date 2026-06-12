@@ -12,11 +12,13 @@ import { requireSchool } from "../lib/scope.js";
 import {
   renderStudentBadgesPdf,
   type StudentBadgeInput,
+  type CardDesign,
 } from "../lib/studentIdBadgesPdf";
 import {
   ObjectStorageService,
   ObjectNotFoundError,
 } from "../lib/objectStorage.js";
+import { loadBrandingForSchool } from "./schoolBranding.js";
 
 const objectStorage = new ObjectStorageService();
 
@@ -40,6 +42,37 @@ async function fetchObjectBytes(objectPath: string): Promise<Buffer | null> {
     if (err instanceof ObjectNotFoundError) return null;
     return null;
   }
+}
+
+// Resolve the per-school card design once per batch: load the saved
+// branding row and, for image mode, fetch the top-background bytes a
+// single time (every badge in the batch shares them). SVG is filtered
+// out — pdfkit can't rasterize it. Failure to load the image silently
+// degrades to the configured colors / house color, never blocks a print.
+async function buildCardDesign(schoolId: number): Promise<CardDesign> {
+  const b = await loadBrandingForSchool(schoolId);
+  let bgImageBytes: Buffer | null = null;
+  if (b.cardBgMode === "image" && b.cardBgObjectPath) {
+    const MAX_BG_BYTES = 5 * 1024 * 1024;
+    const bytes = await fetchObjectBytes(b.cardBgObjectPath);
+    if (bytes && bytes.length <= MAX_BG_BYTES) {
+      const head = bytes.slice(0, 16).toString("utf8").trimStart();
+      if (!head.startsWith("<")) bgImageBytes = bytes;
+    }
+  }
+  return {
+    bgMode: b.cardBgMode,
+    bgColors: b.cardBgColors.slice(0, 2),
+    bgAngle: b.cardBgAngle,
+    bgImageBytes,
+    headerTextMode: b.cardHeaderTextMode,
+    headerTextColor: b.cardHeaderTextColor,
+    showHouse: b.cardShowHouse,
+    houseBgMode: b.cardHouseBgMode,
+    houseBgColor: b.cardHouseBgColor,
+    houseTextMode: b.cardHouseTextMode,
+    houseTextColor: b.cardHouseTextColor,
+  };
 }
 
 const router: IRouter = Router();
@@ -252,6 +285,10 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
     );
   }
 
+  // Per-school card design (top background, contrast text, optional house
+  // footer). Loaded once and shared across every badge in the batch.
+  const design = await buildCardDesign(schoolId);
+
   const badges: StudentBadgeInput[] = students.map((s) => ({
     studentId: s.studentId,
     // District-level Local SIS id (the human-facing id students scan/type).
@@ -276,6 +313,7 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
       };
     })(),
     photoBytes: photoByStudent.get(s.id) ?? null,
+    design,
   }));
 
   // Audit ledger — one row per student per batch. Optional reason
@@ -354,6 +392,70 @@ router.get(
     res.json({ events: rows });
   },
 );
+
+// Sample badge — renders ONE synthetic student with the school's currently
+// saved card design so an admin can "Print sample badge" while tuning the
+// designer without picking a real student or writing an audit row. No PII,
+// no FLEID: the synthetic localSisId is a fixed demo value.
+async function handleSampleBadge(req: Request, res: Response): Promise<void> {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+
+  const [school] = await db
+    .select({ name: schoolsTable.name })
+    .from(schoolsTable)
+    .where(eq(schoolsTable.id, schoolId));
+  const schoolName = school?.name ?? "PulseEDU";
+
+  // Pick the first house (if any) so the optional footer band has a real
+  // name/color to preview. Best-effort — the sample still renders if the
+  // school has no houses configured yet.
+  const [firstHouse] = await db
+    .select({
+      name: housesTable.name,
+      color: housesTable.color,
+      iconKey: housesTable.iconKey,
+    })
+    .from(housesTable)
+    .where(eq(housesTable.schoolId, schoolId))
+    .orderBy(asc(housesTable.name))
+    .limit(1);
+
+  const design = await buildCardDesign(schoolId);
+  const baseUrl = kioskBaseUrl(req);
+
+  const sample: StudentBadgeInput = {
+    studentId: "SAMPLE",
+    localSisId: "100200",
+    firstName: "Jordan",
+    lastName: "Sample",
+    grade: 7,
+    dismissalMode: "car_rider",
+    schoolName,
+    baseUrl,
+    house: firstHouse
+      ? {
+          name: firstHouse.name,
+          color: firstHouse.color,
+          iconKey: firstHouse.iconKey,
+          logoBytes: null,
+        }
+      : null,
+    photoBytes: null,
+    design,
+  };
+
+  const pdf = await renderStudentBadgesPdf([sample]);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    'attachment; filename="student-id-sample.pdf"',
+  );
+  res.send(pdf);
+}
+
+router.post("/students/id-badges-sample.pdf", requireAdmin, handleSampleBadge);
+router.get("/students/id-badges-sample.pdf", requireAdmin, handleSampleBadge);
 
 router.post("/students/id-badges.pdf", requireAdmin, handleBadges);
 router.get("/students/id-badges.pdf", requireAdmin, handleBadges);

@@ -17,6 +17,7 @@
 - [Kiosk local_sis_id boundary](kiosk-local-sis-boundary.md) — student-facing kiosk/badge surfaces use local_sis_id; resolve to canonical student_id for FKs; next-up localSisId is JOINed not stored; reprint old badges.
 - [Tooling pitfalls](tooling-pitfalls.md) — never `rg -rn` (= --replace=n, corrupts output); rg recurses by default.
 - [Tier 3 status aggregation](tier3-status-aggregation.md) — /interventions/my-tier3-status must collapse to one row per student server-side (MAX owed, not SUM — weekly record is per student/teacher/week).
+- [Student ID card designer](student-id-card-designer.md) — house footer defaults ON (legacy badge showed house prominently); "no regression" = house stays visible, NOT footer absent; card PUT is whole-row upsert.
 - [E-sign PDF render reliability](esign-pdf-render.md) — "Link not valid" was a client render crash, not a token bug: render only after canvas mounts, never swallow render errors; pin pdfjs-dist to v4 (v5 calls unshipped Map.getOrInsertComputed → throws in all browsers).
 - [External share tokens linkifier-safe](esign-share-token-linkifier.md) — emailed/QR URL tokens must be base62 (no base64url); trailing -/_ get stripped by linkifiers → 404 "invalid/expired".
 - [E-sign document tenancy](esign-tenancy.md) — e-sign docs are creator-private (school_id AND created_by); public /sign/:token is unauthenticated by design, gated by 192-bit token + race-safe 409.

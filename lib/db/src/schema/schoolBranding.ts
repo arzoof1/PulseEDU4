@@ -45,6 +45,33 @@ export const schoolBrandingTable = pgTable(
     buttonHoverBgColorsJson: text("button_hover_bg_colors_json"),
     buttonHoverBgAngle: integer("button_hover_bg_angle").default(90),
     buttonHoverText: text("button_hover_text"),
+    // ---------------------------------------------------------------------
+    // Student ID card designer. All nullable/defaulted so existing rows keep
+    // the legacy look (house-colored top band) until a school customizes.
+    // ---------------------------------------------------------------------
+    // Top-region background mode: 'colors' (1-2 hex, solid or diagonal
+    // gradient) or 'image' (uploaded photo behind the upper portion).
+    cardBgMode: text("card_bg_mode").notNull().default("colors"),
+    // 1-2 hex for the top background when mode='colors'. JSON array string,
+    // same portability rationale as gradientColorsJson. Empty = fall back to
+    // primary/accent, then to the student's house color.
+    cardBgColorsJson: text("card_bg_colors_json").notNull().default("[]"),
+    cardBgAngle: integer("card_bg_angle").notNull().default(135),
+    // Object-storage path of the uploaded top background image (mode='image').
+    cardBgObjectPath: text("card_bg_object_path"),
+    // Header/name text color: 'auto' (contrast against the background) or
+    // 'manual' (cardHeaderTextColor hex).
+    cardHeaderTextMode: text("card_header_text_mode").notNull().default("auto"),
+    cardHeaderTextColor: text("card_header_text_color"),
+    // Optional house footer band (the "HOUSE PHOENIX" row in the reference).
+    cardShowHouse: integer("card_show_house").notNull().default(1),
+    // Footer band background: 'house' (the student's house color), 'white',
+    // or 'custom' (cardHouseBgColor hex).
+    cardHouseBgMode: text("card_house_bg_mode").notNull().default("house"),
+    cardHouseBgColor: text("card_house_bg_color"),
+    // Footer text color: 'auto' (contrast) or 'manual' (cardHouseTextColor).
+    cardHouseTextMode: text("card_house_text_mode").notNull().default("auto"),
+    cardHouseTextColor: text("card_house_text_color"),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
