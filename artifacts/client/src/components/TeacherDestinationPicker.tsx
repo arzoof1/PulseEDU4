@@ -40,6 +40,23 @@ export default function TeacherDestinationPicker({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [kioskUrlCopied, setKioskUrlCopied] = useState(false);
+
+  // The kiosk screen a teacher opens on a classroom device. Same URL shown
+  // in Settings → Kiosk Setup; surfaced here for quick teacher access.
+  // Loading it just shows the activation screen — activation still requires
+  // the teacher's card QR or PIN, so the URL itself is not sensitive.
+  const kioskUrl = `${window.location.origin}${import.meta.env.BASE_URL}kiosk`;
+
+  const copyKioskUrl = async () => {
+    try {
+      await navigator.clipboard.writeText(kioskUrl);
+      setKioskUrlCopied(true);
+      setTimeout(() => setKioskUrlCopied(false), 1500);
+    } catch {
+      setKioskUrlCopied(false);
+    }
+  };
 
   // Stable dependency for the load effect. The parent passes
   // `teacherAllowlistMap[user] ?? []`, which is a BRAND-NEW array on every
@@ -195,6 +212,33 @@ export default function TeacherDestinationPicker({
           </button>
         </div>
         <div className="tdp-body">
+          <div className="tdp-kiosk-url">
+            <div className="tdp-kiosk-url-label">Teacher kiosk URL</div>
+            <p className="tdp-kiosk-url-hint">
+              Open this on a classroom device, then activate it with your card
+              QR or 6-digit PIN.
+            </p>
+            <div className="tdp-kiosk-url-row">
+              <code className="tdp-kiosk-url-code">{kioskUrl}</code>
+              <button
+                type="button"
+                className="tdp-kiosk-url-copy"
+                onClick={() => void copyKioskUrl()}
+                title="Copy kiosk URL"
+              >
+                {kioskUrlCopied ? "Copied!" : "Copy"}
+              </button>
+              <a
+                href={kioskUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="tdp-kiosk-url-open"
+              >
+                Open
+              </a>
+            </div>
+          </div>
+
           <p className="tdp-intro">
             Choose which restrooms and common areas students may select when
             making a pass from your room
