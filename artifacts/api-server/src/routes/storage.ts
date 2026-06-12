@@ -18,11 +18,14 @@
 //   - /api/storage/public-objects/* → unconditionally public (used for
 //     site assets dropped into the bucket via the workspace pane).
 import { Router, type IRouter, type Request, type Response } from "express";
+import { db, staffTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 import {
   ObjectStorageService,
   ObjectNotFoundError,
 } from "../lib/objectStorage.js";
 import { getObjectAclPolicy } from "../lib/objectAcl.js";
+import { canActAsDistrict, getDistrictIdForSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
@@ -158,6 +161,40 @@ export function schoolOwnerKey(schoolId: number) {
   return `school:${schoolId}`;
 }
 
+// Inverse of schoolOwnerKey — parse the owner school id out of an ACL owner
+// string. Returns null if the owner is not a `school:<id>` key.
+function schoolIdFromOwnerKey(owner: string): number | null {
+  const m = /^school:(\d+)$/.exec(owner);
+  return m ? Number(m[1]) : null;
+}
+
+// District-wide read fallback. When the fast same-school ACL check fails, a
+// SuperUser / District Admin may STILL read an object owned by ANOTHER school
+// in THEIR OWN district. This mirrors the district-wide tenancy tier used by
+// adminStaff (a district admin's roster spans every school in the district),
+// so e.g. a teacher photo owned by school B is viewable by a district admin
+// whose active school is A. Everyone else stays confined to their own school.
+// Only invoked on the slow path (after the same-school check fails), so the
+// common avatar render keeps its single-policy-lookup cost.
+async function viewerMayReadAcrossSchool(
+  staffId: number,
+  ownerSchoolId: number,
+): Promise<boolean> {
+  const [viewer] = await db
+    .select({
+      schoolId: staffTable.schoolId,
+      isSuperUser: staffTable.isSuperUser,
+      isDistrictAdmin: staffTable.isDistrictAdmin,
+    })
+    .from(staffTable)
+    .where(eq(staffTable.id, staffId));
+  if (!viewer || !canActAsDistrict(viewer)) return false;
+  const viewerDistrict = await getDistrictIdForSchool(viewer.schoolId);
+  if (viewerDistrict === null) return false;
+  const ownerDistrict = await getDistrictIdForSchool(ownerSchoolId);
+  return ownerDistrict !== null && ownerDistrict === viewerDistrict;
+}
+
 // Bind a freshly-uploaded object to a school. Called by feature routes
 // (e.g. classroomStore.ts) immediately after persisting the imageUrl, so the
 // `/storage/objects/*` read path can verify the requester has access.
@@ -228,6 +265,14 @@ router.get("/storage/objects/*tail", async (req, res) => {
     let allowed = false;
     if (policy) {
       allowed = policy.owner === schoolOwnerKey(schoolId);
+      if (!allowed) {
+        // Slow path: a SuperUser / District Admin may read an object owned by
+        // another school in their own district (district-wide tenancy tier).
+        const ownerSchoolId = schoolIdFromOwnerKey(policy.owner);
+        if (ownerSchoolId !== null) {
+          allowed = await viewerMayReadAcrossSchool(staffId, ownerSchoolId);
+        }
+      }
     } else {
       // No policy yet — only the school we issued the upload URL to may
       // preview the freshly-uploaded bytes.

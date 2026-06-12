@@ -25,3 +25,15 @@ because it binds with the same `req.schoolId` it uploaded under.
 **Invariant kept:** the already-bound branch still only succeeds when
 `existing.owner === schoolOwnerKey(ownerSchoolId)`, so a bound object can never
 be re-owned by another school, regardless of `uploaderSchoolIds`.
+
+**Read-path corollary:** the bind fix alone leaves the photo invisible — the
+object is owned by the target school but a district admin views from a
+*different* active school, so `GET /storage/objects/*` (owner === viewer
+req.schoolId) 404s → initials fallback. Fix: on the slow path (after the
+same-school check fails) a SuperUser/District Admin may read an object owned by
+any school in their **own district** (`viewerMayReadAcrossSchool`). Keep the
+fast same-school check first so the common avatar render stays one lookup.
+
+**Lesson:** cross-school object scoping has TWO sides — the write/bind owner
+AND the per-viewer read ACL. Fixing one without the other yields a silent
+display failure, not an error.
