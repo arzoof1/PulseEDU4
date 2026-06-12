@@ -523,6 +523,17 @@ async function renderCardBadgePortrait(
   // ring, and the crisis bar so they read on white. Falls back to slate.
   const ink = !isLight(c0) ? c0 : !isLight(c1) ? c1 : "#0f172a";
 
+  // Photo + QR geometry, declared up-front so the image-mode background can
+  // extend down to cover this row (mirrors the landscape layout).
+  const photoX = 12;
+  const photoY = 52;
+  const photoW = 60;
+  const photoH = 60;
+  const qrSize = 60;
+  const qrPad = 3;
+  const qrX = W - 12 - qrSize;
+  const qrY = 52;
+
   // White card body + outline.
   doc
     .save()
@@ -537,22 +548,24 @@ async function renderCardBadgePortrait(
   doc.roundedRect(2, 2, W - 4, H - 4, 6).clip();
 
   if (usingImage) {
-    // Image mode: uploaded photo as a top banner with a dark scrim; the
-    // school name sits white on top.
-    const bandH = 46;
+    // Image mode: the uploaded background extends DOWN to cover the photo +
+    // QR row (mirrors the landscape layout), so the photo and QR plates sit
+    // on top of the image. A dark scrim is applied ONLY to the header band
+    // behind the white school name — the photo/QR area stays a clean image.
+    const imgH = photoY + photoH + 6 - 2; // through the bottom of the photo row
     try {
       doc.image(design.bgImageBytes as Buffer, 2, 2, {
         width: W - 4,
-        height: bandH,
-        cover: [W - 4, bandH],
+        height: imgH,
+        cover: [W - 4, imgH],
         align: "center",
         valign: "center",
       });
     } catch {
-      doc.rect(2, 2, W - 4, bandH).fill(c0);
+      doc.rect(2, 2, W - 4, imgH).fill(c0);
     }
     doc.save();
-    doc.fillOpacity(0.4).fillColor("#000000").rect(2, 2, W - 4, bandH).fill();
+    doc.fillOpacity(0.4).fillColor("#000000").rect(2, 2, W - 4, 46).fill();
     doc.restore();
   } else {
     // Colors mode: diagonal corner ribbons. c1 (accent) is the outer/larger
@@ -619,12 +632,20 @@ async function renderCardBadgePortrait(
       .restore();
   }
 
-  // --- Photo (left) + QR plate (right) ---------------------------------
-  const photoX = 12;
-  const photoY = 52;
-  const photoW = 60;
-  const photoH = 60;
-  drawPhotoRect(doc, badge, photoX, photoY, photoW, photoH, "#e2e8f0");
+  // --- Photo (left) + QR plate (right) — drawn ON TOP of the image -----
+  // In image mode, frame the photo in white so it pops against the image
+  // background (matches the landscape card); in colors mode keep the original
+  // light tile so colors-mode prints are unchanged. The client preview mirrors
+  // this (white border only in image mode).
+  drawPhotoRect(
+    doc,
+    badge,
+    photoX,
+    photoY,
+    photoW,
+    photoH,
+    usingImage ? "#ffffff" : "#e2e8f0",
+  );
 
   // Car-rider badge overlaid on the photo's bottom-left corner (car riders
   // only; other dismissal modes show nothing). Car tinted to the school's
@@ -633,10 +654,6 @@ async function renderCardBadgePortrait(
     drawCarRiderCornerBadge(doc, photoX, photoY + photoH, c0);
   }
 
-  const qrSize = 60;
-  const qrPad = 3;
-  const qrX = W - 12 - qrSize;
-  const qrY = 52;
   doc
     .save()
     .fillColor("#ffffff")

@@ -714,6 +714,7 @@ export function CardDesignPanel() {
           <CardPreviewPortrait
             schoolName={schoolName}
             topBackground={topBackground}
+            bgImageUrl={bgImageUrl}
             headerColor={headerColor}
             carColor={isHex(topColors[0] ?? "") ? (topColors[0] as string) : previewHouseColor}
             showHouse={showHouse}
@@ -911,6 +912,7 @@ function CardPreview(props: {
 function CardPreviewPortrait(props: {
   schoolName: string;
   topBackground: string;
+  bgImageUrl?: string | null;
   headerColor: string;
   carColor: string;
   showHouse: boolean;
@@ -940,6 +942,99 @@ function CardPreviewPortrait(props: {
     justifyContent: "center",
     fontSize: 13,
   };
+  const isImage = !!props.bgImageUrl;
+  const lanyardSlot = (
+    <div
+      style={{
+        position: "absolute",
+        top: 8,
+        left: "50%",
+        transform: "translateX(-50%)",
+        width: 56,
+        height: 12,
+        borderRadius: 6,
+        border: "2px solid rgba(255,255,255,0.85)",
+        background: "rgba(255,255,255,0.12)",
+      }}
+    />
+  );
+  const schoolNameEl = (
+    <div
+      style={{
+        position: "absolute",
+        left: 8,
+        right: 8,
+        top: 40,
+        textAlign: "center",
+        color: props.headerColor,
+        fontWeight: 800,
+        fontSize: 17,
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      }}
+    >
+      {props.schoolName}
+    </div>
+  );
+  const photoCell = (
+    <div
+      style={{
+        position: "relative",
+        flex: "0 0 auto",
+        width: 96,
+        height: 96,
+        borderRadius: 8,
+        background: "#e2e8f0",
+        border: isImage ? "2px solid #fff" : "none",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: "#475569",
+        fontWeight: 700,
+        fontSize: 30,
+      }}
+    >
+      JS
+      {/* car-rider corner badge (car riders only) */}
+      <span
+        style={{
+          position: "absolute",
+          left: 4,
+          bottom: 4,
+          width: 30,
+          height: 30,
+          borderRadius: "50%",
+          background: "#fff",
+          border: "1px solid #cbd5e1",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+        title="Car rider"
+      >
+        <CarGlyph color={props.carColor} size={18} />
+      </span>
+    </div>
+  );
+  const qrCell = (
+    <div
+      style={{
+        flex: 1,
+        height: 96,
+        borderRadius: 8,
+        background: "#fff",
+        border: "1px solid #e2e8f0",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: "#94a3b8",
+        fontSize: 11,
+      }}
+    >
+      QR
+    </div>
+  );
   return (
     <div
       style={{
@@ -952,120 +1047,66 @@ function CardPreviewPortrait(props: {
         boxShadow: "0 1px 4px rgba(0,0,0,0.12)",
       }}
     >
-      {/* Header with lanyard slot + corner ribbons */}
-      <div style={{ position: "relative", height: 92, background: props.topBackground, overflow: "hidden" }}>
-        {/* corner ribbons */}
-        <div
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            width: 0,
-            height: 0,
-            borderTop: `46px solid ${ribbon}`,
-            borderRight: "46px solid transparent",
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            top: 0,
-            right: 0,
-            width: 0,
-            height: 0,
-            borderTop: `46px solid ${ribbon}`,
-            borderLeft: "46px solid transparent",
-          }}
-        />
-        {/* lanyard slot */}
-        <div
-          style={{
-            position: "absolute",
-            top: 8,
-            left: "50%",
-            transform: "translateX(-50%)",
-            width: 56,
-            height: 12,
-            borderRadius: 6,
-            border: "2px solid rgba(255,255,255,0.85)",
-            background: "rgba(255,255,255,0.12)",
-          }}
-        />
-        {/* school name */}
-        <div
-          style={{
-            position: "absolute",
-            left: 8,
-            right: 8,
-            top: 40,
-            textAlign: "center",
-            color: props.headerColor,
-            fontWeight: 800,
-            fontSize: 17,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-        >
-          {props.schoolName}
+      {isImage ? (
+        /* Image mode: the uploaded background spans the header AND the
+           photo/QR row (just like the landscape card). A scrim behind the
+           school name keeps it legible; the photo/QR plates sit on the
+           clean image below. */
+        <div style={{ background: props.topBackground }}>
+          <div style={{ position: "relative", height: 92, overflow: "hidden" }}>
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background:
+                  "linear-gradient(180deg,rgba(0,0,0,0.5) 0%,rgba(0,0,0,0.15) 60%,rgba(0,0,0,0) 100%)",
+              }}
+            />
+            {lanyardSlot}
+            {schoolNameEl}
+          </div>
+          <div style={{ display: "flex", gap: 10, padding: "0 12px 12px" }}>
+            {photoCell}
+            {qrCell}
+          </div>
         </div>
-      </div>
-      {/* photo + QR */}
-      <div style={{ display: "flex", gap: 10, padding: "10px 12px 6px" }}>
-        <div
-          style={{
-            position: "relative",
-            flex: "0 0 auto",
-            width: 96,
-            height: 96,
-            borderRadius: 8,
-            background: "#e2e8f0",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "#475569",
-            fontWeight: 700,
-            fontSize: 30,
-          }}
-        >
-          JS
-          {/* car-rider corner badge (car riders only) */}
-          <span
-            style={{
-              position: "absolute",
-              left: 4,
-              bottom: 4,
-              width: 30,
-              height: 30,
-              borderRadius: "50%",
-              background: "#fff",
-              border: "1px solid #cbd5e1",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-            title="Car rider"
-          >
-            <CarGlyph color={props.carColor} size={18} />
-          </span>
-        </div>
-        <div
-          style={{
-            flex: 1,
-            height: 96,
-            borderRadius: 8,
-            background: "#fff",
-            border: "1px solid #e2e8f0",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "#94a3b8",
-            fontSize: 11,
-          }}
-        >
-          QR
-        </div>
-      </div>
+      ) : (
+        <>
+          {/* Header with lanyard slot + corner ribbons */}
+          <div style={{ position: "relative", height: 92, background: props.topBackground, overflow: "hidden" }}>
+            {/* corner ribbons */}
+            <div
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: 0,
+                height: 0,
+                borderTop: `46px solid ${ribbon}`,
+                borderRight: "46px solid transparent",
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                top: 0,
+                right: 0,
+                width: 0,
+                height: 0,
+                borderTop: `46px solid ${ribbon}`,
+                borderLeft: "46px solid transparent",
+              }}
+            />
+            {lanyardSlot}
+            {schoolNameEl}
+          </div>
+          {/* photo + QR */}
+          <div style={{ display: "flex", gap: 10, padding: "10px 12px 6px" }}>
+            {photoCell}
+            {qrCell}
+          </div>
+        </>
+      )}
       {/* icon rows (no dismissal row — car riders are flagged by the photo badge) */}
       <div style={{ padding: "0 12px" }}>
         <div style={{ ...rowStyle, borderTop: "none" }}>
