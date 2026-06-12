@@ -84,6 +84,29 @@ of `docs/shipped.md`.
 
 ### Open work
 
+- **E-sign signing campaigns (bulk send → per-student return).**
+  Idea only (no build yet). Today e-sign is 1 doc = 1 link = 1
+  signer with NO student tie by design. For field-trip-style
+  workflows, wrap the existing per-document signing flow in a
+  "campaign": upload the slip once (template), fan out one signing
+  COPY per student (each copy carries `student_id`, grouped under a
+  campaign id), and aggregate returns onto one "field trip list"
+  dashboard (Not sent → Sent → Signed, reminders, bulk signed-PDF
+  download). Recipient selection two ways: (A) pick a teacher
+  class/period — expand `section_roster`/`class_sections`
+  (read-only; Skyward is source of truth) — lead with this, zero
+  effort; (B) CSV via the Data Importer pattern for cross-class
+  lists. Delivery: Resend email (parent addresses from
+  `parents`/`parent_email`) + printable per-student QR fallback
+  (reuse kiosk/badge QR) because recipient email is often blank.
+  Key decisions/caveats: the per-copy `student_id` link is the one
+  real schema change (intentionally absent today); siblings/shared
+  parents need distinct links per child; list + CSV/PDF exports
+  show `local_sis_id` ONLY (never FLEID); base62 token +
+  `publicAppOrigin` URL resolution carry over from the existing
+  sign flow. Cleanest first slice: Option A + email + status
+  dashboard; CSV + QR as fast follow.
+
 - **LG subject-band promotions (Algebra I etc.).** Phase 1 +
   Phase 2 of the LG green-check are SHIPPED. Phase 2 extended
   the `learningGain` branch in `buildSubjectBlock`
