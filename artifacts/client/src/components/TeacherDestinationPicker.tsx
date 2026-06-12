@@ -41,6 +41,13 @@ export default function TeacherDestinationPicker({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // Stable dependency for the load effect. The parent passes
+  // `teacherAllowlistMap[user] ?? []`, which is a BRAND-NEW array on every
+  // render — depending on the array itself would re-fire this effect every
+  // render (refetch → setState → re-render → refetch), making the modal
+  // blink and reset its checkboxes. Key off the content instead.
+  const allowlistKey = currentAllowlist.join("\u0000");
+
   // Load the school's pickable destinations whenever the modal opens.
   useEffect(() => {
     if (!open) return;
@@ -86,7 +93,10 @@ export default function TeacherDestinationPicker({
     return () => {
       cancelled = true;
     };
-  }, [open, currentAllowlist]);
+    // currentAllowlist is intentionally read via allowlistKey (its stable
+    // content hash) to avoid an every-render refetch loop. See above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, allowlistKey]);
 
   const restrooms = useMemo(
     () => options.filter((l) => l.kind === "restroom"),
