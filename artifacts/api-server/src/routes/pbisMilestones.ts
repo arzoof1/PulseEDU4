@@ -4,8 +4,9 @@ import {
   pbisMilestonesTable,
   pbisMilestoneEmailsTable,
   staffTable,
+  studentsTable,
 } from "@workspace/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
@@ -138,7 +139,33 @@ router.get(
       .from(pbisMilestoneEmailsTable)
       .where(eq(pbisMilestoneEmailsTable.schoolId, req.schoolId!));
     rows.sort((a, b) => (a.sentAt < b.sentAt ? 1 : -1));
-    res.json(rows.slice(0, 100));
+    const top = rows.slice(0, 100);
+    const idsNeeded = Array.from(
+      new Set(top.map((r) => r.studentId).filter(Boolean)),
+    );
+    const studentRows = idsNeeded.length
+      ? await db
+          .select({
+            studentId: studentsTable.studentId,
+            localSisId: studentsTable.localSisId,
+          })
+          .from(studentsTable)
+          .where(
+            and(
+              eq(studentsTable.schoolId, req.schoolId!),
+              inArray(studentsTable.studentId, idsNeeded),
+            ),
+          )
+      : [];
+    const localSisById = new Map(
+      studentRows.map((s) => [s.studentId, s.localSisId ?? null]),
+    );
+    res.json(
+      top.map((r) => ({
+        ...r,
+        localSisId: localSisById.get(r.studentId) ?? null,
+      })),
+    );
   },
 );
 

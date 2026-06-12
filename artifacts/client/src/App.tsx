@@ -210,6 +210,7 @@ const teachers = ["Ms. Rivera", "Mr. Johnson", "Coach Lee"];
 interface Tardy {
   id: number;
   studentId: string;
+  localSisId: string | null;
   teacherName: string;
   period: string;
   reason: string;
@@ -223,6 +224,7 @@ interface Tardy {
 interface PbisEntry {
   id: number;
   studentId: string;
+  localSisId: string | null;
   reason: string;
   points: number;
   staffId: number | null;
@@ -1294,8 +1296,10 @@ function VerifyPulloutsSection({
                   setCalledInStudentSearch(v);
                   const match = sortedStudentsForCalledIn.find(
                     (s) =>
-                      `${s.firstName} ${s.lastName} (${s.studentId})` ===
-                        v || s.studentId === v.trim(),
+                      `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})` ===
+                        v ||
+                      s.studentId === v.trim() ||
+                      (s.localSisId ?? "") === v.trim(),
                   );
                   setCalledInStudentId(match ? match.studentId : "");
                 }}
@@ -2479,8 +2483,10 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                     setAddStudentSearch(v);
                     const m = sortedStudents.find(
                       (s) =>
-                        `${s.firstName} ${s.lastName} (${s.studentId})` ===
-                          v || s.studentId === v.trim(),
+                        `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})` ===
+                          v ||
+                        s.studentId === v.trim() ||
+                        (s.localSisId ?? "") === v.trim(),
                     );
                     setAddStudentId(m ? m.studentId : "");
                   }}
@@ -3665,10 +3671,12 @@ function PolarityStudentPicker({
                 }}
                 onClick={() => {
                   setSelected(s.studentId);
-                  setSearch(`${s.firstName} ${s.lastName} (${s.studentId})`);
+                  setSearch(
+                    `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`,
+                  );
                 }}
               >
-                {s.firstName} {s.lastName} ({s.studentId})
+                {s.firstName} {s.lastName} ({s.localSisId ?? "—"})
               </button>
             </li>
           ))}
@@ -3695,7 +3703,7 @@ function StudentCombobox({
 }) {
   const selected = students.find((s) => s.studentId === value);
   const labelOf = (s: Student) =>
-    `${s.firstName} ${s.lastName} (${s.studentId})`;
+    `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`;
   const [query, setQuery] = useState(selected ? labelOf(selected) : "");
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(0);
@@ -3844,7 +3852,7 @@ function StudentCombobox({
                 {s.firstName} {s.lastName}
               </strong>{" "}
               <span style={{ color: "#64748b" }}>
-                · {s.studentId} · Gr {s.grade}
+                · {s.localSisId ?? "—"} · Gr {s.grade}
               </span>
             </li>
           ))}
@@ -4511,11 +4519,13 @@ function App() {
     activePassCount: number;
     topStudentTakers: Array<{
       studentId: string;
+      localSisId: string | null;
       studentName: string;
       count: number;
     }>;
     topStudentLostMinutes: Array<{
       studentId: string;
+      localSisId: string | null;
       studentName: string;
       minutes: number;
     }>;
@@ -5096,9 +5106,11 @@ function App() {
   type PolarityPair = {
     id: number;
     studentIdA: string;
+    studentLocalSisIdA: string | null;
     studentAFirstName: string | null;
     studentALastName: string | null;
     studentIdB: string;
+    studentLocalSisIdB: string | null;
     studentBFirstName: string | null;
     studentBLastName: string | null;
     note: string | null;
@@ -5116,6 +5128,7 @@ function App() {
   type StudentHallPassLimit = {
     id: number;
     studentId: string;
+    localSisId: string | null;
     dailyLimit: number;
     note: string | null;
     parentApproved: boolean;
@@ -5168,6 +5181,7 @@ function App() {
     accommodations: { id: number; name: string }[];
     students: {
       studentId: string;
+      localSisId: string | null;
       firstName: string;
       lastName: string;
       grade: number;
@@ -5215,6 +5229,7 @@ function App() {
     id: number;
     createdAt: string;
     studentId: string;
+    localSisId: string | null;
     studentName: string;
     reason: string;
     points: number;
@@ -5269,6 +5284,7 @@ function App() {
   type PbisMilestoneEmailRow = {
     id: number;
     studentId: string;
+    localSisId: string | null;
     milestonePoints: number;
     sentAt: string;
     emailTo: string | null;
@@ -5389,7 +5405,12 @@ function App() {
     period: string;
     from: string | null;
     until: string;
-    students: { studentId: string; total: number; count: number }[];
+    students: {
+      studentId: string;
+      localSisId: string | null;
+      total: number;
+      count: number;
+    }[];
     staff: { staffId: number; staffName: string; total: number; count: number }[];
   };
   const [leaderboardPeriod, setLeaderboardPeriod] =
@@ -7923,7 +7944,7 @@ function App() {
       if (myActives.length > 0) {
         const lines = myActives
           .slice(0, 5)
-          .map((p) => `• ${p.studentId} → ${p.destination}`)
+          .map((p) => `• ${studentName(p.studentId)} → ${p.destination}`)
           .join("\n");
         const more =
           myActives.length > 5
@@ -7978,7 +7999,7 @@ function App() {
       if (res.status === 409 && body?.code === "STUDENT_HAS_ACTIVE_PASS") {
         const ex = body.existingPass;
         const detail = ex
-          ? `${payload.studentId} is already out → ${ex.destination}` +
+          ? `${studentName(payload.studentId)} is already out → ${ex.destination}` +
             (ex.teacherName ? ` (issued by ${ex.teacherName})` : "")
           : body.error ?? "Student already has an active pass.";
         const ok = window.confirm(
@@ -10542,7 +10563,9 @@ function App() {
                             color: "var(--text-subtle)",
                           }}
                         >
-                          {p.studentId} · from {p.originRoom}
+                          {students.find((s) => s.studentId === p.studentId)
+                            ?.localSisId ?? "—"}{" "}
+                          · from {p.originRoom}
                           {p.isTardyReturn && (
                             <span
                               style={{
@@ -11761,13 +11784,19 @@ function App() {
             {(() => {
               const studentInfo = new Map<
                 string,
-                { first: string; last: string; grade: number }
+                {
+                  first: string;
+                  last: string;
+                  grade: number;
+                  localSisId: string | null;
+                }
               >();
               for (const s of students) {
                 studentInfo.set(s.studentId, {
                   first: s.firstName,
                   last: s.lastName,
                   grade: s.grade,
+                  localSisId: s.localSisId ?? null,
                 });
               }
               const stats = new Map<
@@ -11802,6 +11831,7 @@ function App() {
                     first: info.first,
                     last: info.last,
                     grade: info.grade,
+                    localSisId: info.localSisId,
                     passes: v.passes,
                     autoEnded: v.autoEnded,
                     lostMin: Math.round(v.lostMin),
@@ -11879,7 +11909,7 @@ function App() {
                               <td style={{ padding: "0.55rem 0.75rem" }}>
                                 {String(r.grade).padStart(2, "0")}
                               </td>
-                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.sid}</td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.localSisId ?? "—"}</td>
                               <td style={{ padding: "0.55rem 0.75rem" }}>{r.passes}</td>
                               <td style={{ padding: "0.55rem 0.75rem" }}>{r.autoEnded}</td>
                               <td style={{ padding: "0.55rem 0.75rem" }}>
@@ -12147,12 +12177,13 @@ function App() {
       {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "research" && (() => {
         const studentInfo = new Map<
           string,
-          { name: string; grade: number }
+          { name: string; grade: number; localSisId: string | null }
         >();
         for (const s of students) {
           studentInfo.set(s.studentId, {
             name: `${s.firstName} ${s.lastName}`,
             grade: s.grade,
+            localSisId: s.localSisId ?? null,
           });
         }
         const startMs = new Date(`${researchStart}T00:00:00`).getTime();
@@ -12303,7 +12334,7 @@ function App() {
                         )
                         .map((s) => (
                           <option key={s.id} value={`${s.firstName} ${s.lastName}`}>
-                            {s.studentId}
+                            {s.localSisId ?? "—"}
                           </option>
                         ))}
                     </datalist>
@@ -12433,7 +12464,7 @@ function App() {
                             <td style={{ padding: "0.5rem 0.75rem" }}>
                               {info ? String(info.grade).padStart(2, "0") : "—"}
                             </td>
-                            <td style={{ padding: "0.5rem 0.75rem" }}>{p.studentId}</td>
+                            <td style={{ padding: "0.5rem 0.75rem" }}>{info?.localSisId ?? "—"}</td>
                             <td style={{ padding: "0.5rem 0.75rem" }}>{fmtDateTime(p.createdAt)}</td>
                             <td style={{ padding: "0.5rem 0.75rem" }}>
                               {d == null ? "active" : `${d.toFixed(2)} min`}
@@ -12617,7 +12648,7 @@ function App() {
                             <td>{i + 1}</td>
                             <td>
                               {r.studentName}{" "}
-                              <span className="muted">({r.studentId})</span>
+                              <span className="muted">({r.localSisId ?? "—"})</span>
                             </td>
                             <td style={{ textAlign: "right" }}>{r.count}</td>
                           </tr>
@@ -12647,7 +12678,7 @@ function App() {
                             <td>{i + 1}</td>
                             <td>
                               {r.studentName}{" "}
-                              <span className="muted">({r.studentId})</span>
+                              <span className="muted">({r.localSisId ?? "—"})</span>
                             </td>
                             <td style={{ textAlign: "right" }}>{r.minutes}</td>
                           </tr>
@@ -12828,11 +12859,11 @@ function App() {
                         onClick={() => {
                           setTardyStudentId(s.studentId);
                           setTardyStudentSearch(
-                            `${s.studentId} - ${s.firstName} ${s.lastName}`,
+                            `${s.localSisId ?? "—"} - ${s.firstName} ${s.lastName}`,
                           );
                         }}
                       >
-                        {s.studentId} - {s.firstName} {s.lastName}
+                        {s.localSisId ?? "—"} - {s.firstName} {s.lastName}
                       </button>
                     </li>
                   ))}
@@ -12978,7 +13009,7 @@ function App() {
               <td>
                 <div style={{ fontWeight: 600 }}>{studentName(t.studentId)}</div>
                 <div style={{ fontSize: 11, color: "var(--text-subtle)" }}>
-                  {t.studentId}
+                  {t.localSisId ?? "—"}
                 </div>
               </td>
               <td>{t.teacherName}</td>
@@ -13031,7 +13062,9 @@ function App() {
                     setActivityStudentId(id);
                     const s = students.find((x) => x.studentId === id);
                     setActivityStudentSearch(
-                      s ? `${s.firstName} ${s.lastName} (${s.studentId})` : "",
+                      s
+                        ? `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`
+                        : "",
                     );
                   }}
                   minWidth={400}
@@ -13095,11 +13128,11 @@ function App() {
                           onClick={() => {
                             setActivityStudentId(s.studentId);
                             setActivityStudentSearch(
-                              `${s.studentId} - ${s.firstName} ${s.lastName}`,
+                              `${s.localSisId ?? "—"} - ${s.firstName} ${s.lastName}`,
                             );
                           }}
                         >
-                          {s.studentId} - {s.firstName} {s.lastName}
+                          {s.localSisId ?? "—"} - {s.firstName} {s.lastName}
                         </button>
                       </li>
                     ))}
@@ -14436,7 +14469,7 @@ function App() {
                                           color: "var(--text-subtle)",
                                         }}
                                       >
-                                        {s.studentId} · Gr. {s.grade}
+                                        {s.localSisId ?? "—"} · Gr. {s.grade}
                                       </div>
                                     </div>
                                     <div>
@@ -15943,11 +15976,11 @@ function App() {
                             onClick={() => {
                               setPbisStudentId(s.studentId);
                               setPbisStudentSearch(
-                                `${s.studentId} - ${s.firstName} ${s.lastName}`,
+                                `${s.localSisId ?? "—"} - ${s.firstName} ${s.lastName}`,
                               );
                             }}
                           >
-                            {s.studentId} - {s.firstName} {s.lastName}
+                            {s.localSisId ?? "—"} - {s.firstName} {s.lastName}
                           </button>
                         </li>
                       ))}
@@ -16344,7 +16377,7 @@ function App() {
                         <div
                           style={{ fontSize: 11, color: "var(--text-subtle)" }}
                         >
-                          {entry.studentId}
+                          {entry.localSisId ?? "—"}
                         </div>
                       </td>
                       <td style={cellStyle}>
@@ -16494,7 +16527,7 @@ function App() {
                         <td>
                           {studentName(s.studentId)}{" "}
                           <span style={{ color: "var(--muted, #64748b)", fontSize: "0.8rem" }}>
-                            {s.studentId}
+                            {s.localSisId ?? "—"}
                           </span>
                         </td>
                         <td>{s.total}</td>
@@ -16644,7 +16677,11 @@ function App() {
                   <ul style={{ margin: "0.25rem 0 0 1rem" }}>
                     {bulkResult.errors.map((e) => (
                       <li key={e.studentId}>
-                        <code>{e.studentId}</code>: {e.error}
+                        <code>
+                          {students.find((s) => s.studentId === e.studentId)
+                            ?.localSisId ?? "—"}
+                        </code>
+                        : {e.error}
                       </li>
                     ))}
                   </ul>
@@ -16938,7 +16975,7 @@ function App() {
                         <td style={{ padding: "0.25rem" }}>
                           {r.studentName}
                           <div style={{ fontSize: 11, color: "var(--text-subtle, #94a3b8)" }}>
-                            {r.studentId}
+                            {r.localSisId ?? "—"}
                           </div>
                         </td>
                         <td style={{ padding: "0.25rem" }}>{r.reason}</td>
@@ -18198,7 +18235,6 @@ function App() {
       {activeSection === "mtssTemplates" && canAccessMtssHub && (() => {
         const mergeTokens: Array<{ token: string; label: string }> = [
           { token: "studentName", label: "Student Name" },
-          { token: "studentId", label: "Student ID" },
           { token: "parentName", label: "Parent Name" },
           { token: "parentEmail", label: "Parent Email" },
           { token: "hallPassCount", label: "Hall Pass Count" },
@@ -18791,6 +18827,7 @@ function App() {
                       if (!s) return null;
                       return {
                         studentId: s.studentId,
+                        localSisId: s.localSisId ?? null,
                         firstName: s.firstName,
                         lastName: s.lastName,
                         grade: s.grade,
@@ -18802,6 +18839,7 @@ function App() {
                         x,
                       ): x is {
                         studentId: string;
+                        localSisId: string | null;
                         firstName: string;
                         lastName: string;
                         grade: number;
@@ -18909,7 +18947,7 @@ function App() {
                                     {s.lastName}, {s.firstName}
                                   </strong>{" "}
                                   <span style={{ color: "#64748b" }}>
-                                    · {s.studentId} · Gr {s.grade}
+                                    · {s.localSisId ?? "—"} · Gr {s.grade}
                                   </span>
                                   {isExtra && hasNoAssignments && (
                                     <button
@@ -19041,13 +19079,13 @@ function App() {
                           onClick={() => {
                             setEseStudentId(s.studentId);
                             setEseStudentSearch(
-                              `${s.studentId} - ${s.firstName} ${s.lastName}`,
+                              `${s.localSisId ?? "—"} - ${s.firstName} ${s.lastName}`,
                             );
                             setEseAddSelected(new Set());
                             loadEseStudentAccs(s.studentId);
                           }}
                         >
-                          {s.studentId} — {s.firstName} {s.lastName}
+                          {s.localSisId ?? "—"} — {s.firstName} {s.lastName}
                         </button>
                       </li>
                     ))}
@@ -19667,9 +19705,9 @@ function App() {
                       {new Date(r.sentAt).toLocaleString()}
                     </td>
                     <td style={{ padding: "0.4rem" }}>
-                      {studentName(r.studentId) || r.studentId}{" "}
+                      {studentName(r.studentId) || (r.localSisId ?? "—")}{" "}
                       <span style={{ color: "var(--muted, #64748b)", fontSize: "0.8rem" }}>
-                        {r.studentId}
+                        {r.localSisId ?? "—"}
                       </span>
                     </td>
                     <td style={{ padding: "0.4rem" }}>{r.milestonePoints} pts</td>
@@ -20079,8 +20117,8 @@ function App() {
                 {hpLimits.map((l) => {
                   const name =
                     l.firstName && l.lastName
-                      ? `${l.firstName} ${l.lastName} (${l.studentId})`
-                      : l.studentId;
+                      ? `${l.firstName} ${l.lastName} (${l.localSisId ?? "—"})`
+                      : (l.localSisId ?? "—");
                   return (
                     <tr key={l.id} style={{ borderBottom: "1px solid #eee" }}>
                       <td style={{ padding: "0.4rem" }}>{name}</td>
@@ -20225,12 +20263,12 @@ function App() {
                 {polarityPairs.map((p) => {
                   const nameA =
                     p.studentAFirstName && p.studentALastName
-                      ? `${p.studentAFirstName} ${p.studentALastName} (${p.studentIdA})`
-                      : p.studentIdA;
+                      ? `${p.studentAFirstName} ${p.studentALastName} (${p.studentLocalSisIdA ?? "—"})`
+                      : (p.studentLocalSisIdA ?? "—");
                   const nameB =
                     p.studentBFirstName && p.studentBLastName
-                      ? `${p.studentBFirstName} ${p.studentBLastName} (${p.studentIdB})`
-                      : p.studentIdB;
+                      ? `${p.studentBFirstName} ${p.studentBLastName} (${p.studentLocalSisIdB ?? "—"})`
+                      : (p.studentLocalSisIdB ?? "—");
                   return (
                     <tr key={p.id} style={{ borderBottom: "1px solid #eee" }}>
                       <td style={{ padding: "0.4rem" }}>{nameA}</td>
@@ -22732,7 +22770,7 @@ function App() {
               const text = await lookupRes.text();
               throw new Error(
                 text ||
-                  `No teacher found for student ${payload.studentId} in period ${payload.period}.`,
+                  `No teacher found for student ${studentName(payload.studentId)} in period ${payload.period}.`,
               );
             }
             const info = await lookupRes.json();

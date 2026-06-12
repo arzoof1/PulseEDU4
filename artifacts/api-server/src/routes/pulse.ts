@@ -515,6 +515,7 @@ router.get("/pulse/student-timeline", async (req, res) => {
       student: {
         id: student.id,
         studentId: student.studentId,
+        localSisId: student.localSisId,
         firstName: student.firstName,
         lastName: student.lastName,
         grade: student.grade,

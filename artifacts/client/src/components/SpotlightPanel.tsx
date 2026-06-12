@@ -1226,7 +1226,7 @@ function Wheel({
               const lx = cx + labelDist * Math.cos(midRad);
               const ly = cy + labelDist * Math.sin(midRad);
               const color = WHEEL_COLORS[i % WHEEL_COLORS.length];
-              const fname = (s.firstName ?? s.studentId).slice(0, 10);
+              const fname = (s.firstName ?? "Student").slice(0, 10);
               // Text rotation: align with the wedge's radial direction,
               // then auto-flip if it'd be upside down.
               let textRotation = midAngle;
@@ -1358,7 +1358,7 @@ function Bottles({
                 <div className="bottle-cap" />
                 <div className="bottle-body">
                   <div className="bottle-label">
-                    {(s.firstName ?? s.studentId).slice(0, 12)}
+                    {(s.firstName ?? "Student").slice(0, 12)}
                   </div>
                 </div>
               </div>
@@ -1440,7 +1440,7 @@ function Reel({
               style={{ width: REEL_SLOT_WIDTH }}
             >
               <div className="spotlight-reel-slot-name">
-                {s.firstName ?? s.studentId}
+                {s.firstName ?? "Student"}
               </div>
               {s.lastName && (
                 <div className="spotlight-reel-slot-last">
@@ -1523,7 +1523,7 @@ function SpotlightSweep({
               }`}
             >
               <div className="spotlight-grid-cell-first">
-                {s.firstName ?? s.studentId}
+                {s.firstName ?? "Student"}
               </div>
               {s.lastName && (
                 <div className="spotlight-grid-cell-last">{s.lastName}</div>
@@ -1584,7 +1584,7 @@ function ResultCard({
   onDone,
 }: ResultCardProps) {
   const house = pick.pick.house;
-  const fullName = `${pick.pick.firstName ?? pick.pick.studentId} ${
+  const fullName = `${pick.pick.firstName ?? "Student"} ${
     pick.pick.lastName ?? ""
   }`.trim();
   return (

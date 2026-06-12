@@ -51,6 +51,7 @@ export interface ParentSnapshot {
   student: {
     id: number;
     studentId: string;
+    localSisId: string | null;
     firstName: string;
     lastName: string;
     grade: number;
@@ -886,6 +887,7 @@ export async function buildParentSnapshot(
       student: {
         id: student.id,
         studentId: student.studentId,
+        localSisId: student.localSisId ?? null,
         firstName: student.firstName,
         lastName: student.lastName,
         grade: student.grade,

@@ -158,7 +158,7 @@ function drawIdentityStrip(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
     .font("Helvetica")
     .fillColor(COLORS.muted)
     .text(
-      `${gradeLabel(s.student.grade)} · ID ${s.student.studentId}`,
+      `${gradeLabel(s.student.grade)} · ID ${s.student.localSisId ?? "—"}`,
       left + 14,
       top + 30,
     );

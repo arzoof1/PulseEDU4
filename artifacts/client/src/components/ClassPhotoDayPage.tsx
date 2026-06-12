@@ -31,6 +31,7 @@ interface Teacher {
 
 interface RosterStudent {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   gradeLevel: number | string | null;
@@ -658,7 +659,7 @@ export default function ClassPhotoDayPage({
                 {current.firstName} {current.lastName}
               </div>
               <div style={{ color: "#64748b", fontSize: "0.8rem" }}>
-                ID {current.studentId}
+                ID {current.localSisId ?? "—"}
                 {current.gradeLevel != null && ` · Grade ${current.gradeLevel}`}
               </div>
             </div>

@@ -8,6 +8,7 @@ import { authFetch } from "../../lib/authToken";
 
 interface Suggestion {
   studentId: string;
+  localSisId?: string | null;
   displayName: string;
   reason: string;
 }
@@ -67,7 +68,7 @@ export default function MentionSuggestStrip({
           type="button"
           title={s.reason || "Click to add as @-mention"}
           onClick={() => {
-            onInsert(`@[${s.displayName}|${s.studentId}] `);
+            onInsert(`@[${s.displayName}|${s.localSisId ?? s.studentId}] `);
             setDismissed((d) => new Set(d).add(s.studentId));
           }}
           style={{

@@ -229,6 +229,7 @@ router.get(
         assignmentId: studentAccommodationsTable.id,
         studentId: studentAccommodationsTable.studentId,
         accommodationId: studentAccommodationsTable.accommodationId,
+        localSisId: studentsTable.localSisId,
         firstName: studentsTable.firstName,
         lastName: studentsTable.lastName,
         grade: studentsTable.grade,
@@ -252,6 +253,7 @@ router.get(
       string,
       {
         studentId: string;
+        localSisId: string | null;
         firstName: string;
         lastName: string;
         grade: number;
@@ -263,6 +265,7 @@ router.get(
       if (!s) {
         s = {
           studentId: r.studentId,
+          localSisId: r.localSisId ?? null,
           firstName: r.firstName,
           lastName: r.lastName,
           grade: r.grade,

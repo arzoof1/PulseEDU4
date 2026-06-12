@@ -535,6 +535,7 @@ router.get("/reports/hall-passes", requireStaff, async (req, res) => {
     ? await db
         .select({
           studentId: studentsTable.studentId,
+          localSisId: studentsTable.localSisId,
           firstName: studentsTable.firstName,
           lastName: studentsTable.lastName,
         })
@@ -549,8 +550,11 @@ router.get("/reports/hall-passes", requireStaff, async (req, res) => {
   const nameById = new Map(
     studentRows.map((s) => [
       s.studentId,
-      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || s.studentId,
+      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || "—",
     ]),
+  );
+  const localSisById = new Map(
+    studentRows.map((s) => [s.studentId, s.localSisId ?? null]),
   );
 
   function topN<K>(m: Map<K, number>, n = 10): Array<[K, number]> {
@@ -567,11 +571,13 @@ router.get("/reports/hall-passes", requireStaff, async (req, res) => {
     activePassCount,
     topStudentTakers: topN(studentCount).map(([id, count]) => ({
       studentId: id,
+      localSisId: localSisById.get(id) ?? null,
       studentName: nameById.get(id) ?? id,
       count,
     })),
     topStudentLostMinutes: topN(studentMins).map(([id, mins]) => ({
       studentId: id,
+      localSisId: localSisById.get(id) ?? null,
       studentName: nameById.get(id) ?? id,
       minutes: Math.round(mins),
     })),
@@ -673,6 +679,7 @@ router.get("/reports/pbis", requireStaff, async (req, res) => {
     ? await db
         .select({
           studentId: studentsTable.studentId,
+          localSisId: studentsTable.localSisId,
           firstName: studentsTable.firstName,
           lastName: studentsTable.lastName,
         })
@@ -687,8 +694,11 @@ router.get("/reports/pbis", requireStaff, async (req, res) => {
   const nameById = new Map(
     studentRows.map((s) => [
       s.studentId,
-      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || s.studentId,
+      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || "—",
     ]),
+  );
+  const localSisById = new Map(
+    studentRows.map((s) => [s.studentId, s.localSisId ?? null]),
   );
 
   let totalPoints = 0;
@@ -732,7 +742,8 @@ router.get("/reports/pbis", requireStaff, async (req, res) => {
       id: r.id,
       createdAt: r.createdAt,
       studentId: r.studentId,
-      studentName: nameById.get(r.studentId) ?? r.studentId,
+      localSisId: localSisById.get(r.studentId) ?? null,
+      studentName: nameById.get(r.studentId) ?? "—",
       reason: r.reason,
       points: r.points,
       staffName: r.staffName,

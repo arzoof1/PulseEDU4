@@ -340,6 +340,7 @@ interface TrajectoryResponse {
 
 interface TrajStudent {
   studentId: string;
+  localSisId: string | null;
   studentName: string;
   grade: number | null;
   pm1: number | null;
@@ -460,10 +461,10 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
       const s = String(v);
       return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const header = ["student_id", "student_name", "grade", "pm1", "pm3"];
+    const header = ["local_sis_id", "student_name", "grade", "pm1", "pm3"];
     const rows = drawerData.students.map((s) =>
       [
-        esc(s.studentId),
+        esc(s.localSisId ?? ""),
         esc(s.studentName),
         esc(s.grade == null ? "" : s.grade === 0 ? "K" : s.grade),
         esc(s.pm1 ?? ""),

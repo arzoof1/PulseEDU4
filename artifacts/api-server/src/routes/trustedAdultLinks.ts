@@ -98,6 +98,7 @@ async function selectLinks(
     .select({
       id: studentTrustedAdultsTable.id,
       studentId: studentTrustedAdultsTable.studentId,
+      localSisId: studentsTable.localSisId,
       staffId: studentTrustedAdultsTable.staffId,
       studentFirstName: studentsTable.firstName,
       studentLastName: studentsTable.lastName,

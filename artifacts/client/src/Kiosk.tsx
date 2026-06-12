@@ -3087,7 +3087,7 @@ function TimerScreen({
           marginBottom: "0.5rem",
         }}
       >
-        {activePass.studentFirstName ?? activePass.studentId}
+        {activePass.studentFirstName ?? "Student"}
         <span style={{ opacity: 0.85, fontWeight: 500 }}> → </span>
         {activePass.destination}
       </div>
@@ -3276,7 +3276,7 @@ function SuccessCard({
   destination: string;
   onReset: () => void;
 }) {
-  const displayName = studentFirstName ?? studentId;
+  const displayName = studentFirstName ?? "Student";
   return (
     <div
       style={{

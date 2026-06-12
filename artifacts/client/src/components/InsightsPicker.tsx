@@ -311,7 +311,10 @@ export function topListsToCsv(
   const out: string[] = [];
   for (const [name, items] of Object.entries(lists)) {
     if (!items || items.length === 0) continue;
-    const keys = Object.keys(items[0]);
+    // NEVER export the canonical FLEID `student_id`. Drop it from every
+    // top-list CSV; the local SIS id (when the row carries one) is the only
+    // student identifier we surface in exports.
+    const keys = Object.keys(items[0]).filter((k) => k !== "studentId");
     out.push(["list", ...keys].map(csvCell).join(","));
     for (const it of items) {
       out.push([name, ...keys.map((k) => csvCell(it[k]))].join(","));

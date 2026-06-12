@@ -457,7 +457,6 @@ router.get("/algebra-placement/csv", async (req: Request, res: Response) => {
   const report = await buildReport(schoolId);
 
   const header = [
-    "student_id",
     "local_sis_id",
     "last_name",
     "first_name",
@@ -498,7 +497,6 @@ router.get("/algebra-placement/csv", async (req: Request, res: Response) => {
       .join(" ← ");
     lines.push(
       [
-        r.studentId,
         r.localSisId ?? "",
         r.lastName,
         r.firstName,

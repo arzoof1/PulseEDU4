@@ -25,6 +25,7 @@ const MODEL = "claude-sonnet-4-6";
 
 export type MentionSuggestRosterRow = {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: number | string | null;
@@ -32,6 +33,7 @@ export type MentionSuggestRosterRow = {
 
 export type MentionSuggestion = {
   studentId: string;
+  localSisId?: string | null;
   displayName: string;
   reason: string;
 };
@@ -111,6 +113,7 @@ export async function suggestMentions(opts: {
     seen.add(sid);
     out.push({
       studentId: sid,
+      localSisId: r.localSisId ?? null,
       displayName: `${r.firstName} ${r.lastName}`,
       reason: typeof s.reason === "string" ? s.reason.slice(0, 200) : "",
     });

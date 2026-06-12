@@ -2006,7 +2006,7 @@ router.get("/insights/engagement", async (req, res) => {
   const nameById = new Map(
     nameRows.map((s) => [
       s.studentId,
-      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || s.studentId,
+      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || "—",
     ]),
   );
 
@@ -2298,7 +2298,7 @@ router.get("/insights/behavior", async (req, res) => {
   const nameById = new Map(
     nameRows.map((s) => [
       s.studentId,
-      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || s.studentId,
+      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || "—",
     ]),
   );
 
@@ -2489,7 +2489,7 @@ router.get("/insights/academics", async (req, res) => {
   const nameById = new Map<string, string>(
     studentRows.map((r) => [
       r.studentId,
-      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || r.studentId,
+      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || "—",
     ]),
   );
 
@@ -2592,7 +2592,7 @@ router.get("/insights/academics", async (req, res) => {
           if (placement.level === 1) {
             const entry: LowPm3 = {
               studentId: r.studentId,
-              studentName: nameById.get(r.studentId) ?? r.studentId,
+              studentName: nameById.get(r.studentId) ?? "—",
               pm3: r.pm3,
               level: 1,
             };
@@ -2607,7 +2607,7 @@ router.get("/insights/academics", async (req, res) => {
         const delta = r.pm3 - r.pm1;
         const entry: Grower = {
           studentId: r.studentId,
-          studentName: nameById.get(r.studentId) ?? r.studentId,
+          studentName: nameById.get(r.studentId) ?? "—",
           pm1: r.pm1,
           pm3: r.pm3,
           delta,
@@ -2830,7 +2830,7 @@ router.get("/insights/academics/band", async (req, res) => {
   const nameById = new Map<string, string>(
     studentRows.map((r) => [
       r.studentId,
-      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || r.studentId,
+      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || "—",
     ]),
   );
 
@@ -2872,7 +2872,7 @@ router.get("/insights/academics/band", async (req, res) => {
     if (!placement || placement.level !== level) continue;
     hits.push({
       studentId: r.studentId,
-      studentName: nameById.get(r.studentId) ?? r.studentId,
+      studentName: nameById.get(r.studentId) ?? "—",
       grade,
       pm1: r.pm1 ?? null,
       pm3: r.pm3,
@@ -2953,6 +2953,7 @@ function levelToBand(
 
 interface TrajectoryStudentRec {
   studentId: string;
+  localSisId: string | null;
   studentName: string;
   grade: number;
   pm1: number | null;
@@ -3127,6 +3128,7 @@ async function loadTrajectoryRecs(
   let studentRows = await db
     .select({
       studentId: studentsTable.studentId,
+      localSisId: studentsTable.localSisId,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
       grade: studentsTable.grade,
@@ -3164,8 +3166,11 @@ async function loadTrajectoryRecs(
   const nameById = new Map<string, string>(
     studentRows.map((r) => [
       r.studentId,
-      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || r.studentId,
+      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || "—",
     ]),
+  );
+  const localSisById = new Map<string, string | null>(
+    studentRows.map((r) => [r.studentId, r.localSisId ?? null]),
   );
 
   const fastRows = await db
@@ -3217,7 +3222,8 @@ async function loadTrajectoryRecs(
 
     recs.push({
       studentId: sr.studentId,
-      studentName: nameById.get(sr.studentId) ?? sr.studentId,
+      localSisId: localSisById.get(sr.studentId) ?? null,
+      studentName: nameById.get(sr.studentId) ?? "—",
       grade,
       pm1,
       pm2,
@@ -3356,6 +3362,7 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
 
   type Hit = {
     studentId: string;
+    localSisId: string | null;
     studentName: string;
     grade: number | null;
     pm1: number | null;
@@ -3372,6 +3379,7 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
     if (subKey && classifySubArchetype(r) !== subKey) continue;
     hits.push({
       studentId: r.studentId,
+      localSisId: r.localSisId ?? null,
       studentName:
         subjects.length > 1
           ? `${r.studentName} (${subj.toUpperCase()})`
@@ -3509,7 +3517,7 @@ router.get(
       return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
     const header = [
-      "student_id",
+      "local_sis_id",
       "student_name",
       "grade",
       "subject",
@@ -3528,7 +3536,7 @@ router.get(
     for (const { subject: subj, rec: r } of sorted) {
       lines.push(
         [
-          esc(r.studentId),
+          esc(r.localSisId ?? ""),
           esc(r.studentName),
           esc(r.grade === 0 ? "K" : r.grade),
           esc(subj),
@@ -3666,7 +3674,7 @@ router.get("/insights/sebsel", async (req, res) => {
   const nameById = new Map<string, string>(
     studentRows.map((r) => [
       r.studentId,
-      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || r.studentId,
+      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || "—",
     ]),
   );
   const gradeById = new Map<string, number | null>(
@@ -5256,14 +5264,14 @@ router.get("/insights/attendance", async (req, res) => {
   const nameById = new Map(
     nameRows.map((s) => [
       s.studentId,
-      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || s.studentId,
+      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || "—",
     ]),
   );
 
   function rollupRow(s: StudentRollup) {
     return {
       studentId: s.studentId,
-      studentName: nameById.get(s.studentId) ?? s.studentId,
+      studentName: nameById.get(s.studentId) ?? "—",
       absences: s.absences,
       rate: s.rate,
     };
@@ -5404,14 +5412,14 @@ router.get("/insights/attendance", async (req, res) => {
     for (const s of moreNames) {
       nameById.set(
         s.studentId,
-        `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || s.studentId,
+        `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || "—",
       );
     }
   }
 
   const recentAbsences = recentRows.map((r) => ({
     studentId: r.studentId,
-    studentName: nameById.get(r.studentId) ?? r.studentId,
+    studentName: nameById.get(r.studentId) ?? "—",
     date: String(r.day).slice(0, 10),
     status: r.status,
     periods: Array.isArray(r.absentPeriods) ? r.absentPeriods : [],

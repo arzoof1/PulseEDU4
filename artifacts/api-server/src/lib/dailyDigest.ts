@@ -4,8 +4,9 @@ import {
   schoolSettingsTable,
   schoolsTable,
   staffTable,
+  studentsTable,
 } from "@workspace/db";
-import { and, eq, gte, lt, or, isNull } from "drizzle-orm";
+import { and, eq, gte, lt, or, isNull, inArray } from "drizzle-orm";
 import { getUncachableResendClient } from "./resendClient";
 
 export type DailyDigestResult = {
@@ -25,7 +26,7 @@ export type DailyDigestResult = {
     rejected: number;
     unreviewedClosedBacklog: number;
   };
-  topStudents: { studentId: string; count: number }[];
+  topStudents: { studentId: string; localSisId: string | null; count: number }[];
   topReasons: { reason: string; count: number }[];
 };
 
@@ -97,9 +98,29 @@ export async function buildDailyDigest(
     unreviewedClosedBacklog: backlog.length,
   };
 
-  const topStudents = tally(todays, (p) => p.studentId)
-    .slice(0, 5)
-    .map((x) => ({ studentId: x.key, count: x.count }));
+  const topStudentTally = tally(todays, (p) => p.studentId).slice(0, 5);
+  const topStudentIds = topStudentTally.map((x) => x.key);
+  const localBySid = new Map<string, string | null>();
+  if (topStudentIds.length > 0) {
+    const stu = await db
+      .select({
+        studentId: studentsTable.studentId,
+        localSisId: studentsTable.localSisId,
+      })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          inArray(studentsTable.studentId, topStudentIds),
+        ),
+      );
+    for (const s of stu) localBySid.set(s.studentId, s.localSisId);
+  }
+  const topStudents = topStudentTally.map((x) => ({
+    studentId: x.key,
+    localSisId: localBySid.get(x.key) ?? null,
+    count: x.count,
+  }));
   const topReasons = tally(todays, (p) =>
     (p.editedReason ?? p.reason)?.trim().toLowerCase().slice(0, 60),
   )
@@ -188,7 +209,7 @@ export async function sendDailyDigestEmailForSchool(
     lines.push("");
     lines.push("Top students today:");
     for (const s of topStudents) {
-      lines.push(`  ${s.studentId} — ${s.count}`);
+      lines.push(`  ${s.localSisId ?? "—"} — ${s.count}`);
     }
   }
   if (topReasons.length > 0) {
@@ -216,7 +237,7 @@ export async function sendDailyDigestEmailForSchool(
     `</table>` +
     (topStudents.length
       ? `<h3>Top students today</h3><ul>${topStudents
-          .map((s) => `<li>${s.studentId} — ${s.count}</li>`)
+          .map((s) => `<li>${s.localSisId ?? "—"} — ${s.count}</li>`)
           .join("")}</ul>`
       : "") +
     (topReasons.length

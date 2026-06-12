@@ -680,6 +680,7 @@ router.post("/houses/sort/preview", requireHouseAdmin(), async (req, res) => {
           .select({
             id: studentsTable.id,
             studentId: studentsTable.studentId,
+            localSisId: studentsTable.localSisId,
             firstName: studentsTable.firstName,
             lastName: studentsTable.lastName,
             houseId: studentsTable.houseId,
@@ -1177,6 +1178,7 @@ router.get("/houses/changes", requireHouseAdmin(), async (req, res) => {
           .select({
             id: studentsTable.id,
             studentId: studentsTable.studentId,
+            localSisId: studentsTable.localSisId,
             firstName: studentsTable.firstName,
             lastName: studentsTable.lastName,
           })

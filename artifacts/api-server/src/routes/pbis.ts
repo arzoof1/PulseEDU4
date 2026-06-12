@@ -65,7 +65,21 @@ router.get("/pbis", async (req, res) => {
     .select()
     .from(pbisEntriesTable)
     .where(eq(pbisEntriesTable.schoolId, schoolId));
-  res.json(rows);
+  const stu = await db
+    .select({
+      studentId: studentsTable.studentId,
+      localSisId: studentsTable.localSisId,
+    })
+    .from(studentsTable)
+    .where(eq(studentsTable.schoolId, schoolId));
+  const localBySid = new Map<string, string | null>();
+  for (const s of stu) localBySid.set(s.studentId, s.localSisId);
+  res.json(
+    rows.map((r) => ({
+      ...r,
+      localSisId: localBySid.get(r.studentId) ?? null,
+    })),
+  );
 });
 
 // Leaderboard for a bounded period. Excludes voided entries.
@@ -133,8 +147,23 @@ router.get("/pbis/leaderboard", async (req: Request, res: Response) => {
     }
   }
 
+  const leaderStu = await db
+    .select({
+      studentId: studentsTable.studentId,
+      localSisId: studentsTable.localSisId,
+    })
+    .from(studentsTable)
+    .where(eq(studentsTable.schoolId, req.schoolId!));
+  const leaderLocalBySid = new Map<string, string | null>();
+  for (const s of leaderStu) leaderLocalBySid.set(s.studentId, s.localSisId);
+
   const students = Array.from(studentTotals.entries())
-    .map(([studentId, v]) => ({ studentId, total: v.total, count: v.count }))
+    .map(([studentId, v]) => ({
+      studentId,
+      localSisId: leaderLocalBySid.get(studentId) ?? null,
+      total: v.total,
+      count: v.count,
+    }))
     .sort((a, b) => b.total - a.total || a.studentId.localeCompare(b.studentId))
     .slice(0, limit);
   const staffBoard = Array.from(staffTotals.entries())
@@ -947,7 +976,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
   });
   const invisibleStudentSample = invisibleStudents
     .slice(0, 3)
-    .map((s) => studentNameById.get(s.studentId) ?? s.studentId);
+    .map((s) => studentNameById.get(s.studentId) ?? "—");
 
   // ---------- This-week entries (drives alerts 3–5) ----------
   const weekEntries = await db

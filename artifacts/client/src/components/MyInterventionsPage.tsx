@@ -550,7 +550,7 @@ export default function MyInterventionsPage({
               <tbody>
                 {rows.map((r) => {
                   const studentLabel =
-                    studentNameLookup.get(r.studentId) || r.studentId;
+                    studentNameLookup.get(r.studentId) || "—";
                   const badge = tierBadgeStyle(r.tier);
                   return (
                     <tr
@@ -754,7 +754,7 @@ function renderPrintHtml(opts: {
   const rowsHtml = opts.rows
     .map((r) => {
       const student = escapeHtml(
-        opts.studentNameLookup.get(r.studentId) || r.studentId,
+        opts.studentNameLookup.get(r.studentId) || "—",
       );
       const detail = escapeHtml(r.detail || "—");
       return `<tr>

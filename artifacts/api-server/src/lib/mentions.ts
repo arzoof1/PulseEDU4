@@ -1,9 +1,10 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import {
   db,
   caseMentionsTable,
   interactionsTable,
   witnessStatementsTable,
+  studentsTable,
 } from "@workspace/db";
 
 // Token format embedded in free-text bodies:
@@ -63,16 +64,44 @@ export async function syncMentions(opts: {
     );
   const parsed = parseMentions(opts.body);
   if (parsed.length === 0) return;
-  // Dedupe by studentId — multiple mentions of the same student in one
-  // statement should still index once per occurrence (so position-based
-  // neighborhood lookups work later), so we DO NOT dedupe here.
+  // A token's id may be a local SIS id (new tokens, the only id we ever
+  // surface) or the canonical student_id / FLEID (legacy tokens). Resolve
+  // every token id to the canonical student_id so the mentions index — and
+  // the graph edges + AI consistency checks built on it — always key on the
+  // real FK regardless of which form was embedded in the body.
+  const tokenIds = Array.from(new Set(parsed.map((p) => p.studentId)));
+  const resolveMap = new Map<string, string>();
+  if (tokenIds.length > 0) {
+    const rows = await db
+      .select({
+        studentId: studentsTable.studentId,
+        localSisId: studentsTable.localSisId,
+      })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, opts.schoolId),
+          or(
+            inArray(studentsTable.localSisId, tokenIds),
+            inArray(studentsTable.studentId, tokenIds),
+          ),
+        ),
+      );
+    for (const r of rows) {
+      resolveMap.set(r.studentId, r.studentId);
+      if (r.localSisId) resolveMap.set(r.localSisId, r.studentId);
+    }
+  }
+  // One row per occurrence (NOT deduped) so position-based neighborhood
+  // lookups keep working. Fall back to the raw token id if it didn't
+  // resolve — never silently drops a mention row.
   await db.insert(caseMentionsTable).values(
     parsed.map((p) => ({
       schoolId: opts.schoolId,
       sourceKind: opts.sourceKind,
       sourceId: opts.sourceId,
       caseId: opts.caseId,
-      studentId: p.studentId,
+      studentId: resolveMap.get(p.studentId) ?? p.studentId,
       displayNameAtTime: p.displayNameAtTime,
       position: p.position,
     })),

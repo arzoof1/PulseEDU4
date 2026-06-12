@@ -26,6 +26,7 @@ import VoiceTextarea from "./VoiceTextarea";
 
 interface StudentHit {
   studentId: string;
+  localSisId?: string | null;
   firstName: string | null;
   lastName: string | null;
   grade?: number | null;
@@ -75,6 +76,16 @@ function buildToken(displayName: string, studentId: string): string {
   const safeName = displayName.replace(/[|\]]/g, " ").trim();
   const safeId = studentId.replace(/[^A-Za-z0-9_-]/g, "");
   return `@[${safeName}|${safeId}]`;
+}
+
+// Render a stored body for READ-ONLY display: collapse every
+// `@[Display Name|id]` token down to just `@Display Name` so the embedded
+// id (FLEID for legacy tokens, local SIS id for new ones) is NEVER shown
+// to a reader. Use this anywhere a saved note/statement body is printed
+// outside the editor.
+export function mentionsToPlainText(body: string): string {
+  if (!body) return "";
+  return body.replace(MENTION_RE, (_full, name: string) => `@${name.trim()}`);
 }
 
 export default function MentionTextarea({
@@ -189,8 +200,13 @@ export default function MentionTextarea({
 
   function insertMention(hit: StudentHit) {
     const display =
-      `${hit.firstName ?? ""} ${hit.lastName ?? ""}`.trim() || hit.studentId;
-    const token = buildToken(display, hit.studentId);
+      `${hit.firstName ?? ""} ${hit.lastName ?? ""}`.trim() ||
+      hit.localSisId ||
+      "student";
+    // The token's machine id is the local SIS id (the only ID we ever
+    // surface). Falls back to the canonical student_id only if a row has
+    // no SIS id — the server resolver handles both forms.
+    const token = buildToken(display, hit.localSisId ?? hit.studentId);
     const ta = textareaRef.current;
     const caret = ta?.selectionStart ?? value.length;
     let next: string;
@@ -306,7 +322,7 @@ export default function MentionTextarea({
               fontSize: 11,
               fontWeight: 600,
             }}
-            title={`Student ID ${m.studentId}`}
+            title={`Tagged: @${m.displayName}`}
           >
             @{m.displayName}
             <button
@@ -392,7 +408,8 @@ export default function MentionTextarea({
               hits.map((h) => {
                 const display =
                   `${h.firstName ?? ""} ${h.lastName ?? ""}`.trim() ||
-                  h.studentId;
+                  h.localSisId ||
+                  "student";
                 return (
                   <button
                     key={h.studentId}
@@ -420,7 +437,7 @@ export default function MentionTextarea({
                   >
                     <span>{display}</span>
                     <span style={{ color: "#64748b", fontSize: 10 }}>
-                      #{h.studentId}
+                      #{h.localSisId ?? "—"}
                       {h.grade != null ? ` · Gr ${h.grade}` : ""}
                     </span>
                   </button>

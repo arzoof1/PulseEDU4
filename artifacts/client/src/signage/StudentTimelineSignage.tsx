@@ -45,6 +45,7 @@ interface StudentTimelinePayload {
   student: {
     id: number;
     studentId: string;
+    localSisId: string | null;
     firstName: string;
     lastName: string;
     grade: number;
@@ -217,7 +218,7 @@ export default function StudentTimelineSignage() {
           <div className="flex-1 min-w-0">
             <div className="text-2xl font-black tracking-tight">{fullName}</div>
             <div className="text-sm text-slate-500">
-              Grade {student.grade} · Student ID {student.studentId}
+              Grade {student.grade} · Student ID {student.localSisId ?? "—"}
             </div>
             <div className="mt-2 flex items-center gap-2 flex-wrap">
               <span

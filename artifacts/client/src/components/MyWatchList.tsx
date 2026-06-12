@@ -59,6 +59,7 @@ interface CustomGroup {
 
 interface StudentLookup {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: number | string | null;
@@ -1570,7 +1571,7 @@ function EntryModal({
                           {s.lastName}, {s.firstName}
                         </div>
                         <div style={{ fontSize: "0.72rem", color: "#9ca3af" }}>
-                          {s.studentId}
+                          {s.localSisId ?? "—"}
                           {s.grade !== null && s.grade !== undefined && s.grade !== ""
                             ? ` · Grade ${s.grade}`
                             : ""}

@@ -4,6 +4,7 @@ import { authFetch } from "../lib/authToken";
 export interface TardyStudent {
   id: number | string;
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
 }
@@ -199,11 +200,13 @@ export default function LogTardyModal({
     for (const s of students) {
       const first = s.firstName.toLowerCase();
       const last = s.lastName.toLowerCase();
-      const sid = s.studentId.toLowerCase();
+      // Match on the local SIS id (the id staff actually see/type), not the
+      // internal FLEID student_id.
+      const sid = (s.localSisId ?? "").toLowerCase();
       let rank = -1;
       if (first.startsWith(q) || last.startsWith(q)) rank = 0;
-      else if (sid.startsWith(q)) rank = 1;
-      else if (first.includes(q) || last.includes(q) || sid.includes(q))
+      else if (sid && sid.startsWith(q)) rank = 1;
+      else if (first.includes(q) || last.includes(q) || (sid && sid.includes(q)))
         rank = 2;
       if (rank >= 0) scored.push({ s, rank });
     }
@@ -307,7 +310,7 @@ export default function LogTardyModal({
                         <strong>
                           {s.firstName} {s.lastName}
                         </strong>
-                        <span className="cp-list-sub">{s.studentId}</span>
+                        <span className="cp-list-sub">{s.localSisId ?? "—"}</span>
                       </span>
                     </button>
                   </li>
@@ -330,7 +333,7 @@ export default function LogTardyModal({
                 </div>
                 <div className="cp-context-row">
                   <span className="cp-context-label">ID</span>
-                  <strong>{selectedStudent.studentId}</strong>
+                  <strong>{selectedStudent.localSisId ?? "—"}</strong>
                 </div>
                 <div className="cp-context-row">
                   <span className="cp-context-label">Period</span>

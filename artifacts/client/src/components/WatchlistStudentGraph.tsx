@@ -19,6 +19,7 @@ import {
 
 interface SearchHit {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: string | null;
@@ -524,7 +525,7 @@ export default function WatchlistStudentGraph({
                     style={{ color: C.inkSoft }}
                   >
                     {h.grade ? `Gr ${h.grade} · ` : ""}
-                    {h.studentId}
+                    {h.localSisId ?? "—"}
                   </span>
                 </button>
               ))}

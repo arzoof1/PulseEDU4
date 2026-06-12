@@ -243,6 +243,7 @@ router.get("/reteach-activity", async (req: Request, res: Response) => {
       pmWindowAtLog: benchmarkReteachLogTable.pmWindowAtLog,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
+      localSisId: studentsTable.localSisId,
       grade: studentsTable.grade,
     })
     .from(benchmarkReteachLogTable)
@@ -281,6 +282,7 @@ router.get("/reteach-activity", async (req: Request, res: Response) => {
     pmWindowAtLog: r.pmWindowAtLog,
     firstName: r.firstName,
     lastName: r.lastName,
+    localSisId: r.localSisId ?? null,
     grade: r.grade,
   }));
 

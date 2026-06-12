@@ -366,7 +366,7 @@ export default function MtssPlansAdmin({
     if (!canManage) return;
     if (
       !window.confirm(
-        `Dismiss the ${subjectLabel(s.subject)} suggestion for ${s.studentName ?? s.studentId}? It will stay hidden for the rest of this school year.`,
+        `Dismiss the ${subjectLabel(s.subject)} suggestion for ${s.studentName ?? "this student"}? It will stay hidden for the rest of this school year.`,
       )
     ) {
       return;
@@ -504,7 +504,7 @@ export default function MtssPlansAdmin({
     if (!canManage) return;
     if (
       !window.confirm(
-        `Permanently delete plan "${plan.title}" for ${plan.studentName ?? plan.studentId}? This cannot be undone.`,
+        `Permanently delete plan "${plan.title}" for ${plan.studentName ?? "(unknown)"}? This cannot be undone.`,
       )
     )
       return;
