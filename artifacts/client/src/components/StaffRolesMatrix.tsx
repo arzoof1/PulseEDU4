@@ -279,6 +279,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
   const [error, setError] = useState("");
   const [showAddStaff, setShowAddStaff] = useState(false);
   const [showAddRole, setShowAddRole] = useState(false);
+  const [accessTarget, setAccessTarget] = useState<StaffRow | null>(null);
   const [pwResetTarget, setPwResetTarget] = useState<StaffRow | null>(null);
   const [pwResetValue, setPwResetValue] = useState("");
   const [pwResetBusy, setPwResetBusy] = useState(false);
@@ -496,26 +497,6 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
     }
   }
 
-  function applyPreset(staffId: number, capabilities: BoolKey[]) {
-    const body: Record<string, boolean> = {};
-    for (const cap of PAGES.map((p) => p.key)) {
-      body[cap] = capabilities.includes(cap);
-    }
-    patchStaff(staffId, body);
-  }
-
-  function applyCustomRole(staffId: number, role: CustomRole) {
-    const body: Record<string, boolean> = {};
-    for (const cap of PAGES.map((p) => p.key)) {
-      body[cap] = role.capabilities.includes(cap);
-    }
-    patchStaff(staffId, body);
-  }
-
-  function applyTeacherBaseline(staffId: number) {
-    applyPreset(staffId, TEACHER_BASELINE);
-  }
-
   return (
     <div className="card" style={{ marginTop: "1rem" }}>
       <div
@@ -530,19 +511,20 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
         <div>
           <h2 style={{ margin: 0 }}>Staff &amp; Roles</h2>
           <p style={{ color: "var(--text-subtle)", margin: "4px 0 0" }}>
-            Toggle any cell to grant or revoke that page for that user. Click a
-            role label to apply its preset bundle.
+            Find a person, then click <strong>Edit access</strong> to set their
+            role and which pages they can use — one clean checklist, grouped by
+            area.
           </p>
           <HowToUseHelp title="How to use Staff &amp; Roles">
             <HowToSection title="What this page is">
-              The permissions matrix for every staff member at this
-              school. Rows are people, columns are pages/features,
-              and a green check means that person can access it.
+              The staff directory for this school. Each person has a
+              role and a set of pages they can open. Click{" "}
+              <strong>Edit access</strong> on a row to change them.
             </HowToSection>
-            <HowToSection title="Two ways to grant access">
+            <HowToSection title="How access works">
               <ul style={howtoListStyle}>
-                <li><strong>Cell click</strong> — toggles a single page for one person. Use for one-off exceptions (e.g., "give the librarian access to the display playlist").</li>
-                <li><strong>Role label click</strong> — applies that role's preset bundle (e.g., "Counselor" turns on guidance + safety-plan editor + parent-access).</li>
+                <li><strong>Pick a role</strong> — fills in a starter set of pages for that job (e.g., "School Counselor").</li>
+                <li><strong>Fine-tune pages</strong> — check or uncheck individual pages, grouped into Daily, Manage, and Administration. Use "Select all" to grant a whole group at once.</li>
               </ul>
             </HowToSection>
             <RoleSection for={["admin", "districtAdmin", "superUser"]} title="Adding new staff">
@@ -614,7 +596,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
             borderCollapse: "separate",
             borderSpacing: 0,
             fontSize: 13,
-            minWidth: 1200,
+            minWidth: 980,
           }}
         >
           <thead>
@@ -633,13 +615,13 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
               <th
                 style={{
                   ...stickyTh,
-                  left: 220,
                   zIndex: 4,
-                  minWidth: 360,
+                  minWidth: 260,
                   textAlign: "left",
                 }}
+                title="The person's role and which pages they can use. Click Edit access to change."
               >
-                Role presets
+                Access
               </th>
               <th
                 style={{
@@ -674,28 +656,10 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
               >
                 Department
               </th>
-              {PAGES.map((p) => (
-                <th
-                  key={p.key}
-                  style={{
-                    ...stickyTh,
-                    minWidth: 90,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    color: "var(--text-subtle)",
-                  }}
-                  title={p.group + " · " + p.label}
-                >
-                  <div style={{ writingMode: "vertical-rl", transform: "rotate(180deg)", padding: "8px 4px" }}>
-                    {p.label}
-                  </div>
-                </th>
-              ))}
             </tr>
           </thead>
           <tbody>
             {filtered.map((s) => {
-              const isSelf = s.id === currentUser.id;
               const isSaving = savingId === s.id;
               return (
                 <tr
@@ -776,71 +740,13 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                   <td
                     style={{
                       ...stickyTd,
-                      left: 220,
-                      zIndex: 2,
-                      minWidth: 360,
+                      minWidth: 260,
                     }}
                   >
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                      <button
-                        type="button"
-                        className="ghost"
-                        style={pillStyle(false)}
-                        title="Set to teacher baseline"
-                        onClick={() => applyTeacherBaseline(s.id)}
-                      >
-                        Teacher
-                      </button>
-                      {ROLE_PRESETS.map((r) => {
-                        const active = Boolean(s[r.flag]);
-                        const disabled =
-                          (r.flag === "isSuperUser" &&
-                            !currentUser.isSuperUser) ||
-                          (r.flag === "isDistrictAdmin" &&
-                            !currentUser.isSuperUser) ||
-                          (r.flag === "isAdmin" &&
-                            !currentUser.isSuperUser &&
-                            !currentUser.isAdmin) ||
-                          (isSelf &&
-                            (r.flag === "isSuperUser" ||
-                              r.flag === "isDistrictAdmin" ||
-                              r.flag === "isAdmin") &&
-                            active);
-                        return (
-                          <button
-                            key={r.flag}
-                            type="button"
-                            disabled={disabled}
-                            style={pillStyle(active)}
-                            title={
-                              active
-                                ? `Remove role + clear preset capabilities`
-                                : `Apply role + preset capabilities`
-                            }
-                            onClick={() => {
-                              const newVal = !active;
-                              patchStaff(s.id, { [r.flag]: newVal });
-                              if (newVal) {
-                                applyPreset(s.id, r.capabilities);
-                              }
-                            }}
-                          >
-                            {r.label}
-                          </button>
-                        );
-                      })}
-                      {customRoles.map((r) => (
-                        <button
-                          key={r.key}
-                          type="button"
-                          style={pillStyle(false)}
-                          title="Apply custom role preset"
-                          onClick={() => applyCustomRole(s.id, r)}
-                        >
-                          {r.label}
-                        </button>
-                      ))}
-                    </div>
+                    <AccessSummaryCell
+                      staff={s}
+                      onEdit={() => setAccessTarget(s)}
+                    />
                   </td>
                   <td
                     style={{
@@ -901,33 +807,12 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                       ))}
                     </select>
                   </td>
-                  {PAGES.map((p) => {
-                    const checked = Boolean(s[p.key]);
-                    return (
-                      <td
-                        key={p.key}
-                        style={{
-                          textAlign: "center",
-                          padding: "4px 6px",
-                          borderBottom: "1px solid #f1f5f9",
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(e) =>
-                            patchStaff(s.id, { [p.key]: e.target.checked })
-                          }
-                        />
-                      </td>
-                    );
-                  })}
                 </tr>
               );
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={PAGES.length + 5} style={{ padding: 16 }}>
+                <td colSpan={5} style={{ padding: 16 }}>
                   {staffScope === "current"
                     ? "No current staff match."
                     : staffScope === "historical"
@@ -1107,6 +992,373 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
           }}
         />
       )}
+
+      {accessTarget && (
+        <StaffAccessModal
+          staff={accessTarget}
+          customRoles={customRoles}
+          currentUser={currentUser}
+          saving={savingId === accessTarget.id}
+          onClose={() => setAccessTarget(null)}
+          onSave={(b) => {
+            patchStaff(accessTarget.id, b);
+            setAccessTarget(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function AccessSummaryCell({
+  staff,
+  onEdit,
+}: {
+  staff: StaffRow;
+  onEdit: () => void;
+}) {
+  const roles = ROLE_PRESETS.filter((r) => Boolean(staff[r.flag])).map(
+    (r) => r.label,
+  );
+  const capCount = PAGES.filter((p) => Boolean(staff[p.key])).length;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+        {roles.length > 0 ? (
+          roles.map((label) => (
+            <span key={label} style={{ ...pillStyle(true), cursor: "default" }}>
+              {label}
+            </span>
+          ))
+        ) : (
+          <span
+            style={{ ...pillStyle(capCount > 0), cursor: "default" }}
+          >
+            {capCount > 0 ? "Teacher" : "No role"}
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 11, color: "var(--text-subtle)" }}>
+        {capCount} of {PAGES.length} pages
+      </div>
+      <div>
+        <button
+          type="button"
+          className="ghost"
+          onClick={onEdit}
+          style={{ fontSize: 12, padding: "2px 10px" }}
+        >
+          Edit access
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const PAGE_GROUPS: { key: string; label: string }[] = [
+  { key: "Daily", label: "Daily tools" },
+  { key: "Manage", label: "Manage & oversight" },
+  { key: "Admin", label: "Administration" },
+];
+
+function StaffAccessModal({
+  staff,
+  customRoles,
+  currentUser,
+  saving,
+  onClose,
+  onSave,
+}: {
+  staff: StaffRow;
+  customRoles: CustomRole[];
+  currentUser: Props["currentUser"];
+  saving: boolean;
+  onClose: () => void;
+  onSave: (body: Record<string, boolean>) => void;
+}) {
+  const isSelf = staff.id === currentUser.id;
+  const canManageSensitiveCaps =
+    Boolean(currentUser.isSuperUser) || Boolean(currentUser.isAdmin);
+
+  const [caps, setCaps] = useState<Set<BoolKey>>(
+    () => new Set(PAGES.filter((p) => Boolean(staff[p.key])).map((p) => p.key)),
+  );
+  const [roleFlags, setRoleFlags] = useState<Record<string, boolean>>(() => {
+    const m: Record<string, boolean> = {};
+    for (const r of ROLE_PRESETS) m[r.flag] = Boolean(staff[r.flag]);
+    return m;
+  });
+
+  function canSetRole(flag: BoolKey): boolean {
+    if (flag === "isSuperUser" || flag === "isDistrictAdmin")
+      return Boolean(currentUser.isSuperUser);
+    if (flag === "isAdmin")
+      return Boolean(currentUser.isSuperUser) || Boolean(currentUser.isAdmin);
+    return true;
+  }
+  function selfLockedHighRole(flag: BoolKey): boolean {
+    return (
+      isSelf &&
+      Boolean(roleFlags[flag]) &&
+      (flag === "isSuperUser" ||
+        flag === "isDistrictAdmin" ||
+        flag === "isAdmin")
+    );
+  }
+  function roleLocked(flag: BoolKey): boolean {
+    return !canSetRole(flag) || selfLockedHighRole(flag);
+  }
+  // The two escalation caps are admin/super-only on the server — sending
+  // them as a non-admin (even unchanged) is rejected outright. The server
+  // also returns 409 if you revoke them on your OWN account, which (because
+  // we batch the save) would sink every other change in the request. Lock
+  // both cases so the modal never builds a body the server rejects.
+  function capLockReason(key: BoolKey): string | undefined {
+    if (key === "capStaffRoles" || key === "capManageRoles") {
+      if (!canManageSensitiveCaps)
+        return "Only an Admin or SuperUser can change this page.";
+      if (isSelf && Boolean(staff[key]))
+        return "You can't remove your own role-management access.";
+    }
+    return undefined;
+  }
+  function capLocked(key: BoolKey): boolean {
+    return capLockReason(key) !== undefined;
+  }
+
+  const toggleCap = (key: BoolKey) => {
+    if (capLocked(key)) return;
+    setCaps((prev) => {
+      const n = new Set(prev);
+      if (n.has(key)) n.delete(key);
+      else n.add(key);
+      return n;
+    });
+  };
+
+  const mergeCaps = (keys: BoolKey[]) =>
+    setCaps((prev) => {
+      const n = new Set(prev);
+      for (const k of keys) if (!capLocked(k)) n.add(k);
+      return n;
+    });
+
+  const toggleRole = (flag: BoolKey, capabilities: BoolKey[]) => {
+    if (roleLocked(flag)) return;
+    const nextOn = !roleFlags[flag];
+    if (nextOn) mergeCaps(capabilities);
+    setRoleFlags((prev) => ({ ...prev, [flag]: nextOn }));
+  };
+
+  const editableGroupKeys = (group: string) =>
+    PAGES.filter((p) => p.group === group && !capLocked(p.key)).map(
+      (p) => p.key,
+    );
+  const groupAllChecked = (group: string) => {
+    const ks = editableGroupKeys(group);
+    return ks.length > 0 && ks.every((k) => caps.has(k));
+  };
+  const setGroup = (group: string, on: boolean) =>
+    setCaps((prev) => {
+      const n = new Set(prev);
+      for (const k of editableGroupKeys(group)) {
+        if (on) n.add(k);
+        else n.delete(k);
+      }
+      return n;
+    });
+
+  function handleSave() {
+    const body: Record<string, boolean> = {};
+    for (const p of PAGES) {
+      if (capLocked(p.key)) continue;
+      body[p.key] = caps.has(p.key);
+    }
+    for (const r of ROLE_PRESETS) {
+      if (canSetRole(r.flag)) body[r.flag] = Boolean(roleFlags[r.flag]);
+    }
+    onSave(body);
+  }
+
+  return (
+    <div className="cp-overlay" onClick={onClose}>
+      <div
+        className="cp-card"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Access for ${staff.displayName}`}
+      >
+        <div className="cp-header">
+          <div className="cp-title">Access · {staff.displayName}</div>
+          <button
+            type="button"
+            className="cp-close"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div className="tdp-body">
+          <p className="tdp-intro">
+            Pick a role to grant a starter set of pages, then check or uncheck
+            individual pages below. Nothing changes until you click Save.
+          </p>
+          <div className="tdp-scroll">
+            <div className="cp-group-label">Roles</div>
+            <ul className="cp-list">
+              {ROLE_PRESETS.map((r) => {
+                const on = Boolean(roleFlags[r.flag]);
+                const locked = roleLocked(r.flag);
+                return (
+                  <li key={r.flag}>
+                    <label
+                      className="cp-list-item"
+                      style={{
+                        cursor: locked ? "not-allowed" : "pointer",
+                        opacity: locked ? 0.5 : 1,
+                      }}
+                      title={
+                        !canSetRole(r.flag)
+                          ? "You don't have permission to change this role."
+                          : selfLockedHighRole(r.flag)
+                            ? "You can't remove your own admin role."
+                            : undefined
+                      }
+                    >
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        disabled={locked}
+                        onChange={() => toggleRole(r.flag, r.capabilities)}
+                        style={{ marginRight: "0.6rem" }}
+                      />
+                      <span className="cp-list-text">
+                        <strong>{r.label}</strong>
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            fontSize: 11,
+                            color: "var(--text-subtle)",
+                          }}
+                        >
+                          {r.capabilities.length} page
+                          {r.capabilities.length === 1 ? "" : "s"}
+                        </span>
+                      </span>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+
+            {customRoles.length > 0 && (
+              <>
+                <div className="cp-group-label">Custom roles</div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 6,
+                    padding: "4px 0 8px",
+                  }}
+                >
+                  {customRoles.map((r) => (
+                    <button
+                      key={r.key}
+                      type="button"
+                      className="ghost"
+                      style={{ fontSize: 12 }}
+                      title="Add this custom role's pages to the selection"
+                      onClick={() => mergeCaps(r.capabilities)}
+                    >
+                      + {r.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {PAGE_GROUPS.map((g) => {
+              const pages = PAGES.filter((p) => p.group === g.key);
+              if (pages.length === 0) return null;
+              return (
+                <div key={g.key}>
+                  <div
+                    className="cp-group-label"
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
+                    <span>{g.label}</span>
+                    <label
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 500,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={groupAllChecked(g.key)}
+                        onChange={(e) => setGroup(g.key, e.target.checked)}
+                      />
+                      Select all
+                    </label>
+                  </div>
+                  <ul className="cp-list">
+                    {pages.map((p) => {
+                      const locked = capLocked(p.key);
+                      return (
+                        <li key={p.key}>
+                          <label
+                            className="cp-list-item"
+                            style={{
+                              cursor: locked ? "not-allowed" : "pointer",
+                              opacity: locked ? 0.5 : 1,
+                            }}
+                            title={capLockReason(p.key)}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={caps.has(p.key)}
+                              disabled={locked}
+                              onChange={() => toggleCap(p.key)}
+                              style={{ marginRight: "0.6rem" }}
+                            />
+                            <span className="cp-list-text">
+                              <strong>{p.label}</strong>
+                            </span>
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="tdp-footer">
+          <span className="tdp-count" style={{ marginRight: "auto" }}>
+            {caps.size} of {PAGES.length} pages selected
+          </span>
+          <button
+            type="button"
+            className="cp-send"
+            onClick={handleSave}
+            disabled={saving}
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
