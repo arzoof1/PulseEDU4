@@ -202,7 +202,7 @@ export default function TeacherDestinationPicker({
         aria-modal="true"
         aria-label="Choose pass destinations for your students"
       >
-        <div className="cp-header">
+        <div className="cp-header tdp-header">
           <div className="cp-title">Locations students can pick</div>
           <button
             type="button"
