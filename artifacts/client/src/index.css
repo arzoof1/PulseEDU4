@@ -1253,6 +1253,13 @@ ul[style*="listStyle: none"] li button:hover {
   flex-direction: column;
   max-height: calc(100vh - 6rem);
 }
+.tdp-overlay {
+  justify-content: flex-end;
+  padding: 5rem 1.5rem 1.5rem;
+}
+.tdp-card {
+  max-width: 420px;
+}
 .cp-header {
   display: grid;
   grid-template-columns: 32px 1fr 32px;
@@ -1367,14 +1374,40 @@ ul[style*="listStyle: none"] li button:hover {
   font-size: 0.92rem;
   line-height: 1.4;
 }
+.tdp-tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.6rem 1rem 0;
+}
+.tdp-tab {
+  flex: 0 0 auto;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid #e2e8f0;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: var(--bg, #f1f5f9);
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 1.2;
+}
+.tdp-tab:hover {
+  color: var(--text);
+}
+.tdp-tab.is-active {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #4f46e5;
+}
 .tdp-kiosk-url {
   background: var(--bg, #f1f5f9);
   border: 1px solid #e2e8f0;
   border-radius: 10px;
-  padding: 0.6rem 0.75rem;
+  padding: 0.75rem 0.9rem;
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.45rem;
 }
 .tdp-kiosk-url-label {
   font-size: 0.9rem;
@@ -1389,26 +1422,27 @@ ul[style*="listStyle: none"] li button:hover {
 }
 .tdp-kiosk-url-row {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
 }
 .tdp-kiosk-url-code {
-  flex: 1 1 220px;
+  flex: 1 1 auto;
   font-size: 0.85rem;
   word-break: break-all;
   background: #fff;
   border: 1px solid #e2e8f0;
-  padding: 0.4rem 0.6rem;
+  padding: 0.5rem 0.6rem;
   border-radius: 6px;
   color: var(--text);
+}
+.tdp-kiosk-url-actions {
+  display: flex;
+  gap: 0.5rem;
 }
 .tdp-kiosk-url-copy,
 .tdp-kiosk-url-open {
   flex: 0 0 auto;
   font-size: 0.85rem;
   font-weight: 600;
-  padding: 0.4rem 0.75rem;
+  padding: 0.4rem 0.85rem;
   border-radius: 6px;
   border: 1px solid #c7d2fe;
   background: #eef2ff;
@@ -1416,6 +1450,10 @@ ul[style*="listStyle: none"] li button:hover {
   cursor: pointer;
   text-decoration: none;
   line-height: 1.2;
+}
+.tdp-kiosk-url-open {
+  display: inline-flex;
+  align-items: center;
 }
 .tdp-kiosk-url-copy:hover,
 .tdp-kiosk-url-open:hover {

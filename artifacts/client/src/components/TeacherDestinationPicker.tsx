@@ -41,6 +41,7 @@ export default function TeacherDestinationPicker({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [kioskUrlCopied, setKioskUrlCopied] = useState(false);
+  const [tab, setTab] = useState<"locations" | "url">("locations");
 
   // The kiosk screen a teacher opens on a classroom device. Same URL shown
   // in Settings → Kiosk Setup; surfaced here for quick teacher access.
@@ -69,6 +70,7 @@ export default function TeacherDestinationPicker({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    setTab("locations");
     setLoading(true);
     setLoadError(null);
     setSaveError(null);
@@ -192,9 +194,9 @@ export default function TeacherDestinationPicker({
     ) : null;
 
   return (
-    <div className="cp-overlay" onClick={onClose}>
+    <div className="cp-overlay tdp-overlay" onClick={onClose}>
       <div
-        className="cp-card"
+        className="cp-card tdp-card"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -211,93 +213,122 @@ export default function TeacherDestinationPicker({
             ×
           </button>
         </div>
+        <div className="tdp-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "locations"}
+            className={`tdp-tab${tab === "locations" ? " is-active" : ""}`}
+            onClick={() => setTab("locations")}
+          >
+            Set locations
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "url"}
+            className={`tdp-tab${tab === "url" ? " is-active" : ""}`}
+            onClick={() => setTab("url")}
+          >
+            Get kiosk URL
+          </button>
+        </div>
+
         <div className="tdp-body">
-          <div className="tdp-kiosk-url">
-            <div className="tdp-kiosk-url-label">Teacher kiosk URL</div>
-            <p className="tdp-kiosk-url-hint">
-              Open this on a classroom device, then activate it with your card
-              QR or 6-digit PIN.
-            </p>
-            <div className="tdp-kiosk-url-row">
-              <code className="tdp-kiosk-url-code">{kioskUrl}</code>
-              <button
-                type="button"
-                className="tdp-kiosk-url-copy"
-                onClick={() => void copyKioskUrl()}
-                title="Copy kiosk URL"
-              >
-                {kioskUrlCopied ? "Copied!" : "Copy"}
-              </button>
-              <a
-                href={kioskUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="tdp-kiosk-url-open"
-              >
-                Open
-              </a>
+          {tab === "url" ? (
+            <div className="tdp-kiosk-url">
+              <div className="tdp-kiosk-url-label">Teacher kiosk URL</div>
+              <p className="tdp-kiosk-url-hint">
+                Open this on a classroom device, then activate it with your card
+                QR or 6-digit PIN.
+              </p>
+              <div className="tdp-kiosk-url-row">
+                <code className="tdp-kiosk-url-code">{kioskUrl}</code>
+              </div>
+              <div className="tdp-kiosk-url-actions">
+                <button
+                  type="button"
+                  className="tdp-kiosk-url-copy"
+                  onClick={() => void copyKioskUrl()}
+                  title="Copy kiosk URL"
+                >
+                  {kioskUrlCopied ? "Copied!" : "Copy URL"}
+                </button>
+                <a
+                  href={kioskUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="tdp-kiosk-url-open"
+                >
+                  Open
+                </a>
+              </div>
             </div>
-          </div>
-
-          <p className="tdp-intro">
-            Choose which restrooms and common areas students may select when
-            making a pass from your room
-            {currentStaffUser ? ` (${currentStaffUser})` : ""}. Classrooms and
-            teacher rooms are never shown here. Leave everything checked to
-            keep all locations available.
-          </p>
-
-          {loading && <p className="cp-empty">Loading locations…</p>}
-          {loadError && <div className="cp-error">{loadError}</div>}
-
-          {!loading && !loadError && options.length === 0 && (
-            <p className="cp-empty">
-              No restrooms or common areas are set up yet. An admin can add
-              them under Settings → Locations.
-            </p>
-          )}
-
-          {!loading && !loadError && options.length > 0 && (
+          ) : (
             <>
-              <div className="tdp-toolbar">
-                <label className="tdp-selectall">
-                  <input
-                    type="checkbox"
-                    checked={allChecked}
-                    onChange={(e) =>
-                      setSelected(
-                        e.target.checked
-                          ? new Set(options.map((l) => l.name))
-                          : new Set(),
-                      )
-                    }
-                  />
-                  Select all
-                </label>
-                <span className="tdp-count">
-                  {options.length} location{options.length === 1 ? "" : "s"} ·
-                  scroll to see all
-                </span>
-              </div>
-              <div className="tdp-scroll">
-                {renderGroup("Restrooms", restrooms)}
-                {renderGroup("Common areas & offices", facilities)}
-              </div>
+              <p className="tdp-intro">
+                Choose which restrooms and common areas students may select when
+                making a pass from your room
+                {currentStaffUser ? ` (${currentStaffUser})` : ""}. Classrooms
+                and teacher rooms are never shown here. Leave everything checked
+                to keep all locations available.
+              </p>
+
+              {loading && <p className="cp-empty">Loading locations…</p>}
+              {loadError && <div className="cp-error">{loadError}</div>}
+
+              {!loading && !loadError && options.length === 0 && (
+                <p className="cp-empty">
+                  No restrooms or common areas are set up yet. An admin can add
+                  them under Settings → Locations.
+                </p>
+              )}
+
+              {!loading && !loadError && options.length > 0 && (
+                <>
+                  <div className="tdp-toolbar">
+                    <label className="tdp-selectall">
+                      <input
+                        type="checkbox"
+                        checked={allChecked}
+                        onChange={(e) =>
+                          setSelected(
+                            e.target.checked
+                              ? new Set(options.map((l) => l.name))
+                              : new Set(),
+                          )
+                        }
+                      />
+                      Select all
+                    </label>
+                    <span className="tdp-count">
+                      {options.length} location{options.length === 1 ? "" : "s"}{" "}
+                      · scroll to see all
+                    </span>
+                  </div>
+                  <div className="tdp-scroll">
+                    {renderGroup("Restrooms", restrooms)}
+                    {renderGroup("Common areas & offices", facilities)}
+                  </div>
+                </>
+              )}
             </>
           )}
         </div>
 
-        <div className="tdp-footer">
-          {saveError && <div className="cp-error">{saveError}</div>}
-          <button
-            type="button"
-            className="cp-send"
-            onClick={handleSave}
-            disabled={saving || loading || Boolean(loadError)}
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
-        </div>
+        {tab === "locations" && (
+          <div className="tdp-footer">
+            {saveError && <div className="cp-error">{saveError}</div>}
+            <button
+              type="button"
+              className="cp-send"
+              onClick={handleSave}
+              disabled={saving || loading || Boolean(loadError)}
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
