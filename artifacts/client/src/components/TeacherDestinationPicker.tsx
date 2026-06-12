@@ -194,8 +194,8 @@ export default function TeacherDestinationPicker({
             ×
           </button>
         </div>
-        <div className="cp-body">
-          <p style={{ color: "var(--text-muted)", marginTop: 0 }}>
+        <div className="tdp-body">
+          <p className="tdp-intro">
             Choose which restrooms and common areas students may select when
             making a pass from your room
             {currentStaffUser ? ` (${currentStaffUser})` : ""}. Classrooms and
@@ -215,37 +215,36 @@ export default function TeacherDestinationPicker({
 
           {!loading && !loadError && options.length > 0 && (
             <>
-              <label
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 6,
-                  margin: "0 0 0.5rem",
-                  fontSize: "0.85rem",
-                  color: "var(--text-subtle)",
-                  cursor: "pointer",
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={allChecked}
-                  onChange={(e) =>
-                    setSelected(
-                      e.target.checked
-                        ? new Set(options.map((l) => l.name))
-                        : new Set(),
-                    )
-                  }
-                />
-                Select all
-              </label>
-              {renderGroup("Restrooms", restrooms)}
-              {renderGroup("Common areas & offices", facilities)}
+              <div className="tdp-toolbar">
+                <label className="tdp-selectall">
+                  <input
+                    type="checkbox"
+                    checked={allChecked}
+                    onChange={(e) =>
+                      setSelected(
+                        e.target.checked
+                          ? new Set(options.map((l) => l.name))
+                          : new Set(),
+                      )
+                    }
+                  />
+                  Select all
+                </label>
+                <span className="tdp-count">
+                  {options.length} location{options.length === 1 ? "" : "s"} ·
+                  scroll to see all
+                </span>
+              </div>
+              <div className="tdp-scroll">
+                {renderGroup("Restrooms", restrooms)}
+                {renderGroup("Common areas & offices", facilities)}
+              </div>
             </>
           )}
+        </div>
 
+        <div className="tdp-footer">
           {saveError && <div className="cp-error">{saveError}</div>}
-
           <button
             type="button"
             className="cp-send"

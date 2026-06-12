@@ -1352,6 +1352,92 @@ ul[style*="listStyle: none"] li button:hover {
 .cp-list-sub { color: var(--text-muted); font-size: 0.8rem; }
 .cp-empty { color: var(--text-muted); padding: 0.5rem 0.25rem; font-size: 0.9rem; }
 
+/* ===== Teacher destination picker (gear) — clear scroll affordance ===== */
+.tdp-body {
+  padding: 1rem 1.25rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 0; /* let the inner scroll panel shrink instead of the modal */
+  overflow: hidden;
+}
+.tdp-intro {
+  color: var(--text-muted);
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.4;
+}
+.tdp-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.tdp-selectall {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+.tdp-count {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+/* The tinted, bordered panel is the single scroll region. The tint +
+   inset shadow + always-visible scrollbar make it obvious there is more
+   content below the fold. */
+.tdp-scroll {
+  background: var(--bg, #f1f5f9);
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+  overflow-y: auto;
+  min-height: 0;
+  max-height: min(48vh, 360px);
+  box-shadow: inset 0 -10px 12px -10px rgba(15, 23, 42, 0.18),
+    inset 0 10px 12px -10px rgba(15, 23, 42, 0.12);
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 transparent;
+}
+.tdp-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+.tdp-scroll::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 999px;
+  border: 2px solid var(--bg, #f1f5f9);
+}
+.tdp-scroll::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+/* Inside the panel the group lists must NOT create their own nested
+   scroll — the panel is the only scroller. */
+.tdp-scroll .cp-list {
+  max-height: none;
+  overflow: visible;
+}
+.tdp-scroll .cp-list-item {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+}
+.tdp-scroll .cp-list-item:hover {
+  border-color: var(--primary);
+}
+.tdp-footer {
+  border-top: 1px solid #eef2f7;
+  padding: 0.85rem 1.25rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  background: #fff;
+}
+
 .cp-context {
   background: var(--bg);
   border-radius: 10px;
