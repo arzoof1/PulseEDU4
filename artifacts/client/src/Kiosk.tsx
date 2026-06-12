@@ -1731,13 +1731,19 @@ function KioskBody({
       .then((r) => r.json())
       .then((d: SchoolSettings) => setSchool(d))
       .catch(() => setSchool(null));
+    // These two are staff-session endpoints and 401 on a kiosk device (no
+    // staff login). They're only a legacy fallback for destinationOptions —
+    // the token-authed /api/kiosk/destinations below is the real source. We
+    // MUST check r.ok and guard Array.isArray: without it, a 401 JSON error
+    // body parses fine and gets stored as `locations`, then `locations.find`
+    // throws and white-screens the kiosk. (Reproduced after a room take-over.)
     fetch("/api/locations")
-      .then((r) => r.json())
-      .then((d: LocationRow[]) => setLocations(d))
+      .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+      .then((d: LocationRow[]) => setLocations(Array.isArray(d) ? d : []))
       .catch(() => setLocations([]));
     fetch("/api/location-allowed-destinations")
-      .then((r) => r.json())
-      .then((d: AllowedRow[]) => setAllowed(d))
+      .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+      .then((d: AllowedRow[]) => setAllowed(Array.isArray(d) ? d : []))
       .catch(() => setAllowed([]));
     // Token-authed source of truth for "what destinations can students
     // pick at THIS kiosk". Unions the school-wide room-pair matrix with
