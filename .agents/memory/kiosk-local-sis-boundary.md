@@ -21,8 +21,11 @@ opaque state id they don't know. They scan/type their SIS id.
   downstream checks + inserts keep using the canonical FK. Endpoints:
   `/kiosk/hall-passes`, `/kiosk/hall-passes/return`, `/kiosk/class-signin`,
   `/kiosk/queue/:token/add`.
-- Badge QR + barcode encode `localSisId ?? studentId` (fallback only if a row
-  is somehow missing its SIS id).
+- Badge QR + barcode encode `local_sis_id` ONLY — NEVER fall back to
+  `studentId` (the kiosk resolves `?signin=` by `local_sis_id`, so a FLEID
+  fallback both leaks the FLEID and never scans). If a row is missing its SIS
+  id, skip the barcode / emit an empty QR signin param rather than encode the
+  FLEID.
 - The next-up queue confirm needs `local_sis_id` per entry: it's **joined**
   from `students` in `clearStaleAndList` (NOT a stored column — avoids a
   migration on the drizzle-push-managed `hall_pass_queue` table). `shapeEntry`

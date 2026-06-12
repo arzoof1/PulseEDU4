@@ -11,7 +11,6 @@ import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import {
   renderStudentBadgesPdf,
-  type BadgeSize,
   type StudentBadgeInput,
 } from "../lib/studentIdBadgesPdf";
 import {
@@ -91,13 +90,11 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
   const body = (req.body ?? {}) as {
     all?: boolean;
     studentIds?: number[];
-    size?: string;
     reason?: string;
   };
-  // Badge physical size — "lanyard" (default, portrait 3.375"×4.25")
-  // or "cr80" (landscape 3.375"×2.125", standard credit-card ID).
-  const sizeRaw = body.size ?? req.query.size;
-  const size: BadgeSize = sizeRaw === "cr80" ? "cr80" : "lanyard";
+  // Single badge format — a landscape credit-card / CR80 ID
+  // (3.375"×2.125"). Stored on the audit ledger as "card".
+  const size = "card";
   const all =
     body.all === true || req.query.all === "1" || req.query.all === "true";
   const bodyIds = Array.isArray(body.studentIds)
@@ -305,7 +302,7 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
     // Audit is best-effort; never block a print.
   }
 
-  const pdf = await renderStudentBadgesPdf(badges, size);
+  const pdf = await renderStudentBadgesPdf(badges);
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader(
     "Content-Disposition",
@@ -329,7 +326,9 @@ router.get(
       .select({
         id: badgePrintEventsTable.id,
         studentId: badgePrintEventsTable.studentId,
-        studentRecordId: studentsTable.studentId,
+        // Forward-facing ID is the local SIS id ONLY — never the FLEID-style
+        // students.studentId.
+        localSisId: studentsTable.localSisId,
         firstName: studentsTable.firstName,
         lastName: studentsTable.lastName,
         grade: studentsTable.grade,

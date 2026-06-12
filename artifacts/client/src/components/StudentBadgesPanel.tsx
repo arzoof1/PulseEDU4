@@ -1,14 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
 
-// Admin tool — print Student ID badges (PDF, lanyard or CR80, with
-// rectangle photo on the badge when consent + photo are present,
-// otherwise an initials bubble). Backed by
+// Admin tool — print Student ID badges (PDF, a single landscape
+// credit-card / CR80 ID, with a rectangle photo on the badge when consent
+// + photo are present, otherwise an initials bubble). Backed by
 // POST /api/students/id-badges.pdf which is admin-gated and
 // school-scoped on the server side. Phase 4 also surfaces a recent
 // reprint audit table via GET /api/students/badge-print-events.
-
-type BadgeSize = "lanyard" | "cr80";
 
 interface StudentRow {
   id: number;
@@ -22,7 +20,7 @@ interface StudentRow {
 
 interface PrintEvent {
   id: number;
-  studentRecordId: string | null;
+  localSisId: string | null;
   firstName: string | null;
   lastName: string | null;
   grade: number | string | null;
@@ -36,7 +34,6 @@ interface PrintEvent {
 export function StudentBadgesPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [size, setSize] = useState<BadgeSize>("lanyard");
 
   const [students, setStudents] = useState<StudentRow[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -95,7 +92,6 @@ export function StudentBadgesPanel() {
     try {
       const body = {
         ...payload,
-        size,
         reason: reason.trim() || undefined,
       };
       const res = await authFetch("/api/students/id-badges.pdf", {
@@ -144,40 +140,9 @@ export function StudentBadgesPanel() {
         sign in to class or create a hall pass.
       </p>
 
-      <fieldset
-        style={{
-          border: "1px solid var(--border, rgba(0,0,0,0.15))",
-          borderRadius: 6,
-          padding: "0.5rem 0.75rem",
-          margin: "0 0 0.75rem 0",
-        }}
-      >
-        <legend style={{ fontSize: "0.85rem", padding: "0 0.35rem" }}>
-          Badge size
-        </legend>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, marginRight: "1rem", cursor: "pointer" }}>
-          <input
-            type="radio"
-            name="badge-size"
-            value="lanyard"
-            checked={size === "lanyard"}
-            onChange={() => setSize("lanyard")}
-            disabled={busy}
-          />
-          <span>Lanyard <span style={{ opacity: 0.65 }}>(3⅜″ × 4¼″, portrait)</span></span>
-        </label>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-          <input
-            type="radio"
-            name="badge-size"
-            value="cr80"
-            checked={size === "cr80"}
-            onChange={() => setSize("cr80")}
-            disabled={busy}
-          />
-          <span>CR80 card <span style={{ opacity: 0.65 }}>(3⅜″ × 2⅛″, landscape)</span></span>
-        </label>
-      </fieldset>
+      <p style={{ color: "var(--text-subtle)", marginTop: 0, fontSize: "0.85rem" }}>
+        Printed as a landscape credit-card ID (3⅜″ × 2⅛″, CR80).
+      </p>
 
       {error && (
         <div
@@ -381,7 +346,7 @@ export function StudentBadgesPanel() {
                       </td>
                       <td style={{ padding: "0.35rem 0.5rem" }}>
                         {e.firstName ? `${e.lastName}, ${e.firstName}` : "(deleted)"}{" "}
-                        <span style={{ opacity: 0.6 }}>{e.studentRecordId ? `· ${e.studentRecordId}` : ""}</span>
+                        <span style={{ opacity: 0.6 }}>{e.localSisId ? `· ${e.localSisId}` : ""}</span>
                       </td>
                       <td style={{ padding: "0.35rem 0.5rem" }}>{e.printedByName || "—"}</td>
                       <td style={{ padding: "0.35rem 0.5rem" }}>{e.size}</td>

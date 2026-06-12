@@ -1,28 +1,24 @@
-// Per-student printable ID badges. Two physical sizes, both single-sided
-// (one badge = one page), visually consistent:
-//   - "lanyard": portrait 3.375" × 4.25" (standard lanyard ID).
-//   - "cr80":    landscape 3.375" × 2.125" (credit-card ID).
-// Each badge carries: square student photo (or initials fallback), house
-// color block + uploaded house logo (or initials disc fallback), house
-// name, school name, student name, "Grade N · Car Rider" line, QR (links
-// to kiosk sign-in), Code 128 barcode, and the two FL HB 383 crisis
-// hotlines (988 + Crisis Text Line 741741).
+// Per-student printable ID badge. ONE physical size, single-sided
+// (one badge = one page): a landscape credit-card / CR80 ID,
+// 3.375" × 2.125". Each badge carries: a full-width house-color header
+// (uploaded house logo or initials disc on the left, house name + school,
+// and a dismissal-mode indicator on the RIGHT — a small car icon for car
+// riders, otherwise a short text label), a square student photo (or
+// initials fallback), the student name + grade, an enlarged QR (links to
+// kiosk sign-in), a full-width Code 128 barcode, and the two FL HB 383
+// crisis hotlines (988 + Crisis Text Line 741741) printed on the front as
+// Florida law requires.
 
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
 import bwipjs from "bwip-js";
 import { normalizeHex } from "./pdfColors";
 
-export type BadgeSize = "lanyard" | "cr80";
+// Landscape credit-card / CR80 — 3.375" × 2.125" at 72dpi.
+const CARD_W = 243;
+const CARD_H = 153;
 
-// Portrait lanyard ID — 3.375" × 4.25" at 72dpi
-const LANYARD_W = 243;
-const LANYARD_H = 306;
-// Landscape CR80 — 3.375" × 2.125" at 72dpi
-const CR80_W = 243;
-const CR80_H = 153;
-
-const PAGE_MARGIN = 10;
+const PAGE_MARGIN = 8;
 
 export interface StudentBadgeInput {
   studentId: string;
@@ -34,7 +30,8 @@ export interface StudentBadgeInput {
   firstName: string;
   lastName: string;
   grade: number | null;
-  // End-of-day dismissal mode. Rendered as a human label next to grade.
+  // End-of-day dismissal mode. Rendered in the header (car icon for car
+  // riders, short text label otherwise).
   dismissalMode?: string | null;
   schoolName: string;
   // QR points to: `${baseUrl}?signin=<localSisId>` — the kiosk reads
@@ -58,8 +55,7 @@ export interface StudentBadgeInput {
 }
 
 // Human label for a stored dismissal_mode value. `car_rider` is rendered
-// as a small vector car icon instead of text (see drawCarIcon) because
-// the words wouldn't fit cleanly on the CR80 layout next to a Grade label.
+// as a small vector car icon instead of text (see drawCarIcon).
 function dismissalLabel(mode: string | null | undefined): string | null {
   if (!mode) return null;
   switch (mode) {
@@ -73,8 +69,8 @@ function dismissalLabel(mode: string | null | undefined): string | null {
 }
 
 // Tiny side-profile car icon — body + roof + two wheels. Used in place of
-// the "Car Rider" text on student ID badges so the dismissal mode reads at
-// a glance without crowding the Grade label.
+// the "Car Rider" text in the badge header so the dismissal mode reads at
+// a glance without crowding the layout.
 function drawCarIcon(
   doc: PDFKit.PDFDocument,
   x: number,
@@ -117,21 +113,23 @@ function drawCarIcon(
 
 export async function renderStudentBadgesPdf(
   badges: StudentBadgeInput[],
-  size: BadgeSize = "lanyard",
 ): Promise<Buffer> {
-  const [W, H] = size === "cr80" ? [CR80_W, CR80_H] : [LANYARD_W, LANYARD_H];
+  // Bottom margin intentionally small — the badge layout positions every
+  // element absolutely and the crisis hotline line sits close to the page
+  // edge. A larger bottom margin would push pdfkit to auto-page when text
+  // crosses (pageHeight - bottomMargin). These margins MUST be passed to
+  // every addPage() too: pdfkit applies its default 72pt margins to any
+  // page whose options object omits them, which silently shrinks the
+  // usable area and auto-paginates a single badge across several pages.
+  const margins = {
+    top: PAGE_MARGIN,
+    bottom: 2,
+    left: PAGE_MARGIN,
+    right: PAGE_MARGIN,
+  };
   const doc = new PDFDocument({
-    size: [W, H],
-    // Bottom margin intentionally small — the badge layout positions
-    // every element absolutely and the crisis hotline lines sit almost
-    // flush against the page edge. A larger bottom margin would push
-    // pdfkit to auto-page when text crosses (pageHeight - bottomMargin).
-    margins: {
-      top: PAGE_MARGIN,
-      bottom: 2,
-      left: PAGE_MARGIN,
-      right: PAGE_MARGIN,
-    },
+    size: [CARD_W, CARD_H],
+    margins,
     info: { Title: "Student ID Badges" },
   });
 
@@ -142,12 +140,8 @@ export async function renderStudentBadgesPdf(
   });
 
   for (let i = 0; i < badges.length; i++) {
-    if (i > 0) doc.addPage({ size: [W, H] });
-    if (size === "cr80") {
-      await renderCr80Badge(doc, badges[i]);
-    } else {
-      await renderLanyardBadge(doc, badges[i]);
-    }
+    if (i > 0) doc.addPage({ size: [CARD_W, CARD_H], margins });
+    await renderCardBadge(doc, badges[i]);
   }
 
   doc.end();
@@ -155,197 +149,25 @@ export async function renderStudentBadgesPdf(
 }
 
 // ---------------------------------------------------------------------------
-// Lanyard (portrait 243 × 306)
+// Credit-card / CR80 (landscape 243 × 153)
 //
-// Layout, top to bottom:
-//   [ house-color band, 56pt tall ]
-//     house logo (square, 32×32) at left, white if no upload
-//     "House Name"  in white on band
-//     "School Name" in faint white under house name
-//   [ square photo, 96×96, centered, framed in house color ]
-//   "First Last" (14pt)  · "Grade N · Car Rider" (9pt)
-//   QR (60×60, centered) → Code 128 barcode → crisis lines (988 / 741741)
+// Layout:
+//   [ full-width house-color header band, 34pt tall ]
+//     house logo (square) at LEFT, white if no upload
+//     "House Name" + "School Name" stacked next to the logo
+//     dismissal indicator at RIGHT — car icon for car riders, else label
+//   [ body, white ]
+//     square photo (66) at left · student name + grade in the middle
+//     enlarged QR (86, links to kiosk sign-in) at the right
+//   [ full-width Code 128 barcode near the bottom ]
+//   [ FL HB 383 crisis line on the front: 988 + 741741 ]
 // ---------------------------------------------------------------------------
-async function renderLanyardBadge(
+async function renderCardBadge(
   doc: PDFKit.PDFDocument,
   badge: StudentBadgeInput,
 ) {
-  const W = LANYARD_W;
-  const H = LANYARD_H;
-  const houseColor = badge.house ? normalizeHex(badge.house.color) : "#0f172a";
-
-  // Card outline
-  doc
-    .save()
-    .lineWidth(0.5)
-    .strokeColor("#cbd5e1")
-    .roundedRect(2, 2, W - 4, H - 4, 8)
-    .stroke()
-    .restore();
-
-  // Top color band
-  const bandH = 56;
-  doc
-    .save()
-    .fillColor(houseColor)
-    .roundedRect(2, 2, W - 4, bandH, 8)
-    .fill()
-    .restore();
-  // Square the bottom edge of the band so it butts cleanly against the
-  // photo area (the roundedRect rounds all corners; we paint a small
-  // rect over the bottom-rounded portion to flatten it).
-  doc
-    .save()
-    .fillColor(houseColor)
-    .rect(2, bandH - 6, W - 4, 8)
-    .fill()
-    .restore();
-
-  // House emblem (top-left on band) — uploaded logo if we have it,
-  // else white disc with first letter in house color.
-  const logoSize = 32;
-  const logoX = 10;
-  const logoY = (bandH - logoSize) / 2 + 2;
-  drawHouseEmblem(doc, badge, logoX, logoY, logoSize, houseColor);
-
-  // House name + school, stacked right of the emblem on the band.
-  const labelX = logoX + logoSize + 8;
-  const labelW = W - labelX - 8;
-  if (badge.house) {
-    doc
-      .fillColor("#ffffff")
-      .fontSize(13)
-      .text(`${badge.house.name} House`, labelX, 10, {
-        width: labelW,
-        ellipsis: true,
-        lineBreak: false,
-      });
-    doc
-      .fillColor("rgba(255,255,255,0.88)")
-      .fontSize(8.5)
-      .text(badge.schoolName, labelX, 28, {
-        width: labelW,
-        ellipsis: true,
-        height: 24,
-      });
-  } else {
-    doc
-      .fillColor("#ffffff")
-      .fontSize(12)
-      .text("Student ID", labelX, 12, {
-        width: labelW,
-        lineBreak: false,
-      });
-    doc
-      .fillColor("rgba(255,255,255,0.88)")
-      .fontSize(8.5)
-      .text(badge.schoolName, labelX, 30, {
-        width: labelW,
-        ellipsis: true,
-        height: 22,
-      });
-  }
-
-  // Square photo slot (centered under the band) — sized to roughly double
-  // the area of the original 96pt slot. To make room, the QR/barcode block
-  // below tightens up (smaller QR, less padding) so the badge still fits
-  // the 306pt lanyard height with the FL HB 383 crisis lines intact.
-  const photoSize = 130;
-  const photoX = (W - photoSize) / 2;
-  const photoY = bandH + 8;
-  drawPhotoSlot(doc, badge, photoX, photoY, photoSize, houseColor);
-
-  // Name
-  const nameY = photoY + photoSize + 4;
-  doc
-    .fillColor("#111827")
-    .fontSize(14)
-    .text(`${badge.firstName} ${badge.lastName}`, PAGE_MARGIN, nameY, {
-      width: W - PAGE_MARGIN * 2,
-      align: "center",
-      ellipsis: true,
-      height: 18,
-    });
-
-  // Grade · Dismissal mode. Car riders get a small car icon to the right
-  // of the Grade text (the words "Car Rider" don't fit cleanly on a CR80
-  // badge so the lanyard mirrors the same convention for consistency).
-  const dLabel = dismissalLabel(badge.dismissalMode);
-  const isCarRider = badge.dismissalMode === "car_rider";
-  const gradeBits: string[] = [];
-  if (badge.grade !== null) gradeBits.push(`Grade ${badge.grade}`);
-  if (dLabel) gradeBits.push(dLabel);
-  const gradeY = nameY + 17;
-  if (gradeBits.length > 0 || isCarRider) {
-    const text = gradeBits.join(" · ");
-    doc.fillColor("#475569").fontSize(9);
-    const iconW = 18;
-    const iconH = iconW * 0.55;
-    const gap = text ? 4 : 0;
-    const textW = text ? doc.widthOfString(text) : 0;
-    const totalW = textW + (isCarRider ? gap + iconW : 0);
-    const startX = PAGE_MARGIN + (W - PAGE_MARGIN * 2 - totalW) / 2;
-    if (text) {
-      doc.text(text, startX, gradeY, { lineBreak: false });
-    }
-    if (isCarRider) {
-      drawCarIcon(doc, startX + textW + gap, gradeY + (9 - iconH) / 2, iconW, "#475569");
-    }
-  }
-
-  // QR + barcode + crisis lines, anchored to the bottom of the card so
-  // the layout stays stable as the photo / name area flex. Tightened in
-  // step with the larger photo above to keep the bottom crisis line on
-  // the card.
-  const qrSize = 44;
-  const qrX = (W - qrSize) / 2;
-  const qrY = nameY + 22;
-  const qrBuf = await renderQrBuffer(badge);
-  doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
-
-  const barcodePng = await renderBarcodeBuffer(badge.localSisId ?? badge.studentId);
-  const bcW = W - PAGE_MARGIN * 2 - 30;
-  const bcH = 14;
-  const bcX = (W - bcW) / 2;
-  const bcY = qrY + qrSize + 3;
-  doc.image(barcodePng, bcX, bcY, { width: bcW, height: bcH });
-
-  // Crisis hotlines — FL HB 383 (effective 2021-07-01) requires
-  // 988 + a text crisis line on student IDs grades 6-12.
-  const crisisY1 = bcY + bcH + 5;
-  doc
-    .fillColor("#b91c1c")
-    .fontSize(7)
-    .text("Crisis? Call or text 988", PAGE_MARGIN, crisisY1, {
-      width: W - PAGE_MARGIN * 2,
-      align: "center",
-      lineBreak: false,
-    });
-  doc
-    .fillColor("#475569")
-    .fontSize(7)
-    .text("Crisis Text Line: text HOME to 741741", PAGE_MARGIN, crisisY1 + 10, {
-      width: W - PAGE_MARGIN * 2,
-      align: "center",
-      lineBreak: false,
-    });
-}
-
-// ---------------------------------------------------------------------------
-// CR80 (landscape 243 × 153)
-//
-// Layout: full-card house-color background, with a white rounded "card"
-// inset on the RIGHT for QR + barcode + crisis lines. Left side carries
-// the house logo, house name, school name, square photo, student name,
-// and grade · dismissal — matching the user's mock visually but with all
-// content on a single side.
-// ---------------------------------------------------------------------------
-async function renderCr80Badge(
-  doc: PDFKit.PDFDocument,
-  badge: StudentBadgeInput,
-) {
-  const W = CR80_W;
-  const H = CR80_H;
+  const W = CARD_W;
+  const H = CARD_H;
   const houseColor = badge.house ? normalizeHex(badge.house.color) : "#0f172a";
 
   // Card outline
@@ -357,37 +179,57 @@ async function renderCr80Badge(
     .stroke()
     .restore();
 
-  // Left house-color zone (≈ 60% of width)
-  const leftW = 148;
+  // Full-width header band
+  const bandH = 32;
   doc
     .save()
     .fillColor(houseColor)
-    .roundedRect(2, 2, leftW, H - 4, 6)
+    .roundedRect(2, 2, W - 4, bandH, 6)
     .fill()
     .restore();
-  // Square the right edge of the band so it butts against the white
-  // right-hand zone cleanly.
+  // Square the bottom edge of the band so it butts cleanly against the body.
   doc
     .save()
     .fillColor(houseColor)
-    .rect(leftW - 4, 2, 6, H - 4)
+    .rect(2, bandH - 4, W - 4, 8)
     .fill()
     .restore();
 
-  // House emblem (top-left)
-  const logoSize = 28;
+  // House emblem (top-left on band)
+  const logoSize = 24;
   const logoX = 8;
-  const logoY = 8;
+  const logoY = 2 + (bandH - logoSize) / 2;
   drawHouseEmblem(doc, badge, logoX, logoY, logoSize, houseColor);
 
-  // House name + school next to the emblem
-  const labelX = logoX + logoSize + 6;
-  const labelW = leftW - labelX - 4;
+  // Dismissal indicator (RIGHT side of the header, opposite the house logo):
+  // a small car icon for car riders, otherwise the short text label.
+  const isCarRider = badge.dismissalMode === "car_rider";
+  const dLabel = dismissalLabel(badge.dismissalMode);
+  let headerRightLimit = W - 8;
+  if (isCarRider) {
+    const iconW = 26;
+    const iconH = iconW * 0.55;
+    const iconX = W - iconW - 8;
+    const iconY = 2 + (bandH - iconH) / 2;
+    drawCarIcon(doc, iconX, iconY, iconW, "#ffffff");
+    headerRightLimit = iconX - 6;
+  } else if (dLabel) {
+    doc.fillColor("#ffffff").fontSize(8.5);
+    const tw = doc.widthOfString(dLabel);
+    const tx = W - 8 - tw;
+    doc.text(dLabel, tx, 2 + (bandH - 9) / 2, { lineBreak: false });
+    headerRightLimit = tx - 6;
+  }
+
+  // House name + school, stacked right of the emblem (clamped so it never
+  // collides with the dismissal indicator).
+  const labelX = logoX + logoSize + 8;
+  const labelW = Math.max(40, headerRightLimit - labelX);
   if (badge.house) {
     doc
       .fillColor("#ffffff")
       .fontSize(9)
-      .text(`${badge.house.name} House`, labelX, logoY + 1, {
+      .text(`${badge.house.name} House`, labelX, 8, {
         width: labelW,
         ellipsis: true,
         lineBreak: false,
@@ -395,108 +237,94 @@ async function renderCr80Badge(
     doc
       .fillColor("rgba(255,255,255,0.88)")
       .fontSize(7)
-      .text(badge.schoolName, labelX, logoY + 13, {
+      .text(badge.schoolName, labelX, 20, {
         width: labelW,
         ellipsis: true,
-        height: 18,
+        height: 12,
+        lineBreak: false,
       });
   } else {
     doc
       .fillColor("#ffffff")
       .fontSize(9)
-      .text("Student ID", labelX, logoY + 1, {
-        width: labelW,
-        lineBreak: false,
-      });
+      .text("Student ID", labelX, 8, { width: labelW, lineBreak: false });
     doc
       .fillColor("rgba(255,255,255,0.88)")
       .fontSize(7)
-      .text(badge.schoolName, labelX, logoY + 13, {
+      .text(badge.schoolName, labelX, 20, {
         width: labelW,
-        ellipsis: true,
-        height: 18,
-      });
-  }
-
-  // Square photo (left-bottom area of the band) — enlarged from 64 to
-  // 86pt so the photo area roughly doubles. Name + grade column to the
-  // right tightens to fit the remaining horizontal space in the band.
-  const photoSize = 86;
-  const photoX = 8;
-  const photoY = H - photoSize - 8;
-  drawPhotoSlot(doc, badge, photoX, photoY, photoSize, "#ffffff");
-
-  // Name + grade right of the photo, within the house-color zone
-  const txtX = photoX + photoSize + 6;
-  const txtW = leftW - txtX - 4;
-  doc
-    .fillColor("#ffffff")
-    .fontSize(10.5)
-    .text(`${badge.firstName} ${badge.lastName}`, txtX, photoY + 4, {
-      width: txtW,
-      ellipsis: true,
-      height: 28,
-    });
-  const dLabel = dismissalLabel(badge.dismissalMode);
-  const isCarRider = badge.dismissalMode === "car_rider";
-  const gradeBits: string[] = [];
-  if (badge.grade !== null) gradeBits.push(`Grade ${badge.grade}`);
-  if (dLabel) gradeBits.push(dLabel);
-  const gradeRowY = photoY + photoSize - 22;
-  if (gradeBits.length > 0 || isCarRider) {
-    const text = gradeBits.join(" · ");
-    doc.fillColor("rgba(255,255,255,0.92)").fontSize(8);
-    if (text) {
-      doc.text(text, txtX, gradeRowY, {
-        width: txtW,
         ellipsis: true,
         height: 12,
         lineBreak: false,
       });
-    }
-    if (isCarRider) {
-      const iconW = 16;
-      const iconH = iconW * 0.55;
-      const textW = text ? doc.widthOfString(text) : 0;
-      const iconX = txtX + textW + (text ? 4 : 0);
-      drawCarIcon(doc, iconX, gradeRowY + (8 - iconH) / 2, iconW, "#ffffff");
-    }
   }
 
-  // Right white zone: QR on top, barcode below, crisis lines underneath.
-  const rightX = leftW + 2;
-  const rightW = W - rightX - 4;
-
+  // Body — enlarged QR on the right.
+  const qrSize = 84;
+  const qrX = W - qrSize - 8;
+  const qrY = bandH + 4;
   const qrBuf = await renderQrBuffer(badge);
-  const qrSize = 64;
-  const qrX = rightX + (rightW - qrSize) / 2;
-  const qrY = 8;
   doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
 
-  const barcodePng = await renderBarcodeBuffer(badge.localSisId ?? badge.studentId);
-  const bcW = rightW - 4;
-  const bcH = 26;
-  const bcX = rightX + (rightW - bcW) / 2;
-  const bcY = qrY + qrSize + 3;
-  doc.image(barcodePng, bcX, bcY, { width: bcW, height: bcH });
+  // Square photo on the left.
+  const photoSize = 64;
+  const photoX = 8;
+  const photoY = bandH + 4;
+  drawPhotoSlot(doc, badge, photoX, photoY, photoSize, houseColor);
 
-  // Crisis hotlines — FL HB 383 mandate, see lanyard comment.
+  // Name + grade between the photo and the QR.
+  const txtX = photoX + photoSize + 8;
+  const txtW = Math.max(36, qrX - txtX - 6);
+  doc
+    .fillColor("#111827")
+    .fontSize(10.5)
+    .text(`${badge.firstName} ${badge.lastName}`, txtX, photoY + 6, {
+      width: txtW,
+      ellipsis: true,
+      height: 26,
+    });
+  if (badge.grade !== null) {
+    doc
+      .fillColor("#475569")
+      .fontSize(9)
+      .text(`Grade ${badge.grade}`, txtX, photoY + 30, {
+        width: txtW,
+        ellipsis: true,
+        lineBreak: false,
+      });
+  }
+
+  // Full-width Code 128 barcode below the photo / QR — far wider (and so
+  // far more scannable) than the old right-zone barcode. Encodes the local
+  // SIS id ONLY — the internal FLEID-style student_id must never reach a
+  // printed, student-facing surface. local_sis_id is 100%-populated in
+  // practice; if it is somehow missing we skip the barcode rather than leak
+  // the FLEID or render an unscannable code.
+  const bcW = W - PAGE_MARGIN * 2;
+  const bcH = 14;
+  const bcX = PAGE_MARGIN;
+  const bcY = Math.max(photoY + photoSize, qrY + qrSize) + 3;
+  if (badge.localSisId) {
+    const barcodePng = await renderBarcodeBuffer(badge.localSisId);
+    doc.image(barcodePng, bcX, bcY, { width: bcW, height: bcH });
+  }
+
+  // Crisis hotlines — FL HB 383 (effective 2021-07-01) requires the 988
+  // lifeline + a crisis text line on student IDs grades 6-12, on the front.
+  const crisisY = bcY + bcH + 2;
   doc
     .fillColor("#b91c1c")
     .fontSize(6)
-    .text("Crisis? Call or text 988", rightX, bcY + bcH + 2, {
-      width: rightW,
-      align: "center",
-      lineBreak: false,
-    });
-  doc
-    .fillColor("#475569")
-    .fontSize(6)
-    .text("Text HOME to 741741", rightX, bcY + bcH + 10, {
-      width: rightW,
-      align: "center",
-      lineBreak: false,
-    });
+    .text(
+      "Crisis? Call or text 988  ·  Crisis Text Line: text HOME to 741741",
+      PAGE_MARGIN,
+      crisisY,
+      {
+        width: W - PAGE_MARGIN * 2,
+        align: "center",
+        lineBreak: false,
+      },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -618,21 +446,23 @@ function computeInitials(badge: StudentBadgeInput): string {
 }
 
 async function renderQrBuffer(badge: StudentBadgeInput): Promise<Buffer> {
-  const qrUrl = `${badge.baseUrl}?signin=${encodeURIComponent(badge.localSisId ?? badge.studentId)}`;
+  // Encode local_sis_id ONLY — the kiosk resolves `?signin=` by local_sis_id,
+  // and the internal FLEID-style student_id must never reach a printed QR.
+  const qrUrl = `${badge.baseUrl}?signin=${encodeURIComponent(badge.localSisId ?? "")}`;
   const qrDataUrl = await QRCode.toDataURL(qrUrl, {
     margin: 1,
-    width: 200,
+    width: 280,
     errorCorrectionLevel: "M",
   });
   return Buffer.from(qrDataUrl.split(",")[1], "base64");
 }
 
-async function renderBarcodeBuffer(studentId: string): Promise<Buffer> {
+async function renderBarcodeBuffer(localSisId: string): Promise<Buffer> {
   return bwipjs.toBuffer({
     bcid: "code128",
-    text: studentId,
-    scale: 2,
-    height: 12,
+    text: localSisId,
+    scale: 3,
+    height: 16,
     includetext: false,
     paddingwidth: 4,
     paddingheight: 4,
