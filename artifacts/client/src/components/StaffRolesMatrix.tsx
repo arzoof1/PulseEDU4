@@ -1370,6 +1370,14 @@ const stickyTh: React.CSSProperties = {
   borderBottom: "1px solid #cbd5e1",
   padding: "6px 8px",
   zIndex: 3,
+  // `.pulse-table thead th` paints its text with a gradient via
+  // `background-clip: text; color: transparent`. The opaque sticky
+  // background above overrides that gradient, which would clip the
+  // text to a near-white solid and render the headers invisible.
+  // Restore a solid, visible header color and normal background clipping.
+  color: "#4f46e5",
+  WebkitBackgroundClip: "border-box",
+  backgroundClip: "border-box",
 };
 const stickyTd: React.CSSProperties = {
   position: "sticky",
