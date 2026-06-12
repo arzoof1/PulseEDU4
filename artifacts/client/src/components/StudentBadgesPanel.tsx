@@ -149,8 +149,23 @@ export function StudentBadgesPanel() {
       </p>
 
       <p style={{ color: "var(--text-subtle)", marginTop: 0, fontSize: "0.85rem" }}>
-        Printed as a landscape credit-card ID (3⅜″ × 2⅛″, CR80).
+        Printed as a credit-card ID (CR80) — choose landscape (3⅜″ × 2⅛″) or a
+        portrait lanyard badge in Card design below.
       </p>
+
+      <details style={{ marginTop: "1rem" }} open>
+        <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+          Card design
+        </summary>
+        <p style={{ color: "var(--text-subtle)", fontSize: "0.85rem", marginBottom: 0 }}>
+          Customize the printed badge: landscape or portrait orientation, a
+          school-color or uploaded background across the top (behind the header
+          + photo), header text contrast, and an optional house footer band.
+          The QR, barcode, and crisis line always stay on clean white so they
+          scan and read reliably.
+        </p>
+        <CardDesignPanel />
+      </details>
 
       {error && (
         <div
@@ -457,19 +472,6 @@ export function StudentBadgesPanel() {
             </button>
           </div>
         </div>
-      </details>
-
-      <details style={{ marginTop: "1rem" }}>
-        <summary style={{ cursor: "pointer", fontWeight: 600 }}>
-          Card design
-        </summary>
-        <p style={{ color: "var(--text-subtle)", fontSize: "0.85rem", marginBottom: 0 }}>
-          Customize the printed badge: a school-color or uploaded background
-          across the top (behind the header + photo), header text contrast,
-          and an optional house footer band. The QR, barcode, and crisis line
-          always stay on clean white so they scan and read reliably.
-        </p>
-        <CardDesignPanel />
       </details>
 
       <details style={{ marginTop: "1rem" }}>

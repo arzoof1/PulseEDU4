@@ -4,6 +4,7 @@
 - [Deployment secret propagation](deployment-secret-propagation.md) — updating a workspace secret value may not reach the published deployment; secret-gated boot one-shots can stay dormant in prod. Bake a one-way value (e.g. bcrypt hash) instead.
 - [School Grade LG parity](school-grade-lg-parity.md) — learning-gain prior evidence must come from `loadFastHistory` historical PM3 (like Teacher Roster), never `priorYearScore`.
 - [FAST Benchmarks PDF headers](fast-benchmarks-pdf-headers.md) — diagonal code headers: anchor at column LEFT edge + translate/rotate rising up-right; verify by rendering the real PDF, don't eyeball.
+- [pdfkit absolute-text pagination](pdfkit-absolute-text-pagination.md) — center-aligned bottom-edge .text() wraps + adds a blank page even with lineBreak:false; auto-fit font to one line, don't truncate.
 - [Hall pass destination policy](hall-pass-destination-policy.md) — destination-visibility policies (e.g. Restroom Access) must be enforced in POST /hall-passes, not just CreatePassModal; client filtering is bypassable.
 - [Academic vs Behavior MTSS](academic-mtss.md) — fastSubject is the academic discriminator; academic Tier3 is now a MINUTES small-group model (met/owed/excused via lib/academicMinutes.ts), separate form from behavior score grid.
 - [Cross-device data freshness](cross-device-data-freshness.md) — staff-app counts/lists for data kiosks can mutate must POLL (15s), not just refresh on mount + own-action, or kiosk rows go unseen.

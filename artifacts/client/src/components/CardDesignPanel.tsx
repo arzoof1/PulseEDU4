@@ -47,6 +47,12 @@ export function CardDesignPanel() {
   const [err, setErr] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
+  // Card orientation (per-school). Landscape is the legacy CR80 layout;
+  // portrait is the lanyard-style layout with icon rows + house emblem.
+  const [orientation, setOrientation] = useState<"landscape" | "portrait">(
+    "landscape",
+  );
+
   // Top background
   const [bgMode, setBgMode] = useState<BgMode>("colors");
   const [bgColors, setBgColors] = useState<string[]>([]);
@@ -85,6 +91,7 @@ export function CardDesignPanel() {
             displayNameOverride?: string | null;
           };
           if (!cancelled) {
+            setOrientation(b.cardOrientation ?? "landscape");
             setBgMode(b.cardBgMode ?? "colors");
             setBgColors(Array.isArray(b.cardBgColors) ? b.cardBgColors : []);
             setBgAngle(b.cardBgAngle ?? 135);
@@ -256,6 +263,7 @@ export function CardDesignPanel() {
         buttonHoverBgAngle: base?.buttonHoverBgAngle ?? 135,
         buttonHoverText: base?.buttonHoverText ?? null,
         // Card design.
+        cardOrientation: orientation,
         cardBgMode: bgMode,
         cardBgColors: bgMode === "colors" ? bgColors : [],
         cardBgAngle: bgAngle,
@@ -389,6 +397,36 @@ export function CardDesignPanel() {
     <div style={{ display: "flex", flexWrap: "wrap", gap: "1.5rem", marginTop: "0.75rem" }}>
       {/* ---- Controls ---- */}
       <div style={{ flex: "1 1 320px", minWidth: 300 }}>
+        {/* Orientation */}
+        <fieldset style={{ border: "1px solid var(--border, rgba(0,0,0,0.15))", borderRadius: 8, marginBottom: "1rem" }}>
+          <legend style={{ fontWeight: 700, padding: "0 0.4rem" }}>Orientation</legend>
+          <div style={{ display: "flex", gap: "1rem" }}>
+            <label style={{ display: "flex", gap: "0.35rem", alignItems: "center" }}>
+              <input
+                type="radio"
+                name="cardOrientation"
+                checked={orientation === "landscape"}
+                onChange={() => setOrientation("landscape")}
+              />
+              Landscape
+            </label>
+            <label style={{ display: "flex", gap: "0.35rem", alignItems: "center" }}>
+              <input
+                type="radio"
+                name="cardOrientation"
+                checked={orientation === "portrait"}
+                onChange={() => setOrientation("portrait")}
+              />
+              Portrait (lanyard)
+            </label>
+          </div>
+          <div style={{ fontSize: "0.8rem", opacity: 0.7, marginTop: "0.45rem" }}>
+            Portrait prints a vertical lanyard badge with icon rows and a house
+            emblem. All colors, background, header-text and house options below
+            apply to both orientations.
+          </div>
+        </fieldset>
+
         {/* Top background */}
         <fieldset style={{ border: "1px solid var(--border, rgba(0,0,0,0.15))", borderRadius: 8, marginBottom: "1rem" }}>
           <legend style={{ fontWeight: 700, padding: "0 0.4rem" }}>Top background</legend>
@@ -636,15 +674,28 @@ export function CardDesignPanel() {
       {/* ---- Live preview ---- */}
       <div style={{ flex: "0 0 auto" }}>
         <span style={labelStyle}>Live preview</span>
-        <CardPreview
-          schoolName={schoolName}
-          topBackground={topBackground}
-          headerColor={headerColor}
-          showHouse={showHouse}
-          footerBg={footerBg}
-          footerText={footerText}
-          houseName={previewHouseName}
-        />
+        {orientation === "portrait" ? (
+          <CardPreviewPortrait
+            schoolName={schoolName}
+            topBackground={topBackground}
+            headerColor={headerColor}
+            showHouse={showHouse}
+            footerBg={footerBg}
+            footerText={footerText}
+            houseName={previewHouseName}
+            houseColor={previewHouseColor}
+          />
+        ) : (
+          <CardPreview
+            schoolName={schoolName}
+            topBackground={topBackground}
+            headerColor={headerColor}
+            showHouse={showHouse}
+            footerBg={footerBg}
+            footerText={footerText}
+            houseName={previewHouseName}
+          />
+        )}
         <div style={{ fontSize: "0.78rem", opacity: 0.65, maxWidth: 360, marginTop: "0.4rem" }}>
           Approximation of the printed card. Use “Print sample badge” for an
           exact PDF.
@@ -744,19 +795,12 @@ function CardPreview(props: {
           QR
         </div>
       </div>
-      {/* White region */}
+      {/* White region — house band, then barcode (below the band, for
+          cafeteria swipe readers), then the crisis strip at the very bottom. */}
       <div style={{ padding: "8px 12px 10px" }}>
-        <div
-          style={{
-            height: 18,
-            background:
-              "repeating-linear-gradient(90deg,#111 0 2px,#fff 2px 4px,#111 4px 7px,#fff 7px 9px)",
-          }}
-        />
         {props.showHouse && (
           <div
             style={{
-              marginTop: 8,
               height: 24,
               borderRadius: 5,
               background: props.footerBg,
@@ -773,9 +817,236 @@ function CardPreview(props: {
             HOUSE {props.houseName.toUpperCase()}
           </div>
         )}
+        <div
+          style={{
+            marginTop: props.showHouse ? 8 : 0,
+            height: 18,
+            background:
+              "repeating-linear-gradient(90deg,#111 0 2px,#fff 2px 4px,#111 4px 7px,#fff 7px 9px)",
+          }}
+        />
         <div style={{ marginTop: 8, textAlign: "center", color: "#b91c1c", fontSize: 9 }}>
           Crisis? Call or text 988 · Crisis Text Line: text HOME to 741741
         </div>
+      </div>
+    </div>
+  );
+}
+
+// HTML mock of the PORTRAIT lanyard badge (scaled from 153×243). Mirrors the
+// PDF portrait renderer: lanyard slot, diagonal school-color corner ribbons,
+// centered school name, photo + QR, icon rows (Car Rider / name+grade /
+// teacher), house emblem band, barcode below it, navy crisis strip.
+function CardPreviewPortrait(props: {
+  schoolName: string;
+  topBackground: string;
+  headerColor: string;
+  showHouse: boolean;
+  footerBg: string;
+  footerText: string;
+  houseName: string;
+  houseColor: string;
+}) {
+  const W = 255; // 153 * 1.667
+  const ribbon = props.houseColor || "#b91c1c";
+  const rowStyle: React.CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "8px 0",
+    borderTop: "1px solid #e2e8f0",
+  };
+  const iconBubble: React.CSSProperties = {
+    flex: "0 0 auto",
+    width: 26,
+    height: 26,
+    borderRadius: "50%",
+    background: "#1e3a5f",
+    color: "#fff",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 13,
+  };
+  return (
+    <div
+      style={{
+        width: W,
+        border: "1px solid #cbd5e1",
+        borderRadius: 12,
+        overflow: "hidden",
+        background: "#fff",
+        fontFamily: "system-ui, sans-serif",
+        boxShadow: "0 1px 4px rgba(0,0,0,0.12)",
+      }}
+    >
+      {/* Header with lanyard slot + corner ribbons */}
+      <div style={{ position: "relative", height: 92, background: props.topBackground, overflow: "hidden" }}>
+        {/* corner ribbons */}
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: 0,
+            height: 0,
+            borderTop: `46px solid ${ribbon}`,
+            borderRight: "46px solid transparent",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            right: 0,
+            width: 0,
+            height: 0,
+            borderTop: `46px solid ${ribbon}`,
+            borderLeft: "46px solid transparent",
+          }}
+        />
+        {/* lanyard slot */}
+        <div
+          style={{
+            position: "absolute",
+            top: 8,
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: 56,
+            height: 12,
+            borderRadius: 6,
+            border: "2px solid rgba(255,255,255,0.85)",
+            background: "rgba(255,255,255,0.12)",
+          }}
+        />
+        {/* school name */}
+        <div
+          style={{
+            position: "absolute",
+            left: 8,
+            right: 8,
+            top: 40,
+            textAlign: "center",
+            color: props.headerColor,
+            fontWeight: 800,
+            fontSize: 17,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {props.schoolName}
+        </div>
+      </div>
+      {/* photo + QR */}
+      <div style={{ display: "flex", gap: 10, padding: "10px 12px 6px" }}>
+        <div
+          style={{
+            flex: "0 0 auto",
+            width: 96,
+            height: 96,
+            borderRadius: 8,
+            background: "#e2e8f0",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#475569",
+            fontWeight: 700,
+            fontSize: 30,
+          }}
+        >
+          JS
+        </div>
+        <div
+          style={{
+            flex: 1,
+            height: 96,
+            borderRadius: 8,
+            background: "#fff",
+            border: "1px solid #e2e8f0",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#94a3b8",
+            fontSize: 11,
+          }}
+        >
+          QR
+        </div>
+      </div>
+      {/* icon rows */}
+      <div style={{ padding: "0 12px" }}>
+        <div style={rowStyle}>
+          <span style={iconBubble}>🚗</span>
+          <span style={{ fontWeight: 700, fontSize: 14, color: "#1e293b" }}>CAR RIDER</span>
+        </div>
+        <div style={rowStyle}>
+          <span style={iconBubble}>👤</span>
+          <span style={{ fontWeight: 700, fontSize: 14, color: "#1e293b", flex: 1 }}>Jordan Sample</span>
+          <span
+            style={{
+              flex: "0 0 auto",
+              width: 26,
+              height: 26,
+              borderRadius: "50%",
+              border: "2px solid #1e3a5f",
+              color: "#1e3a5f",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontWeight: 700,
+              fontSize: 13,
+            }}
+          >
+            7
+          </span>
+        </div>
+        <div style={rowStyle}>
+          <span style={iconBubble}>👥</span>
+          <span style={{ fontWeight: 600, fontSize: 13, color: "#1e293b" }}>Teacher: Ms. Johnson</span>
+        </div>
+      </div>
+      {/* house band + barcode + crisis */}
+      <div style={{ padding: "8px 12px 10px" }}>
+        {props.showHouse && (
+          <div
+            style={{
+              height: 28,
+              borderRadius: 6,
+              background: props.footerBg,
+              border: props.footerBg.toLowerCase() === "#ffffff" ? "1px solid #cbd5e1" : "none",
+              color: props.footerText,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontWeight: 800,
+              fontSize: 13,
+              letterSpacing: 0.5,
+            }}
+          >
+            HOUSE {props.houseName.toUpperCase()}
+          </div>
+        )}
+        <div
+          style={{
+            marginTop: props.showHouse ? 8 : 0,
+            height: 20,
+            background:
+              "repeating-linear-gradient(90deg,#111 0 2px,#fff 2px 4px,#111 4px 7px,#fff 7px 9px)",
+          }}
+        />
+      </div>
+      {/* navy crisis strip */}
+      <div
+        style={{
+          background: "#1e3a5f",
+          color: "#fff",
+          fontSize: 9,
+          textAlign: "center",
+          padding: "6px 8px",
+        }}
+      >
+        Crisis? Call or text 988 · Text HOME to 741741
       </div>
     </div>
   );

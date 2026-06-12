@@ -24,6 +24,7 @@ export type BrandingPayload = {
   buttonHoverText: string | null;
   // Student ID card designer. Empty cardBgColors[] + mode 'colors' means
   // "not customized" — the printed badge keeps its legacy house-colored look.
+  cardOrientation: "landscape" | "portrait";
   cardBgMode: "colors" | "image";
   cardBgColors: string[];
   cardBgAngle: number;

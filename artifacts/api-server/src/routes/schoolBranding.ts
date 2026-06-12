@@ -65,6 +65,7 @@ export type BrandingResponse = {
   cardHouseBgColor: string | null;
   cardHouseTextMode: "auto" | "manual";
   cardHouseTextColor: string | null;
+  cardOrientation: "landscape" | "portrait";
 };
 
 // Shared loader so other routers (parent portal, kiosk activation) can
@@ -99,6 +100,7 @@ export async function loadBrandingForSchool(
       cardHouseBgColor: schoolBrandingTable.cardHouseBgColor,
       cardHouseTextMode: schoolBrandingTable.cardHouseTextMode,
       cardHouseTextColor: schoolBrandingTable.cardHouseTextColor,
+      cardOrientation: schoolBrandingTable.cardOrientation,
     })
     .from(schoolBrandingTable)
     .where(eq(schoolBrandingTable.schoolId, schoolId));
@@ -144,6 +146,7 @@ function rowToResponse(row: {
   cardHouseBgColor: string | null;
   cardHouseTextMode: string | null;
   cardHouseTextColor: string | null;
+  cardOrientation: string | null;
 } | null,
 schoolId: number): BrandingResponse {
   if (!row) {
@@ -172,6 +175,7 @@ schoolId: number): BrandingResponse {
       cardHouseBgColor: null,
       cardHouseTextMode: "auto",
       cardHouseTextColor: null,
+      cardOrientation: "landscape",
     };
   }
   return {
@@ -202,6 +206,7 @@ schoolId: number): BrandingResponse {
     cardHouseBgColor: row.cardHouseBgColor,
     cardHouseTextMode: row.cardHouseTextMode === "manual" ? "manual" : "auto",
     cardHouseTextColor: row.cardHouseTextColor,
+    cardOrientation: row.cardOrientation === "portrait" ? "portrait" : "landscape",
   };
 }
 
@@ -470,6 +475,9 @@ router.put("/school-branding", async (req, res) => {
     cardHouseTextColor = (body.cardHouseTextColor as string).trim();
   }
 
+  const cardOrientation =
+    body.cardOrientation === "portrait" ? "portrait" : "landscape";
+
   const cardFields = {
     cardBgMode,
     cardBgColorsJson,
@@ -482,6 +490,7 @@ router.put("/school-branding", async (req, res) => {
     cardHouseBgColor,
     cardHouseTextMode,
     cardHouseTextColor,
+    cardOrientation,
   };
 
   // Upsert by schoolId (one row per school).

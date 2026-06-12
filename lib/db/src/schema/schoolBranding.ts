@@ -72,6 +72,10 @@ export const schoolBrandingTable = pgTable(
     // Footer text color: 'auto' (contrast) or 'manual' (cardHouseTextColor).
     cardHouseTextMode: text("card_house_text_mode").notNull().default("auto"),
     cardHouseTextColor: text("card_house_text_color"),
+    // Physical badge orientation: 'landscape' (CR80 horizontal, the legacy
+    // look) or 'portrait' (tall lanyard-style ID — corner ribbons, lanyard
+    // slot, icon rows, house emblem, navy crisis bar). Per-school choice.
+    cardOrientation: text("card_orientation").notNull().default("landscape"),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

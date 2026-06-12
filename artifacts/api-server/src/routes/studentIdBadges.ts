@@ -61,6 +61,7 @@ async function buildCardDesign(schoolId: number): Promise<CardDesign> {
     }
   }
   return {
+    orientation: b.cardOrientation,
     bgMode: b.cardBgMode,
     bgColors: b.cardBgColors.slice(0, 2),
     bgAngle: b.cardBgAngle,
@@ -430,6 +431,7 @@ async function handleSampleBadge(req: Request, res: Response): Promise<void> {
     firstName: "Jordan",
     lastName: "Sample",
     grade: 7,
+    teacherName: "Ms. Johnson",
     dismissalMode: "car_rider",
     schoolName,
     baseUrl,
