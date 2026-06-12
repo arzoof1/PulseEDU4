@@ -9399,13 +9399,13 @@ function App() {
             alignItems: "center",
             gap: 12,
             justifyContent: "space-between",
-            // No wrap: keep the button on the same row as the label so
-            // it can never get hidden under the header on narrow widths.
-            // The label gets ellipsis truncation via min-width:0 + the
-            // inner span's overflow rules below.
-            flexWrap: "nowrap",
-            fontSize: 12.5,
-            lineHeight: 1.4,
+            // Wrap so the teacher name is never truncated: on narrow
+            // widths the Exit button drops to its own line instead of
+            // squeezing the label into an ellipsis. Seeing exactly which
+            // teacher you're previewing as is the whole point of the bar.
+            flexWrap: "wrap",
+            fontSize: 13.5,
+            lineHeight: 1.45,
             borderBottom: "1px solid #f59e0b",
           }}
         >
@@ -9414,9 +9414,7 @@ function App() {
               display: "inline-flex",
               alignItems: "center",
               gap: 8,
-              minWidth: 0,
               flex: "1 1 auto",
-              overflow: "hidden",
             }}
           >
             <span
@@ -9430,15 +9428,11 @@ function App() {
                 flexShrink: 0,
               }}
             />
-            <span
-              style={{
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                minWidth: 0,
-              }}
-            >
-              Previewing as <strong>{authUser.displayName}</strong>
+            <span>
+              Previewing as{" "}
+              <strong style={{ fontSize: "1.1em" }}>
+                {authUser.displayName}
+              </strong>
               <span style={{ opacity: 0.7 }}>
                 {" "}— signed in as {authUser.impersonatorDisplayName}
               </span>
