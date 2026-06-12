@@ -660,12 +660,21 @@ router.get("/kiosk/destinations/:token", async (req, res) => {
   const roomPairDestIds = roomPairRows.map((r) => r.id);
   const teacherDestIds = teacherRows.map((r) => r.id);
 
-  // Show-all default: when the activating teacher has NOT set a per-teacher
-  // allowlist (via the self-serve gear or the admin tile), fall back to every
-  // student-visible non-classroom destination so day-one kiosks aren't empty.
-  // Once the teacher narrows their list, only those (∪ the room matrix) show.
-  let defaultDestIds: number[] = [];
-  if (teacherDestIds.length === 0) {
+  // Precedence (teacher list is AUTHORITATIVE when set):
+  //   1. If the activating teacher HAS a per-teacher allowlist (set via the
+  //      self-serve gear or the admin tile) → show ONLY those destinations.
+  //      The teacher's curated list wins; the room-pair matrix is ignored so
+  //      a teacher can genuinely narrow what students see.
+  //   2. Otherwise fall back to the school-wide room-pair matrix.
+  //   3. If that's also empty, show every student-visible non-classroom
+  //      destination so day-one kiosks aren't empty.
+  // Keep this precedence in sync with the POST /kiosk pass-creation check.
+  let allIds: number[];
+  if (teacherDestIds.length > 0) {
+    allIds = Array.from(new Set(teacherDestIds));
+  } else if (roomPairDestIds.length > 0) {
+    allIds = Array.from(new Set(roomPairDestIds));
+  } else {
     const defaults = await db
       .select({ id: locationsTable.id })
       .from(locationsTable)
@@ -678,12 +687,9 @@ router.get("/kiosk/destinations/:token", async (req, res) => {
           ne(locationsTable.kind, "classroom"),
         ),
       );
-    defaultDestIds = defaults.map((r) => r.id);
+    allIds = defaults.map((r) => r.id);
   }
 
-  const allIds = Array.from(
-    new Set([...roomPairDestIds, ...teacherDestIds, ...defaultDestIds]),
-  );
   if (allIds.length === 0) {
     res.json({ originRoom: act.room, destinations: [] });
     return;
@@ -1001,31 +1007,17 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     return;
   }
 
-  // Allow the destination if EITHER allowlist matches: the school-wide
-  // room-pair matrix (location_allowed_destinations) OR the activating
-  // teacher's per-staff allowlist (teacher_destination_allowlist). Keep
-  // these in sync with /kiosk/destinations/:token above — they're the
-  // same union, just one validates a single pick and the other lists all.
-  const [roomPairAllowed] = await db
-    .select({ id: locationAllowedDestinationsTable.id })
-    .from(locationAllowedDestinationsTable)
-    .where(
-      and(
-        eq(locationAllowedDestinationsTable.schoolId, act.schoolId),
-        eq(locationAllowedDestinationsTable.originLocationId, origin.id),
-        eq(
-          locationAllowedDestinationsTable.destinationLocationId,
-          dest.id,
-        ),
-      ),
-    );
-  // Resolve the activating teacher's per-staff allowlist once so we can both
-  // check membership and detect whether they've set a list at all. Mirror of
-  // /kiosk/destinations/:token's show-all default: a teacher with NO list
-  // permits every student-visible non-classroom destination, and once they
-  // narrow it the kiosk hard-gates to their picks (∪ the room matrix).
+  // Hard-gate the single pick using the SAME precedence as
+  // /kiosk/destinations/:token above (teacher list authoritative when set):
+  //   1. teacher per-staff allowlist set → allow ONLY its members
+  //      (room matrix ignored so the teacher can genuinely narrow).
+  //   2. else → allow if the school-wide room-pair matrix has this pair.
+  //   3. else (origin has no matrix rows at all) → allow any student-visible
+  //      non-classroom destination (mirror of the show-all default).
+  // Resolve the activating teacher's per-staff allowlist first so we can both
+  // check membership and detect whether they've set a list at all.
   let teacherDestIdSet = new Set<number>();
-  if (!roomPairAllowed && actStaff?.displayName) {
+  if (actStaff?.displayName) {
     const rows = await db
       .select({
         destinationLocationId:
@@ -1041,14 +1033,44 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     teacherDestIdSet = new Set(rows.map((r) => r.destinationLocationId));
   }
   const teacherHasList = teacherDestIdSet.size > 0;
-  const teacherAllowed = teacherDestIdSet.has(dest.id);
-  const defaultAllowed =
-    !teacherHasList &&
-    dest.active &&
-    dest.studentVisible &&
-    dest.isDestination &&
-    dest.kind !== "classroom";
-  if (!roomPairAllowed && !teacherAllowed && !defaultAllowed) {
+
+  let allowed: boolean;
+  if (teacherHasList) {
+    allowed = teacherDestIdSet.has(dest.id);
+  } else {
+    const originPairRows = await db
+      .select({
+        destinationLocationId:
+          locationAllowedDestinationsTable.destinationLocationId,
+      })
+      .from(locationAllowedDestinationsTable)
+      .where(
+        and(
+          eq(locationAllowedDestinationsTable.schoolId, act.schoolId),
+          eq(locationAllowedDestinationsTable.originLocationId, origin.id),
+        ),
+      );
+    if (originPairRows.length > 0) {
+      allowed = originPairRows.some((r) => r.destinationLocationId === dest.id);
+    } else {
+      allowed =
+        dest.active &&
+        dest.studentVisible &&
+        dest.isDestination &&
+        dest.kind !== "classroom";
+    }
+  }
+  // Final eligibility parity with the GET /kiosk/destinations/:token listing,
+  // which always post-filters to `active && studentVisible && isDestination`.
+  // Re-apply it here so a crafted POST can never create a pass to a
+  // destination the listing would have hidden (e.g. one still in a teacher's
+  // list or the room matrix but since deactivated / un-flagged as a
+  // destination). studentVisible is already gated above; this also covers
+  // active + isDestination in the teacher/matrix branches.
+  if (allowed && !(dest.active && dest.studentVisible && dest.isDestination)) {
+    allowed = false;
+  }
+  if (!allowed) {
     res.status(403).json({
       error: `${destination} is not an allowed destination from ${originRoom}`,
     });
