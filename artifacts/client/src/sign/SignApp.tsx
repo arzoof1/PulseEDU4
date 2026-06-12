@@ -309,7 +309,11 @@ export default function SignApp() {
     return (
       <Centered>
         <h2>Link not valid</h2>
-        <p>This signing link is invalid or has expired.</p>
+        <p>
+          This signing link isn&rsquo;t valid. The link may have been cut off
+          when it was copied or sent &mdash; please ask the sender to share it
+          again.
+        </p>
       </Centered>
     );
   }

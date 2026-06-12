@@ -51,10 +51,28 @@ const MAX_TITLE_LEN = 200;
 const MAX_NAME_LEN = 120;
 const MAX_EMAIL_LEN = 254;
 
-// 24 random bytes (~192 bits) base64url — not derived from any id, so a leaked
-// token reveals nothing and cannot be guessed or forged.
+// Unguessable share token: 32 chars of base62 (~190 bits of entropy) — not
+// derived from any id, so a leaked token reveals nothing and cannot be guessed
+// or forged. We deliberately avoid base64url here: its '-' and '_' characters
+// get silently stripped by email/chat auto-linkifiers when they land at the END
+// of a URL, which truncated the token and made brand-new links 404 as
+// "invalid" seconds after creation. A pure-alphanumeric token survives
+// linkification, copy/paste, and trailing punctuation intact.
+const TOKEN_ALPHABET =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"; // 62 chars
 function genShareToken(): string {
-  return randomBytes(24).toString("base64url");
+  const out: string[] = [];
+  // Rejection-sample bytes into 0..61 with no modulo bias (248 = 4 * 62; bytes
+  // 248..255 are discarded so every alphabet symbol is equally likely).
+  while (out.length < 32) {
+    for (const b of randomBytes(64)) {
+      if (b < 248) {
+        out.push(TOKEN_ALPHABET[b % 62]);
+        if (out.length === 32) break;
+      }
+    }
+  }
+  return out.join("");
 }
 
 // Public-facing origin for the signing link (recipients open it OUTSIDE the
