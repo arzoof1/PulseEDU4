@@ -90,6 +90,96 @@ router.get(
   },
 );
 
+// Self-serve: a signed-in teacher replaces THEIR OWN allowlist (keyed to
+// their display name). Mirrors the admin PUT below but (a) needs no admin
+// role and (b) forbids classrooms — the self-serve picker only ever offers
+// general-area / restroom / office destinations, so this is the
+// server-side guard that keeps a crafted request from sneaking a classroom
+// in. MUST stay above "/teacher-allowlist/:staffName" or ":staffName" would
+// capture the literal "me".
+router.put("/teacher-allowlist/me", requireSignedIn(), async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const staff = await loadStaff(req);
+  if (!staff) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  const staffName = staff.displayName.trim();
+  if (!staffName) {
+    res.status(400).json({ error: "Your profile has no display name" });
+    return;
+  }
+  const body = req.body ?? {};
+  const destinations: unknown = body.destinations;
+  if (!Array.isArray(destinations)) {
+    res.status(400).json({ error: "destinations must be an array of names" });
+    return;
+  }
+  const names = Array.from(
+    new Set(
+      destinations
+        .filter((d): d is string => typeof d === "string")
+        .map((d) => d.trim())
+        .filter((d) => d.length > 0),
+    ),
+  );
+
+  let locationIds: number[] = [];
+  if (names.length > 0) {
+    const locs = await db
+      .select({
+        id: locationsTable.id,
+        name: locationsTable.name,
+        kind: locationsTable.kind,
+      })
+      .from(locationsTable)
+      .where(
+        and(
+          inArray(locationsTable.name, names),
+          eq(locationsTable.schoolId, schoolId),
+        ),
+      );
+    if (locs.length !== names.length) {
+      res.status(400).json({
+        error: "One or more destination names did not match a location",
+      });
+      return;
+    }
+    const classroom = locs.find((l) => l.kind === "classroom");
+    if (classroom) {
+      res.status(400).json({
+        error: `Classrooms can't be added here (${classroom.name}). Pick restrooms and common areas only.`,
+      });
+      return;
+    }
+    locationIds = locs.map((l) => l.id);
+  }
+
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(teacherDestinationAllowlistTable)
+      .where(
+        and(
+          eq(teacherDestinationAllowlistTable.staffName, staffName),
+          eq(teacherDestinationAllowlistTable.schoolId, schoolId),
+        ),
+      );
+
+    if (locationIds.length > 0) {
+      await tx.insert(teacherDestinationAllowlistTable).values(
+        locationIds.map((destinationLocationId) => ({
+          schoolId,
+          staffName,
+          destinationLocationId,
+        })),
+      );
+    }
+  });
+
+  res.json({ ok: true, staffName, count: locationIds.length });
+});
+
 // Replace the allowlist for a single teacher. Body: { destinations: string[] }
 // where each entry is a location name.
 router.put(

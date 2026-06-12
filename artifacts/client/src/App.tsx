@@ -107,6 +107,7 @@ import ParentAccess from "./components/ParentAccess";
 import StaffPreviewPage from "./components/StaffPreviewPage";
 import HeartbeatSectionsAdmin from "./components/HeartbeatSectionsAdmin";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
+import TeacherDestinationPicker from "./components/TeacherDestinationPicker";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
 import LocationsAdmin from "./components/LocationsAdmin";
 import RestroomAccessAdmin from "./components/RestroomAccessAdmin";
@@ -4351,6 +4352,7 @@ function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
   const [createPassOpen, setCreatePassOpen] = useState(false);
+  const [destPickerOpen, setDestPickerOpen] = useState(false);
   // Forced-acknowledgement modal for keep-apart overrides. The server
   // returns a 409 with code KEEP_APART_CONFLICT when a teacher tries to
   // issue a pass for a student whose keep-apart partner is currently out.
@@ -10380,6 +10382,26 @@ function App() {
           Previously sat below the stats — fine on desktop, awkward on
           a narrow viewport where the stats stack into a tall column. */}
       <div className="card cp-cta-card">
+        <button
+          type="button"
+          className="cp-cta-gear"
+          onClick={() => setDestPickerOpen(true)}
+          title="Choose which locations your students can pick"
+          aria-label="Choose which locations your students can pick"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"
+              stroke="currentColor"
+              strokeWidth="1.6"
+            />
+            <path
+              d="M19.4 13a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 8.4 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H2a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 3.6 8.4a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H8a1.65 1.65 0 0 0 1-1.51V2a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V8a1.65 1.65 0 0 0 1.51 1H22a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"
+              stroke="currentColor"
+              strokeWidth="1.6"
+            />
+          </svg>
+        </button>
         <div className="cp-cta-text">Need to Create a Pass?</div>
         <button
           type="button"
@@ -10389,6 +10411,21 @@ function App() {
           + Create Pass
         </button>
       </div>
+
+      <TeacherDestinationPicker
+        open={destPickerOpen}
+        onClose={() => setDestPickerOpen(false)}
+        currentStaffUser={currentStaffUser}
+        currentAllowlist={teacherAllowlistMap[currentStaffUser] ?? []}
+        onSaved={(next) =>
+          setTeacherAllowlistMap((prev) => {
+            const m = { ...prev };
+            if (next.length === 0) delete m[currentStaffUser];
+            else m[currentStaffUser] = next;
+            return m;
+          })
+        }
+      />
       {/* Create Pass CTA was here — moved to the top of the overview
           so it's tappable on mobile without scrolling past the stats. */}
 

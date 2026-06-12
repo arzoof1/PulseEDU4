@@ -1114,6 +1114,7 @@ ul[style*="listStyle: none"] li button:hover {
 
 /* ===== Create Pass modal & CTA ===== */
 .cp-cta-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1121,6 +1122,27 @@ ul[style*="listStyle: none"] li button:hover {
   padding: 1.5rem 1rem;
   background: var(--primary-soft);
   border: 1px dashed color-mix(in srgb, var(--primary) 30%, transparent);
+}
+.cp-cta-gear {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--primary) 25%, transparent);
+  background: var(--surface, #fff);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.cp-cta-gear:hover {
+  color: var(--primary);
+  border-color: var(--primary);
 }
 .cp-cta-text {
   color: var(--text-muted);

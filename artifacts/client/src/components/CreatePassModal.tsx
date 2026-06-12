@@ -364,10 +364,21 @@ export default function CreatePassModal({
       : availableDestinations;
     const near = filtered.filter((d) => nearSet.has(d));
     const other = filtered.filter((d) => !nearSet.has(d));
+    // Sort the "go see another teacher" group by LAST name. Display names
+    // are usually "First Last" but tolerate "Last, First" too.
+    const lastNameKey = (full: string) => {
+      const s = full.trim();
+      if (s.includes(",")) return s.split(",")[0]!.trim().toLowerCase();
+      const parts = s.split(/\s+/);
+      return (parts[parts.length - 1] || s).toLowerCase();
+    };
     const teachers = staffUsers
       .filter((s) => s && s !== selectedTeacher)
       .filter((s) => !q || s.toLowerCase().includes(q))
-      .sort((a, b) => a.localeCompare(b));
+      .sort((a, b) => {
+        const k = lastNameKey(a).localeCompare(lastNameKey(b));
+        return k !== 0 ? k : a.localeCompare(b);
+      });
     return { near, other, teachers };
   }, [availableDestinations, destQuery, nearSet, staffUsers, selectedTeacher]);
 
@@ -607,7 +618,7 @@ export default function CreatePassModal({
                 <div className="cp-groups">
                   {groupedDestinations.near.length > 0 && (
                     <>
-                      <div className="cp-group-label">Near you</div>
+                      <div className="cp-group-label">Your locations</div>
                       <ul className="cp-list">
                         {groupedDestinations.near.map((d) => (
                           <li key={d}>
@@ -635,7 +646,7 @@ export default function CreatePassModal({
                   )}
                   {groupedDestinations.other.length > 0 && (
                     <>
-                      <div className="cp-group-label">Other locations</div>
+                      <div className="cp-group-label">Other common areas</div>
                       <ul className="cp-list">
                         {groupedDestinations.other.map((d) => (
                           <li key={d}>
@@ -668,7 +679,7 @@ export default function CreatePassModal({
                   )}
                   {groupedDestinations.teachers.length > 0 && (
                     <>
-                      <div className="cp-group-label">Send back to teacher</div>
+                      <div className="cp-group-label">Additional or other</div>
                       <ul className="cp-list">
                         {groupedDestinations.teachers.map((name) => (
                           <li key={`t:${name}`}>
@@ -771,7 +782,7 @@ export default function CreatePassModal({
                     Off‑route destination
                   </div>
                   <p className="cp-offroute-text">
-                    {destination} isn't on your nearby list. Please contact
+                    {destination} isn't on your saved locations. Please contact
                     someone there before sending.
                   </p>
                   <label className="cp-ack">

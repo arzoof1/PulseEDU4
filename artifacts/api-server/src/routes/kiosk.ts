@@ -651,7 +651,30 @@ router.get("/kiosk/destinations/:token", async (req, res) => {
   const roomPairDestIds = roomPairRows.map((r) => r.id);
   const teacherDestIds = teacherRows.map((r) => r.id);
 
-  const allIds = Array.from(new Set([...roomPairDestIds, ...teacherDestIds]));
+  // Show-all default: when the activating teacher has NOT set a per-teacher
+  // allowlist (via the self-serve gear or the admin tile), fall back to every
+  // student-visible non-classroom destination so day-one kiosks aren't empty.
+  // Once the teacher narrows their list, only those (∪ the room matrix) show.
+  let defaultDestIds: number[] = [];
+  if (teacherDestIds.length === 0) {
+    const defaults = await db
+      .select({ id: locationsTable.id })
+      .from(locationsTable)
+      .where(
+        and(
+          eq(locationsTable.schoolId, act.schoolId),
+          eq(locationsTable.active, true),
+          eq(locationsTable.studentVisible, true),
+          eq(locationsTable.isDestination, true),
+          ne(locationsTable.kind, "classroom"),
+        ),
+      );
+    defaultDestIds = defaults.map((r) => r.id);
+  }
+
+  const allIds = Array.from(
+    new Set([...roomPairDestIds, ...teacherDestIds, ...defaultDestIds]),
+  );
   if (allIds.length === 0) {
     res.json({ originRoom: act.room, destinations: [] });
     return;
@@ -987,26 +1010,36 @@ router.post("/kiosk/hall-passes", async (req, res) => {
         ),
       ),
     );
-  let teacherAllowed: { id: number } | undefined;
+  // Resolve the activating teacher's per-staff allowlist once so we can both
+  // check membership and detect whether they've set a list at all. Mirror of
+  // /kiosk/destinations/:token's show-all default: a teacher with NO list
+  // permits every student-visible non-classroom destination, and once they
+  // narrow it the kiosk hard-gates to their picks (∪ the room matrix).
+  let teacherDestIdSet = new Set<number>();
   if (!roomPairAllowed && actStaff?.displayName) {
-    [teacherAllowed] = await db
-      .select({ id: teacherDestinationAllowlistTable.id })
+    const rows = await db
+      .select({
+        destinationLocationId:
+          teacherDestinationAllowlistTable.destinationLocationId,
+      })
       .from(teacherDestinationAllowlistTable)
       .where(
         and(
           eq(teacherDestinationAllowlistTable.schoolId, act.schoolId),
-          eq(
-            teacherDestinationAllowlistTable.staffName,
-            actStaff.displayName,
-          ),
-          eq(
-            teacherDestinationAllowlistTable.destinationLocationId,
-            dest.id,
-          ),
+          eq(teacherDestinationAllowlistTable.staffName, actStaff.displayName),
         ),
       );
+    teacherDestIdSet = new Set(rows.map((r) => r.destinationLocationId));
   }
-  if (!roomPairAllowed && !teacherAllowed) {
+  const teacherHasList = teacherDestIdSet.size > 0;
+  const teacherAllowed = teacherDestIdSet.has(dest.id);
+  const defaultAllowed =
+    !teacherHasList &&
+    dest.active &&
+    dest.studentVisible &&
+    dest.isDestination &&
+    dest.kind !== "classroom";
+  if (!roomPairAllowed && !teacherAllowed && !defaultAllowed) {
     res.status(403).json({
       error: `${destination} is not an allowed destination from ${originRoom}`,
     });
