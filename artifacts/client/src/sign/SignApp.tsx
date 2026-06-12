@@ -382,7 +382,7 @@ export default function SignApp() {
   return (
     <div
       style={{
-        minHeight: "100vh",
+        height: "100dvh",
         display: "flex",
         flexDirection: "column",
         background: "#f4f5f8",
@@ -394,6 +394,7 @@ export default function SignApp() {
           padding: "12px 16px",
           background: "#0b1b3a",
           color: "#fff",
+          flexShrink: 0,
         }}
       >
         <div style={{ fontWeight: 700 }}>{meta?.title}</div>
@@ -413,6 +414,7 @@ export default function SignApp() {
           flexWrap: "wrap",
           background: "#fff",
           borderBottom: "1px solid #e2e3ea",
+          flexShrink: 0,
         }}
       >
         <div style={{ display: "flex", borderRadius: 8, overflow: "hidden" }}>
@@ -500,8 +502,12 @@ export default function SignApp() {
           borderTop: "1px solid #e2e3ea",
           display: "grid",
           gap: 10,
+          flexShrink: 0,
         }}
       >
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f2a44" }}>
+          Last step — type your full name, then submit to send it back.
+        </div>
         <input
           type="text"
           value={signerName}
