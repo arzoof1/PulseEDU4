@@ -160,6 +160,14 @@ interface QueueEntry {
 // — they have to either be re-queued or walk up cold).
 const NEXT_UP_TIMEOUT_MS = 60_000;
 
+// Grace window before the queue poll is allowed to clear this device's
+// TimerScreen on the basis of "the pass id is no longer active server-side".
+// Set comfortably above the 10s poll interval so a legitimately-active pass
+// always gets at least one confirming poll before the grace can fire — the
+// grace only matters when a pass is created AND ended remotely before any poll
+// ever observed it active (otherwise the confirmation ref clears it promptly).
+const ACTIVE_PASS_CLEAR_GRACE_MS = 12_000;
+
 export default function Kiosk() {
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
   // Phase 3: `?signin=<studentId>` parsed from URL on first load,
@@ -1664,6 +1672,35 @@ function KioskBody({
     expiresAt: number;
   } | null>(null);
 
+  // The queue poll runs inside a stable (token-keyed) closure, so it can't
+  // read live `activePass` / `nextUp` / `getInLineOpen` state directly without
+  // capturing stale values. Mirror them into refs the poll can consult.
+  const activePassRef = useRef<ActivePass | null>(activePass);
+  const nextUpRef = useRef(nextUp);
+  const getInLineOpenRef = useRef(getInLineOpen);
+  // Flips true once a poll has SEEN the device's current pass listed as still
+  // active. Only then will a later poll that finds it absent clear the timer —
+  // this prevents a poll that races a fresh sign-out (its row not yet visible)
+  // from wiping a pass we just created.
+  const activePassConfirmedRef = useRef(false);
+  // When the current pass was set locally — used to grace-window the
+  // poll-driven clear so it can never deadlock waiting for a confirmation
+  // that will never come (pass created AND ended before any poll saw it).
+  const activePassSetAtRef = useRef(0);
+  useEffect(() => {
+    activePassRef.current = activePass;
+  }, [activePass]);
+  useEffect(() => {
+    nextUpRef.current = nextUp;
+  }, [nextUp]);
+  useEffect(() => {
+    getInLineOpenRef.current = getInLineOpen;
+  }, [getInLineOpen]);
+  useEffect(() => {
+    activePassConfirmedRef.current = false;
+    activePassSetAtRef.current = activePass ? Date.now() : 0;
+  }, [activePass?.id]);
+
   const refetchQueue = useMemo(
     () => async () => {
       try {
@@ -1674,9 +1711,73 @@ function KioskBody({
         const data = (await res.json()) as {
           capacity?: number;
           entries?: QueueEntry[];
+          nextUp?: {
+            studentId: string;
+            localSisId: string | null;
+            firstName: string | null;
+            lastName: string | null;
+            destination: string;
+          } | null;
+          activePassIds?: number[];
         };
         setQueue(data.entries ?? []);
         if (typeof data.capacity === "number") setQueueCap(data.capacity);
+
+        // Remote-end detection. The TimerScreen on THIS device is driven by
+        // local state and normally only clears when the student taps "I'm
+        // back". If a teacher ends the pass from the staff app (or the system
+        // ends it), drop the now-stale countdown so the freed slot can
+        // advance. Guarded by activePassConfirmedRef against a sign-out race.
+        const ap = activePassRef.current;
+        let deviceBusy = !!ap;
+        if (ap && Array.isArray(data.activePassIds)) {
+          if (data.activePassIds.includes(ap.id)) {
+            activePassConfirmedRef.current = true;
+            deviceBusy = true;
+          } else {
+            // The pass id is absent from the room's active set. Clear the
+            // stale timer if we previously saw it active (fast path) OR the
+            // grace window since it was set has elapsed (deadlock guard for a
+            // pass ended remotely before any poll ever observed it active).
+            const graceExpired =
+              Date.now() - activePassSetAtRef.current >
+              ACTIVE_PASS_CLEAR_GRACE_MS;
+            if (activePassConfirmedRef.current || graceExpired) {
+              setActivePass(null);
+              deviceBusy = false;
+            } else {
+              deviceBusy = true; // within grace, unconfirmed — assume still out
+            }
+          }
+        }
+
+        // Auto-promote. When the kiosk is idle (no out-timer on this device,
+        // no handoff prompt already up, get-in-line sheet closed) and the
+        // server reports an eligible front-of-line student, raise the
+        // "Welcome [Name] — enter your ID" prompt automatically. This makes a
+        // slot opening from ANY source advance the line with no re-scan. The
+        // existing NEXT_UP_TIMEOUT_MS auto-skip still forfeits the slot if the
+        // student isn't there, and the next poll promotes whoever is next.
+        if (
+          data.nextUp &&
+          !deviceBusy &&
+          !nextUpRef.current &&
+          !getInLineOpenRef.current
+        ) {
+          setNextUp({
+            entry: {
+              id: -1,
+              studentId: data.nextUp.studentId,
+              localSisId: data.nextUp.localSisId,
+              firstName: data.nextUp.firstName,
+              lastName: data.nextUp.lastName,
+              destination: data.nextUp.destination,
+              position: 1,
+              addedAt: new Date().toISOString(),
+            },
+            expiresAt: Date.now() + NEXT_UP_TIMEOUT_MS,
+          });
+        }
       } catch {
         // ignore — next poll will retry
       }

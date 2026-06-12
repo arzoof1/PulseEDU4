@@ -237,9 +237,32 @@ router.get("/kiosk/queue/:token", async (req, res) => {
     return;
   }
   const { rows } = await clearStaleAndList(act);
+  // The kiosk polls this endpoint. We surface two extra fields so a slot
+  // opening from ANY source — the out student tapping "I'm back", a teacher
+  // ending a pass from the staff app, or a staff queue cancel — advances the
+  // line on the kiosk without anyone re-scanning:
+  //   - nextUp: the first ELIGIBLE waiting student (keep-apart / daily-limit
+  //     holds are skipped, preserving arrival fairness) the kiosk should
+  //     promote to the "Welcome [Name] — enter your ID" handoff prompt.
+  //   - activePassIds: ids of passes still OUT from this room, so the kiosk
+  //     can detect that the student on its TimerScreen was ended remotely
+  //     and clear the now-stale countdown.
+  const nextUp = await firstEligible(rows, act.schoolId);
+  const activeRows = await db
+    .select({ id: hallPassesTable.id })
+    .from(hallPassesTable)
+    .where(
+      and(
+        eq(hallPassesTable.schoolId, act.schoolId),
+        eq(hallPassesTable.status, "active"),
+        eq(hallPassesTable.originRoom, act.room),
+      ),
+    );
   res.json({
     capacity: QUEUE_CAP,
     entries: rows.map((r, i) => shapeEntry(r, i)),
+    nextUp,
+    activePassIds: activeRows.map((r) => r.id),
   });
 });
 
@@ -459,21 +482,26 @@ export async function consumeQueueEntry(
     );
 }
 
-export async function peekNextInQueue(act: {
-  id: number;
-  schoolId: number;
-}) {
-  const { rows } = await clearStaleAndList(act);
-  if (rows.length === 0) return null;
-  // Skip-and-badge: walk arrival order and return the first entry that is
-  // currently eligible to leave — i.e. NOT blocked by either a keep-apart
-  // hold OR a daily-limit cap they hit while waiting in line. Preserves
-  // arrival fairness; blocked students don't lose their place, the kiosk
-  // just calls the next eligible kid until they're cleared.
+// Skip-and-badge: walk arrival order and return the first entry that is
+// currently eligible to leave — i.e. NOT blocked by either a keep-apart
+// hold OR a daily-limit cap they hit while waiting in line. Preserves
+// arrival fairness; blocked students don't lose their place, the kiosk
+// just calls the next eligible kid until they're cleared. Shared by the
+// pass-end "next up" response and the kiosk's queue poll.
+async function firstEligible(
+  rows: Array<{
+    studentId: string;
+    localSisId?: string | null;
+    firstName: string | null;
+    lastName: string | null;
+    destination: string;
+  }>,
+  schoolId: number,
+) {
   for (const row of rows) {
-    const polarity = await findPolarityConflict(row.studentId, act.schoolId);
+    const polarity = await findPolarityConflict(row.studentId, schoolId);
     if (polarity) continue;
-    const limit = await findDailyLimitConflict(row.studentId, act.schoolId);
+    const limit = await findDailyLimitConflict(row.studentId, schoolId);
     if (limit) continue;
     return {
       studentId: row.studentId,
@@ -484,6 +512,15 @@ export async function peekNextInQueue(act: {
     };
   }
   return null;
+}
+
+export async function peekNextInQueue(act: {
+  id: number;
+  schoolId: number;
+}) {
+  const { rows } = await clearStaleAndList(act);
+  if (rows.length === 0) return null;
+  return firstEligible(rows, act.schoolId);
 }
 
 // ---------------------------------------------------------------------------
