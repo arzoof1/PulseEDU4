@@ -10389,13 +10389,6 @@ function App() {
           + Create Pass
         </button>
       </div>
-      {/* Companion Queue Panel — visible whenever there is at least one
-          live kiosk waiting line the signed-in staff member is allowed
-          to manage. Reorder/remove from here without disturbing the
-          front-of-room kiosk; "Show QR" mints a phone-ready view-only
-          link. The component self-hides when nothing is in scope. */}
-      <CompanionQueuePanel user={authUser} />
-
       {/* Create Pass CTA was here — moved to the top of the overview
           so it's tappable on mobile without scrolling past the stats. */}
 
@@ -10818,6 +10811,15 @@ function App() {
           </table>
         )}
       </div>
+
+      {/* Companion Queue Panel (Live Hall Pass Kiosks) — placed directly
+          below "Out Right Now" so the active-pass list sits right under the
+          Create Pass CTA. Visible whenever there is at least one live kiosk
+          waiting line the signed-in staff member is allowed to manage;
+          "Show QR" mints a phone-ready view-only link; self-hides when
+          nothing is in scope. */}
+      <CompanionQueuePanel user={authUser} />
+
       {(() => {
         let active = 0;
         let overdue = 0;
