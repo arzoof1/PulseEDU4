@@ -316,9 +316,15 @@ export default function Kiosk() {
             previewRoom: data.previewRoom ?? null,
             locations: Array.isArray(data.locations) ? data.locations : [],
             ttlDays: data.ttlDays ?? 14,
+            // For a room-taken failure, don't pre-fill the scary "already
+            // has an active kiosk" banner — the confirm screen will pop a
+            // clean "take over this room?" modal when the user clicks
+            // activate. Surface other errors (e.g. bad room) as before.
             autoConfirmError:
-              confirmData.error ??
-              `Auto-activation failed (${confirmRes.status}). Pick a room and try again.`,
+              confirmRes.status === 409 && confirmData.roomTaken
+                ? null
+                : (confirmData.error ??
+                  `Auto-activation failed (${confirmRes.status}). Pick a room and try again.`),
           });
           return { ok: true };
         }
@@ -399,13 +405,14 @@ export default function Kiosk() {
           ttlDays={phase.ttlDays}
           initialError={phase.autoConfirmError ?? null}
           onCancel={() => setPhase({ kind: "activate" })}
-          onConfirm={async (room) => {
+          onConfirm={async (room, replaceExisting) => {
             const body: Record<string, unknown> = {
               deviceFingerprint: getOrCreateDeviceFingerprint(),
               deviceLabel: getDeviceLabel(),
               confirm: true,
               room,
             };
+            if (replaceExisting) body.replaceExisting = true;
             if (phase.method === "enroll")
               body.enrollToken = phase.credential;
             else body.pin = phase.credential;
@@ -427,6 +434,18 @@ export default function Kiosk() {
                 data.expiresAt ?? null,
               );
               return { ok: true };
+            }
+            // Room already hosts another active kiosk. Surface the
+            // take-over prompt (replaceExisting) instead of looping on
+            // the same "already has an active kiosk" error forever.
+            if (res.status === 409 && data.roomTaken) {
+              return {
+                ok: false,
+                roomTaken: true,
+                room: data.room ?? room,
+                existing: data.existing ?? null,
+                error: data.error ?? "Room already has an active kiosk",
+              };
             }
             return {
               ok: false,
@@ -819,7 +838,20 @@ function EnrollConfirmScreen({
   ttlDays: number;
   initialError?: string | null;
   onCancel: () => void;
-  onConfirm: (room: string) => Promise<{ ok: boolean; error?: string }>;
+  onConfirm: (
+    room: string,
+    replaceExisting?: boolean,
+  ) => Promise<{
+    ok: boolean;
+    error?: string;
+    roomTaken?: boolean;
+    room?: string;
+    existing?: {
+      activatedByName: string | null;
+      deviceLabel: string | null;
+      activatedAt: string | null;
+    } | null;
+  }>;
 }) {
   const [room, setRoom] = useState(previewRoom ?? "");
   const sortedRooms = useMemo(
@@ -828,6 +860,12 @@ function EnrollConfirmScreen({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(initialError ?? "");
+  const [takeover, setTakeover] = useState<{
+    room: string;
+    activatedByName: string | null;
+    deviceLabel: string | null;
+    activatedAt: string | null;
+  } | null>(null);
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!room.trim()) {
@@ -838,11 +876,35 @@ function EnrollConfirmScreen({
     setError("");
     const result = await onConfirm(room.trim());
     if (!result.ok) {
+      if (result.roomTaken) {
+        // Don't show the raw error + reactivate button (the loop the
+        // user hit) — switch to an explicit "take over this room?" modal.
+        setTakeover({
+          room: result.room ?? room.trim(),
+          activatedByName: result.existing?.activatedByName ?? null,
+          deviceLabel: result.existing?.deviceLabel ?? null,
+          activatedAt: result.existing?.activatedAt ?? null,
+        });
+        setBusy(false);
+        return;
+      }
       setError(result.error ?? "Activation failed");
       setBusy(false);
     }
     // On success the parent moves us to phase:'ready' — no need to
     // unset busy.
+  }
+  async function confirmTakeover() {
+    if (!takeover) return;
+    setBusy(true);
+    setError("");
+    const result = await onConfirm(takeover.room, true);
+    if (!result.ok) {
+      setError(result.error ?? "Activation failed");
+      setTakeover(null);
+      setBusy(false);
+    }
+    // On success the parent moves us to phase:'ready'.
   }
   return (
     <form
@@ -905,6 +967,17 @@ function EnrollConfirmScreen({
       >
         Cancel
       </button>
+      {takeover && (
+        <TakeoverConfirm
+          info={takeover}
+          busy={busy}
+          onCancel={() => {
+            setTakeover(null);
+            setBusy(false);
+          }}
+          onConfirm={confirmTakeover}
+        />
+      )}
     </form>
   );
 }
