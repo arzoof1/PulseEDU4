@@ -372,19 +372,22 @@ async function renderCardBadgeLandscape(
   // --- Name + grade between the photo and the QR plate -----------------
   const txtX = photoX + photoSize + 8;
   const txtW = Math.max(36, plateLeft - txtX - 6);
-  doc
-    .fillColor(headerText)
-    .fontSize(10.5)
-    .text(`${badge.firstName} ${badge.lastName}`, txtX, photoY + 4, {
-      width: txtW,
-      ellipsis: true,
-      height: 26,
-    });
+  const nameTop = photoY + 2;
+  const nameH = drawTwoLineName(
+    doc,
+    badge.firstName,
+    badge.lastName,
+    txtX,
+    nameTop,
+    txtW,
+    { firstFs: 12, lastFs: 10, color: headerText },
+  );
   if (badge.grade !== null) {
     doc
       .fillColor(headerText)
+      .font("Helvetica")
       .fontSize(8.5)
-      .text(`Grade ${badge.grade}`, txtX, photoY + 32, {
+      .text(`Grade ${badge.grade}`, txtX, nameTop + nameH + 2, {
         width: txtW,
         ellipsis: true,
         lineBreak: false,
@@ -683,11 +686,19 @@ async function renderCardBadgePortrait(
 
   // Name + optional teacher only. The dismissal row was removed — car riders
   // are flagged by the corner badge on the photo; other modes show nothing.
-  type IconRow = { kind: "person" | "teacher"; text: string; grade?: number | null };
+  type IconRow = {
+    kind: "person" | "teacher";
+    text: string;
+    firstName?: string;
+    lastName?: string;
+    grade?: number | null;
+  };
   const rows: IconRow[] = [];
   rows.push({
     kind: "person",
     text: `${badge.firstName} ${badge.lastName}`.trim() || "Student",
+    firstName: (badge.firstName || "").trim() || "Student",
+    lastName: (badge.lastName || "").trim(),
     grade: badge.grade,
   });
   if (badge.teacherName && badge.teacherName.trim()) {
@@ -730,15 +741,33 @@ async function renderCardBadgePortrait(
         });
       textRight = gcx - gr - 4;
     }
-    // Row label — strictly single-line (fitText truncates to width).
+    // Row label. The student name draws on TWO lines (bold first name over a
+    // smaller last name) so long last names no longer truncate; other rows stay
+    // strictly single-line (fitText truncates to width).
     const textX = discCx + discR + 7;
-    const labelFs = row.grade !== null && row.grade !== undefined ? 11 : 9.5;
     const labelW = Math.max(20, textRight - textX);
-    doc.fillColor("#1f2937").fontSize(labelFs);
-    doc.text(fitText(doc, row.text.toUpperCase(), labelW), textX, cy - 6, {
-      width: labelW,
-      lineBreak: false,
-    });
+    if (row.kind === "person" && (row.firstName || row.lastName)) {
+      const firstFs = row.grade !== null && row.grade !== undefined ? 11 : 10;
+      const lastFs = firstFs - 2;
+      const last = (row.lastName || "").trim();
+      const totalH = last ? firstFs + 1 + lastFs : firstFs;
+      drawTwoLineName(
+        doc,
+        (row.firstName || "").toUpperCase(),
+        last.toUpperCase(),
+        textX,
+        cy - totalH / 2,
+        labelW,
+        { firstFs, lastFs, color: "#1f2937" },
+      );
+    } else {
+      const labelFs = 9.5;
+      doc.fillColor("#1f2937").font("Helvetica").fontSize(labelFs);
+      doc.text(fitText(doc, row.text.toUpperCase(), labelW), textX, cy - 6, {
+        width: labelW,
+        lineBreak: false,
+      });
+    }
     // Separator under the row (except the last).
     if (i < rows.length - 1) {
       doc
@@ -843,6 +872,55 @@ function fitText(
   let t = text;
   while (t.length > 1 && doc.widthOfString(`${t}…`) > maxW) t = t.slice(0, -1);
   return `${t}…`;
+}
+
+// Draw a student name on TWO lines — the first name (bold, larger) over the
+// last name (regular, smaller) directly below. Splitting the name this way
+// nearly doubles the horizontal room each part gets, so long last names stop
+// truncating the way a single "First Last" line did. Each line is still
+// independently width-fit (fitText) as a final safety net. Returns the total
+// height drawn so callers can position whatever sits beneath it. Always
+// restores the default Helvetica font so later renders are unaffected.
+function drawTwoLineName(
+  doc: PDFKit.PDFDocument,
+  firstName: string,
+  lastName: string,
+  x: number,
+  y: number,
+  maxW: number,
+  opts: {
+    firstFs: number;
+    lastFs: number;
+    color: string;
+    align?: "left" | "center";
+    lineGap?: number;
+  },
+): number {
+  const { firstFs, lastFs, color, align = "left", lineGap = 1 } = opts;
+  const first = (firstName || "").trim();
+  const last = (lastName || "").trim();
+  doc.fillColor(color);
+  let cursorY = y;
+  if (first) {
+    doc.font("Helvetica-Bold").fontSize(firstFs);
+    doc.text(fitText(doc, first, maxW), x, cursorY, {
+      width: maxW,
+      align,
+      lineBreak: false,
+    });
+    cursorY += firstFs + lineGap;
+  }
+  if (last) {
+    doc.font("Helvetica").fontSize(lastFs);
+    doc.text(fitText(doc, last, maxW), x, cursorY, {
+      width: maxW,
+      align,
+      lineBreak: false,
+    });
+    cursorY += lastFs + lineGap;
+  }
+  doc.font("Helvetica");
+  return cursorY - y;
 }
 
 // One diagonal corner ribbon = a right triangle anchored in a top corner,

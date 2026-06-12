@@ -842,7 +842,8 @@ function CardPreview(props: {
         </div>
         {/* Name + grade */}
         <div style={{ position: "absolute", top: 52, left: 110, right: 132, color: props.headerColor }}>
-          <div style={{ fontWeight: 700, fontSize: 15 }}>Jordan Sample</div>
+          <div style={{ fontWeight: 700, fontSize: 15, lineHeight: 1.05 }}>Jordan</div>
+          <div style={{ fontWeight: 600, fontSize: 12, marginTop: 1 }}>Sample</div>
           <div style={{ fontSize: 12, marginTop: 6 }}>Grade 7</div>
         </div>
         {/* QR white plate */}
@@ -1111,7 +1112,18 @@ function CardPreviewPortrait(props: {
       <div style={{ padding: "0 12px" }}>
         <div style={{ ...rowStyle, borderTop: "none" }}>
           <span style={iconBubble}>👤</span>
-          <span style={{ fontWeight: 700, fontSize: 14, color: "#1e293b", flex: 1 }}>Jordan Sample</span>
+          <span
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              flex: 1,
+              lineHeight: 1.1,
+              color: "#1e293b",
+            }}
+          >
+            <span style={{ fontWeight: 700, fontSize: 14 }}>JORDAN</span>
+            <span style={{ fontWeight: 600, fontSize: 12 }}>SAMPLE</span>
+          </span>
           <span
             style={{
               flex: "0 0 auto",
