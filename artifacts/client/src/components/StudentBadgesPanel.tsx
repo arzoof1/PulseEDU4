@@ -41,6 +41,12 @@ export function StudentBadgesPanel() {
   const [gradeFilter, setGradeFilter] = useState<string>("");
   const [reason, setReason] = useState("");
 
+  // Two-step confirmation gate for the bulk "print everyone" action so it is a
+  // deliberate decision, never an accidental tap. 0 = closed, 1 = first
+  // "compile" warning, 2 = final "print" confirmation.
+  const [confirmAllStage, setConfirmAllStage] = useState<0 | 1 | 2>(0);
+  const allCount = students.length;
+
   const [events, setEvents] = useState<PrintEvent[]>([]);
 
   useEffect(() => {
@@ -160,25 +166,152 @@ export function StudentBadgesPanel() {
         </div>
       )}
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "flex-end", marginBottom: "0.75rem" }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "0.75rem" }}>
         <button
           type="button"
-          disabled={busy}
-          onClick={() => download({ all: true })}
+          disabled={busy || allCount === 0}
+          onClick={() => setConfirmAllStage(1)}
+          title="Generates a PDF of every student's badge"
           style={{
-            background: "#2563eb",
-            color: "#fff",
-            border: "none",
+            background: "transparent",
+            color: "var(--text)",
+            border: "1px solid var(--border, rgba(0,0,0,0.25))",
             borderRadius: 6,
-            padding: "0.7rem 1.25rem",
-            fontWeight: 600,
-            cursor: busy ? "not-allowed" : "pointer",
-            opacity: busy ? 0.7 : 1,
+            padding: "0.4rem 0.8rem",
+            fontWeight: 500,
+            fontSize: "0.85rem",
+            cursor: busy || allCount === 0 ? "not-allowed" : "pointer",
+            opacity: busy || allCount === 0 ? 0.55 : 1,
           }}
         >
-          {busy ? "Generating…" : "Print all student badges"}
+          {busy ? "Generating…" : `Print all student badges (${allCount})`}
         </button>
       </div>
+
+      {confirmAllStage > 0 && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setConfirmAllStage(0)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            padding: "1rem",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "var(--surface, #fff)",
+              color: "var(--text)",
+              borderRadius: 10,
+              padding: "1.25rem 1.5rem",
+              maxWidth: 460,
+              width: "100%",
+              boxShadow: "0 12px 40px rgba(0,0,0,0.25)",
+            }}
+          >
+            {confirmAllStage === 1 ? (
+              <>
+                <h3 style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+                  Compile all {allCount} badges?
+                </h3>
+                <p style={{ marginTop: 0, color: "var(--text-subtle)" }}>
+                  Are you sure you want to compile{" "}
+                  <strong>{allCount}</strong> badge{allCount === 1 ? "" : "s"}?
+                  This process can take a lengthy amount of time and{" "}
+                  <strong>cannot be stopped</strong> once it starts.
+                </p>
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginTop: "1rem" }}>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmAllStage(0)}
+                    style={{
+                      background: "transparent",
+                      color: "var(--text)",
+                      border: "1px solid var(--border, rgba(0,0,0,0.2))",
+                      borderRadius: 6,
+                      padding: "0.5rem 1rem",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmAllStage(2)}
+                    style={{
+                      background: "#b45309",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: 6,
+                      padding: "0.5rem 1rem",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Continue
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h3 style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+                  Print {allCount} badges?
+                </h3>
+                <p style={{ marginTop: 0, color: "var(--text-subtle)" }}>
+                  Final check — this will generate a single PDF containing all{" "}
+                  <strong>{allCount}</strong> student badge
+                  {allCount === 1 ? "" : "s"}. Are you sure you want to print{" "}
+                  <strong>{allCount}</strong> badge{allCount === 1 ? "" : "s"}?
+                </p>
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginTop: "1rem" }}>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmAllStage(0)}
+                    style={{
+                      background: "transparent",
+                      color: "var(--text)",
+                      border: "1px solid var(--border, rgba(0,0,0,0.2))",
+                      borderRadius: 6,
+                      padding: "0.5rem 1rem",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      if (busy) return;
+                      setConfirmAllStage(0);
+                      void download({ all: true });
+                    }}
+                    style={{
+                      background: "#2563eb",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: 6,
+                      padding: "0.5rem 1rem",
+                      fontWeight: 600,
+                      cursor: busy ? "not-allowed" : "pointer",
+                      opacity: busy ? 0.7 : 1,
+                    }}
+                  >
+                    Print {allCount} badge{allCount === 1 ? "" : "s"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       <details style={{ marginTop: "0.5rem" }}>
         <summary style={{ cursor: "pointer", fontWeight: 600 }}>
