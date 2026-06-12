@@ -10812,14 +10812,6 @@ function App() {
         )}
       </div>
 
-      {/* Companion Queue Panel (Live Hall Pass Kiosks) — placed directly
-          below "Out Right Now" so the active-pass list sits right under the
-          Create Pass CTA. Visible whenever there is at least one live kiosk
-          waiting line the signed-in staff member is allowed to manage;
-          "Show QR" mints a phone-ready view-only link; self-hides when
-          nothing is in scope. */}
-      <CompanionQueuePanel user={authUser} />
-
       {(() => {
         let active = 0;
         let overdue = 0;
@@ -10985,6 +10977,13 @@ function App() {
           </>
         );
       })()}
+
+      {/* Companion Queue Panel (Live Hall Pass Kiosks) — anchored at the
+          bottom of the overview stack, below the Hall Pass Summary. Visible
+          whenever there is at least one live kiosk waiting line the signed-in
+          staff member is allowed to manage; "Show QR" mints a phone-ready
+          view-only link; self-hides when nothing is in scope. */}
+      <CompanionQueuePanel user={authUser} />
 
       </>)}
       {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "hub" && (() => {
