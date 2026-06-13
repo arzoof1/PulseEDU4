@@ -4497,16 +4497,24 @@ function App() {
   // active-view filter/tint/button logic and the full-log filter so the two
   // surfaces always agree on what "mine" vs "heading to me" means.
   //   - passIsMine: I issued this pass (teacherName is the creator).
-  //   - passHeadingToMe: this pass is routed to me — either to a location I
-  //     cover, or named directly to me via destinationTeacher (the teacher's
-  //     displayName). The destinationTeacher case is why teacher-routed passes
-  //     used to vanish from "Heading to me": the destination string is the
-  //     teacher's displayName, never a covered ROOM name.
+  //   - passHeadingToMe: this pass is routed to me. Three match paths, any of
+  //     which is sufficient:
+  //       (a) the destination is a location I cover (room-based coverage);
+  //       (b) the destination string IS my displayName — schools commonly name
+  //           a teacher's destination location after the teacher (e.g.
+  //           "Amy Brown - Math G7"), and currentStaffUser is that displayName.
+  //           This is the common case: the primary Create Pass modal stores the
+  //           teacher-room as `destination` and leaves `destinationTeacher` null;
+  //       (c) destinationTeacher names me directly (legacy inline form +
+  //           tardy-return path, which do populate destinationTeacher).
+  //     The "(K)" suffix is the kiosk marker that can appear on a teacher label.
   const passIsMine = (p: HallPass): boolean =>
     p.teacherName === currentStaffUser ||
     p.teacherName === `${currentStaffUser} (K)`;
   const passHeadingToMe = (p: HallPass): boolean =>
     coveredLocations.includes(p.destination) ||
+    p.destination === currentStaffUser ||
+    p.destination === `${currentStaffUser} (K)` ||
     p.destinationTeacher === currentStaffUser ||
     p.destinationTeacher === `${currentStaffUser} (K)`;
 
