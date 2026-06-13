@@ -4293,7 +4293,12 @@ function TimerScreen({
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "center",
+        // `safe center` keeps everything centered when it fits but falls
+        // back to top-aligned (scrollable) instead of clipping the bottom
+        // when the photo + giant timer overflow a short kiosk screen — so
+        // the "I'm back" button can never be pushed out of reach.
+        justifyContent: "safe center",
+        overflowY: "auto",
         padding: "2rem",
         zIndex: 5,
         textAlign: "center",
@@ -4305,17 +4310,17 @@ function TimerScreen({
           letterSpacing: "0.15em",
           textTransform: "uppercase",
           opacity: 0.85,
-          marginBottom: "0.75rem",
+          marginBottom: "0.5rem",
         }}
       >
         {overdue ? "Overdue" : "Out on pass"}
       </div>
-      <div style={{ marginBottom: "0.75rem" }}>
+      <div style={{ marginBottom: "0.5rem" }}>
         <KioskPhoto
           token={token}
           photoObjectKey={activePass.photoObjectKey}
           firstName={activePass.studentFirstName}
-          size={104}
+          size={88}
         />
       </div>
       <div
@@ -4338,7 +4343,7 @@ function TimerScreen({
           lineHeight: 1,
           fontVariantNumeric: "tabular-nums",
           letterSpacing: "0.02em",
-          margin: "1rem 0 1.5rem",
+          margin: "0.5rem 0 0.75rem",
           textShadow: "0 4px 24px rgba(0,0,0,0.25)",
         }}
       >
@@ -4348,7 +4353,7 @@ function TimerScreen({
         style={{
           fontSize: "clamp(1rem, 2vw, 1.25rem)",
           opacity: 0.85,
-          marginBottom: "2rem",
+          marginBottom: "1.25rem",
         }}
       >
         {overdue
