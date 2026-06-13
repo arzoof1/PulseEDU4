@@ -3985,6 +3985,7 @@ function DeactivateModal({
             type="email"
             autoComplete="username"
             autoFocus
+            placeholder="you@school.org"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             disabled={busy}
@@ -3996,6 +3997,7 @@ function DeactivateModal({
           <input
             type="password"
             autoComplete="current-password"
+            placeholder="Your password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             disabled={busy}
@@ -4011,7 +4013,9 @@ function DeactivateModal({
             alignItems: "flex-start",
             gap: "0.5rem",
             fontSize: "0.85rem",
-            opacity: 0.85,
+            // Explicit light color — overrides the global `label` rule that
+            // would otherwise render this dark-on-dark in the kiosk modal.
+            color: "rgba(255,255,255,0.85)",
             cursor: "pointer",
             lineHeight: 1.4,
           }}
@@ -4218,7 +4222,16 @@ function Field({
         textAlign: "left",
       }}
     >
-      <span style={{ fontSize: "0.85rem", opacity: 0.8, fontWeight: 500 }}>
+      <span
+        style={{
+          fontSize: "0.85rem",
+          // Explicit light color: the global `label { color: var(--text) }`
+          // rule (light theme = dark text) would otherwise paint these
+          // dark-on-dark and invisible inside the dark kiosk modal.
+          color: "rgba(255,255,255,0.85)",
+          fontWeight: 500,
+        }}
+      >
         {label}
       </span>
       {children}
