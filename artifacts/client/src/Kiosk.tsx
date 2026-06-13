@@ -3179,13 +3179,15 @@ function QueueStrip({
         top: 0,
         right: 0,
         bottom: 0,
-        width: 96,
+        width: 240,
         background: "rgba(15,23,42,0.92)",
         color: "#fff",
         zIndex: 10,
         display: "flex",
         flexDirection: "column",
-        padding: "0.75rem 0.5rem",
+        gap: "0.75rem",
+        padding: "0.9rem 0.75rem",
+        overflowY: "auto",
         boxShadow: "-4px 0 16px rgba(0,0,0,0.25)",
         borderLeft: "1px solid rgba(255,255,255,0.08)",
       }}
@@ -3196,7 +3198,6 @@ function QueueStrip({
           letterSpacing: "0.12em",
           textTransform: "uppercase",
           opacity: 0.7,
-          marginBottom: "0.5rem",
           textAlign: "center",
         }}
       >
@@ -3204,17 +3205,14 @@ function QueueStrip({
       </div>
       <div
         style={{
-          fontSize: "1.6rem",
-          fontWeight: 800,
-          lineHeight: 1,
+          fontSize: "0.7rem",
+          opacity: 0.55,
           textAlign: "center",
-          marginBottom: "0.75rem",
+          marginTop: "-0.4rem",
         }}
       >
         {entries.length}
-        <span style={{ opacity: 0.5, fontSize: "0.85rem", fontWeight: 600 }}>
-          /{cap}
-        </span>
+        <span style={{ opacity: 0.8 }}>/{cap}</span> waiting
       </div>
       <div
         style={{
@@ -3222,13 +3220,13 @@ function QueueStrip({
           overflowY: "auto",
           display: "flex",
           flexDirection: "column",
-          gap: "0.4rem",
+          gap: "0.75rem",
         }}
       >
         {entries.length === 0 ? (
           <div
             style={{
-              fontSize: "0.75rem",
+              fontSize: "0.8rem",
               opacity: 0.55,
               textAlign: "center",
               padding: "0.5rem 0.25rem",
@@ -3242,17 +3240,15 @@ function QueueStrip({
             <div
               key={e.id}
               style={{
-                background: "rgba(255,255,255,0.08)",
-                borderRadius: 8,
-                padding: "0.4rem 0.35rem",
-                fontSize: "0.8rem",
-                lineHeight: 1.15,
-                textAlign: "center",
-                fontWeight: 600,
                 display: "flex",
-                flexDirection: "column",
                 alignItems: "center",
-                gap: 4,
+                gap: "0.75rem",
+                background: "rgba(255,255,255,0.06)",
+                border: "1px solid rgba(255,255,255,0.14)",
+                borderRadius: 12,
+                padding: "0.6rem 0.9rem",
+                color: "#fff",
+                textAlign: "left",
               }}
             >
               <KioskPhoto
@@ -3260,21 +3256,28 @@ function QueueStrip({
                 photoObjectKey={e.photoObjectKey}
                 firstName={e.firstName}
                 lastName={e.lastName}
-                size={44}
+                size={48}
               />
-              <div>
-                {e.firstName ?? e.localSisId ?? ""}
-                {e.lastName ? ` ${e.lastName.charAt(0)}.` : ""}
-              </div>
-              <div
-                style={{
-                  fontSize: "0.65rem",
-                  opacity: 0.6,
-                  fontWeight: 400,
-                  marginTop: 2,
-                }}
-              >
-                {e.destination}
+              <div style={{ minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: "1.1rem",
+                    fontWeight: 700,
+                    lineHeight: 1.1,
+                  }}
+                >
+                  {e.firstName ?? e.localSisId ?? ""}
+                  {e.lastName ? ` ${e.lastName.charAt(0)}.` : ""}
+                </div>
+                <div
+                  style={{
+                    fontSize: "0.8rem",
+                    opacity: 0.75,
+                    marginTop: 2,
+                  }}
+                >
+                  to {e.destination}
+                </div>
               </div>
             </div>
           ))
@@ -3289,10 +3292,10 @@ function QueueStrip({
           background: isFull || disabled ? "rgba(255,255,255,0.1)" : "#22c55e",
           color: isFull || disabled ? "rgba(255,255,255,0.5)" : "#0b1220",
           border: "none",
-          borderRadius: 8,
-          padding: "0.6rem 0.3rem",
+          borderRadius: 10,
+          padding: "0.7rem 0.5rem",
           fontWeight: 700,
-          fontSize: "0.75rem",
+          fontSize: "0.95rem",
           lineHeight: 1.15,
           cursor: isFull || disabled ? "not-allowed" : "pointer",
         }}
@@ -3307,10 +3310,10 @@ function QueueStrip({
           background: "transparent",
           color: "#fbbf24",
           border: "1px solid rgba(251,191,36,0.55)",
-          borderRadius: 8,
-          padding: "0.55rem 0.3rem",
+          borderRadius: 10,
+          padding: "0.65rem 0.5rem",
           fontWeight: 700,
-          fontSize: "0.72rem",
+          fontSize: "0.9rem",
           lineHeight: 1.15,
           cursor: "pointer",
         }}
@@ -3320,7 +3323,7 @@ function QueueStrip({
       <div
         style={{
           marginTop: 4,
-          fontSize: "0.55rem",
+          fontSize: "0.7rem",
           opacity: 0.55,
           textAlign: "center",
           lineHeight: 1.2,
