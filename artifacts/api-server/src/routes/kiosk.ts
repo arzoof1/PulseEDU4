@@ -1543,6 +1543,22 @@ router.post("/kiosk/hall-passes/arrive", async (req, res) => {
     });
     return;
   }
+  // Self-check-in identity gate. When the arriving student confirms by
+  // scanning/typing their badge, the resolved Local SIS id must belong to
+  // THIS pass — so a mis-tap on the wrong chip can never check in another
+  // student. studentId is optional for backward compatibility; when present
+  // it is enforced. Mirrors the "I'm back" return flow's scan requirement.
+  const arriveStudentId = req.body?.studentId;
+  if (typeof arriveStudentId === "string" && arriveStudentId.trim()) {
+    const scanned = await resolveKioskStudent(arriveStudentId, act.schoolId);
+    if (!scanned || scanned.studentId !== pass.studentId) {
+      res.status(403).json({
+        error:
+          "That badge doesn't match this student. Scan the badge of the student checking in.",
+      });
+      return;
+    }
+  }
   // Idempotent: already received / ended → return as-is.
   if (pass.status !== "active") {
     res.json({ ...pass, alreadyReceived: true });

@@ -1721,6 +1721,15 @@ function KioskBody({
   const [arrivals, setArrivals] = useState<OneWayPass[]>([]);
   // Transient banner for arrival check-ins (kiosk has no toast system).
   const [arriveMessage, setArriveMessage] = useState<string | null>(null);
+  // Self-check-in confirm: when a student taps their chip on the "Heading
+  // here" rail, we don't check them in on the tap — they must confirm
+  // identity by scanning/typing their badge first (mirrors "I'm back").
+  // `arriveConfirm` holds the pass awaiting that scan; `arriveScannerOpen`
+  // drives a dedicated camera modal so it never clobbers the main form scan.
+  const [arriveConfirm, setArriveConfirm] = useState<OneWayPass | null>(null);
+  const [arriveScannerOpen, setArriveScannerOpen] = useState(false);
+  const [arriveError, setArriveError] = useState<string | null>(null);
+  const [arriveBusy, setArriveBusy] = useState(false);
   const [getInLineOpen, setGetInLineOpen] = useState(false);
   // "Go now" line bypass — opens an overlay that creates an immediate pass for
   // a student summoned to the office/guidance/clinic (any non-restroom dest).
@@ -2191,15 +2200,18 @@ function KioskBody({
   // inbound student to RECEIVE them — this ends the pass + stamps arrival.
   // Idempotent: a friendly banner on alreadyReceived, then refetch so the
   // strip clears.
-  async function handleArrive(pass: OneWayPass) {
+  // Self-check-in: `scannedId` is the Local SIS id the student just scanned /
+  // typed to confirm identity. The server enforces it belongs to `pass`, so a
+  // mis-tap on the wrong chip can never check in another student.
+  async function handleArrive(pass: OneWayPass, scannedId: string) {
     const name = pass.firstName ?? pass.localSisId ?? "Student";
-    // Optimistic: drop the row immediately so a double-tap can't fire twice.
-    setArrivals((prev) => prev.filter((p) => p.id !== pass.id));
+    setArriveBusy(true);
+    setArriveError(null);
     try {
       const res = await fetch("/api/kiosk/hall-passes/arrive", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, passId: pass.id }),
+        body: JSON.stringify({ token, passId: pass.id, studentId: scannedId }),
       });
       if (res.status === 401) {
         const b = await res.json().catch(() => ({}));
@@ -2210,20 +2222,25 @@ function KioskBody({
       }
       if (!res.ok) {
         const b = await res.json().catch(() => ({}));
-        setArriveMessage(b.error ?? `Check-in failed (${res.status})`);
-      } else {
-        const b = (await res.json().catch(() => ({}))) as {
-          alreadyReceived?: boolean;
-        };
-        setArriveMessage(
-          b.alreadyReceived
-            ? `${name} was already checked in.`
-            : `Checked in ${name}.`,
-        );
+        // Keep the confirm panel open so a wrong-badge scan can be retried.
+        setArriveError(b.error ?? `Check-in failed (${res.status})`);
+        return;
       }
+      const b = (await res.json().catch(() => ({}))) as {
+        alreadyReceived?: boolean;
+      };
+      // Success: drop the row and close the confirm panel.
+      setArrivals((prev) => prev.filter((p) => p.id !== pass.id));
+      setArriveConfirm(null);
+      setArriveMessage(
+        b.alreadyReceived
+          ? `${name} was already checked in.`
+          : `Checked in ${name}.`,
+      );
     } catch (err) {
-      setArriveMessage(err instanceof Error ? err.message : "Network error");
+      setArriveError(err instanceof Error ? err.message : "Network error");
     } finally {
+      setArriveBusy(false);
       await refetchQueue();
     }
   }
@@ -2571,47 +2588,87 @@ function KioskBody({
         </div>
       )}
 
-      {/* Destination arrivals strip — students HEADED here. Tap one to check
-          them in (receive). Idempotent on the server. */}
+      {/* Destination arrivals rail — students HEADED here. Fixed to the LEFT
+          edge (mirrors the "Next up" rail on the right) with a z-index above
+          the TimerScreen overlay, so a returning student can self-check-in
+          even while a countdown is running. Tapping a chip opens a badge-scan
+          confirm — it does NOT check in on the tap. */}
       {arrivals.length > 0 && (
         <div
           style={{
-            width: "min(680px, 88vw)",
-            marginTop: "1.5rem",
-            marginRight: 96,
+            position: "fixed",
+            top: 0,
+            left: 0,
+            bottom: 0,
+            width: 240,
+            background: "rgba(15,23,42,0.92)",
+            color: "#fff",
+            zIndex: 11,
             display: "flex",
             flexDirection: "column",
             gap: "0.75rem",
+            padding: "0.9rem 0.75rem",
+            overflowY: "auto",
+            boxShadow: "4px 0 16px rgba(0,0,0,0.25)",
+            borderRight: "1px solid rgba(255,255,255,0.08)",
           }}
         >
           <div
             style={{
-              fontSize: "0.875rem",
-              letterSpacing: "0.15em",
+              fontSize: "0.7rem",
+              letterSpacing: "0.12em",
               textTransform: "uppercase",
-              opacity: 0.6,
-              textAlign: "left",
+              opacity: 0.7,
+              textAlign: "center",
             }}
           >
-            Heading here — tap to check in
+            Heading here
           </div>
           <div
             style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "0.75rem",
+              fontSize: "0.7rem",
+              opacity: 0.55,
+              textAlign: "center",
+              marginTop: "-0.4rem",
             }}
           >
-            {arrivals.map((p) => (
-              <ArrivalChip
-                key={p.id}
-                pass={p}
-                token={token}
-                onArrive={() => handleArrive(p)}
-              />
-            ))}
+            Tap your name, then scan your badge
           </div>
+          {arrivals.map((p) => (
+            <ArrivalChip
+              key={p.id}
+              pass={p}
+              token={token}
+              onArrive={() => {
+                setArriveError(null);
+                setArriveConfirm(p);
+              }}
+            />
+          ))}
         </div>
+      )}
+
+      {/* Badge-scan confirm for a tapped arrival chip. Rendered above the
+          timer (z-index) so it works mid-countdown. */}
+      {arriveConfirm && (
+        <ArriveConfirmOverlay
+          pass={arriveConfirm}
+          token={token}
+          busy={arriveBusy}
+          error={arriveError}
+          scannerOpen={arriveScannerOpen}
+          onOpenScanner={() => setArriveScannerOpen(true)}
+          onCloseScanner={() => setArriveScannerOpen(false)}
+          onSubmit={(scannedId) => {
+            setArriveScannerOpen(false);
+            void handleArrive(arriveConfirm, scannedId);
+          }}
+          onCancel={() => {
+            setArriveScannerOpen(false);
+            setArriveError(null);
+            setArriveConfirm(null);
+          }}
+        />
       )}
 
       {arriveMessage && (
@@ -2904,10 +2961,196 @@ function ArrivalChip({
           {name}
         </div>
         <div style={{ fontSize: "0.8rem", opacity: 0.75, marginTop: 2 }}>
-          from {pass.originRoom} · tap to check in
+          from {pass.originRoom}
         </div>
       </div>
     </button>
+  );
+}
+
+// Badge-scan confirm for a student self-checking-in from the "Heading here"
+// rail. Identity must be confirmed by scanning/typing the Local SIS id before
+// the pass is ended — tapping the chip alone is not enough. Rendered as a
+// full-screen overlay above the TimerScreen so it works mid-countdown.
+function ArriveConfirmOverlay({
+  pass,
+  token,
+  busy,
+  error,
+  scannerOpen,
+  onOpenScanner,
+  onCloseScanner,
+  onSubmit,
+  onCancel,
+}: {
+  pass: OneWayPass;
+  token: string;
+  busy: boolean;
+  error: string | null;
+  scannerOpen: boolean;
+  onOpenScanner: () => void;
+  onCloseScanner: () => void;
+  onSubmit: (scannedId: string) => void;
+  onCancel: () => void;
+}) {
+  const [enteredId, setEnteredId] = useState("");
+  const name = `${pass.firstName ?? pass.localSisId ?? "Student"}${
+    pass.lastName ? ` ${pass.lastName.charAt(0)}.` : ""
+  }`;
+  const submit = (raw: string) => {
+    const id = raw.trim();
+    if (!id || busy) return;
+    onSubmit(id);
+  };
+  if (scannerOpen) {
+    return (
+      <CameraScanner
+        onScan={(text) => {
+          onCloseScanner();
+          const id = extractStudentIdFromScan(text);
+          if (id) submit(id);
+        }}
+        onCancel={onCloseScanner}
+      />
+    );
+  }
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(2,6,23,0.82)",
+        zIndex: 60,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "1.5rem",
+      }}
+    >
+      <div
+        style={{
+          width: "min(440px, 92vw)",
+          background: "#0f172a",
+          color: "#fff",
+          border: "1px solid rgba(255,255,255,0.12)",
+          borderRadius: 18,
+          padding: "1.5rem",
+          boxShadow: "0 24px 64px rgba(0,0,0,0.45)",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: "1rem",
+          textAlign: "center",
+        }}
+      >
+        <KioskPhoto
+          token={token}
+          photoObjectKey={pass.photoObjectKey}
+          firstName={pass.firstName}
+          lastName={pass.lastName}
+          size={72}
+        />
+        <div>
+          <div style={{ fontSize: "1.35rem", fontWeight: 800 }}>{name}</div>
+          <div style={{ fontSize: "0.9rem", opacity: 0.7, marginTop: 2 }}>
+            Scan your badge to check in
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onOpenScanner}
+          disabled={busy}
+          style={{
+            width: "100%",
+            background: "#2563eb",
+            border: "none",
+            borderRadius: 12,
+            color: "#fff",
+            fontSize: "1.05rem",
+            fontWeight: 700,
+            padding: "0.85rem 1rem",
+            cursor: busy ? "default" : "pointer",
+          }}
+        >
+          📷 Scan badge
+        </button>
+        <div style={{ fontSize: "0.8rem", opacity: 0.5 }}>
+          or type your Student ID
+        </div>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit(enteredId);
+          }}
+          style={{ width: "100%", display: "flex", gap: "0.5rem" }}
+        >
+          <input
+            value={enteredId}
+            onChange={(e) => setEnteredId(e.target.value)}
+            inputMode="numeric"
+            autoComplete="off"
+            placeholder="e.g. 12345"
+            style={{
+              flex: 1,
+              background: "rgba(255,255,255,0.08)",
+              border: "1px solid rgba(255,255,255,0.18)",
+              borderRadius: 10,
+              color: "#fff",
+              fontSize: "1.05rem",
+              padding: "0.7rem 0.8rem",
+            }}
+          />
+          <button
+            type="submit"
+            disabled={busy || !enteredId.trim()}
+            style={{
+              background: "#16a34a",
+              border: "none",
+              borderRadius: 10,
+              color: "#fff",
+              fontSize: "1rem",
+              fontWeight: 700,
+              padding: "0.7rem 1.1rem",
+              cursor: busy || !enteredId.trim() ? "default" : "pointer",
+              opacity: busy || !enteredId.trim() ? 0.6 : 1,
+            }}
+          >
+            {busy ? "…" : "Check in"}
+          </button>
+        </form>
+        {error && (
+          <div
+            role="alert"
+            style={{
+              width: "100%",
+              background: "rgba(220,38,38,0.18)",
+              border: "1px solid rgba(248,113,113,0.55)",
+              color: "#fecaca",
+              borderRadius: 10,
+              padding: "0.6rem 0.8rem",
+              fontSize: "0.9rem",
+            }}
+          >
+            {error}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          style={{
+            background: "transparent",
+            border: "none",
+            color: "rgba(255,255,255,0.6)",
+            fontSize: "0.9rem",
+            cursor: busy ? "default" : "pointer",
+            textDecoration: "underline",
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }
 

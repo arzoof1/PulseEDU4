@@ -36,3 +36,19 @@ strings), not introduced here.
 
 **Why:** mirrors the already-shipped staff-app "Heading to me" displayName
 match, so the kiosk and the teacher's staff view agree on who is inbound.
+
+## Self-check-in UX + identity gate
+
+The "Heading here" list is a **fixed left rail** (`zIndex 11`), mirroring the
+right "Next up" `QueueStrip` (`zIndex 10`) and layered above the full-screen
+`TimerScreen` overlay (`zIndex 5`) — so a returning student can self-check-in
+**mid-countdown**. Layering ladder: TimerScreen 5 < QueueStrip 10 < left rail
+11 < ArriveConfirmOverlay 60 < CameraScanner 100.
+
+**Tapping a chip does NOT check in.** It opens `ArriveConfirmOverlay`, which
+requires a badge scan (or manual Local SIS id) — mirroring the "I'm back"
+return flow. `handleArrive(pass, scannedId)` sends `studentId`; the arrive
+endpoint resolves it via `resolveKioskStudent` and enforces
+`scanned.studentId === pass.studentId` (403 on mismatch) so a mis-tap on the
+wrong chip can never check in another student. `studentId` is optional on the
+endpoint for backward compatibility, but the client always sends it now.
