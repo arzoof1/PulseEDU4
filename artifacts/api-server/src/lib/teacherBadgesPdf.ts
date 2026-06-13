@@ -2,13 +2,16 @@
 // is the LANYARD-style staff counterpart to the student ID badge
 // (studentIdBadgesPdf.ts) and shares its per-school CardDesign so a school's
 // staff + student IDs read as one family. Unlike the student badge it ALSO
-// carries the live hall-pass kiosk activation payload, so a single worn card
-// both identifies the teacher AND activates their room kiosk:
-//   • QR code     → `${baseUrl}?enroll=<token>` (phone camera / USB scanner)
-//   • Code 128    → the raw enroll token (hardware laser/CCD scanner)
-//   • 6-digit PIN → typed manually
-// The caller is responsible for never persisting the raw token/PIN (only the
-// hash lives in kiosk_enroll_tokens). There is NO FL HB 383 crisis line —
+// carries a SCAN-ONLY hall-pass kiosk activation payload, so a single worn
+// card both identifies the teacher AND activates their room kiosk:
+//   • QR code  → `${baseUrl}?enroll=<token>` (phone camera / USB scanner)
+//   • Code 128 → the raw enroll token (hardware laser/CCD scanner)
+// The human-readable 6-digit PIN is intentionally NOT printed here — the
+// badge activates a kiosk by scanning only. (A teacher who needs the typeable
+// PIN reads it from the Hall Pass gear → "Get kiosk URL" tab; see
+// GET /kiosk/my-pin.) The caller is still responsible for never persisting
+// the raw token/PIN (only the hash lives in kiosk_enroll_tokens). There is
+// NO FL HB 383 crisis line —
 // that is a student-ID legal requirement, not a staff one. The teacher name
 // splits onto two lines on the last space (first part bold over the rest).
 
@@ -33,7 +36,9 @@ export interface TeacherBadgeInput {
   // The raw enroll token (encoded into the QR + Code 128). One-shot — never
   // persisted by this renderer.
   enrollToken: string;
-  // The raw 6-digit PIN. Same one-shot rule.
+  // The raw 6-digit PIN. Accepted for API contract parity with the kiosk
+  // card/token modes, but NO LONGER rendered on the badge (scan-only). Same
+  // one-shot rule — never persisted.
   pin: string;
   // Origin the kiosk lives at, e.g. "https://school.pulseedu.com/kiosk". The
   // QR encodes `${baseUrl}?enroll=${enrollToken}`.
@@ -129,7 +134,7 @@ export async function renderTeacherBadgesPdf(
 //   centered school name + divider diamond
 //   square photo (left) · QR on a WHITE plate (right)
 //   icon rows: teacher name (two lines) · room (when present)
-//   "Scan to activate kiosk" hint + the 6-digit PIN
+//   "Scan to activate kiosk" hint under the QR
 //   optional house emblem + "HOUSE NAME" band
 //   full-width Code 128 barcode (the enroll token) BELOW the band
 // ---------------------------------------------------------------------------
@@ -286,20 +291,18 @@ async function renderTeacherBadge(
     { width: qrSize + qrPad * 2, align: "center", lineBreak: false },
   );
 
-  // --- Bottom-anchored elements (barcode, PIN, house band) -------------
+  // --- Bottom-anchored elements (barcode, house band) -----------------
   const bcH = 22;
   const bcY = H - 2 - bcH;
   const showFooter = design.showHouse && !!badge.house;
   const bandH = 24;
   const bandY = showFooter ? bcY - 4 - bandH : bcY;
 
-  // PIN strip sits just above the house band / barcode.
-  const pinStripH = 26;
-  const pinStripY = (showFooter ? bandY : bcY) - 6 - pinStripH;
-
-  // --- Icon rows fill the middle, between the photo/QR row and the PIN --
+  // --- Icon rows fill the middle, between the photo/QR row and the house
+  // band / barcode. The human-readable PIN strip was removed (badge is
+  // scan-only), so the rows extend all the way down to the band/barcode.
   const rowsTop = Math.max(photoY + photoH, qrY + qrSize) + 12;
-  const rowsBottom = pinStripY - 6;
+  const rowsBottom = (showFooter ? bandY : bcY) - 6;
 
   type IconRow = {
     kind: "person" | "room";
@@ -368,35 +371,6 @@ async function renderTeacherBadge(
         .restore();
     }
   }
-
-  // --- PIN strip — "Or type PIN" label + spaced 6 digits ---------------
-  doc
-    .save()
-    .fillColor("#f1f5f9")
-    .roundedRect(M, pinStripY, W - M * 2, pinStripH, 4)
-    .fill()
-    .restore();
-  doc
-    .fillColor("#64748b")
-    .font("Helvetica")
-    .fontSize(6.5)
-    .text("OR TYPE PIN", M + 6, pinStripY + 4, {
-      width: W - M * 2 - 12,
-      align: "left",
-      lineBreak: false,
-    });
-  const spacedPin = `${badge.pin.slice(0, 3)} ${badge.pin.slice(3)}`;
-  doc
-    .fillColor("#0f172a")
-    .font("Helvetica-Bold")
-    .fontSize(15)
-    .text(spacedPin, M + 6, pinStripY + 9, {
-      width: W - M * 2 - 12,
-      align: "center",
-      characterSpacing: 1.5,
-      lineBreak: false,
-    });
-  doc.font("Helvetica");
 
   // --- Optional house emblem + "HOUSE NAME" band -----------------------
   if (showFooter && badge.house) {
