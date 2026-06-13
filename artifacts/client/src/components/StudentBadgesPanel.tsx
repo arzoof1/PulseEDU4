@@ -32,6 +32,12 @@ interface PrintEvent {
   printedAt: string;
 }
 
+interface TeacherOption {
+  id: number;
+  displayName: string;
+  department?: string | null;
+}
+
 export function StudentBadgesPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -51,13 +57,60 @@ export function StudentBadgesPanel() {
 
   const [events, setEvents] = useState<PrintEvent[]>([]);
 
+  // Print-by-teacher state.
+  const [teachers, setTeachers] = useState<TeacherOption[]>([]);
+  const [teacherId, setTeacherId] = useState<string>("");
+  const [teacherPeriods, setTeacherPeriods] = useState<number[]>([]);
+  const [periodSel, setPeriodSel] = useState<string>("");
+  const [rosterCount, setRosterCount] = useState<number | null>(null);
+  const [rosterLoading, setRosterLoading] = useState(false);
+
   useEffect(() => {
     authFetch("/api/students")
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => setStudents(Array.isArray(d) ? d : d?.students ?? []))
       .catch(() => setStudents([]));
+    authFetch("/api/teacher-roster/teachers")
+      .then((r) => (r.ok ? r.json() : { teachers: [] }))
+      .then((d) => setTeachers(Array.isArray(d?.teachers) ? d.teachers : []))
+      .catch(() => setTeachers([]));
     refreshEvents();
   }, []);
+
+  // When a teacher is picked, pull their roster so we can offer a period
+  // dropdown and preview how many badges the print will produce. The
+  // teacher-roster endpoint already returns availablePeriods + the
+  // (period-filtered) student list, so we reuse it rather than adding a
+  // new endpoint. Period "" = all of the teacher's classes.
+  useEffect(() => {
+    if (!teacherId) {
+      setTeacherPeriods([]);
+      setPeriodSel("");
+      setRosterCount(null);
+      return;
+    }
+    const params = new URLSearchParams({ teacherId });
+    if (periodSel) params.set("period", periodSel);
+    setRosterLoading(true);
+    authFetch(`/api/teacher-roster?${params.toString()}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d) {
+          setTeacherPeriods([]);
+          setRosterCount(null);
+          return;
+        }
+        setTeacherPeriods(
+          Array.isArray(d.availablePeriods) ? d.availablePeriods : [],
+        );
+        setRosterCount(Array.isArray(d.students) ? d.students.length : 0);
+      })
+      .catch(() => {
+        setTeacherPeriods([]);
+        setRosterCount(null);
+      })
+      .finally(() => setRosterLoading(false));
+  }, [teacherId, periodSel]);
 
   function refreshEvents() {
     authFetch("/api/students/badge-print-events?limit=25")
@@ -94,7 +147,12 @@ export function StudentBadgesPanel() {
     });
   }
 
-  async function download(payload: { all: true } | { studentIds: number[] }) {
+  async function download(
+    payload:
+      | { all: true }
+      | { studentIds: number[] }
+      | { teacherId: number; period?: number },
+  ) {
     setBusy(true);
     setError("");
     try {
@@ -136,6 +194,17 @@ export function StudentBadgesPanel() {
       return;
     }
     await download({ studentIds: ids });
+  }
+
+  async function printByTeacher() {
+    const tid = Number(teacherId);
+    if (!Number.isInteger(tid) || tid <= 0) {
+      setError("Pick a teacher first.");
+      return;
+    }
+    const payload: { teacherId: number; period?: number } = { teacherId: tid };
+    if (periodSel) payload.period = Number(periodSel);
+    await download(payload);
   }
 
   return (
@@ -337,6 +406,97 @@ export function StudentBadgesPanel() {
           </div>
         </div>
       )}
+
+      <details style={{ marginTop: "0.5rem" }} open>
+        <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+          Print by teacher & period
+        </summary>
+        <div style={{ marginTop: "0.75rem" }}>
+          <p style={{ color: "var(--text-subtle)", fontSize: "0.85rem", marginTop: 0 }}>
+            Print every badge on a teacher's roster. Choose a period to limit
+            it to a single class, or leave it on "All periods" for every
+            student that teacher sees. Rosters come from Skyward/RosterOne.
+          </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+            <select
+              value={teacherId}
+              onChange={(e) => {
+                setTeacherId(e.target.value);
+                setPeriodSel("");
+              }}
+              style={{
+                flex: "1 1 240px",
+                padding: "0.45rem 0.6rem",
+                borderRadius: 6,
+                border: "1px solid var(--border, rgba(0,0,0,0.15))",
+              }}
+            >
+              <option value="">Select a teacher…</option>
+              {teachers.map((t) => (
+                <option key={t.id} value={String(t.id)}>
+                  {t.displayName}
+                  {t.department ? ` · ${t.department}` : ""}
+                </option>
+              ))}
+            </select>
+            <select
+              value={periodSel}
+              onChange={(e) => setPeriodSel(e.target.value)}
+              disabled={!teacherId || teacherPeriods.length === 0}
+              style={{
+                padding: "0.45rem 0.6rem",
+                borderRadius: 6,
+                border: "1px solid var(--border, rgba(0,0,0,0.15))",
+                opacity: !teacherId || teacherPeriods.length === 0 ? 0.5 : 1,
+              }}
+            >
+              <option value="">All periods</option>
+              {teacherPeriods.map((p) => (
+                <option key={p} value={String(p)}>
+                  Period {p}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              disabled={busy || !teacherId || rosterCount === 0}
+              onClick={printByTeacher}
+              style={{
+                background: "#0f766e",
+                color: "#fff",
+                border: "none",
+                borderRadius: 6,
+                padding: "0.55rem 1rem",
+                fontWeight: 600,
+                cursor:
+                  busy || !teacherId || rosterCount === 0
+                    ? "not-allowed"
+                    : "pointer",
+                opacity: busy || !teacherId || rosterCount === 0 ? 0.6 : 1,
+              }}
+            >
+              {busy
+                ? "Generating…"
+                : rosterCount !== null && teacherId
+                  ? `Print ${rosterCount} badge${rosterCount === 1 ? "" : "s"}`
+                  : "Print badges"}
+            </button>
+          </div>
+          {teacherId && (
+            <div style={{ marginTop: "0.5rem", fontSize: "0.85rem", color: "var(--text-subtle)" }}>
+              {rosterLoading
+                ? "Loading roster…"
+                : rosterCount === null
+                  ? ""
+                  : rosterCount === 0
+                    ? "No students on this roster for the selected period."
+                    : `${rosterCount} student${rosterCount === 1 ? "" : "s"} ${
+                        periodSel ? `in period ${periodSel}` : "across all periods"
+                      }.`}
+            </div>
+          )}
+        </div>
+      </details>
 
       <details style={{ marginTop: "0.5rem" }}>
         <summary style={{ cursor: "pointer", fontWeight: 600 }}>

@@ -6,6 +6,8 @@ import {
   schoolsTable,
   housesTable,
   badgePrintEventsTable,
+  classSectionsTable,
+  sectionRosterTable,
 } from "@workspace/db";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -124,6 +126,8 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
   const body = (req.body ?? {}) as {
     all?: boolean;
     studentIds?: number[];
+    teacherId?: number;
+    period?: number;
     reason?: string;
   };
   // Single badge format — a landscape credit-card / CR80 ID
@@ -142,11 +146,95 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
     .filter((n) => Number.isInteger(n) && n > 0);
   const studentIds = bodyIds.length ? bodyIds : queryIds;
 
-  if (!all && studentIds.length === 0) {
+  // Optional "print by teacher (+ period)" filter. Mirrors the
+  // teacher-roster join: class_sections (by teacher [+period]) →
+  // section_roster → students. Only consulted when neither `all` nor an
+  // explicit `studentIds` list was provided, so existing callers are
+  // untouched.
+  const teacherIdRaw = body.teacherId ?? req.query.teacherId;
+  let teacherId: number | null = null;
+  if (
+    teacherIdRaw !== undefined &&
+    teacherIdRaw !== null &&
+    teacherIdRaw !== ""
+  ) {
+    const t = Number(teacherIdRaw);
+    if (!Number.isInteger(t) || t <= 0) {
+      res.status(400).json({ error: "Invalid teacherId" });
+      return;
+    }
+    teacherId = t;
+  }
+  const periodRaw = body.period ?? req.query.period;
+  let period: number | null = null;
+  if (periodRaw !== undefined && periodRaw !== null && periodRaw !== "") {
+    const p = Number(periodRaw);
+    if (!Number.isInteger(p) || p <= 0) {
+      res.status(400).json({ error: "Invalid period" });
+      return;
+    }
+    period = p;
+  }
+
+  if (!all && studentIds.length === 0 && teacherId === null) {
     res
       .status(400)
-      .json({ error: "Provide studentIds=1,2,3 or all=1" });
+      .json({ error: "Provide studentIds=1,2,3, teacherId, or all=1" });
     return;
+  }
+
+  // Resolve a teacher's roster to district student IDs when the
+  // teacher/period filter is in play (and no explicit id list was given).
+  let rosterDistrictIds: string[] | null = null;
+  if (!all && studentIds.length === 0 && teacherId !== null) {
+    const [teacher] = await db
+      .select({ id: staffTable.id })
+      .from(staffTable)
+      .where(
+        and(
+          eq(staffTable.id, teacherId),
+          eq(staffTable.schoolId, schoolId),
+        ),
+      );
+    if (!teacher) {
+      res.status(404).json({ error: "Teacher not found" });
+      return;
+    }
+    const sectionWhere = period
+      ? and(
+          eq(classSectionsTable.schoolId, schoolId),
+          eq(classSectionsTable.teacherStaffId, teacherId),
+          eq(classSectionsTable.period, period),
+        )
+      : and(
+          eq(classSectionsTable.schoolId, schoolId),
+          eq(classSectionsTable.teacherStaffId, teacherId),
+        );
+    const sections = await db
+      .select({ id: classSectionsTable.id })
+      .from(classSectionsTable)
+      .where(sectionWhere);
+    if (sections.length === 0) {
+      res
+        .status(404)
+        .json({ error: "No class sections for that teacher/period" });
+      return;
+    }
+    const sectionIds = sections.map((s) => s.id);
+    const rosterRows = await db
+      .select({ studentId: sectionRosterTable.studentId })
+      .from(sectionRosterTable)
+      .where(
+        and(
+          eq(sectionRosterTable.schoolId, schoolId),
+          inArray(sectionRosterTable.sectionId, sectionIds),
+        ),
+      );
+    rosterDistrictIds = Array.from(new Set(rosterRows.map((r) => r.studentId)));
+    if (rosterDistrictIds.length === 0) {
+      res.status(404).json({ error: "No students on that roster" });
+      return;
+    }
   }
 
   const students = await db
@@ -155,7 +243,11 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
     .where(
       and(
         eq(studentsTable.schoolId, schoolId),
-        ...(all ? [] : [inArray(studentsTable.id, studentIds)]),
+        ...(all
+          ? []
+          : studentIds.length
+            ? [inArray(studentsTable.id, studentIds)]
+            : [inArray(studentsTable.studentId, rosterDistrictIds ?? [])]),
       ),
     )
     .orderBy(asc(studentsTable.lastName), asc(studentsTable.firstName));
