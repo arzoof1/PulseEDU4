@@ -2298,7 +2298,7 @@ function KioskBody({
           now={now}
           returning={returning}
           returnError={returnError}
-          onReturn={async () => {
+          onReturn={async (scannedId: string) => {
             setReturning(true);
             setReturnError(null);
             try {
@@ -2306,7 +2306,11 @@ function KioskBody({
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  studentId: activePass.studentId,
+                  // Identity comes from the badge the student just scanned /
+                  // typed — NOT activePass — so tapping "I'm back" alone can
+                  // never end another student's pass. The server only ends a
+                  // pass that belongs to this student from this room.
+                  studentId: scannedId,
                   token,
                 }),
               });
@@ -2317,15 +2321,23 @@ function KioskBody({
                   return;
                 }
               }
-              if (!res.ok && res.status !== 404) {
+              if (res.status === 404) {
+                // Wrong badge: the scanned student has no active pass from
+                // this room. A remotely-ended pass clears on its own via the
+                // queue poll, so a 404 on an explicit scan means a mismatch —
+                // surface it instead of silently dismissing the timer.
+                setReturnError(
+                  "That badge has no active pass from this room. Scan the badge of the student who is out.",
+                );
+                return;
+              }
+              if (!res.ok) {
                 const b = await res.json().catch(() => ({}));
                 setReturnError(
                   b.error ?? `Request failed (${res.status})`,
                 );
                 return;
               }
-              // 404 means the pass was already ended elsewhere; treat as
-              // success and clear the screen.
               const body = (await res
                 .json()
                 .catch(() => ({}))) as {
@@ -4271,8 +4283,21 @@ function TimerScreen({
   now: Date;
   returning: boolean;
   returnError: string | null;
-  onReturn: () => void;
+  onReturn: (studentId: string) => void;
 }) {
+  // Signing back in requires the student to confirm identity by scanning
+  // (or typing) their badge first — tapping "I'm back" alone must never end
+  // the pass. The entered id is what gets sent to the return endpoint, which
+  // only ends a pass that actually belongs to that student from this room.
+  const [confirming, setConfirming] = useState(false);
+  const [enteredId, setEnteredId] = useState("");
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const idInputRef = useRef<HTMLInputElement | null>(null);
+  const submitReturn = (raw: string) => {
+    const id = raw.trim();
+    if (!id) return;
+    onReturn(id);
+  };
   const elapsedMs = now.getTime() - new Date(activePass.createdAt).getTime();
   const totalMs = activePass.maxDurationMinutes * 60 * 1000;
   const remainingMs = totalMs - elapsedMs;
@@ -4378,25 +4403,157 @@ function TimerScreen({
         </div>
       )}
 
-      <button
-        type="button"
-        onClick={onReturn}
-        disabled={returning}
-        style={{
-          background: "#fff",
-          color: overdue ? "#dc2626" : "#15803d",
-          border: "none",
-          borderRadius: 12,
-          padding: "1.1rem 2.5rem",
-          fontSize: "clamp(1.25rem, 2.5vw, 1.6rem)",
-          fontWeight: 700,
-          cursor: returning ? "not-allowed" : "pointer",
-          opacity: returning ? 0.7 : 1,
-          boxShadow: "0 6px 18px rgba(0,0,0,0.25)",
-        }}
-      >
-        {returning ? "Signing in…" : "I'm back"}
-      </button>
+      {!confirming ? (
+        <button
+          type="button"
+          onClick={() => {
+            setConfirming(true);
+            // Focus on the next tick so a hardware scanner / typed id lands
+            // in the field immediately after the panel mounts.
+            setTimeout(() => idInputRef.current?.focus(), 0);
+          }}
+          style={{
+            background: "#fff",
+            color: overdue ? "#dc2626" : "#15803d",
+            border: "none",
+            borderRadius: 12,
+            padding: "1.1rem 2.5rem",
+            fontSize: "clamp(1.25rem, 2.5vw, 1.6rem)",
+            fontWeight: 700,
+            cursor: "pointer",
+            boxShadow: "0 6px 18px rgba(0,0,0,0.25)",
+          }}
+        >
+          I'm back
+        </button>
+      ) : (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "0.85rem",
+            width: "min(420px, 92vw)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "clamp(1rem, 2.2vw, 1.35rem)",
+              fontWeight: 600,
+            }}
+          >
+            Scan or enter your badge to sign back in
+          </div>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitReturn(enteredId);
+            }}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.75rem",
+              width: "100%",
+            }}
+          >
+            <input
+              ref={idInputRef}
+              value={enteredId}
+              onChange={(e) => setEnteredId(e.target.value)}
+              inputMode="numeric"
+              autoComplete="off"
+              placeholder="Student ID"
+              disabled={returning}
+              style={{
+                padding: "0.9rem 1rem",
+                fontSize: "1.25rem",
+                textAlign: "center",
+                borderRadius: 10,
+                border: "none",
+                width: "100%",
+                boxSizing: "border-box",
+              }}
+            />
+            <div style={{ display: "flex", gap: "0.6rem" }}>
+              <button
+                type="button"
+                onClick={() => setScannerOpen(true)}
+                disabled={returning}
+                style={{
+                  flex: 1,
+                  background: "rgba(255,255,255,0.16)",
+                  color: "#fff",
+                  border: "1px solid rgba(255,255,255,0.5)",
+                  borderRadius: 10,
+                  padding: "0.9rem",
+                  fontSize: "1.05rem",
+                  fontWeight: 600,
+                  cursor: returning ? "not-allowed" : "pointer",
+                }}
+              >
+                Scan badge
+              </button>
+              <button
+                type="submit"
+                disabled={returning || !enteredId.trim()}
+                style={{
+                  flex: 1,
+                  background: "#fff",
+                  color: overdue ? "#dc2626" : "#15803d",
+                  border: "none",
+                  borderRadius: 10,
+                  padding: "0.9rem",
+                  fontSize: "1.05rem",
+                  fontWeight: 700,
+                  cursor:
+                    returning || !enteredId.trim()
+                      ? "not-allowed"
+                      : "pointer",
+                  opacity: returning || !enteredId.trim() ? 0.7 : 1,
+                }}
+              >
+                {returning ? "Signing in…" : "Sign back in"}
+              </button>
+            </div>
+          </form>
+
+          <button
+            type="button"
+            onClick={() => {
+              setConfirming(false);
+              setEnteredId("");
+            }}
+            disabled={returning}
+            style={{
+              background: "transparent",
+              color: "#fff",
+              border: "none",
+              fontSize: "0.95rem",
+              textDecoration: "underline",
+              cursor: returning ? "not-allowed" : "pointer",
+              opacity: 0.85,
+            }}
+          >
+            Cancel
+          </button>
+
+          {scannerOpen && (
+            <CameraScanner
+              onScan={(text) => {
+                const id = extractStudentIdFromScan(text);
+                setScannerOpen(false);
+                if (!id) return;
+                setEnteredId(id);
+                // Auto-submit on a successful scan — tapping the badge IS the
+                // confirmation, no extra button press needed.
+                submitReturn(id);
+              }}
+              onCancel={() => setScannerOpen(false)}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }
