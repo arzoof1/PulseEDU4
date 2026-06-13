@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
 } from "react";
 import Login from "./Login";
 import {
@@ -4342,6 +4343,309 @@ function PlaceholderCard({
         >
           {body}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// On-Time Attendance / Tardy Lottery TEST MODE panel (admin / Core Team only).
+//
+// Renders inside the "On-Time Attendance & Lottery" settings card. Lets staff
+// demo the time-gated feature without waiting for a real passing period or the
+// afternoon lottery reveal. Two tools:
+//   * Demo clock — set a simulated time; it advances in real time and the real
+//     bell-schedule + lottery math run against it.
+//   * Test loop — a synthetic passing→bell cycle on a short timer (no bell
+//     schedule needed), plus "Run lottery draw now".
+// All state is server-side (per school) and managed via dedicated admin
+// endpoints, so it is isolated from the normal School Settings save flow.
+// ---------------------------------------------------------------------------
+interface OnTimeTestStatus {
+  attendanceEnabled: boolean;
+  lotteryEnabled: boolean;
+  realNow: string;
+  simEnabled: boolean;
+  simNow: string | null;
+  testLoop: boolean;
+  loop: { phase: string; minutesRemaining: number; cycleSeconds: number } | null;
+  loopConfig: { passingSeconds: number; postBellSeconds: number };
+}
+
+function OnTimeTestingPanel() {
+  const [status, setStatus] = useState<OnTimeTestStatus | null>(null);
+  const [busy, setBusy] = useState<string>("");
+  const [timeInput, setTimeInput] = useState<string>("07:45");
+  const [note, setNote] = useState<string>("");
+  const [error, setError] = useState<string>("");
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const res = await authFetch("/api/on-time/test/status");
+      if (!res.ok) {
+        if (res.status === 403 || res.status === 401) return;
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as OnTimeTestStatus;
+      setStatus(data);
+    } catch {
+      // Transient; the next poll retries.
+    }
+  }, []);
+
+  // Poll while the panel is mounted so the live "simulated now" + loop
+  // countdown tick. Only mounted on the settings card for Core Team, so this
+  // doesn't run app-wide.
+  useEffect(() => {
+    void loadStatus();
+    const id = window.setInterval(() => void loadStatus(), 4000);
+    return () => window.clearInterval(id);
+  }, [loadStatus]);
+
+  const post = useCallback(
+    async (action: string, url: string, body?: unknown): Promise<unknown> => {
+      setBusy(action);
+      setError("");
+      setNote("");
+      try {
+        const res = await authFetch(url, {
+          method: "POST",
+          headers: body ? { "Content-Type": "application/json" } : undefined,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const text = await res.text();
+        const data = text ? JSON.parse(text) : {};
+        if (!res.ok) {
+          throw new Error(
+            (data && (data.error as string)) || `HTTP ${res.status}`,
+          );
+        }
+        await loadStatus();
+        return data;
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Request failed");
+        return null;
+      } finally {
+        setBusy("");
+      }
+    },
+    [loadStatus],
+  );
+
+  const labelStyle: CSSProperties = {
+    fontSize: "0.85rem",
+    color: "var(--text-subtle, #64748b)",
+  };
+
+  return (
+    <div
+      style={{
+        marginTop: "1.25rem",
+        padding: "1rem",
+        border: "1px dashed #f59e0b",
+        borderRadius: "0.5rem",
+        background: "rgba(245, 158, 11, 0.06)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "0.5rem",
+          fontWeight: 700,
+        }}
+      >
+        <span
+          style={{
+            fontSize: "0.7rem",
+            fontWeight: 700,
+            color: "#92400e",
+            background: "#fde68a",
+            borderRadius: "0.25rem",
+            padding: "0.1rem 0.4rem",
+            textTransform: "uppercase",
+            letterSpacing: "0.04em",
+          }}
+        >
+          Testing
+        </span>
+        <span>Demo &amp; time-travel tools</span>
+      </div>
+      <p style={{ ...labelStyle, marginTop: "0.4rem" }}>
+        Admin / Core Team only. Try On-Time Attendance and the Tardy Lottery
+        without waiting for a real passing period or the afternoon reveal. These
+        tools only affect this school&apos;s demo timing — turn them off when you
+        are done.
+      </p>
+
+      {/* Live status readout */}
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "1rem",
+          margin: "0.5rem 0 0.75rem",
+          fontSize: "0.85rem",
+        }}
+      >
+        <span>
+          Real time: <strong>{status?.realNow ?? "—"}</strong>
+        </span>
+        <span>
+          Simulated now:{" "}
+          <strong>{status?.simEnabled ? status?.simNow : "off"}</strong>
+        </span>
+        <span>
+          Test loop:{" "}
+          <strong>
+            {status?.testLoop
+              ? `on (${status.loop?.phase ?? "—"})`
+              : "off"}
+          </strong>
+        </span>
+      </div>
+
+      {/* Demo clock */}
+      <div style={{ marginBottom: "0.85rem" }}>
+        <div style={{ fontWeight: 600, marginBottom: "0.3rem" }}>Demo clock</div>
+        <div style={labelStyle}>
+          Set a simulated time of day. It advances in real time from there, and
+          the real bell schedule + lottery run against it.
+        </div>
+        <div
+          style={{
+            display: "flex",
+            gap: "0.5rem",
+            alignItems: "center",
+            marginTop: "0.4rem",
+            flexWrap: "wrap",
+          }}
+        >
+          <input
+            type="time"
+            value={timeInput}
+            onChange={(e) => setTimeInput(e.target.value)}
+            style={{ width: "8rem" }}
+          />
+          <button
+            type="button"
+            disabled={busy !== ""}
+            onClick={() =>
+              void post("set-clock", "/api/on-time/test/sim-clock", {
+                time: timeInput,
+              })
+            }
+          >
+            {busy === "set-clock" ? "Setting…" : "Set demo clock"}
+          </button>
+          <button
+            type="button"
+            disabled={busy !== "" || !status?.simEnabled}
+            onClick={() =>
+              void post("clear-clock", "/api/on-time/test/sim-clock/clear")
+            }
+          >
+            {busy === "clear-clock" ? "Clearing…" : "Use real time"}
+          </button>
+        </div>
+      </div>
+
+      {/* Test loop */}
+      <div style={{ marginBottom: "0.85rem" }}>
+        <div style={{ fontWeight: 600, marginBottom: "0.3rem" }}>Test loop</div>
+        <div style={labelStyle}>
+          Forces an activated kiosk into a repeating passing→bell cycle (
+          {Math.round((status?.loopConfig.passingSeconds ?? 150) / 60)}–
+          {Math.round((status?.loopConfig.postBellSeconds ?? 90) / 60)} min)
+          so you can watch it flip and scan students on demand — no bell
+          schedule required. Every scanned student earns credit during the loop.
+        </div>
+        <div
+          style={{
+            display: "flex",
+            gap: "0.5rem",
+            alignItems: "center",
+            marginTop: "0.4rem",
+          }}
+        >
+          <button
+            type="button"
+            disabled={busy !== ""}
+            onClick={() =>
+              void post("toggle-loop", "/api/on-time/test/loop", {
+                enabled: !status?.testLoop,
+              })
+            }
+          >
+            {busy === "toggle-loop"
+              ? "Saving…"
+              : status?.testLoop
+                ? "Stop test loop"
+                : "Start test loop"}
+          </button>
+        </div>
+      </div>
+
+      {/* Run lottery now */}
+      <div>
+        <div style={{ fontWeight: 600, marginBottom: "0.3rem" }}>
+          Tardy Lottery
+        </div>
+        <div style={labelStyle}>
+          Draw the lottery right now using today&apos;s check-ins, ignoring the
+          reveal time. Re-running clears the prior draw so you can demo it again.
+        </div>
+        <div style={{ marginTop: "0.4rem" }}>
+          <button
+            type="button"
+            disabled={busy !== "" || !status?.lotteryEnabled}
+            onClick={() => {
+              void post(
+                "run-lottery",
+                "/api/on-time/lottery/run-now",
+              ).then((data) => {
+                const d = data as {
+                  status?: string;
+                  teacherName?: string;
+                  winnerCount?: number;
+                  reason?: string;
+                } | null;
+                if (!d) return;
+                if (d.status === "revealed") {
+                  setNote(
+                    `Lottery drawn: ${d.teacherName ?? "a class"} — ${
+                      d.winnerCount ?? 0
+                    } student(s) rewarded.`,
+                  );
+                } else if (d.status === "skipped") {
+                  setNote("No eligible class ran attendance today yet.");
+                } else if (d.reason === "disabled") {
+                  setNote("Lottery is turned off for this school.");
+                } else {
+                  setNote(`Lottery result: ${d.status ?? "done"}.`);
+                }
+              });
+            }}
+          >
+            {busy === "run-lottery" ? "Drawing…" : "Run lottery draw now"}
+          </button>
+          {!status?.lotteryEnabled && (
+            <span style={{ ...labelStyle, marginLeft: "0.5rem" }}>
+              Enable the lottery above to use this.
+            </span>
+          )}
+        </div>
+      </div>
+
+      {note && (
+        <p style={{ color: "#15803d", marginTop: "0.6rem", fontSize: "0.85rem" }}>
+          {note}
+        </p>
+      )}
+      {error && (
+        <p style={{ color: "#b91c1c", marginTop: "0.6rem", fontSize: "0.85rem" }}>
+          {error}
+        </p>
       )}
     </div>
   );
@@ -22585,6 +22889,8 @@ function App() {
                     <span style={{ color: "#b91c1c" }}>{settingsError}</span>
                   )}
                 </div>
+
+                {(isAdmin || isCoreTeamMember) && <OnTimeTestingPanel />}
               </div>
             </div>
           </div>

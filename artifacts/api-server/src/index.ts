@@ -37,6 +37,7 @@ import {
   ensureFastItemResponsesSchema,
   ensureSchoolsTimezoneColumn,
   ensureStudentPhotoColumns,
+  ensureOnTimeTestModeColumns,
   ensureStudentLocalSisIdBackfill,
   ensureStudentAccommodationsBackfill,
   ensureLocationAllowedDestinationsBackfill,
@@ -262,6 +263,9 @@ async function runSeed(): Promise<void> {
   // Packet B — Student photo + consent columns on students (pre-2026
   // tenants may be missing them). Idempotent.
   await ensureStudentPhotoColumns();
+  // On-Time Attendance / Tardy Lottery TEST MODE columns (test loop +
+  // simulated demo clock). Additive + idempotent.
+  await ensureOnTimeTestModeColumns();
   // Backfill local_sis_id from the FLEID for any students missing it
   // (legacy rows). Local SIS ID is the student-facing credential
   // everywhere in the app; FLEID stays internal for FAST joins.

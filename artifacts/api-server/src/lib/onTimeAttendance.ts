@@ -3,6 +3,7 @@ import {
   db,
   bellSchedulesTable,
   bellSchedulePeriodsTable,
+  schoolSettingsTable,
   type BellSchedulePeriodRow,
 } from "@workspace/db";
 
@@ -156,12 +157,112 @@ export function computeAttendanceWindow(
   return base;
 }
 
+// ---------------------------------------------------------------------------
+// TEST MODE (admin / Core Team only). See schoolSettings.ts for the columns.
+//
+// Two independent tools, both off by default:
+//   * Demo clock  — a simulated "now" that advances in real time. The real
+//                   bell-schedule + lottery math run against it (effectiveNow).
+//   * Test loop   — a synthetic passing -> bell cycle on a short timer that
+//                   ignores the bell schedule entirely (buildTestLoopWindow).
+// ---------------------------------------------------------------------------
+
+export interface SimClockSettings {
+  onTimeSimClockMinutes: number | null;
+  onTimeSimClockSetAt: Date | null;
+}
+
+// Resolve the effective "now" a school's On-Time logic should run against.
+// When the demo clock is set, we anchor at onTimeSimClockMinutes (minutes
+// since local midnight) and advance it by the real elapsed time since it was
+// set, so countdowns tick naturally. Otherwise we return realNow unchanged.
+export function effectiveNow(
+  sim: SimClockSettings,
+  realNow: Date = new Date(),
+): Date {
+  if (sim.onTimeSimClockMinutes === null || sim.onTimeSimClockSetAt === null) {
+    return realNow;
+  }
+  const elapsedMs = realNow.getTime() - sim.onTimeSimClockSetAt.getTime();
+  const simMin = sim.onTimeSimClockMinutes + elapsedMs / 60000;
+  // Build a Date on the real local day at simMin minutes past midnight.
+  const d = new Date(realNow);
+  d.setHours(0, 0, 0, 0);
+  return new Date(d.getTime() + simMin * 60000);
+}
+
+// Test-loop cycle: a passing window counting down to a bell, then a post-bell
+// window, then it repeats. Tuned short so a demo never waits long, but long
+// enough to scan a handful of students per phase.
+export const TEST_LOOP_PASSING_SEC = 150; // 2.5 min "passing" countdown
+export const TEST_LOOP_POST_BELL_SEC = 90; // 1.5 min "post bell" window
+export const TEST_LOOP_CYCLE_SEC =
+  TEST_LOOP_PASSING_SEC + TEST_LOOP_POST_BELL_SEC;
+
+// Synthetic attendance window for the test loop. Phase + countdown are derived
+// purely from wall-clock seconds so every kiosk on the same school stays in
+// sync. periodKey embeds the cycle index so each cycle is its own idempotency
+// bucket (re-scans within a cycle dedupe; a new cycle reopens scanning and
+// resets the teacher Done state automatically). incomingPeriodNumber = 0 has
+// no class_sections row, so the roster gate falls through to open-accept —
+// every scanned student earns credit, which is what a demo wants.
+export function buildTestLoopWindow(now: Date): AttendanceWindow {
+  const dayKey = localDayKey(now);
+  const epochSec = Math.floor(now.getTime() / 1000);
+  const cycleIndex = Math.floor(epochSec / TEST_LOOP_CYCLE_SEC);
+  const offset = epochSec % TEST_LOOP_CYCLE_SEC;
+  const periodKey = `testloop:${cycleIndex}:${dayKey}`;
+  if (offset < TEST_LOOP_PASSING_SEC) {
+    return {
+      scheduleId: null,
+      dayKey,
+      phase: "passing",
+      incomingPeriodNumber: 0,
+      incomingPeriodName: "Test Loop",
+      minutesRemaining: Math.max(
+        1,
+        Math.ceil((TEST_LOOP_PASSING_SEC - offset) / 60),
+      ),
+      periodKey,
+    };
+  }
+  return {
+    scheduleId: null,
+    dayKey,
+    phase: "post_bell",
+    incomingPeriodNumber: 0,
+    incomingPeriodName: "Test Loop",
+    minutesRemaining: 0,
+    periodKey,
+  };
+}
+
 export async function loadAttendanceWindow(
   schoolId: number,
   now: Date = new Date(),
 ): Promise<AttendanceWindow> {
+  const [settings] = await db
+    .select({
+      testLoop: schoolSettingsTable.onTimeTestLoopEnabled,
+      simMinutes: schoolSettingsTable.onTimeSimClockMinutes,
+      simSetAt: schoolSettingsTable.onTimeSimClockSetAt,
+    })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
+
+  // Test loop wins over the demo clock when both are on.
+  if (settings?.testLoop) {
+    return buildTestLoopWindow(now);
+  }
+  const eff = effectiveNow(
+    {
+      onTimeSimClockMinutes: settings?.simMinutes ?? null,
+      onTimeSimClockSetAt: settings?.simSetAt ?? null,
+    },
+    now,
+  );
   const { scheduleId, periods } = await loadDefaultSchedulePeriods(schoolId);
-  return computeAttendanceWindow(scheduleId, periods, now);
+  return computeAttendanceWindow(scheduleId, periods, eff);
 }
 
 // Server-authoritative point value for a scan in the given window.

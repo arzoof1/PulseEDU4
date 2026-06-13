@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, real, boolean, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, real, boolean, uniqueIndex, jsonb, timestamp } from "drizzle-orm/pg-core";
 
 // Per-school operational settings. As of D4 there is exactly one row per
 // school (enforced by `school_settings_school_id_unique`). Routes
@@ -386,6 +386,34 @@ export const schoolSettingsTable = pgTable(
   onTimeLotteryRevealLeadMinutes: integer("on_time_lottery_reveal_lead_minutes")
     .notNull()
     .default(30),
+  // -----------------------------------------------------------------
+  // On-Time Attendance TEST MODE (admin / Core Team only). Lets a
+  // school demo the time-gated feature without waiting for a real
+  // passing period or the afternoon lottery reveal. Two independent
+  // tools, both off by default and never used in normal operation:
+  //
+  //   onTimeTestLoopEnabled — when true, an activated kiosk ignores the
+  //     bell schedule and instead runs a synthetic passing -> bell ->
+  //     post-bell cycle on a short repeating timer, so you can watch the
+  //     kiosk flip and scan students on demand.
+  //
+  //   onTimeSimClockMinutes / onTimeSimClockSetAt — "demo clock". A
+  //     simulated wall-clock (minutes since local midnight) anchored at
+  //     the moment it was set; it advances in real time from there
+  //     (sim now = minutes + elapsed-since-setAt). When non-null the
+  //     attendance window AND the lottery resolve against this fake
+  //     time, so the REAL bell-schedule math can be exercised against
+  //     any moment of the day. NULL = off (use the real clock).
+  //
+  // The test loop takes precedence over the demo clock when both are on.
+  // -----------------------------------------------------------------
+  onTimeTestLoopEnabled: boolean("on_time_test_loop_enabled")
+    .notNull()
+    .default(false),
+  onTimeSimClockMinutes: integer("on_time_sim_clock_minutes"),
+  onTimeSimClockSetAt: timestamp("on_time_sim_clock_set_at", {
+    withTimezone: true,
+  }),
   },
   (t) => ({
     schoolIdUnique: uniqueIndex("school_settings_school_id_unique").on(

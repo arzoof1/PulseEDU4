@@ -7062,6 +7062,30 @@ export async function ensureStudentPhotoColumns(): Promise<void> {
   );
 }
 
+// -----------------------------------------------------------------------------
+// On-Time Attendance / Tardy Lottery TEST MODE columns bootstrap.
+//
+// Admin/Core-Team-only demo controls so the kiosk + lottery can be exercised
+// without waiting for a real passing period or the afternoon reveal. All three
+// are additive + nullable/defaulted, so existing schools keep production
+// behavior (test mode off, no simulated clock). The schema TS declares them;
+// these ALTERs cover DBs onboarded before the test-mode feature shipped.
+//   - on_time_test_loop_enabled: synthetic passing→bell cycle on a short timer.
+//   - on_time_sim_clock_minutes / on_time_sim_clock_set_at: per-school
+//     "time-travel" clock that advances in real time from the moment it was set.
+// -----------------------------------------------------------------------------
+export async function ensureOnTimeTestModeColumns(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS on_time_test_loop_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS on_time_sim_clock_minutes INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS on_time_sim_clock_set_at TIMESTAMPTZ`,
+  );
+}
+
 // Backfill local_sis_id for every student that is currently NULL.
 // Derivation: strip the leading "FL" prefix and any subsequent leading
 // zeros from the FLEID — "FL000008101387" → "8101387". This is the
