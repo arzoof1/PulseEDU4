@@ -1,44 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
-import { BarcodeFormat, MultiFormatWriter } from "@zxing/library";
 import { authFetch } from "../lib/authToken";
-
-// Render a Code 128 barcode of `text` to a PNG data URL. Mirrors the
-// barcode on the printed kiosk card so a classroom device with a 1D
-// scanner can read the on-screen code off a teacher's phone. QR + the
-// big PIN cover camera kiosks and manual entry; this covers laser/USB
-// scanners. Returns "" if encoding fails (UI then just omits it).
-function code128DataUrl(text: string): string {
-  try {
-    const targetW = 360;
-    const targetH = 90;
-    const matrix = new MultiFormatWriter().encode(
-      text,
-      BarcodeFormat.CODE_128,
-      targetW,
-      targetH,
-      new Map(),
-    );
-    const w = matrix.getWidth();
-    const h = matrix.getHeight();
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return "";
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = "#000000";
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        if (matrix.get(x, y)) ctx.fillRect(x, y, 1, 1);
-      }
-    }
-    return canvas.toDataURL("image/png");
-  } catch {
-    return "";
-  }
-}
+import { code128DataUrl } from "../lib/barcode";
 
 interface Props {
   open: boolean;
@@ -242,8 +205,15 @@ export default function TeacherDestinationPicker({
       });
       if (!res.ok) throw new Error("regen");
       const data: { enrollToken: string; pin: string } = await res.json();
-      const qrUrl = `${kioskUrl}?enroll=${encodeURIComponent(data.enrollToken)}`;
-      const qr = await QRCode.toDataURL(qrUrl, { width: 240, margin: 1 });
+      // The on-screen QR points at the phone "carry over" mirror page
+      // (/kiosk-code), NOT the kiosk activation URL. Scanning it with a
+      // phone opens a page that displays the real activation QR + PIN, which
+      // the teacher then holds up to the kiosk camera. (If this QR encoded
+      // ?enroll= directly, a phone scan would try to activate the kiosk on
+      // the phone — the wrong device.) Token + PIN ride in the hash fragment
+      // so they are never sent to the server.
+      const mirrorUrl = `${window.location.origin}${import.meta.env.BASE_URL}kiosk-code#t=${encodeURIComponent(data.enrollToken)}&p=${encodeURIComponent(data.pin)}`;
+      const qr = await QRCode.toDataURL(mirrorUrl, { width: 240, margin: 1 });
       setQrDataUrl(qr);
       setBarcodeDataUrl(code128DataUrl(data.enrollToken));
       setNewCode({ enrollToken: data.enrollToken, pin: data.pin });
@@ -500,8 +470,9 @@ export default function TeacherDestinationPicker({
                 {newCode && (
                   <div className="tdp-newcode">
                     <p className="tdp-newcode-instr">
-                      Hold this up to the kiosk camera, or type the code on the
-                      activation screen. No need to write anything down.
+                      Scan this with your phone to carry the code over — your
+                      phone will show a QR you hold up to the kiosk camera to
+                      activate. Or just type the 6-digit code at the kiosk.
                     </p>
                     {qrDataUrl && (
                       <img

@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import Kiosk from "./Kiosk";
 import KioskViewer from "./KioskViewer";
+import KioskCodeMirror from "./KioskCodeMirror";
 import ParentApp from "./parent/ParentApp";
 import SignageApp from "./signage/SignageApp";
 import PickupApp from "./pickup/PickupApp";
@@ -16,7 +17,11 @@ const path = window.location.pathname;
 // the read-only mirror page wins the dispatch instead of falling into
 // the full kiosk activation flow.
 const isKioskViewer = path.includes("/kiosk-view");
-const isKiosk = !isKioskViewer && path.includes("/kiosk");
+// Phone "carry over" mirror for a teacher's activation code
+// (/kiosk-code#t=...&p=...). Checked before /kiosk so the read-only display
+// page wins the dispatch instead of falling into the full activation flow.
+const isKioskCode = path.includes("/kiosk-code");
+const isKiosk = !isKioskViewer && !isKioskCode && path.includes("/kiosk");
 const isParent = path.includes("/parent");
 // Public, unauthenticated staff self-service password reset pages
 // (/forgot-password, /reset-password/<token>). Checked AFTER isParent
@@ -42,6 +47,7 @@ const isSign = !isSignage && path.includes("/sign");
 createRoot(document.getElementById("root")!).render(
   isSignage ? <SignageApp />
     : isKioskViewer ? <KioskViewer />
+    : isKioskCode ? <KioskCodeMirror />
     : isKiosk ? <Kiosk />
     : isParent ? <ParentApp />
     : isStaffReset ? <StaffResetApp />

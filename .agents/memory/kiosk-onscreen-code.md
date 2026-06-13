@@ -5,19 +5,31 @@ description: Rules for any surface that emits a kiosk activation QR/code, and fo
 
 # Kiosk activation code surfaces
 
-**Any QR that should activate a kiosk must encode the SAME payload the
-kiosk's camera parser expects:** `${kioskUrl}?enroll=<encodeURIComponent(token)>`
-(the format the printed card uses). The kiosk's `extractToken` accepts a
-full URL with `?enroll=` or a bare token ≥16 chars; emit the URL form so
-phone-camera and kiosk-camera both work. Code128 of the bare token covers
-1D scanners.
+**Two-step QR pattern (staff-app QR → phone mirror → kiosk activation
+QR).** There are TWO different QR payloads, do not conflate them:
+- The QR the **kiosk camera** reads must encode the kiosk parser payload:
+  `${kioskUrl}?enroll=<encodeURIComponent(token)>` (same format the
+  printed card uses). `extractToken` (Kiosk.tsx) accepts a full `?enroll=`
+  URL or a bare token ≥16 chars; Code128 of the bare token covers 1D
+  scanners.
+- The QR the **staff app shows on a computer** must NOT encode `?enroll=`
+  directly. It encodes the phone "carry over" mirror page URL
+  `${origin}${BASE_URL}kiosk-code#t=<token>&p=<pin>` (route =
+  `KioskCodeMirror.tsx`, dispatched in main.tsx BEFORE `/kiosk`). The
+  mirror page is public, does no server call/activation, and just renders
+  the real activation QR (`?enroll=`) + PIN + barcode from the hash.
 
-**Why:** a teacher's phone scanning the QR opens the URL *on the phone*
-(activates the wrong device). The working zero-typing path is the KIOSK
-camera reading the code off the phone — so the on-screen code is for the
-kiosk to read, or for the teacher to read the PIN and type. Label it
-"hold up to the kiosk camera, or type the code," never "scan with your
-phone to send it."
+**Why:** opening `?enroll=` on ANY device auto-activates (Kiosk.tsx calls
+`beginEnrollActivation` from the URL param). So if the computer QR encoded
+`?enroll=` and a teacher scanned it WITH A PHONE, the phone would activate
+the kiosk (wrong device). The teacher's phone must instead carry the code
+so they can hold the PHONE up to the kiosk camera. Token+PIN ride in the
+URL **hash fragment** (not query) so they are never sent to the server /
+Referer.
+
+**How to label:** the computer card says "scan this with your phone to
+carry the code over, then hold your phone up to the kiosk camera."  The
+phone mirror says "hold this screen up to the kiosk camera."
 
 **Self-service rotation is self-scoped, no staffId param.** Teacher
 "generate a new code" = `POST /kiosk/my-code/regenerate` (requireStaff),
