@@ -2216,8 +2216,15 @@ router.post("/kiosk/my-active/revoke-all", requireStaff, async (req, res) => {
 // tab) so a teacher who lost their badge can still activate a classroom
 // device. Scoped strictly to (req.staff.schoolId, req.staff.id): there is
 // no staffId parameter, so one teacher can never read another's PIN.
-// Returns { pin: null } when the teacher has no live token, or a token
-// issued before reversible encryption existed (admin must reprint).
+// Response status distinguishes the three states so the UI can message
+// accurately (a legacy badge is NOT the same as having no badge):
+//   "ok"     — pin present, revealed.
+//   "legacy" — a live badge exists, but its PIN was stored one-way (bcrypt)
+//              before reversible encryption existed, OR can no longer be
+//              decrypted (e.g. SESSION_SECRET rotated). The printed badge
+//              STILL WORKS on the kiosk; it just can't be read back here.
+//              Admin must reprint to surface a fresh, revealable code.
+//   "none"   — the teacher has no live enrollment token at all.
 router.get("/kiosk/my-pin", requireStaff, async (req, res) => {
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
@@ -2231,18 +2238,25 @@ router.get("/kiosk/my-pin", requireStaff, async (req, res) => {
         isNull(kioskEnrollTokensTable.revokedAt),
       ),
     );
-  if (!row || !row.pinEncrypted) {
-    res.json({ pin: null });
+  if (!row) {
+    res.json({ pin: null, status: "none" });
+    return;
+  }
+  if (!row.pinEncrypted) {
+    res.json({ pin: null, status: "legacy" });
     return;
   }
   try {
-    res.json({ pin: decryptSecret(row.pinEncrypted, KIOSK_PIN_PURPOSE) });
+    res.json({
+      pin: decryptSecret(row.pinEncrypted, KIOSK_PIN_PURPOSE),
+      status: "ok",
+    });
   } catch (err) {
     // A decrypt failure (e.g. SESSION_SECRET rotated since issuance) is not
-    // fatal — treat it as "no recoverable PIN" so the UI falls back to the
-    // reprint hint rather than erroring.
+    // fatal — the badge still works on the kiosk. Treat it like a legacy
+    // row so the UI shows the reprint hint rather than erroring.
     req.log.warn({ err, staffId: staff.id }, "kiosk my-pin decrypt failed");
-    res.json({ pin: null });
+    res.json({ pin: null, status: "legacy" });
   }
 });
 

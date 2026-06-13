@@ -43,10 +43,16 @@ export default function TeacherDestinationPicker({
   const [kioskUrlCopied, setKioskUrlCopied] = useState(false);
   const [tab, setTab] = useState<"locations" | "url">("locations");
   // The teacher's own 6-digit kiosk PIN — the same code printed on their
-  // badge, revealed owner-only from GET /api/kiosk/my-pin. `undefined` =
-  // not loaded yet; `null` = no recoverable code (no badge issued, or one
-  // issued before reversible storage existed → admin reprint needed).
-  const [myPin, setMyPin] = useState<string | null | undefined>(undefined);
+  // badge, revealed owner-only from GET /api/kiosk/my-pin.
+  //   undefined  = not loaded yet
+  //   "ok"       = pin present (myPin holds it)
+  //   "legacy"   = a working badge exists but its code can't be read back
+  //                (printed before reversible storage) → reprint to reveal
+  //   "none"     = no badge issued yet
+  const [myPin, setMyPin] = useState<string | null>(null);
+  const [pinStatus, setPinStatus] = useState<
+    "ok" | "legacy" | "none" | undefined
+  >(undefined);
   const [pinCopied, setPinCopied] = useState(false);
 
   // The kiosk screen a teacher opens on a classroom device. Same URL shown
@@ -128,15 +134,18 @@ export default function TeacherDestinationPicker({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setMyPin(undefined);
+    setMyPin(null);
+    setPinStatus(undefined);
     setPinCopied(false);
     authFetch("/api/kiosk/my-pin")
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error("pin"))))
-      .then((data: { pin: string | null }) => {
-        if (!cancelled) setMyPin(data.pin ?? null);
+      .then((data: { pin: string | null; status: "ok" | "legacy" | "none" }) => {
+        if (cancelled) return;
+        setMyPin(data.pin ?? null);
+        setPinStatus(data.status);
       })
       .catch(() => {
-        if (!cancelled) setMyPin(null);
+        if (!cancelled) setPinStatus("none");
       });
     return () => {
       cancelled = true;
@@ -303,9 +312,9 @@ export default function TeacherDestinationPicker({
 
               <div className="tdp-kiosk-pin">
                 <div className="tdp-kiosk-url-label">Your 6-digit PIN</div>
-                {myPin === undefined ? (
+                {pinStatus === undefined ? (
                   <p className="tdp-kiosk-url-hint">Loading…</p>
-                ) : myPin ? (
+                ) : pinStatus === "ok" && myPin ? (
                   <>
                     <p className="tdp-kiosk-url-hint">
                       The same code printed on your kiosk badge. Type it on the
@@ -330,6 +339,13 @@ export default function TeacherDestinationPicker({
                       </button>
                     </div>
                   </>
+                ) : pinStatus === "legacy" ? (
+                  <p className="tdp-kiosk-url-hint">
+                    Your printed badge code still works on the kiosk, but it
+                    can&apos;t be shown here — older badges were stored securely
+                    and can&apos;t be read back. Ask an admin to reprint your
+                    kiosk badge to get a fresh code that will appear here.
+                  </p>
                 ) : (
                   <p className="tdp-kiosk-url-hint">
                     No kiosk code yet. Ask an admin to print your kiosk badge —
