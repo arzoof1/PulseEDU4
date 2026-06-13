@@ -4109,7 +4109,8 @@ function StepOutButton() {
       style={{
         position: "fixed",
         top: 12,
-        right: 64,
+        // Left of the gear, which itself sits left of the 96px queue sidebar.
+        right: 156,
         background: "rgba(255,255,255,0.06)",
         border: "1px solid rgba(255,255,255,0.15)",
         color: "rgba(255,255,255,0.7)",
@@ -4120,7 +4121,7 @@ function StepOutButton() {
         alignItems: "center",
         gap: 6,
         cursor: "pointer",
-        zIndex: 10,
+        zIndex: 20,
         fontSize: "0.85rem",
         textDecoration: "none",
       }}
@@ -4155,7 +4156,9 @@ function GearButton({ onClick }: { onClick: () => void }) {
       style={{
         position: "fixed",
         top: 12,
-        right: 12,
+        // Sit to the LEFT of the 96px "Next up" queue sidebar (it's an opaque
+        // panel at the same stacking level) so the gear is never buried under it.
+        right: 108,
         background: "rgba(255,255,255,0.06)",
         border: "1px solid rgba(255,255,255,0.15)",
         color: "rgba(255,255,255,0.55)",
@@ -4166,7 +4169,7 @@ function GearButton({ onClick }: { onClick: () => void }) {
         alignItems: "center",
         justifyContent: "center",
         cursor: "pointer",
-        zIndex: 10,
+        zIndex: 20,
       }}
     >
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
