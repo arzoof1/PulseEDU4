@@ -6845,6 +6845,12 @@ export async function ensureKioskCardsSchema(): Promise<void> {
       last_used_at TIMESTAMPTZ
     )
   `);
+  // Reversibly-encrypted copy of the PIN so the owning teacher can read
+  // their badge code back from the Hall Pass gear. Additive; pre-existing
+  // tokens stay NULL (no recoverable PIN until reissued).
+  await db.execute(
+    sql`ALTER TABLE kiosk_enroll_tokens ADD COLUMN IF NOT EXISTS pin_encrypted TEXT`,
+  );
   // At most one live enrollment token per teacher per school.
   // "Reissue card" must revoke-then-insert in a single transaction so
   // this partial index never sees two live rows for the same teacher.

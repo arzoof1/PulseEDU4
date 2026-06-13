@@ -23,6 +23,7 @@ import {
   teacherDestinationAllowlistTable,
 } from "@workspace/db";
 import { renderKioskCardsPdf } from "../lib/kioskCardsPdf.js";
+import { encryptSecret, decryptSecret } from "../lib/secretCrypto.js";
 import {
   renderTeacherBadgesPdf,
   type TeacherBadgeInput,
@@ -84,6 +85,12 @@ const router: IRouter = Router();
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
+
+// Domain-separation tag for the reversibly-encrypted kiosk PIN. Keeps the
+// derived key distinct from the parent-TOTP encryption (secretCrypto's
+// default purpose) — a value encrypted under one cannot be read under the
+// other. Encrypt + decrypt of pin_encrypted MUST both use this tag.
+const KIOSK_PIN_PURPOSE = "kiosk-pin-v1";
 
 // Trailing subject descriptors that some rosters bake into the display name
 // (e.g. "Marcus Hayes ELA" or "Jane Doe G6"). Stripped only when building the
@@ -2204,6 +2211,41 @@ router.post("/kiosk/my-active/revoke-all", requireStaff, async (req, res) => {
   res.json({ revoked: result.length });
 });
 
+// Owner-only reveal of the caller's OWN 6-digit kiosk PIN — the same code
+// printed on their badge. Surfaced in the Hall Pass gear ("Get kiosk URL"
+// tab) so a teacher who lost their badge can still activate a classroom
+// device. Scoped strictly to (req.staff.schoolId, req.staff.id): there is
+// no staffId parameter, so one teacher can never read another's PIN.
+// Returns { pin: null } when the teacher has no live token, or a token
+// issued before reversible encryption existed (admin must reprint).
+router.get("/kiosk/my-pin", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const [row] = await db
+    .select({ pinEncrypted: kioskEnrollTokensTable.pinEncrypted })
+    .from(kioskEnrollTokensTable)
+    .where(
+      and(
+        eq(kioskEnrollTokensTable.schoolId, staff.schoolId),
+        eq(kioskEnrollTokensTable.staffId, staff.id),
+        isNull(kioskEnrollTokensTable.revokedAt),
+      ),
+    );
+  if (!row || !row.pinEncrypted) {
+    res.json({ pin: null });
+    return;
+  }
+  try {
+    res.json({ pin: decryptSecret(row.pinEncrypted, KIOSK_PIN_PURPOSE) });
+  } catch (err) {
+    // A decrypt failure (e.g. SESSION_SECRET rotated since issuance) is not
+    // fatal — treat it as "no recoverable PIN" so the UI falls back to the
+    // reprint hint rather than erroring.
+    req.log.warn({ err, staffId: staff.id }, "kiosk my-pin decrypt failed");
+    res.json({ pin: null });
+  }
+});
+
 // ---- Admin: enrollment-token management ----------------------------
 
 // One row per active teacher with their enrollment-token status.
@@ -2360,6 +2402,10 @@ async function issueEnrollToken(args: {
   const tokenHash = hashToken(rawToken);
   const rawPin = generatePin();
   const pinHash = await bcrypt.hash(rawPin, 10);
+  // Reversibly-encrypted copy so the owning teacher can read this exact
+  // code back from the Hall Pass gear ("Get kiosk URL" tab). Owner-only
+  // reveal — see GET /kiosk/my-pin. Distinct purpose tag from parent TOTP.
+  const pinEncrypted = encryptSecret(rawPin, KIOSK_PIN_PURPOSE);
 
   const tokenId = await db.transaction(async (tx) => {
     await tx
@@ -2382,6 +2428,7 @@ async function issueEnrollToken(args: {
         staffId: args.staffId,
         tokenHash,
         pinHash,
+        pinEncrypted,
         createdByStaffId: args.actorStaffId,
         rotatedAt: new Date(),
       })

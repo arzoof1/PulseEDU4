@@ -42,6 +42,12 @@ export default function TeacherDestinationPicker({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [kioskUrlCopied, setKioskUrlCopied] = useState(false);
   const [tab, setTab] = useState<"locations" | "url">("locations");
+  // The teacher's own 6-digit kiosk PIN — the same code printed on their
+  // badge, revealed owner-only from GET /api/kiosk/my-pin. `undefined` =
+  // not loaded yet; `null` = no recoverable code (no badge issued, or one
+  // issued before reversible storage existed → admin reprint needed).
+  const [myPin, setMyPin] = useState<string | null | undefined>(undefined);
+  const [pinCopied, setPinCopied] = useState(false);
 
   // The kiosk screen a teacher opens on a classroom device. Same URL shown
   // in Settings → Kiosk Setup; surfaced here for quick teacher access.
@@ -116,6 +122,37 @@ export default function TeacherDestinationPicker({
     // content hash) to avoid an every-render refetch loop. See above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, allowlistKey]);
+
+  // Reveal the teacher's own kiosk PIN when the modal opens. Owner-only on
+  // the server; cleared between opens so a stale code never flashes.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setMyPin(undefined);
+    setPinCopied(false);
+    authFetch("/api/kiosk/my-pin")
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error("pin"))))
+      .then((data: { pin: string | null }) => {
+        if (!cancelled) setMyPin(data.pin ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setMyPin(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const copyPin = async () => {
+    if (!myPin) return;
+    try {
+      await navigator.clipboard.writeText(myPin);
+      setPinCopied(true);
+      setTimeout(() => setPinCopied(false), 1500);
+    } catch {
+      setPinCopied(false);
+    }
+  };
 
   const restrooms = useMemo(
     () => options.filter((l) => l.kind === "restroom"),
@@ -262,6 +299,43 @@ export default function TeacherDestinationPicker({
                 >
                   Open
                 </a>
+              </div>
+
+              <div className="tdp-kiosk-pin">
+                <div className="tdp-kiosk-url-label">Your 6-digit PIN</div>
+                {myPin === undefined ? (
+                  <p className="tdp-kiosk-url-hint">Loading…</p>
+                ) : myPin ? (
+                  <>
+                    <p className="tdp-kiosk-url-hint">
+                      The same code printed on your kiosk badge. Type it on the
+                      activation screen to start your room.
+                    </p>
+                    <div className="tdp-kiosk-url-row">
+                      <code
+                        className="tdp-kiosk-url-code"
+                        style={{ letterSpacing: "0.25em", fontSize: "1.25rem" }}
+                      >
+                        {myPin.slice(0, 3)} {myPin.slice(3)}
+                      </code>
+                    </div>
+                    <div className="tdp-kiosk-url-actions">
+                      <button
+                        type="button"
+                        className="tdp-kiosk-url-copy"
+                        onClick={() => void copyPin()}
+                        title="Copy PIN"
+                      >
+                        {pinCopied ? "Copied!" : "Copy PIN"}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="tdp-kiosk-url-hint">
+                    No kiosk code yet. Ask an admin to print your kiosk badge —
+                    your PIN will appear here afterward.
+                  </p>
+                )}
               </div>
             </div>
           ) : (
