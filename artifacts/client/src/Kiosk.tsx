@@ -4325,7 +4325,7 @@ function TimerScreen({
       </div>
       <div
         style={{
-          fontSize: "clamp(2.5rem, 7vw, 5rem)",
+          fontSize: "clamp(1.75rem, min(7vw, 7vh), 4.5rem)",
           fontWeight: 700,
           lineHeight: 1.1,
           marginBottom: "0.5rem",
@@ -4338,7 +4338,7 @@ function TimerScreen({
       <div
         aria-label={overdue ? "overdue countdown" : "time remaining"}
         style={{
-          fontSize: "clamp(8rem, 28vw, 22rem)",
+          fontSize: "clamp(4rem, min(28vw, 30vh), 22rem)",
           fontWeight: 900,
           lineHeight: 1,
           fontVariantNumeric: "tabular-nums",
