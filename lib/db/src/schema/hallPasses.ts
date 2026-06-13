@@ -14,6 +14,10 @@ export const hallPassesTable = pgTable("hall_passes", {
   maxDurationMinutes: integer("max_duration_minutes").notNull(),
   endedAt: text("ended_at"),
   isTardyReturn: boolean("is_tardy_return").notNull().default(false),
+  // "Go now" line-bypass passes (student summoned to office/guidance/clinic).
+  // Flagged so admins can audit who skipped the waiting queue and spot
+  // patterns of overuse. Never set for normal or queued passes.
+  priorityBypass: boolean("priority_bypass").notNull().default(false),
 });
 
 export type HallPassRow = typeof hallPassesTable.$inferSelect;

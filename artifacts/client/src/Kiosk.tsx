@@ -13,6 +13,9 @@ interface LocationRow {
   isDestination: boolean;
   studentVisible: boolean;
   active: boolean;
+  // Location kind discriminator (e.g. "restroom"). Used to keep restrooms out
+  // of the "Go now" line-bypass picker.
+  kind?: string | null;
 }
 
 // A destination as shown in the kiosk picker. Extends a location row with the
@@ -1656,7 +1659,12 @@ function KioskBody({
   // the activating teacher's per-staff allowlist. Preferred over the old
   // locations × allowed intersection so per-teacher admin edits show up.
   const [tokenDestinations, setTokenDestinations] = useState<
-    { id: number; name: string; teacherName?: string | null }[] | null
+    {
+      id: number;
+      name: string;
+      kind?: string | null;
+      teacherName?: string | null;
+    }[] | null
   >(null);
   const [now, setNow] = useState(new Date());
   const [studentId, setStudentId] = useState("");
@@ -1684,6 +1692,9 @@ function KioskBody({
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [queueCap, setQueueCap] = useState(5);
   const [getInLineOpen, setGetInLineOpen] = useState(false);
+  // "Go now" line bypass — opens an overlay that creates an immediate pass for
+  // a student summoned to the office/guidance/clinic (any non-restroom dest).
+  const [goNowOpen, setGoNowOpen] = useState(false);
   // When the previous student taps "I'm back" and the server reports a
   // next-up entry, we render a dedicated handoff overlay until they enter
   // their ID (or NEXT_UP_TIMEOUT_MS elapses).
@@ -1877,6 +1888,7 @@ function KioskBody({
           destinations: {
             id: number;
             name: string;
+            kind?: string | null;
             teacherName?: string | null;
           }[];
         }) => setTokenDestinations(d.destinations ?? []),
@@ -1905,7 +1917,14 @@ function KioskBody({
       return tokenDestinations
         .map((d): DestinationOption => {
           const base = byId.get(d.id) ?? ({ id: d.id, name: d.name } as LocationRow);
-          return { ...base, teacherName: d.teacherName ?? null };
+          return {
+            ...base,
+            // The token endpoint is the authoritative source for `kind` on a
+            // kiosk device (the staff-only /api/locations 401s here, so the
+            // `byId` fallback is usually empty).
+            kind: d.kind ?? base.kind,
+            teacherName: d.teacherName ?? null,
+          };
         })
         .sort((a, b) => a.name.localeCompare(b.name));
     }
@@ -2416,6 +2435,7 @@ function KioskBody({
         entries={queue}
         cap={queueCap}
         onAdd={() => setGetInLineOpen(true)}
+        onGoNow={() => setGoNowOpen(true)}
         disabled={!!nextUp}
       />
 
@@ -2426,6 +2446,18 @@ function KioskBody({
           onClose={() => setGetInLineOpen(false)}
           onAdded={() => {
             setGetInLineOpen(false);
+            void refetchQueue();
+          }}
+        />
+      )}
+
+      {goNowOpen && (
+        <GoNowOverlay
+          token={token}
+          destinationOptions={destinationOptions}
+          onClose={() => setGoNowOpen(false)}
+          onCreated={() => {
+            setGoNowOpen(false);
             void refetchQueue();
           }}
         />
@@ -2468,11 +2500,13 @@ function QueueStrip({
   entries,
   cap,
   onAdd,
+  onGoNow,
   disabled,
 }: {
   entries: QueueEntry[];
   cap: number;
   onAdd: () => void;
+  onGoNow: () => void;
   disabled: boolean;
 }) {
   const isFull = entries.length >= cap;
@@ -2592,6 +2626,35 @@ function QueueStrip({
       >
         {isFull ? "Line is full" : "Get in line"}
       </button>
+      <button
+        type="button"
+        onClick={onGoNow}
+        style={{
+          marginTop: "0.4rem",
+          background: "transparent",
+          color: "#fbbf24",
+          border: "1px solid rgba(251,191,36,0.55)",
+          borderRadius: 8,
+          padding: "0.55rem 0.3rem",
+          fontWeight: 700,
+          fontSize: "0.72rem",
+          lineHeight: 1.15,
+          cursor: "pointer",
+        }}
+      >
+        Go now
+      </button>
+      <div
+        style={{
+          marginTop: 4,
+          fontSize: "0.55rem",
+          opacity: 0.55,
+          textAlign: "center",
+          lineHeight: 1.2,
+        }}
+      >
+        Called to the office?
+      </div>
     </div>
   );
 }
@@ -2817,6 +2880,309 @@ function GetInLineOverlay({
           </form>
         )}
       </div>
+      </div>
+    </>
+  );
+}
+
+// "Go now" line-bypass overlay. Lets a student who was summoned to the
+// office/guidance/clinic create a pass immediately instead of waiting in the
+// queue. Restroom-kind destinations are excluded (the line meters bathroom
+// traffic). A confirmation step ("Were you called down or teacher directed?")
+// guards against students bypassing the line casually. On success the pass is
+// created server-side (priorityBypass=true) but does NOT take over the device
+// timer — the line/bathroom student keeps the big countdown.
+function GoNowOverlay({
+  token,
+  destinationOptions,
+  onClose,
+  onCreated,
+}: {
+  token: string;
+  destinationOptions: DestinationOption[];
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [studentId, setStudentId] = useState("");
+  const [destination, setDestination] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [done, setDone] = useState(false);
+  const [scannerOpen, setScannerOpen] = useState(false);
+
+  // Restrooms can never bypass the line; hide them from the picker. (The
+  // server enforces this too, in case `kind` isn't available client-side.)
+  const bypassDestinations = useMemo(
+    () => destinationOptions.filter((d) => d.kind !== "restroom"),
+    [destinationOptions],
+  );
+
+  // Auto-close after a brief confirmation so the kiosk returns to its normal
+  // screen for the next student.
+  useEffect(() => {
+    if (!done) return;
+    const id = setTimeout(onCreated, 2500);
+    return () => clearTimeout(id);
+  }, [done, onCreated]);
+
+  async function confirmGoNow() {
+    if (!studentId.trim() || !destination) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/kiosk/hall-passes`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            token,
+            studentId: studentId.trim(),
+            destination,
+            bypassQueue: true,
+          }),
+        },
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(body.error ?? `Request failed (${res.status})`);
+        setConfirming(false);
+        return;
+      }
+      setDone(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+      setConfirming(false);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <>
+      {scannerOpen && (
+        <CameraScanner
+          onScan={(text) => {
+            const trimmed = text.trim();
+            const m = trimmed.match(/[?&]signin=([^&\s]+)/);
+            const id = m ? decodeURIComponent(m[1]) : trimmed;
+            setScannerOpen(false);
+            if (id) setStudentId(id);
+          }}
+          onCancel={() => setScannerOpen(false)}
+        />
+      )}
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(0,0,0,0.7)",
+          zIndex: 20,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "2rem",
+        }}
+        onClick={onClose}
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            background: "#0f172a",
+            color: "#fff",
+            borderRadius: 16,
+            padding: "1.5rem",
+            width: "min(440px, 92vw)",
+            border: "1px solid rgba(251,191,36,0.4)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "0.75rem",
+              letterSpacing: "0.15em",
+              textTransform: "uppercase",
+              color: "#fbbf24",
+              marginBottom: "0.25rem",
+            }}
+          >
+            Go now — skip the line
+          </div>
+          <h2 style={{ margin: "0 0 1rem", fontSize: "1.5rem" }}>
+            Called down or teacher directed
+          </h2>
+          {done ? (
+            <div
+              style={{
+                padding: "1rem",
+                background: "rgba(34,197,94,0.15)",
+                border: "1px solid #22c55e",
+                borderRadius: 8,
+                textAlign: "center",
+              }}
+            >
+              <div style={{ fontSize: "2rem", marginBottom: "0.25rem" }}>
+                ✓
+              </div>
+              <div style={{ fontSize: "1.1rem", fontWeight: 700 }}>
+                You're all set — head to {destination}.
+              </div>
+              <div style={{ opacity: 0.85, marginTop: "0.5rem" }}>
+                Come back and tap “I'm back” when you return.
+              </div>
+            </div>
+          ) : confirming ? (
+            <div
+              style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+            >
+              <div
+                style={{
+                  padding: "1rem",
+                  background: "rgba(251,191,36,0.12)",
+                  border: "1px solid rgba(251,191,36,0.5)",
+                  borderRadius: 8,
+                  fontSize: "1.15rem",
+                  fontWeight: 600,
+                  textAlign: "center",
+                  lineHeight: 1.4,
+                }}
+              >
+                Were you called down or teacher directed?
+              </div>
+              {error && <ErrorBox>{error}</ErrorBox>}
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirming(false);
+                    setError(null);
+                  }}
+                  disabled={submitting}
+                  style={{
+                    flex: 1,
+                    background: "transparent",
+                    color: "#fff",
+                    border: "1px solid rgba(255,255,255,0.25)",
+                    borderRadius: 8,
+                    padding: "0.85rem",
+                    fontWeight: 600,
+                    cursor: submitting ? "not-allowed" : "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmGoNow}
+                  disabled={submitting}
+                  style={{
+                    flex: 1,
+                    background: submitting ? "rgba(251,191,36,0.4)" : "#fbbf24",
+                    color: "#0b1220",
+                    border: "none",
+                    borderRadius: 8,
+                    padding: "0.85rem",
+                    fontWeight: 800,
+                    cursor: submitting ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {submitting ? "Creating…" : "Go now"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (studentId.trim() && destination) setConfirming(true);
+              }}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.85rem",
+              }}
+            >
+              <Field label="Scan or enter your ID">
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    autoFocus
+                    value={studentId}
+                    onChange={(e) => setStudentId(e.target.value)}
+                    placeholder="e.g. 12345"
+                    style={{ ...inputStyle, flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setScannerOpen(true)}
+                    aria-label="Scan badge with camera"
+                    title="Scan badge with camera"
+                    style={{
+                      background: "rgba(255,255,255,0.1)",
+                      border: "1px solid rgba(255,255,255,0.2)",
+                      borderRadius: 8,
+                      color: "#fff",
+                      width: 56,
+                      fontSize: "1.5rem",
+                      cursor: "pointer",
+                      flexShrink: 0,
+                    }}
+                  >
+                    📷
+                  </button>
+                </div>
+              </Field>
+              <Field label="Where are you going?">
+                <select
+                  value={destination}
+                  onChange={(e) => setDestination(e.target.value)}
+                  style={inputStyle}
+                >
+                  <option value="">Select a destination…</option>
+                  {bypassDestinations.map((d) => (
+                    <option key={d.id} value={d.name}>
+                      {d.teacherName ? `${d.teacherName} — ${d.name}` : d.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <div style={{ fontSize: "0.8rem", opacity: 0.65 }}>
+                Restrooms can't skip the line — use “Get in line” for those.
+              </div>
+              {error && <ErrorBox>{error}</ErrorBox>}
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  style={{
+                    flex: 1,
+                    background: "transparent",
+                    color: "#fff",
+                    border: "1px solid rgba(255,255,255,0.25)",
+                    borderRadius: 8,
+                    padding: "0.85rem",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!studentId.trim() || !destination}
+                  style={primaryBtn(!studentId.trim() || !destination, {
+                    padding: "0.85rem",
+                    flex: 1,
+                  })}
+                >
+                  Continue
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
       </div>
     </>
   );

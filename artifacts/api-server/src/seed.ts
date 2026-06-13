@@ -6828,6 +6828,16 @@ export async function ensureFeaturePlansSchema() {
 // Adds the per-teacher enrollment-token table and the provenance /
 // sub-flow columns on kiosk_activations. All additive + idempotent.
 // -----------------------------------------------------------------------------
+// "Go now" line-bypass audit flag on hall passes. Pre-2026 tenants (and any
+// DB created before this column was added to the Drizzle schema) may be
+// missing it; without it, a bypass pass insert fails at runtime. Additive,
+// defaulted, and idempotent — safe on every boot.
+export async function ensureHallPassPriorityBypassColumn(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE hall_passes ADD COLUMN IF NOT EXISTS priority_bypass BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+}
+
 export async function ensureKioskCardsSchema(): Promise<void> {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS kiosk_enroll_tokens (

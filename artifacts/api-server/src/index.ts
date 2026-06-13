@@ -29,6 +29,7 @@ import {
   ensurePickupSchema,
   ensureAstSchema,
   ensureKioskCardsSchema,
+  ensureHallPassPriorityBypassColumn,
   ensureKioskWelcomeSchema,
   ensurePbisInvisibleTierColumns,
   ensureBadgePrintEventsSchema,
@@ -224,6 +225,8 @@ async function runSeed(): Promise<void> {
   // tokens encoded as QR + Code 128 + 6-digit PIN; sub/proxy + audit
   // columns on kiosk_activations). Idempotent.
   await ensureKioskCardsSchema();
+  // "Go now" line-bypass audit flag on hall_passes. Additive + idempotent.
+  await ensureHallPassPriorityBypassColumn();
   // Phase 3 — Kiosk "Sign in to class" welcome messages + class_signins
   // append-only ledger. Idempotent.
   await ensureKioskWelcomeSchema();

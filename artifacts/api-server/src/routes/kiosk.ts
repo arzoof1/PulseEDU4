@@ -748,6 +748,7 @@ router.get("/kiosk/destinations/:token", async (req, res) => {
     .select({
       id: locationsTable.id,
       name: locationsTable.name,
+      kind: locationsTable.kind,
       active: locationsTable.active,
       studentVisible: locationsTable.studentVisible,
       isDestination: locationsTable.isDestination,
@@ -802,6 +803,9 @@ router.get("/kiosk/destinations/:token", async (req, res) => {
   const visible = visibleRows.map((r) => ({
     id: r.id,
     name: r.name,
+    // Exposed so the kiosk can hide restroom-kind destinations from the
+    // "Go now" line-bypass picker (restrooms must stay line-only).
+    kind: r.kind,
     teacherName: teacherByRoom.get(r.name) ?? null,
   }));
   res.json({ originRoom: act.room, destinations: visible });
@@ -1014,6 +1018,11 @@ async function resolveKioskStudent(
 
 router.post("/kiosk/hall-passes", async (req, res) => {
   const { studentId, destination, token } = req.body ?? {};
+  // "Go now" line bypass: student summoned to the office/guidance/clinic who
+  // can't wait in the queue. Skips the waiting line and the daily limit, but
+  // keep-apart is still enforced (it alerts instead of silently queuing) and
+  // restroom-kind destinations are never bypassable.
+  const bypassQueue = req.body?.bypassQueue === true;
 
   if (
     typeof studentId !== "string" ||
@@ -1094,6 +1103,15 @@ router.post("/kiosk/hall-passes", async (req, res) => {
   if (!dest.studentVisible) {
     res.status(403).json({
       error: "Destination not available from kiosk",
+    });
+    return;
+  }
+  // Restrooms can never skip the line — the queue exists precisely to meter
+  // bathroom traffic. Mirror of the client, which hides restrooms from the
+  // "Go now" picker; this rejects a crafted bypass POST for one.
+  if (bypassQueue && dest.kind === "restroom") {
+    res.status(400).json({
+      error: "Restroom passes can't skip the line — please get in line.",
     });
     return;
   }
@@ -1202,10 +1220,11 @@ router.post("/kiosk/hall-passes", async (req, res) => {
   // Polarity / keep-apart enforcement. The kiosk activation carries the
   // school it was bound to, so the daily limit is read from that school's
   // settings (not the singleton row).
-  const limitConflict = await findDailyLimitConflict(
-    normalizedStudentId,
-    act.schoolId,
-  );
+  // A "Go now" bypass is for an involuntary summons (office/guidance/clinic),
+  // so it is exempt from the per-student daily pass limit.
+  const limitConflict = bypassQueue
+    ? null
+    : await findDailyLimitConflict(normalizedStudentId, act.schoolId);
   if (limitConflict) {
     res.status(409).json({ error: dailyLimitConflictMessage(limitConflict) });
     return;
@@ -1215,6 +1234,17 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     act.schoolId,
   );
   if (conflict) {
+    // A "Go now" bypass must NOT silently queue on a keep-apart hit — that
+    // would defeat the bypass. Safety still wins over the summons: block and
+    // alert so the teacher resolves it (the two kept-apart students can't be
+    // in the hall together regardless of who called the student down).
+    if (bypassQueue) {
+      res.status(409).json({
+        error:
+          "You can't leave right now — please see your teacher. (A keep-apart rule is active.)",
+      });
+      return;
+    }
     // Keep-apart at the kiosk: instead of bouncing the student with an
     // error that names the other kid, drop them silently into THIS kiosk's
     // queue and tell them they're on hold. The companion queue panel and
@@ -1319,6 +1349,7 @@ router.post("/kiosk/hall-passes", async (req, res) => {
       createdAt: new Date().toISOString(),
       maxDurationMinutes: config.defaultHallPassDurationMinutes,
       endedAt: null,
+      priorityBypass: bypassQueue,
     })
     .returning();
 
