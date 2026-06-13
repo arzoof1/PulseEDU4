@@ -842,9 +842,27 @@ function CardPreview(props: {
         </div>
         {/* Name + grade */}
         <div style={{ position: "absolute", top: 52, left: 110, right: 132, color: props.headerColor }}>
-          <div style={{ fontWeight: 700, fontSize: 15, lineHeight: 1.05 }}>Jordan</div>
-          <div style={{ fontWeight: 600, fontSize: 12, marginTop: 1 }}>Sample</div>
-          <div style={{ fontSize: 12, marginTop: 6 }}>Grade 7</div>
+          <div style={{ fontWeight: 800, fontSize: 17, lineHeight: 1.05 }}>Jordan</div>
+          <div style={{ fontWeight: 800, fontSize: 14, marginTop: 1 }}>Sample</div>
+          {/* Grade as a bold digit inside a white circle (matches the PDF) */}
+          <div
+            style={{
+              marginTop: 7,
+              width: 26,
+              height: 26,
+              borderRadius: "50%",
+              background: "#fff",
+              border: "1px solid #cbd5e1",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontWeight: 800,
+              fontSize: 15,
+              color: "#0f172a",
+            }}
+          >
+            7
+          </div>
         </div>
         {/* QR white plate */}
         <div

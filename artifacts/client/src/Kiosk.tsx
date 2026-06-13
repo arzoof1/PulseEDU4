@@ -4359,8 +4359,8 @@ function StepOutButton() {
       style={{
         position: "fixed",
         top: 12,
-        // Left of the gear, which itself sits left of the 96px queue sidebar.
-        right: 156,
+        // Left of the gear, which itself sits left of the 240px queue sidebar.
+        right: 304,
         background: "rgba(255,255,255,0.06)",
         border: "1px solid rgba(255,255,255,0.15)",
         color: "rgba(255,255,255,0.7)",
@@ -4406,9 +4406,9 @@ function GearButton({ onClick }: { onClick: () => void }) {
       style={{
         position: "fixed",
         top: 12,
-        // Sit to the LEFT of the 96px "Next up" queue sidebar (it's an opaque
-        // panel at the same stacking level) so the gear is never buried under it.
-        right: 108,
+        // Sit to the LEFT of the 240px "Next up" queue sidebar (an opaque panel
+        // at the same stacking level) so the gear never overlaps it / its text.
+        right: 252,
         background: "rgba(255,255,255,0.06)",
         border: "1px solid rgba(255,255,255,0.15)",
         color: "rgba(255,255,255,0.55)",
