@@ -45,6 +45,7 @@ import {
   studentSeparationsTable,
   studentRetentionsTable,
   housesTable,
+  attendanceCheckinsTable,
 } from "@workspace/db";
 import { and, eq, inArray, isNull, gte, lte, sql, desc, or } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -573,6 +574,39 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
     )
     .orderBy(desc(pulloutsTable.requestedAt))
     .limit(10);
+
+  // On-Time Attendance summary (lives under the flow/Attendance pillar).
+  // SEPARATE ledger from PBIS — these arrival points count toward house
+  // standings but never the Invisible Student calc. We surface a simple
+  // on-time rate (pre-bell check-ins ÷ total check-ins) plus the points
+  // earned this window. Lottery bonus rows are included in points but
+  // excluded from the rate denominator (they aren't an arrival event).
+  const onTimeRows = await db
+    .select({
+      kind: attendanceCheckinsTable.kind,
+      points: attendanceCheckinsTable.points,
+      postBell: attendanceCheckinsTable.postBell,
+    })
+    .from(attendanceCheckinsTable)
+    .where(
+      and(
+        eq(attendanceCheckinsTable.schoolId, schoolId),
+        eq(attendanceCheckinsTable.studentId, studentId),
+        gte(attendanceCheckinsTable.createdAt, window.from),
+        lte(attendanceCheckinsTable.createdAt, window.to),
+      ),
+    );
+  const onTimeCheckins = onTimeRows.filter((r) => r.kind === "checkin");
+  const onTimeCheckinCount = onTimeCheckins.length;
+  const onTimePreBellCount = onTimeCheckins.filter((r) => !r.postBell).length;
+  const onTimePoints = onTimeRows.reduce((sum, r) => sum + (r.points ?? 0), 0);
+  const onTimeLotteryWins = onTimeRows.filter(
+    (r) => r.kind === "lottery",
+  ).length;
+  const onTimeRatePct =
+    onTimeCheckinCount > 0
+      ? Math.round((onTimePreBellCount / onTimeCheckinCount) * 100)
+      : null;
 
   // ----- Pillar: Supports ------------------------------------------------
   const accommodations = await db
@@ -1261,6 +1295,16 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
         hallPassCount,
         hallPassSchoolAvg: Number(hallPassSchoolAvg.toFixed(2)),
         recentPullouts,
+        // On-Time Attendance (separate ledger; never affects Invisible
+        // Student). onTimeRatePct is null when the student had no check-ins
+        // in the window so the UI can hide the block cleanly.
+        onTime: {
+          checkinCount: onTimeCheckinCount,
+          onTimeCount: onTimePreBellCount,
+          ratePct: onTimeRatePct,
+          points: onTimePoints,
+          lotteryWins: onTimeLotteryWins,
+        },
       },
       supports: {
         activeAccommodationCount: accommodations.length,

@@ -354,6 +354,38 @@ export const schoolSettingsTable = pgTable(
       { letter: "D", word: "Determined" },
       { letter: "E", word: "Engaged" },
     ]),
+  // -----------------------------------------------------------------
+  // On-Time Attendance / Tardy Incentive (classroom-door kiosk).
+  //   onTimeAttendanceEnabled — master switch. When OFF the kiosk never
+  //     auto-flips to Attendance mode (default OFF; opt-in per school).
+  //   onTimeMaxPoints — point value for arriving in the first minute of
+  //     passing; points = min(maxPoints, ceil(minutes until the bell)).
+  //     Caps long (post-lunch) passing periods from over-rewarding.
+  //   onTimeLotteryEnabled — daily "lucky class" bonus draw on/off.
+  //   onTimeLotteryLabel — school-editable name shown in the reveal email
+  //     so it mirrors the school's PBIS theme (e.g. "Paw Pride").
+  //   onTimeLotteryBonusPoints — points awarded to every present student in
+  //     the winning class.
+  //   onTimeLotteryRevealLeadMinutes — minutes before end of day that the
+  //     draw runs + admins are emailed. Picking this late keeps EVERY
+  //     period (even last) eligible without leaking the winner early.
+  // -----------------------------------------------------------------
+  onTimeAttendanceEnabled: boolean("on_time_attendance_enabled")
+    .notNull()
+    .default(false),
+  onTimeMaxPoints: integer("on_time_max_points").notNull().default(4),
+  onTimeLotteryEnabled: boolean("on_time_lottery_enabled")
+    .notNull()
+    .default(false),
+  onTimeLotteryLabel: text("on_time_lottery_label")
+    .notNull()
+    .default("On-Time Champions"),
+  onTimeLotteryBonusPoints: integer("on_time_lottery_bonus_points")
+    .notNull()
+    .default(20),
+  onTimeLotteryRevealLeadMinutes: integer("on_time_lottery_reveal_lead_minutes")
+    .notNull()
+    .default(30),
   },
   (t) => ({
     schoolIdUnique: uniqueIndex("school_settings_school_id_unique").on(

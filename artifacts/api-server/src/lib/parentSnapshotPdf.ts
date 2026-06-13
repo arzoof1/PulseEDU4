@@ -341,6 +341,25 @@ function drawAttendanceBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
         color: COLORS.positive,
       });
     }
+    // Kiosk On-Time Attendance arrivals — only when the student has
+    // door-kiosk check-ins this school year (otherwise the block is null).
+    if (s.attendance.onTimeArrivals && s.attendance.onTimeArrivals.checkinCount > 0) {
+      stats.push({
+        label: "On-time arrivals",
+        value:
+          s.attendance.onTimeArrivals.ratePct != null
+            ? `${s.attendance.onTimeArrivals.ratePct}%`
+            : "—",
+        color: COLORS.positive,
+      });
+      if (s.attendance.onTimeArrivals.lotteryWins > 0) {
+        stats.push({
+          label: "Lottery wins",
+          value: String(s.attendance.onTimeArrivals.lotteryWins),
+          color: COLORS.accent,
+        });
+      }
+    }
   }
   if (s.sectionsAvailable.hallPasses) {
     stats.push({

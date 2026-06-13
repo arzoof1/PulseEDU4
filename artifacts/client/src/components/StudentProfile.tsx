@@ -154,6 +154,13 @@ interface ProfilePayload {
         status: string;
         referringTeacherName: string;
       }>;
+      onTime?: {
+        checkinCount: number;
+        onTimeCount: number;
+        ratePct: number | null;
+        points: number;
+        lotteryWins: number;
+      };
     };
     supports: {
       activeAccommodationCount: number;
@@ -3480,6 +3487,7 @@ export default function StudentProfile({
             pillars.flow.issDayCount === 0 &&
             pillars.flow.hallPassCount === 0 &&
             pillars.flow.recentPullouts.length === 0 &&
+            (pillars.flow.onTime?.checkinCount ?? 0) === 0 &&
             (data.trends?.tardiesDaily?.length ?? 0) === 0
           }
         >
@@ -3499,6 +3507,22 @@ export default function StudentProfile({
                     ? "watch"
                     : "info"
                 }
+              />
+            )}
+            {pillars.flow.onTime &&
+              pillars.flow.onTime.checkinCount > 0 &&
+              pillars.flow.onTime.ratePct != null && (
+                <Chip
+                  label={`${pillars.flow.onTime.ratePct}% on time (${pillars.flow.onTime.onTimeCount}/${pillars.flow.onTime.checkinCount})`}
+                  sev={pillars.flow.onTime.ratePct >= 80 ? "info" : "watch"}
+                />
+              )}
+            {pillars.flow.onTime && pillars.flow.onTime.lotteryWins > 0 && (
+              <Chip
+                label={`${pillars.flow.onTime.lotteryWins} lottery ${
+                  pillars.flow.onTime.lotteryWins === 1 ? "win" : "wins"
+                }`}
+                sev="info"
               />
             )}
           </div>

@@ -30,6 +30,7 @@ import {
   bellSchedulePeriodsTable,
   benchmarkReteachLogTable,
   housesTable,
+  attendanceCheckinsTable,
 } from "@workspace/db";
 import { and, eq, desc, isNull, sql, gte, lt } from "drizzle-orm";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./schoolYear.js";
@@ -140,6 +141,19 @@ export interface ParentSnapshot {
       longestYtd: number;
       pctYtd: number | null;
       countedPeriods: number;
+    } | null;
+    // Kiosk On-Time Attendance ledger (attendance_checkins), YTD. Distinct
+    // from the tardy-derived `onTimeStreak` above: this counts only the
+    // door-kiosk check-ins logged this school year. `ratePct` is on-time
+    // arrivals (pre-bell) / total check-ins, null when the student has no
+    // check-ins yet. `lotteryWins` counts Tardy-Lottery bonus rows. The
+    // whole block is `null` when the school has zero check-ins logged for
+    // the student so the surface hides cleanly.
+    onTimeArrivals: {
+      checkinCount: number;
+      onTimeCount: number;
+      ratePct: number | null;
+      lotteryWins: number;
     } | null;
     recent: Array<{
       id: number;
@@ -615,6 +629,45 @@ export async function buildParentSnapshot(
     }
   }
 
+  // ----- Kiosk On-Time Attendance ledger (attendance_checkins) -----
+  // YTD door-kiosk check-ins. Separate from `onTimeStreak` (tardy-derived).
+  // Gated on the attendance section flag. `ratePct` = pre-bell arrivals /
+  // total check-ins. The whole block is null when no check-ins exist.
+  let onTimeArrivals: ParentSnapshot["attendance"]["onTimeArrivals"] = null;
+  if (sectionsAvailable.attendance) {
+    const { startIso: caStartIso, endExclusiveIso: caEndIso } =
+      schoolYearBounds();
+    const caRows = await db
+      .select({
+        kind: attendanceCheckinsTable.kind,
+        postBell: attendanceCheckinsTable.postBell,
+      })
+      .from(attendanceCheckinsTable)
+      .where(
+        and(
+          eq(attendanceCheckinsTable.schoolId, student.schoolId),
+          eq(attendanceCheckinsTable.studentId, student.studentId),
+          gte(attendanceCheckinsTable.day, caStartIso),
+          lt(attendanceCheckinsTable.day, caEndIso),
+        ),
+      );
+    if (caRows.length > 0) {
+      const checkins = caRows.filter((r) => r.kind === "checkin");
+      const checkinCount = checkins.length;
+      const onTimeCount = checkins.filter((r) => !r.postBell).length;
+      const lotteryWins = caRows.filter((r) => r.kind === "lottery").length;
+      onTimeArrivals = {
+        checkinCount,
+        onTimeCount,
+        ratePct:
+          checkinCount > 0
+            ? Math.round((onTimeCount / checkinCount) * 100)
+            : null,
+        lotteryWins,
+      };
+    }
+  }
+
   // ----- Accommodations -----
   let accommodations: Array<{ id: number; name: string; category: string }> = [];
   if (sectionsAvailable.accommodations) {
@@ -942,6 +995,7 @@ export async function buildParentSnapshot(
         checkInsThisWeek: checkInThisWeek,
         pct: attendancePct,
         onTimeStreak,
+        onTimeArrivals,
         recent: tardyRows.slice(0, 10).map((r) => ({
           id: r.id,
           entryType: r.entryType,

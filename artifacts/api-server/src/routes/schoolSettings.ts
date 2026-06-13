@@ -134,6 +134,12 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     fastHistoryYearsVisible,
     restroomAccessControlEnabled,
     ireadyAp1Cuts,
+    onTimeAttendanceEnabled,
+    onTimeMaxPoints,
+    onTimeLotteryEnabled,
+    onTimeLotteryLabel,
+    onTimeLotteryBonusPoints,
+    onTimeLotteryRevealLeadMinutes,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -288,6 +294,25 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       2,
       5,
       "fastHistoryYearsVisible",
+    ),
+    // On-Time Attendance — max points awarded for the earliest passing-window
+    // scan (the ceil(min-until-bell) value is capped at this).
+    intRange("onTimeMaxPoints", onTimeMaxPoints, 1, 10, "onTimeMaxPoints"),
+    // Tardy Lottery — bonus points each winner receives, and how many minutes
+    // before end-of-day the draw is revealed.
+    intRange(
+      "onTimeLotteryBonusPoints",
+      onTimeLotteryBonusPoints,
+      1,
+      500,
+      "onTimeLotteryBonusPoints",
+    ),
+    intRange(
+      "onTimeLotteryRevealLeadMinutes",
+      onTimeLotteryRevealLeadMinutes,
+      5,
+      240,
+      "onTimeLotteryRevealLeadMinutes",
     ),
   ]) {
     if (err) {
@@ -486,6 +511,41 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.staffDirectoryShowCellPhone = staffDirectoryShowCellPhone;
+  }
+  // -----------------------------------------------------------------
+  // On-Time Attendance + Tardy Lottery toggles and the lottery label.
+  // Any settings-manager can flip these (same gate as the rest of the
+  // PUT); the int-valued knobs are validated in the intRange block above.
+  // -----------------------------------------------------------------
+  if (onTimeAttendanceEnabled !== undefined) {
+    if (typeof onTimeAttendanceEnabled !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "onTimeAttendanceEnabled must be a boolean" });
+      return;
+    }
+    updates.onTimeAttendanceEnabled = onTimeAttendanceEnabled;
+  }
+  if (onTimeLotteryEnabled !== undefined) {
+    if (typeof onTimeLotteryEnabled !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "onTimeLotteryEnabled must be a boolean" });
+      return;
+    }
+    updates.onTimeLotteryEnabled = onTimeLotteryEnabled;
+  }
+  if (onTimeLotteryLabel !== undefined) {
+    if (typeof onTimeLotteryLabel !== "string") {
+      res
+        .status(400)
+        .json({ error: "onTimeLotteryLabel must be a string" });
+      return;
+    }
+    const cleaned = onTimeLotteryLabel.trim().slice(0, 60);
+    // Non-null column with a default — empty resets to the default label.
+    updates.onTimeLotteryLabel =
+      cleaned.length === 0 ? "On-Time Champions" : cleaned;
   }
   // Pick-Up cutoff time: "HH:MM" 24h, validated lexically. Used by the
   // Admin Hub "Still on campus" reconciliation tile and (eventually)

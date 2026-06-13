@@ -21,6 +21,10 @@ import {
   bellSchedulesTable,
   bellSchedulePeriodsTable,
   teacherDestinationAllowlistTable,
+  attendanceCheckinsTable,
+  onTimeRejectedScansTable,
+  classSectionsTable,
+  sectionRosterTable,
 } from "@workspace/db";
 import { renderKioskCardsPdf } from "../lib/kioskCardsPdf.js";
 import { encryptSecret, decryptSecret } from "../lib/secretCrypto.js";
@@ -58,6 +62,11 @@ import {
   QUEUE_CAP,
   getCurrentPeriodKey,
 } from "./hallPassQueue";
+import {
+  loadAttendanceWindow,
+  computePoints,
+  type AttendanceWindow,
+} from "../lib/onTimeAttendance.js";
 
 // Default TTL for the legacy email-+-password activation flow. The
 // printed-card path (`/kiosk/activate-by-enrollment`,
@@ -2176,6 +2185,330 @@ router.post("/kiosk/class-signin", async (req, res) => {
     house,
     welcomeMessage,
   });
+});
+
+// ===========================================================================
+// On-Time Attendance (classroom-door kiosk auto-flip)
+//
+// During the passing window before a class, an activated kiosk flips from
+// hall-pass mode to Attendance mode. Students scan their Local SIS id to earn
+// on-time points (server-authoritative). Points land in a SEPARATE ledger
+// (attendance_checkins) that DOES count toward house standings but is NEVER
+// part of the Invisible-Student calc. All three endpoints are token-authed
+// (no session) like the rest of the kiosk surface.
+// ===========================================================================
+
+// Resolve the kiosk activation + the class the kiosk runs attendance for this
+// passing window. Returns null pieces rather than throwing so each route can
+// shape its own response.
+async function resolveAttendanceContext(token: unknown): Promise<
+  | { error: { status: number; body: Record<string, unknown> } }
+  | {
+      act: InferSelectModel<typeof kioskActivationsTable>;
+      enabled: boolean;
+      maxPoints: number;
+      win: AttendanceWindow;
+      // Roster gate result for the incoming class:
+      //   sectionId  — the teacher's class_sections row for the incoming
+      //                period (null = no section → OPEN FALLBACK, accept all).
+      //   isPlanning — the section is the teacher's planning period (no class).
+      sectionId: number | null;
+      isPlanning: boolean;
+      endedByTeacher: boolean;
+    }
+> {
+  if (typeof token !== "string" || token.length < 16) {
+    return {
+      error: { status: 401, body: { error: "Kiosk token required", revoked: true } },
+    };
+  }
+  const [act] = await db
+    .select()
+    .from(kioskActivationsTable)
+    .where(
+      and(
+        eq(kioskActivationsTable.tokenHash, hashToken(token)),
+        isNull(kioskActivationsTable.deactivatedAt),
+        gt(kioskActivationsTable.expiresAt, new Date()),
+      ),
+    );
+  if (!act) {
+    return {
+      error: {
+        status: 401,
+        body: { error: "Kiosk activation not found, revoked, or expired", revoked: true },
+      },
+    };
+  }
+
+  const [settings] = await db
+    .select({
+      enabled: schoolSettingsTable.onTimeAttendanceEnabled,
+      maxPoints: schoolSettingsTable.onTimeMaxPoints,
+    })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, act.schoolId));
+
+  const win = await loadAttendanceWindow(act.schoolId);
+
+  // Roster gate context: does the kiosk's teacher have a class for the
+  // incoming period, and is it their planning period?
+  let sectionId: number | null = null;
+  let isPlanning = false;
+  if (win.incomingPeriodNumber !== null) {
+    const [section] = await db
+      .select({ id: classSectionsTable.id, isPlanning: classSectionsTable.isPlanning })
+      .from(classSectionsTable)
+      .where(
+        and(
+          eq(classSectionsTable.schoolId, act.schoolId),
+          eq(classSectionsTable.teacherStaffId, act.staffId),
+          eq(classSectionsTable.period, win.incomingPeriodNumber),
+        ),
+      );
+    if (section) {
+      sectionId = section.id;
+      isPlanning = section.isPlanning;
+    }
+  }
+
+  const endedByTeacher =
+    win.periodKey !== null && act.onTimeEndedKey === win.periodKey;
+
+  return {
+    act,
+    enabled: settings?.enabled ?? false,
+    maxPoints: settings?.maxPoints ?? 4,
+    win,
+    sectionId,
+    isPlanning,
+    endedByTeacher,
+  };
+}
+
+// GET /api/kiosk/attendance/state?token=...
+// Polled by the kiosk (a few-second cadence) to know whether to show the
+// Attendance screen, the countdown, the post-bell "Done" button, and the
+// recent-scan list. Read-only.
+router.get("/kiosk/attendance/state", async (req, res) => {
+  const ctx = await resolveAttendanceContext(req.query.token);
+  if ("error" in ctx) {
+    res.status(ctx.error.status).json(ctx.error.body);
+    return;
+  }
+  const { act, enabled, win, isPlanning, endedByTeacher } = ctx;
+
+  const attendanceActive =
+    enabled && win.phase !== "off" && !isPlanning && !endedByTeacher;
+
+  if (!attendanceActive) {
+    res.json({ enabled, mode: "hallpass" as const });
+    return;
+  }
+
+  // Last few scans this passing window (newest first) for the slide-down list.
+  const recentRows = await db
+    .select({
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      localSisId: studentsTable.localSisId,
+      points: attendanceCheckinsTable.points,
+      postBell: attendanceCheckinsTable.postBell,
+      createdAt: attendanceCheckinsTable.createdAt,
+    })
+    .from(attendanceCheckinsTable)
+    .leftJoin(
+      studentsTable,
+      and(
+        eq(studentsTable.studentId, attendanceCheckinsTable.studentId),
+        eq(studentsTable.schoolId, attendanceCheckinsTable.schoolId),
+      ),
+    )
+    .where(
+      and(
+        eq(attendanceCheckinsTable.schoolId, act.schoolId),
+        eq(attendanceCheckinsTable.kioskActivationId, act.id),
+        eq(attendanceCheckinsTable.periodKey, win.periodKey as string),
+        eq(attendanceCheckinsTable.kind, "checkin"),
+      ),
+    )
+    .orderBy(desc(attendanceCheckinsTable.createdAt))
+    .limit(4);
+
+  res.json({
+    enabled: true,
+    mode: "attendance" as const,
+    phase: win.phase,
+    incomingPeriodNumber: win.incomingPeriodNumber,
+    incomingPeriodName: win.incomingPeriodName,
+    minutesRemaining: win.minutesRemaining,
+    periodKey: win.periodKey,
+    // The big Done button only appears once the bell has rung.
+    showDone: win.phase === "post_bell",
+    recent: recentRows.map((r) => ({
+      firstName: r.firstName ?? "",
+      lastName: r.lastName ?? "",
+      points: r.points,
+      postBell: r.postBell,
+    })),
+  });
+});
+
+// POST /api/kiosk/attendance/checkin  { token, studentId, source? }
+// studentId is the human-facing Local SIS id (what the badge QR encodes).
+router.post("/kiosk/attendance/checkin", async (req, res) => {
+  const { studentId, token, source } = req.body ?? {};
+  if (typeof studentId !== "string" || !studentId.trim()) {
+    res.status(400).json({ error: "studentId is required" });
+    return;
+  }
+  const ctx = await resolveAttendanceContext(token);
+  if ("error" in ctx) {
+    res.status(ctx.error.status).json(ctx.error.body);
+    return;
+  }
+  const { act, enabled, maxPoints, win, sectionId, isPlanning, endedByTeacher } =
+    ctx;
+
+  if (!enabled || win.phase === "off" || isPlanning || endedByTeacher) {
+    res.status(409).json({ status: "closed", error: "Attendance is not open" });
+    return;
+  }
+  if (!checkSigninRate(act.id)) {
+    res.status(429).json({ error: "Too many scans on this kiosk" });
+    return;
+  }
+
+  const scanned = studentId.trim();
+  const [student] = await db
+    .select()
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.localSisId, scanned),
+        eq(studentsTable.schoolId, act.schoolId),
+      ),
+    );
+
+  if (!student) {
+    await db.insert(onTimeRejectedScansTable).values({
+      schoolId: act.schoolId,
+      studentId: null,
+      scannedLocalSisId: scanned,
+      kioskActivationId: act.id,
+      staffId: act.staffId,
+      periodNumber: win.incomingPeriodNumber,
+      periodKey: win.periodKey,
+      day: win.dayKey,
+      reason: "unknown_student",
+    });
+    res.status(404).json({ status: "unknown", error: "Student not found" });
+    return;
+  }
+
+  // Roster gate: when the teacher HAS a roster for the incoming class, only
+  // its students earn credit. No section row → open fallback (shared rooms /
+  // schools that don't load class_sections).
+  if (sectionId !== null) {
+    const [rostered] = await db
+      .select({ id: sectionRosterTable.id })
+      .from(sectionRosterTable)
+      .where(
+        and(
+          eq(sectionRosterTable.schoolId, act.schoolId),
+          eq(sectionRosterTable.sectionId, sectionId),
+          eq(sectionRosterTable.studentId, student.studentId),
+        ),
+      );
+    if (!rostered) {
+      await db.insert(onTimeRejectedScansTable).values({
+        schoolId: act.schoolId,
+        studentId: student.studentId,
+        scannedLocalSisId: scanned,
+        kioskActivationId: act.id,
+        staffId: act.staffId,
+        periodNumber: win.incomingPeriodNumber,
+        periodKey: win.periodKey,
+        day: win.dayKey,
+        reason: "not_rostered",
+      });
+      res.status(200).json({
+        status: "rejected",
+        firstName: student.firstName,
+        message: "Wrong door — this isn't your class right now.",
+      });
+      return;
+    }
+  }
+
+  const points = computePoints(win, maxPoints);
+  const inserted = await db
+    .insert(attendanceCheckinsTable)
+    .values({
+      schoolId: act.schoolId,
+      studentId: student.studentId,
+      kioskActivationId: act.id,
+      staffId: act.staffId,
+      scheduleId: win.scheduleId,
+      periodNumber: win.incomingPeriodNumber ?? 0,
+      periodKey: win.periodKey as string,
+      day: win.dayKey,
+      kind: "checkin",
+      points,
+      minutesRemaining: win.phase === "passing" ? win.minutesRemaining : null,
+      postBell: win.phase === "post_bell",
+      source: typeof source === "string" ? source.slice(0, 16) : null,
+    })
+    .onConflictDoNothing()
+    .returning({ id: attendanceCheckinsTable.id });
+
+  let house: { id: number; name: string; color: string } | null = null;
+  if (student.houseId !== null && student.houseId !== undefined) {
+    const [h] = await db
+      .select({ id: housesTable.id, name: housesTable.name, color: housesTable.color })
+      .from(housesTable)
+      .where(
+        and(
+          eq(housesTable.id, student.houseId),
+          eq(housesTable.schoolId, act.schoolId),
+        ),
+      );
+    if (h) house = h;
+  }
+
+  res.status(inserted.length > 0 ? 201 : 200).json({
+    status: inserted.length > 0 ? "ok" : "already",
+    firstName: student.firstName,
+    lastName: student.lastName,
+    points,
+    postBell: win.phase === "post_bell",
+    house,
+  });
+});
+
+// POST /api/kiosk/attendance/done  { token }
+// Teacher taps the big Done button at the bell to close attendance for this
+// passing window and revert the kiosk to hall-pass mode early.
+router.post("/kiosk/attendance/done", async (req, res) => {
+  const ctx = await resolveAttendanceContext(req.body?.token);
+  if ("error" in ctx) {
+    res.status(ctx.error.status).json(ctx.error.body);
+    return;
+  }
+  const { act, win } = ctx;
+  // Server-authoritative "no End before bell": the teacher Done button only
+  // appears post-bell on the client, but a crafted request must not be able
+  // to close attendance early and shrink the on-time scoring window. Only
+  // honor Done once the bell has rung (phase === "post_bell").
+  if (win.phase !== "post_bell" || !win.periodKey) {
+    res.status(409).json({ error: "Attendance can only be ended after the bell." });
+    return;
+  }
+  await db
+    .update(kioskActivationsTable)
+    .set({ onTimeEndedKey: win.periodKey })
+    .where(eq(kioskActivationsTable.id, act.id));
+  res.json({ ok: true });
 });
 
 router.post("/kiosk/activate-by-enrollment", async (req, res) => {

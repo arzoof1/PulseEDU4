@@ -61,6 +61,7 @@ import { backfillWitnessSequences } from "./lib/witnessStatementId";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
 import { sendWeeklyHeartbeatEmails } from "./lib/weeklyHeartbeatEmail";
+import { runDueLotteryDraws } from "./lib/onTimeLottery";
 import { startReminderScheduler } from "./lib/scheduler";
 import { runAstYearEndLapse } from "./cron/astLapse";
 import { runFeatureLicensingOverrideSweep } from "./cron/featureLicensingOverrideSweep";
@@ -472,6 +473,58 @@ function startListening(): void {
           logger.error(
             { err: schedErr },
             "Failed to schedule weekly HeartBEAT email",
+          );
+        }
+
+        // Tardy Lottery draw. Runs every 5 minutes on the afternoon of
+        // school days; each school draws once its own reveal time (last
+        // period end minus the school's lead) arrives. Idempotent across
+        // the day via the unique (school_id, day) draw row, so the 5-min
+        // cadence just means "check if any school is due now". Override
+        // window via ON_TIME_LOTTERY_CRON / ON_TIME_LOTTERY_TZ.
+        const lotteryExpr =
+          process.env.ON_TIME_LOTTERY_CRON ?? "*/5 12-22 * * 1-5";
+        const lotteryTz =
+          process.env.ON_TIME_LOTTERY_TZ ?? "America/New_York";
+        try {
+          cron.schedule(
+            lotteryExpr,
+            async () => {
+              try {
+                const results = await runDueLotteryDraws(new Date());
+                const revealed = results.filter(
+                  (r) => r.status === "revealed",
+                );
+                for (const r of revealed) {
+                  logger.info(
+                    {
+                      schoolId: r.schoolId,
+                      periodNumber: r.periodNumber,
+                      teacherName: r.teacherName,
+                      winnerCount: r.winnerCount,
+                      bonusPoints: r.bonusPoints,
+                      emailedTo: r.emailedTo,
+                    },
+                    "Tardy Lottery draw revealed",
+                  );
+                }
+              } catch (cronErr) {
+                logger.error(
+                  { err: cronErr },
+                  "Tardy Lottery draw run failed",
+                );
+              }
+            },
+            { timezone: lotteryTz },
+          );
+          logger.info(
+            { expr: lotteryExpr, tz: lotteryTz },
+            "Tardy Lottery draw scheduled",
+          );
+        } catch (schedErr) {
+          logger.error(
+            { err: schedErr },
+            "Failed to schedule Tardy Lottery draw",
           );
         }
 

@@ -2247,6 +2247,15 @@ function KioskBody({
 
   return (
     <>
+      {/* On-Time Attendance overlay. Self-polling; renders null (and the
+          hall-pass UI below shows through) until the kiosk's class enters its
+          passing window, then takes over the screen. */}
+      <AttendanceMode
+        token={token}
+        schoolName={school?.schoolName ?? ""}
+        room={room}
+        onRevoked={onRevoked}
+      />
       {welcome && (
         <WelcomeOverlay
           welcome={welcome}
@@ -5000,6 +5009,543 @@ function SuccessCard({
       >
         Done
       </button>
+    </div>
+  );
+}
+
+// ===========================================================================
+// On-Time Attendance mode. When an activated kiosk's class is in its passing
+// window, /api/kiosk/attendance/state flips `mode` to "attendance" and this
+// component takes over the screen as a full-bleed overlay. Students earn
+// server-authoritative on-time points by presenting their Local SIS id via
+// three live inputs at once: a focused field (USB scanner + on-screen
+// keypad) and the camera. The card slides down with the result; the last few
+// scans show beneath it. The teacher's "Done" button only appears at the bell.
+// ===========================================================================
+
+type AttState = {
+  enabled: boolean;
+  mode: "hallpass" | "attendance";
+  phase?: "passing" | "post_bell" | "off";
+  incomingPeriodNumber?: number | null;
+  incomingPeriodName?: string | null;
+  minutesRemaining?: number | null;
+  periodKey?: string | null;
+  showDone?: boolean;
+  recent?: {
+    firstName: string;
+    lastName: string;
+    points: number;
+    postBell: boolean;
+  }[];
+};
+
+type AttResult =
+  | {
+      kind: "ok" | "already";
+      firstName: string;
+      points: number;
+      postBell: boolean;
+      house: { id: number; name: string; color: string } | null;
+    }
+  | { kind: "rejected"; firstName: string; message: string }
+  | { kind: "unknown" }
+  | { kind: "closed" }
+  | { kind: "error"; message: string };
+
+function AttendanceMode({
+  token,
+  schoolName,
+  room,
+  onRevoked,
+}: {
+  token: string;
+  schoolName: string;
+  room: string;
+  onRevoked: () => void;
+}) {
+  const [state, setState] = useState<AttState | null>(null);
+  const [studentId, setStudentId] = useState("");
+  const [result, setResult] = useState<AttResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [cameraOn, setCameraOn] = useState(false);
+  const [cameraKey, setCameraKey] = useState(0);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const busyRef = useRef(false);
+  // Per-id debounce so a camera that re-decodes the same badge many times a
+  // second only submits it once per ~2s.
+  const lastScanRef = useRef<{ id: string; at: number } | null>(null);
+
+  const active = state?.mode === "attendance";
+
+  const refetchState = useMemo(
+    () => async () => {
+      try {
+        const res = await fetch(
+          `/api/kiosk/attendance/state?token=${encodeURIComponent(token)}`,
+        );
+        if (res.status === 401) {
+          const b = await res.json().catch(() => ({}));
+          if (b.revoked) {
+            onRevoked();
+            return;
+          }
+        }
+        if (!res.ok) return;
+        const data = (await res.json()) as AttState;
+        setState(data);
+      } catch {
+        // ignore — next poll retries
+      }
+    },
+    [token, onRevoked],
+  );
+
+  useEffect(() => {
+    refetchState();
+    const id = setInterval(refetchState, 3000);
+    return () => clearInterval(id);
+  }, [refetchState]);
+
+  // Keep the field focused for the USB scanner / keypad whenever attendance is
+  // active and no result card is up.
+  useEffect(() => {
+    if (active && !result) inputRef.current?.focus();
+  }, [active, result]);
+
+  // Result card auto-dismiss so the next student isn't blocked.
+  useEffect(() => {
+    if (!result) return;
+    const id = setTimeout(() => setResult(null), 4000);
+    return () => clearTimeout(id);
+  }, [result]);
+
+  async function submit(rawId: string, source: "usb" | "keypad" | "camera") {
+    const id = rawId.trim();
+    if (!id || busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/kiosk/attendance/checkin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentId: id, token, source }),
+      });
+      if (res.status === 401) {
+        const b = await res.json().catch(() => ({}));
+        if (b.revoked) {
+          onRevoked();
+          return;
+        }
+      }
+      const b = await res.json().catch(() => ({}) as Record<string, unknown>);
+      if (res.status === 409) {
+        setResult({ kind: "closed" });
+      } else if (res.status === 404) {
+        setResult({ kind: "unknown" });
+      } else if (res.ok && b.status === "rejected") {
+        setResult({
+          kind: "rejected",
+          firstName: String(b.firstName ?? ""),
+          message: String(b.message ?? "Wrong door — this isn't your class."),
+        });
+      } else if (res.ok) {
+        setResult({
+          kind: b.status === "already" ? "already" : "ok",
+          firstName: String(b.firstName ?? ""),
+          points: Number(b.points ?? 0),
+          postBell: Boolean(b.postBell),
+          house:
+            b.house && typeof b.house === "object"
+              ? (b.house as { id: number; name: string; color: string })
+              : null,
+        });
+      } else {
+        setResult({
+          kind: "error",
+          message: String(b.error ?? `Check-in failed (${res.status})`),
+        });
+      }
+    } catch (err) {
+      setResult({
+        kind: "error",
+        message: err instanceof Error ? err.message : "Network error",
+      });
+    } finally {
+      setStudentId("");
+      busyRef.current = false;
+      setBusy(false);
+      inputRef.current?.focus();
+      // Refresh the recent-scan list.
+      void refetchState();
+    }
+  }
+
+  function onCameraScan(text: string) {
+    const id = extractStudentIdFromScan(text);
+    if (!id) return;
+    const prev = lastScanRef.current;
+    const nowMs = Date.now();
+    if (prev && prev.id === id && nowMs - prev.at < 2000) return;
+    lastScanRef.current = { id, at: nowMs };
+    void submit(id, "camera");
+    // Re-arm the scanner for the next student (CameraScanner fires once).
+    setCameraKey((k) => k + 1);
+  }
+
+  async function markDone() {
+    try {
+      const res = await fetch("/api/kiosk/attendance/done", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      if (res.status === 401) {
+        const b = await res.json().catch(() => ({}));
+        if (b.revoked) onRevoked();
+      }
+    } catch {
+      // ignore — the auto-revert safety net (and next poll) covers this
+    } finally {
+      void refetchState();
+    }
+  }
+
+  if (!active) return null;
+
+  const mins = state?.minutesRemaining ?? null;
+  const postBell = state?.phase === "post_bell";
+  const periodLabel =
+    state?.incomingPeriodName ||
+    (state?.incomingPeriodNumber != null
+      ? `Period ${state.incomingPeriodNumber}`
+      : "Next class");
+
+  const keypadDigits = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 60,
+        background:
+          "radial-gradient(1200px 600px at 50% -10%, #15324f 0%, #0b1220 60%, #070b14 100%)",
+        color: "#fff",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        padding: "2rem 1.25rem",
+        overflowY: "auto",
+      }}
+    >
+      <div
+        style={{
+          fontSize: "0.8rem",
+          letterSpacing: "0.18em",
+          textTransform: "uppercase",
+          opacity: 0.6,
+        }}
+      >
+        {schoolName || "PulseEDU"} · On-Time Attendance
+      </div>
+      <h1
+        style={{
+          fontSize: "clamp(1.8rem, 4.5vw, 3rem)",
+          margin: "0.35rem 0 0",
+          fontWeight: 800,
+        }}
+      >
+        {room}
+      </h1>
+      <div
+        style={{
+          fontSize: "1.05rem",
+          opacity: 0.85,
+          marginTop: "0.35rem",
+          textAlign: "center",
+        }}
+      >
+        Scan in for <strong>{periodLabel}</strong>
+      </div>
+      <div
+        style={{
+          marginTop: "0.5rem",
+          fontSize: postBell ? "1.05rem" : "1.25rem",
+          fontWeight: 700,
+          color: postBell ? "#fca5a5" : "#86efac",
+        }}
+      >
+        {postBell
+          ? "Bell has rung — last call!"
+          : mins != null
+            ? `${mins} min until the bell`
+            : "Open now"}
+      </div>
+
+      {/* Slide-down result card */}
+      <div
+        style={{
+          width: "min(560px, 94vw)",
+          marginTop: "1rem",
+          minHeight: result ? undefined : 0,
+        }}
+      >
+        {result && <AttendanceResultCard result={result} />}
+      </div>
+
+      {/* Scan field — serves the USB scanner AND the on-screen keypad. */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit(studentId, "usb");
+        }}
+        style={{
+          width: "min(560px, 94vw)",
+          marginTop: "1rem",
+          background: "rgba(255,255,255,0.06)",
+          border: "1px solid rgba(255,255,255,0.12)",
+          borderRadius: 14,
+          padding: "1.25rem",
+          display: "flex",
+          flexDirection: "column",
+          gap: "0.9rem",
+        }}
+      >
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          <input
+            ref={inputRef}
+            type="text"
+            inputMode="numeric"
+            autoComplete="off"
+            autoFocus
+            value={studentId}
+            onChange={(e) => setStudentId(e.target.value)}
+            placeholder="Scan badge or enter your ID"
+            style={{ ...inputStyle, flex: 1, fontSize: "1.3rem", textAlign: "center" }}
+            disabled={busy}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              setCameraOn((v) => !v);
+              setCameraKey((k) => k + 1);
+            }}
+            aria-label="Toggle camera scanning"
+            title="Toggle camera scanning"
+            style={{
+              background: cameraOn ? "#3b82f6" : "rgba(255,255,255,0.1)",
+              border: "1px solid rgba(255,255,255,0.2)",
+              borderRadius: 10,
+              color: "#fff",
+              width: 64,
+              fontSize: "1.6rem",
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            📷
+          </button>
+        </div>
+
+        {/* On-screen keypad (live alongside the USB field). */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, 1fr)",
+            gap: "0.5rem",
+          }}
+        >
+          {keypadDigits.map((d) => (
+            <button
+              key={d}
+              type="button"
+              onClick={() => setStudentId((s) => s + d)}
+              disabled={busy}
+              style={keypadBtnStyle}
+            >
+              {d}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => setStudentId((s) => s.slice(0, -1))}
+            disabled={busy}
+            style={keypadBtnStyle}
+            aria-label="Delete last digit"
+          >
+            ⌫
+          </button>
+          <button
+            type="button"
+            onClick={() => setStudentId((s) => s + "0")}
+            disabled={busy}
+            style={keypadBtnStyle}
+          >
+            0
+          </button>
+          <button
+            type="submit"
+            disabled={busy || !studentId.trim()}
+            style={{
+              ...keypadBtnStyle,
+              background:
+                busy || !studentId.trim() ? "rgba(34,197,94,0.4)" : "#22c55e",
+              border: "none",
+            }}
+            aria-label="Submit check-in"
+          >
+            ✓
+          </button>
+        </div>
+      </form>
+
+      {/* Camera scanner (continuous via re-arm key). */}
+      {cameraOn && (
+        <div style={{ width: "min(560px, 94vw)", marginTop: "1rem" }}>
+          <CameraScanner
+            key={cameraKey}
+            onScan={onCameraScan}
+            onCancel={() => setCameraOn(false)}
+          />
+        </div>
+      )}
+
+      {/* Recent scans (last few this passing window). */}
+      {state?.recent && state.recent.length > 0 && (
+        <div style={{ width: "min(560px, 94vw)", marginTop: "1.25rem" }}>
+          <div
+            style={{
+              fontSize: "0.8rem",
+              textTransform: "uppercase",
+              letterSpacing: "0.12em",
+              opacity: 0.5,
+              marginBottom: "0.5rem",
+            }}
+          >
+            Just checked in
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            {state.recent.map((r, i) => (
+              <div
+                key={i}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  background: "rgba(255,255,255,0.05)",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  borderRadius: 8,
+                  padding: "0.55rem 0.85rem",
+                  fontSize: "1rem",
+                }}
+              >
+                <span>
+                  {r.firstName} {r.lastName}
+                </span>
+                <span style={{ fontWeight: 700, color: "#86efac" }}>
+                  {r.postBell ? "On time" : `+${r.points}`}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Teacher "Done" — only at the bell. One tap reverts to hall pass. */}
+      {state?.showDone && (
+        <button
+          type="button"
+          onClick={markDone}
+          style={{
+            marginTop: "1.5rem",
+            background: "#ef4444",
+            color: "#fff",
+            border: "none",
+            borderRadius: 12,
+            padding: "1.1rem 2.5rem",
+            fontSize: "1.3rem",
+            fontWeight: 800,
+            cursor: "pointer",
+          }}
+        >
+          Done — close attendance
+        </button>
+      )}
+    </div>
+  );
+}
+
+const keypadBtnStyle: React.CSSProperties = {
+  background: "rgba(255,255,255,0.1)",
+  border: "1px solid rgba(255,255,255,0.2)",
+  color: "#fff",
+  borderRadius: 10,
+  padding: "1rem 0",
+  fontSize: "1.5rem",
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+function AttendanceResultCard({ result }: { result: AttResult }) {
+  let bg = "rgba(34,197,94,0.15)";
+  let border = "rgba(34,197,94,0.5)";
+  let title = "";
+  let subtitle = "";
+
+  if (result.kind === "ok") {
+    bg = result.house
+      ? `${result.house.color}26`
+      : "rgba(34,197,94,0.15)";
+    border = result.house ? result.house.color : "rgba(34,197,94,0.6)";
+    title = `Welcome, ${result.firstName}!`;
+    subtitle = result.postBell
+      ? "Checked in — you made it."
+      : `+${result.points} point${result.points === 1 ? "" : "s"}${
+          result.house ? ` for ${result.house.name}` : ""
+        }`;
+  } else if (result.kind === "already") {
+    bg = "rgba(59,130,246,0.15)";
+    border = "rgba(59,130,246,0.6)";
+    title = `You're already in, ${result.firstName}!`;
+    subtitle = "No need to scan twice.";
+  } else if (result.kind === "rejected") {
+    bg = "rgba(234,179,8,0.15)";
+    border = "rgba(234,179,8,0.6)";
+    title = result.firstName ? `Hi ${result.firstName}` : "Wrong door";
+    subtitle = result.message;
+  } else if (result.kind === "unknown") {
+    bg = "rgba(234,179,8,0.15)";
+    border = "rgba(234,179,8,0.6)";
+    title = "ID not found";
+    subtitle = "Check your ID and try again, or see the teacher.";
+  } else if (result.kind === "closed") {
+    bg = "rgba(148,163,184,0.15)";
+    border = "rgba(148,163,184,0.6)";
+    title = "Attendance is closed";
+    subtitle = "This window has ended.";
+  } else if (result.kind === "error") {
+    bg = "rgba(239,68,68,0.15)";
+    border = "rgba(239,68,68,0.6)";
+    title = "Something went wrong";
+    subtitle = result.message;
+  }
+
+  return (
+    <div
+      style={{
+        background: bg,
+        border: `2px solid ${border}`,
+        borderRadius: 14,
+        padding: "1.1rem 1.4rem",
+        textAlign: "center",
+        animation: "attCardIn 220ms ease-out",
+      }}
+    >
+      <style>{`@keyframes attCardIn{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}`}</style>
+      <div style={{ fontSize: "1.6rem", fontWeight: 800 }}>{title}</div>
+      <div style={{ fontSize: "1.1rem", opacity: 0.9, marginTop: "0.3rem" }}>
+        {subtitle}
+      </div>
     </div>
   );
 }

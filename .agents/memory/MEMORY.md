@@ -31,6 +31,7 @@
 - [E-sign PDF render reliability](esign-pdf-render.md) — "Link not valid" was a client render crash, not a token bug: render only after canvas mounts, never swallow render errors; pin pdfjs-dist to v4 (v5 calls unshipped Map.getOrInsertComputed → throws in all browsers).
 - [External share tokens linkifier-safe](esign-share-token-linkifier.md) — emailed/QR URL tokens must be base62 (no base64url); trailing -/_ get stripped by linkifiers → 404 "invalid/expired".
 - [E-sign document tenancy](esign-tenancy.md) — e-sign docs are creator-private (school_id AND created_by); public /sign/:token is unauthenticated by design, gated by 192-bit token + race-safe 409.
+- [attendance_checkins createdAt timestamp](attendance-checkins-timestamp.md) — its createdAt is a real timestamp(Date), unlike text created_at on tardies/pbis_entries; filter by Date or the `day` TEXT column, not ISO strings.
 - [Kiosk destination precedence](kiosk-destination-precedence.md) — teacher allowlist is authoritative over the (auto-seeded ~everything) room matrix, NOT a union; GET listing + POST create must share precedence + active/visible/isDestination filter.
 
 - [Staff PATCH batched gating](staff-patch-batched-gating.md) — batched PATCH /admin/staff/:id must OMIT role flags/sensitive caps actor cant set AND self-revoked caps, or one bad field sinks the whole save.

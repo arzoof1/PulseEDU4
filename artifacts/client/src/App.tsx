@@ -4745,6 +4745,12 @@ function App() {
     pbisInvisibleDaysTier3: number;
     pbisReasonImbalancePct: number;
     pbisColdPeriodMultiple: number;
+    onTimeAttendanceEnabled: boolean;
+    onTimeMaxPoints: number;
+    onTimeLotteryEnabled: boolean;
+    onTimeLotteryLabel: string;
+    onTimeLotteryBonusPoints: number;
+    onTimeLotteryRevealLeadMinutes: number;
     finderShowAbsentBanner: boolean;
     staffDirectoryShowCellPhone: boolean;
     manualRosterUploadEnabled: boolean;
@@ -4803,6 +4809,12 @@ function App() {
     pbisInvisibleDaysTier3: 3,
     pbisReasonImbalancePct: 60,
     pbisColdPeriodMultiple: 5,
+    onTimeAttendanceEnabled: false,
+    onTimeMaxPoints: 4,
+    onTimeLotteryEnabled: false,
+    onTimeLotteryLabel: "On-Time Champions",
+    onTimeLotteryBonusPoints: 20,
+    onTimeLotteryRevealLeadMinutes: 30,
     finderShowAbsentBanner: false,
     staffDirectoryShowCellPhone: false,
     manualRosterUploadEnabled: false,
@@ -6566,6 +6578,31 @@ function App() {
             typeof data.pbisColdPeriodMultiple === "number"
               ? data.pbisColdPeriodMultiple
               : 5,
+          onTimeAttendanceEnabled:
+            typeof data.onTimeAttendanceEnabled === "boolean"
+              ? data.onTimeAttendanceEnabled
+              : false,
+          onTimeMaxPoints:
+            typeof data.onTimeMaxPoints === "number"
+              ? data.onTimeMaxPoints
+              : 4,
+          onTimeLotteryEnabled:
+            typeof data.onTimeLotteryEnabled === "boolean"
+              ? data.onTimeLotteryEnabled
+              : false,
+          onTimeLotteryLabel:
+            typeof data.onTimeLotteryLabel === "string" &&
+            data.onTimeLotteryLabel.trim()
+              ? data.onTimeLotteryLabel
+              : "On-Time Champions",
+          onTimeLotteryBonusPoints:
+            typeof data.onTimeLotteryBonusPoints === "number"
+              ? data.onTimeLotteryBonusPoints
+              : 20,
+          onTimeLotteryRevealLeadMinutes:
+            typeof data.onTimeLotteryRevealLeadMinutes === "number"
+              ? data.onTimeLotteryRevealLeadMinutes
+              : 30,
           finderShowAbsentBanner:
             typeof data.finderShowAbsentBanner === "boolean"
               ? data.finderShowAbsentBanner
@@ -6689,6 +6726,29 @@ function App() {
           typeof data.pbisColdPeriodMultiple === "number"
             ? data.pbisColdPeriodMultiple
             : 5,
+        onTimeAttendanceEnabled:
+          typeof data.onTimeAttendanceEnabled === "boolean"
+            ? data.onTimeAttendanceEnabled
+            : false,
+        onTimeMaxPoints:
+          typeof data.onTimeMaxPoints === "number" ? data.onTimeMaxPoints : 4,
+        onTimeLotteryEnabled:
+          typeof data.onTimeLotteryEnabled === "boolean"
+            ? data.onTimeLotteryEnabled
+            : false,
+        onTimeLotteryLabel:
+          typeof data.onTimeLotteryLabel === "string" &&
+          data.onTimeLotteryLabel.trim()
+            ? data.onTimeLotteryLabel
+            : "On-Time Champions",
+        onTimeLotteryBonusPoints:
+          typeof data.onTimeLotteryBonusPoints === "number"
+            ? data.onTimeLotteryBonusPoints
+            : 20,
+        onTimeLotteryRevealLeadMinutes:
+          typeof data.onTimeLotteryRevealLeadMinutes === "number"
+            ? data.onTimeLotteryRevealLeadMinutes
+            : 30,
         finderShowAbsentBanner:
           typeof data.finderShowAbsentBanner === "boolean"
             ? data.finderShowAbsentBanner
@@ -22252,6 +22312,279 @@ function App() {
                 {settingsStatus === "error" && (
                   <span style={{ color: "#b91c1c" }}>{settingsError}</span>
                 )}
+              </div>
+            </div>
+            <div
+              className="card"
+              style={{ marginTop: "1rem", maxWidth: 560 }}
+            >
+              <h2 style={{ marginTop: 0 }}>On-Time Attendance &amp; Lottery</h2>
+              <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+                During each passing period the door kiosk flips to an On-Time
+                check-in screen. Students who scan in before the bell earn
+                house points (a separate ledger that never affects the
+                Invisible Student calc). Changes save with "Save School
+                Settings" above.
+              </p>
+              <div style={{ display: "grid", gap: "1rem" }}>
+                <label
+                  style={{
+                    display: "flex",
+                    gap: "0.6rem",
+                    alignItems: "flex-start",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={schoolSettings.onTimeAttendanceEnabled}
+                    onChange={(e) =>
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        onTimeAttendanceEnabled: e.target.checked,
+                      })
+                    }
+                    style={{ marginTop: "0.25rem" }}
+                  />
+                  <span>
+                    Enable On-Time Attendance
+                    <span
+                      style={{
+                        display: "block",
+                        color: "var(--text-subtle, #64748b)",
+                        fontSize: "0.82rem",
+                        fontWeight: "normal",
+                      }}
+                    >
+                      Activated kiosks switch to the check-in screen
+                      automatically during passing periods.
+                    </span>
+                  </span>
+                </label>
+
+                <label style={{ display: "grid", gap: "0.25rem" }}>
+                  <span>
+                    Maximum on-time points
+                    <span
+                      style={{
+                        color: "var(--text-subtle, #64748b)",
+                        fontWeight: "normal",
+                        marginLeft: "0.5rem",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      (1–10 points)
+                    </span>
+                  </span>
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontSize: "0.82rem",
+                    }}
+                  >
+                    Earned points = minutes until the bell, capped here.
+                    In-line after the bell is always 1.
+                  </span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    step={1}
+                    value={schoolSettings.onTimeMaxPoints}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      const next = Number.isFinite(n)
+                        ? Math.max(1, Math.min(10, Math.trunc(n)))
+                        : schoolSettings.onTimeMaxPoints;
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        onTimeMaxPoints: next,
+                      });
+                    }}
+                    style={{ width: "6rem" }}
+                  />
+                </label>
+
+                <hr
+                  style={{
+                    border: "none",
+                    borderTop: "1px solid var(--border, #e2e8f0)",
+                    margin: "0.25rem 0",
+                  }}
+                />
+
+                <label
+                  style={{
+                    display: "flex",
+                    gap: "0.6rem",
+                    alignItems: "flex-start",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={schoolSettings.onTimeLotteryEnabled}
+                    onChange={(e) =>
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        onTimeLotteryEnabled: e.target.checked,
+                      })
+                    }
+                    style={{ marginTop: "0.25rem" }}
+                  />
+                  <span>
+                    Enable daily Tardy Lottery
+                    <span
+                      style={{
+                        display: "block",
+                        color: "var(--text-subtle, #64748b)",
+                        fontSize: "0.82rem",
+                        fontWeight: "normal",
+                      }}
+                    >
+                      Once per school day a random class that ran attendance is
+                      drawn; every student who checked in that period earns a
+                      bonus, revealed near the end of the day.
+                    </span>
+                  </span>
+                </label>
+
+                <label style={{ display: "grid", gap: "0.25rem" }}>
+                  <span>Lottery label</span>
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontSize: "0.82rem",
+                    }}
+                  >
+                    Shown to families and on the reveal email. Defaults to
+                    "On-Time Champions".
+                  </span>
+                  <input
+                    type="text"
+                    maxLength={60}
+                    placeholder="On-Time Champions"
+                    value={schoolSettings.onTimeLotteryLabel}
+                    onChange={(e) =>
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        onTimeLotteryLabel: e.target.value,
+                      })
+                    }
+                    style={{ maxWidth: "20rem" }}
+                  />
+                </label>
+
+                <label style={{ display: "grid", gap: "0.25rem" }}>
+                  <span>
+                    Bonus points
+                    <span
+                      style={{
+                        color: "var(--text-subtle, #64748b)",
+                        fontWeight: "normal",
+                        marginLeft: "0.5rem",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      (1–500 points)
+                    </span>
+                  </span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    step={1}
+                    value={schoolSettings.onTimeLotteryBonusPoints}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      const next = Number.isFinite(n)
+                        ? Math.max(1, Math.min(500, Math.trunc(n)))
+                        : schoolSettings.onTimeLotteryBonusPoints;
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        onTimeLotteryBonusPoints: next,
+                      });
+                    }}
+                    style={{ width: "6rem" }}
+                  />
+                </label>
+
+                <label style={{ display: "grid", gap: "0.25rem" }}>
+                  <span>
+                    Reveal lead time
+                    <span
+                      style={{
+                        color: "var(--text-subtle, #64748b)",
+                        fontWeight: "normal",
+                        marginLeft: "0.5rem",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      (5–240 minutes before end of day)
+                    </span>
+                  </span>
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontSize: "0.82rem",
+                    }}
+                  >
+                    How long before dismissal the winning class is revealed and
+                    the admin/Core-Team email goes out.
+                  </span>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.75rem",
+                    }}
+                  >
+                    <input
+                      type="number"
+                      min={5}
+                      max={240}
+                      step={1}
+                      value={schoolSettings.onTimeLotteryRevealLeadMinutes}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        const next = Number.isFinite(n)
+                          ? Math.max(5, Math.min(240, Math.trunc(n)))
+                          : schoolSettings.onTimeLotteryRevealLeadMinutes;
+                        setSchoolSettings({
+                          ...schoolSettings,
+                          onTimeLotteryRevealLeadMinutes: next,
+                        });
+                      }}
+                      style={{ width: "6rem" }}
+                    />
+                    <span style={{ color: "var(--text-subtle, #64748b)" }}>
+                      minutes
+                    </span>
+                  </div>
+                </label>
+
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "0.5rem",
+                    alignItems: "center",
+                    marginTop: "0.5rem",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => void saveSchoolSettings()}
+                    disabled={settingsStatus === "saving"}
+                  >
+                    {settingsStatus === "saving"
+                      ? "Saving…"
+                      : "Save School Settings"}
+                  </button>
+                  {settingsStatus === "saved" && (
+                    <span style={{ color: "#15803d" }}>Saved.</span>
+                  )}
+                  {settingsStatus === "error" && (
+                    <span style={{ color: "#b91c1c" }}>{settingsError}</span>
+                  )}
+                </div>
               </div>
             </div>
           </div>
