@@ -230,7 +230,7 @@ export default function TeacherDestinationPicker({
   const regenerate = async () => {
     if (regenBusy) return;
     const confirmed = window.confirm(
-      "Generate a new kiosk code?\n\nYour current code stops working right away — any printed badge or screenshot you have will no longer activate a kiosk. You'll get a new QR + PIN to use instead.",
+      "Generate a new kiosk code?\n\nYour current code stops working right away — any saved code or screenshot you have will no longer activate a kiosk. You'll get a new QR + PIN to use instead.",
     );
     if (!confirmed) return;
     setRegenBusy(true);
@@ -404,8 +404,8 @@ export default function TeacherDestinationPicker({
             <div className="tdp-kiosk-url">
               <div className="tdp-kiosk-url-label">Teacher kiosk URL</div>
               <p className="tdp-kiosk-url-hint">
-                Open this on a classroom device, then activate it with your card
-                QR or 6-digit PIN.
+                Open this on a classroom device, then activate it with your scan
+                code or 6-digit PIN.
               </p>
               <div className="tdp-kiosk-url-row">
                 <code className="tdp-kiosk-url-code">{kioskUrl}</code>
@@ -436,8 +436,7 @@ export default function TeacherDestinationPicker({
                 ) : pinStatus === "ok" && myPin ? (
                   <>
                     <p className="tdp-kiosk-url-hint">
-                      The same code printed on your kiosk badge. Type it on the
-                      activation screen to start your room.
+                      Type this on the activation screen to start your room.
                     </p>
                     <div className="tdp-kiosk-url-row">
                       <code
@@ -460,10 +459,10 @@ export default function TeacherDestinationPicker({
                   </>
                 ) : pinStatus === "legacy" ? (
                   <p className="tdp-kiosk-url-hint">
-                    Your printed badge code still works on the kiosk, but it
-                    can&apos;t be shown here — older badges were stored securely
-                    and can&apos;t be read back. Ask an admin to reprint your
-                    kiosk badge to get a fresh code that will appear here.
+                    Your current kiosk code still works, but it can&apos;t be
+                    shown here — it was stored securely and can&apos;t be read
+                    back. Tap <b>Generate a new code</b> below to get a fresh one
+                    that appears here, with a scan code you can show the kiosk.
                   </p>
                 ) : (
                   <p className="tdp-kiosk-url-hint">
@@ -477,9 +476,10 @@ export default function TeacherDestinationPicker({
               <div className="tdp-kiosk-regen">
                 <div className="tdp-kiosk-url-label">Generate a new code</div>
                 <p className="tdp-kiosk-url-hint">
-                  Lost your badge, or want to replace your code? Generate a new
-                  one here — it works instantly and you don&apos;t need to print
-                  anything. Your old code stops working right away.
+                  Need a fresh code, or want to replace your current one?
+                  Generate a new one here — it works instantly, nothing to
+                  print. You&apos;ll get a scan code to show the kiosk camera
+                  plus a PIN, and your old code stops working right away.
                 </p>
                 <div className="tdp-kiosk-url-actions">
                   <button
