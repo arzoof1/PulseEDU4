@@ -592,14 +592,18 @@ export default function CreatePassModal({
                 {allRooms.length > 0 && (
                   <div className="cp-context-row">
                     <span className="cp-context-label">Room</span>
-                    <RoomCombobox
-                      rooms={allRooms}
-                      value={originRoom}
-                      onChange={(r) => {
-                        setOriginRoom(r);
-                        setDestination("");
-                      }}
-                    />
+                    {canChangeTeacher ? (
+                      <RoomCombobox
+                        rooms={allRooms}
+                        value={originRoom}
+                        onChange={(r) => {
+                          setOriginRoom(r);
+                          setDestination("");
+                        }}
+                      />
+                    ) : (
+                      <strong>{originRoom || "—"}</strong>
+                    )}
                   </div>
                 )}
               </div>
@@ -609,13 +613,8 @@ export default function CreatePassModal({
                 placeholder="Search destinations"
                 value={destQuery}
                 onChange={(e) => setDestQuery(e.target.value)}
-                disabled={!originRoom && !canChangeTeacher}
               />
-              {!originRoom && !canChangeTeacher && (
-                <p className="cp-empty">Select an origin room to continue.</p>
-              )}
-              {(originRoom || canChangeTeacher) && (
-                <div className="cp-groups">
+              <div className="cp-groups">
                   {groupedDestinations.near.length > 0 && (
                     <>
                       <div className="cp-group-label">Your locations</div>
@@ -724,7 +723,6 @@ export default function CreatePassModal({
                       <p className="cp-empty">No destinations match.</p>
                     )}
                 </div>
-              )}
             </>
           )}
 

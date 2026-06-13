@@ -4423,6 +4423,7 @@ function App() {
     isFrontOffice?: boolean;
     isSro?: boolean;
     isGuardian?: boolean;
+    isCoreTeam?: boolean;
     capStaffRoles?: boolean;
     capManageRoles?: boolean;
     capManageDisplays?: boolean;
@@ -8247,6 +8248,19 @@ function App() {
     isAdmin ||
     authUser?.isDistrictAdmin === true ||
     authUser?.isSuperUser === true;
+  // Core Team membership — mirrors isCoreTeam() in lib/coreTeam.ts: the
+  // role-derived members (Admin / District Admin / SuperUser / Behavior
+  // Specialist / MTSS Coordinator / School Psychologist) plus the explicit
+  // admin-assignable `isCoreTeam` flag from Settings → Staff & Roles. Drives
+  // the hall-pass "create a pass on behalf of another teacher" picker.
+  const isCoreTeamMember =
+    isAdmin ||
+    authUser?.isDistrictAdmin === true ||
+    authUser?.isSuperUser === true ||
+    authUser?.isBehaviorSpecialist === true ||
+    authUser?.isMtssCoordinator === true ||
+    authUser?.isSchoolPsychologist === true ||
+    authUser?.isCoreTeam === true;
   // Pickup-tag management gate — mirrors canManagePickup() in
   // lib/coreTeam.ts. Admin / Core Team (BS, MTSS, school psych,
   // district admin, super) / counselor (school OR guidance) /
@@ -10483,7 +10497,7 @@ function App() {
         currentStaffUser={currentStaffUser}
         staffUsers={staffUsers}
         staffDefaults={staffDefaults}
-        canChangeTeacher={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
+        canChangeTeacher={isCoreTeamMember}
         nearDestinations={teacherAllowlistMap[currentStaffUser] ?? []}
         bypassContactAck={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
         restroomAccessEnabled={restroomAccessEnabled}

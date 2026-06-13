@@ -74,6 +74,7 @@ const ROLE_FLAGS = [
   "isFrontOffice",
   "isSro",
   "isGuardian",
+  "isCoreTeam",
 ] as const;
 type RoleFlag = (typeof ROLE_FLAGS)[number];
 
@@ -144,6 +145,7 @@ const STAFF_SELECT = {
   isFrontOffice: staffTable.isFrontOffice,
   isSro: staffTable.isSro,
   isGuardian: staffTable.isGuardian,
+  isCoreTeam: staffTable.isCoreTeam,
   exemptStatus: staffTable.exemptStatus,
   capHallPasses: staffTable.capHallPasses,
   capTardies: staffTable.capTardies,

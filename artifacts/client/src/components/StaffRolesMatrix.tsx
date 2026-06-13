@@ -202,6 +202,23 @@ const ROLE_PRESETS: {
       "capSupportNotes",
     ],
   },
+  // Core Team: a FULL Core Team member. The flag itself grants every Core
+  // Team power server-side (read/write all teachers' Tier 2/3 intervention
+  // data, goal editing, completion reports, strategy catalog, plus the gates
+  // that compose isCoreTeam()). The capability bundle below just lights up the
+  // matching pages so the member can actually reach those surfaces.
+  {
+    flag: "isCoreTeam",
+    label: "Core Team",
+    capabilities: [
+      "capStudentActivity",
+      "capInterventionLog",
+      "capInterventionManage",
+      "capSupportNotes",
+      "capPulloutsVerify",
+      "capReports",
+    ],
+  },
   {
     flag: "isSocialWorker",
     label: "School Social Worker",

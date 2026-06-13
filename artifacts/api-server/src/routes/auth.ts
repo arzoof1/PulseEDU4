@@ -60,6 +60,7 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     isFrontOffice: row.isFrontOffice,
     isSro: row.isSro,
     isGuardian: row.isGuardian,
+    isCoreTeam: row.isCoreTeam,
     defaultRoom: row.defaultRoom,
   };
 }

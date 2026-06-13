@@ -10,7 +10,10 @@
 //   - manage the strategy catalog
 //
 // Members: SuperUser, District Admin, school Admin, Behavior Specialist,
-// MTSS Coordinator, School Psychologist.
+// MTSS Coordinator, School Psychologist — plus any staff member an admin
+// explicitly adds to the Core Team via the assignable `isCoreTeam` flag in
+// Settings → Staff & Roles. The explicit flag grants the full Core Team
+// power set everywhere this gate (and every gate that composes it) is used.
 export function isCoreTeam(staff: {
   isSuperUser?: boolean | null;
   isDistrictAdmin?: boolean | null;
@@ -18,6 +21,7 @@ export function isCoreTeam(staff: {
   isBehaviorSpecialist?: boolean | null;
   isMtssCoordinator?: boolean | null;
   isSchoolPsychologist?: boolean | null;
+  isCoreTeam?: boolean | null;
 }): boolean {
   return Boolean(
     staff.isSuperUser ||
@@ -25,7 +29,8 @@ export function isCoreTeam(staff: {
       staff.isAdmin ||
       staff.isBehaviorSpecialist ||
       staff.isMtssCoordinator ||
-      staff.isSchoolPsychologist,
+      staff.isSchoolPsychologist ||
+      staff.isCoreTeam,
   );
 }
 

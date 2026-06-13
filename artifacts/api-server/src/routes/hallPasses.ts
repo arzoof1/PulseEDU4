@@ -20,6 +20,7 @@ import {
 } from "./studentHallPassLimits";
 import { resolveStudentIdInput } from "../lib/studentIdResolver.js";
 import { checkRestroomAccess } from "../lib/restroomAccess.js";
+import { isCoreTeam } from "../lib/coreTeam.js";
 
 const router: IRouter = Router();
 
@@ -105,14 +106,51 @@ router.post("/hall-passes", async (req, res) => {
     return;
   }
 
+  // Create-on-behalf authorization. The "From" teacher and origin Room are
+  // identity, not free text: only Core Team may issue a pass attributed to
+  // another teacher / room (mirrors the locked "From"/"Room" UI and the
+  // `endedBy` derivation on PATCH /:id/end). For a non-Core-Team staff
+  // member we DERIVE both fields from the authenticated account and ignore
+  // whatever the body claims, so a stale tab or crafted request can't forge
+  // a pass under someone else's name or spoof a room to dodge restroom
+  // policy. Unauthenticated callers (no req.staffId) keep the body values —
+  // those flows are gated elsewhere.
+  let effectiveTeacherName = teacherName;
+  let effectiveOriginRoom = originRoom;
+  if (req.staffId) {
+    const [actor] = await db
+      .select({
+        displayName: staffTable.displayName,
+        defaultRoom: staffTable.defaultRoom,
+        isSuperUser: staffTable.isSuperUser,
+        isDistrictAdmin: staffTable.isDistrictAdmin,
+        isAdmin: staffTable.isAdmin,
+        isBehaviorSpecialist: staffTable.isBehaviorSpecialist,
+        isMtssCoordinator: staffTable.isMtssCoordinator,
+        isSchoolPsychologist: staffTable.isSchoolPsychologist,
+        isCoreTeam: staffTable.isCoreTeam,
+      })
+      .from(staffTable)
+      .where(
+        and(
+          eq(staffTable.id, req.staffId),
+          eq(staffTable.schoolId, schoolId),
+        ),
+      );
+    if (actor && !isCoreTeam(actor)) {
+      effectiveTeacherName = actor.displayName;
+      effectiveOriginRoom = actor.defaultRoom ?? "";
+    }
+  }
+
   // Restroom Access Control hard block — enforced server-side so a stale
   // tab or crafted request can't issue a pass to a restroom that's hidden
   // for this room/teacher. No-op when the feature is off or the
   // destination isn't a restroom.
   const restroomCheck = await checkRestroomAccess(schoolId, {
     destination,
-    originRoom,
-    teacherName,
+    originRoom: effectiveOriginRoom,
+    teacherName: effectiveTeacherName,
   });
   if (!restroomCheck.allowed) {
     res.status(403).json({
@@ -182,7 +220,7 @@ router.post("/hall-passes", async (req, res) => {
       {
         studentId,
         partnerStudentId: conflict.partnerStudentId,
-        teacherName,
+        teacherName: effectiveTeacherName,
         schoolId,
       },
       "keep-apart override acknowledged by teacher",
@@ -202,8 +240,8 @@ router.post("/hall-passes", async (req, res) => {
       schoolId,
       studentId: resolvedStudentId,
       destination,
-      originRoom,
-      teacherName,
+      originRoom: effectiveOriginRoom,
+      teacherName: effectiveTeacherName,
       destinationTeacher: destTeacher,
       contactedAcknowledged: acknowledged,
       status: "active",

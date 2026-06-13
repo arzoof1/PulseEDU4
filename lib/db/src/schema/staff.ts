@@ -101,6 +101,16 @@ export const staffTable = pgTable("staff", {
   // Guardian / hall monitor / security aide. Same as teacher today.
   isGuardian: boolean("is_guardian").notNull().default(false),
 
+  // Core Team membership — an explicit, admin-assignable flag that makes a
+  // staff member a FULL Core Team member everywhere. ORed into isCoreTeam()
+  // in lib/coreTeam.ts alongside the role-derived members (Admin / Behavior
+  // Specialist / MTSS Coordinator / School Psychologist / District Admin /
+  // SuperUser), so toggling it grants every Core Team power: read/write of
+  // every teacher's Tier 2/3 intervention data, goal editing, completion
+  // reports, the strategy catalog, plus the downstream gates that compose
+  // isCoreTeam() (safety plans, pickup, tours, tickets, etc.).
+  isCoreTeam: boolean("is_core_team").notNull().default(false),
+
   // ---- Per-page capability flags ----
   // Pages everyone uses by default — defaulted true so new staff land with
   // the same baseline access teachers have today.
