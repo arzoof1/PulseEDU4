@@ -85,6 +85,49 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+// Trailing subject descriptors that some rosters bake into the display name
+// (e.g. "Marcus Hayes ELA" or "Jane Doe G6"). Stripped only when building the
+// student-facing kiosk teacher label so it reads cleanly; the stored
+// displayName is never modified.
+const SUBJECT_NAME_SUFFIXES = new Set([
+  "ela",
+  "math",
+  "science",
+  "reading",
+  "writing",
+  "civics",
+  "history",
+  "ss",
+]);
+
+// Build the student-facing "teacher of record" label for a kiosk destination.
+//   - With a title:  "Mr." + "Marcus Hayes ELA"  -> "Mr. Hayes"  (last name)
+//   - Without title: "Marcus Hayes ELA"          -> "Marcus Hayes" (full name)
+// We only collapse to a last name when a title is present, because "Mr. Hayes"
+// reads naturally while a bare "Hayes" does not.
+function teacherOfRecordLabel(
+  displayName: string,
+  title: string | null,
+): string {
+  // Drop a " - Subject" suffix (the documented roster format) up front.
+  let base = displayName;
+  const dash = base.indexOf(" - ");
+  if (dash !== -1) base = base.slice(0, dash);
+  let tokens = base.trim().split(/\s+/).filter(Boolean);
+  // Drop a single trailing standalone subject token (e.g. "... Hayes ELA").
+  if (
+    tokens.length > 1 &&
+    SUBJECT_NAME_SUFFIXES.has(tokens[tokens.length - 1].toLowerCase())
+  ) {
+    tokens = tokens.slice(0, -1);
+  }
+  const cleanName = tokens.join(" ") || displayName.trim();
+  const t = (title ?? "").trim();
+  if (!t) return cleanName;
+  const lastName = tokens[tokens.length - 1] ?? cleanName;
+  return `${t} ${lastName}`;
+}
+
 async function requireStaff(
   req: Request,
   res: Response,
@@ -709,10 +752,51 @@ router.get("/kiosk/destinations/:token", async (req, res) => {
         inArray(locationsTable.id, allIds),
       ),
     );
-  const visible = rows
+  const visibleRows = rows
     .filter((r) => r.active && r.studentVisible && r.isDestination)
-    .map((r) => ({ id: r.id, name: r.name }))
     .sort((a, b) => a.name.localeCompare(b.name));
+
+  // Teacher of record per destination room, so students see "Mr. Hayes —
+  // Room 204" instead of a bare room. The teacher is the active staff member
+  // whose default room matches the destination's name (same school). A room
+  // with no — or more than one — match shows no teacher (we can't pick "the"
+  // teacher of record unambiguously, so we stay silent rather than guess).
+  const teacherByRoom = new Map<string, string>();
+  const roomNames = visibleRows.map((r) => r.name);
+  if (roomNames.length > 0) {
+    const staffRows = await db
+      .select({
+        displayName: staffTable.displayName,
+        title: staffTable.title,
+        defaultRoom: staffTable.defaultRoom,
+      })
+      .from(staffTable)
+      .where(
+        and(
+          eq(staffTable.schoolId, act.schoolId),
+          eq(staffTable.active, true),
+          inArray(staffTable.defaultRoom, roomNames),
+        ),
+      );
+    // Count matches per room first; only rooms with exactly one teacher get a
+    // label (avoids misattributing a shared room to one of several teachers).
+    const countByRoom = new Map<string, number>();
+    for (const s of staffRows) {
+      const room = s.defaultRoom ?? "";
+      countByRoom.set(room, (countByRoom.get(room) ?? 0) + 1);
+    }
+    for (const s of staffRows) {
+      const room = s.defaultRoom ?? "";
+      if (countByRoom.get(room) !== 1) continue;
+      teacherByRoom.set(room, teacherOfRecordLabel(s.displayName, s.title));
+    }
+  }
+
+  const visible = visibleRows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    teacherName: teacherByRoom.get(r.name) ?? null,
+  }));
   res.json({ originRoom: act.room, destinations: visible });
 });
 

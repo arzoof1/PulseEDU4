@@ -32,6 +32,10 @@ const DEPARTMENTS = [
   "Other",
 ] as const;
 
+// Courtesy titles shown to students on the hall-pass kiosk as the teacher of
+// record for a person's default room (e.g. "Mr. Hayes — Room 204").
+const STAFF_TITLES = ["Mr.", "Mrs.", "Ms.", "Mx.", "Dr.", "Coach"] as const;
+
 type HouseOption = {
   id: number;
   name: string;
@@ -656,6 +660,17 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
               >
                 Department
               </th>
+              <th
+                style={{
+                  ...stickyTh,
+                  zIndex: 4,
+                  minWidth: 130,
+                  textAlign: "left",
+                }}
+                title="Courtesy title (Mr./Mrs./Ms./…). Shown to students on the hall-pass kiosk as the teacher of record for this person's default room, e.g. 'Mr. Hayes — Room 204'."
+              >
+                Title
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -807,12 +822,37 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                       ))}
                     </select>
                   </td>
+                  <td
+                    style={{
+                      padding: "4px 6px",
+                      borderBottom: "1px solid #f1f5f9",
+                      minWidth: 130,
+                    }}
+                  >
+                    <select
+                      value={(s["title"] as string | null) ?? ""}
+                      disabled={isSaving}
+                      onChange={(e) =>
+                        patchStaff(s.id, {
+                          title: e.target.value === "" ? null : e.target.value,
+                        })
+                      }
+                      style={{ width: "100%" }}
+                    >
+                      <option value="">—</option>
+                      {STAFF_TITLES.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
                 </tr>
               );
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={5} style={{ padding: 16 }}>
+                <td colSpan={6} style={{ padding: 16 }}>
                   {staffScope === "current"
                     ? "No current staff match."
                     : staffScope === "historical"

@@ -40,6 +40,13 @@ export const staffTable = pgTable("staff", {
   passwordHash: text("password_hash").notNull(),
   displayName: text("display_name").notNull(),
 
+  // Optional courtesy title / honorific (e.g. "Mr.", "Mrs.", "Ms.", "Dr.",
+  // "Coach"). Set by an admin on Staff & Roles. Surfaced where students see
+  // a teacher of record — currently the hall-pass kiosk destination list,
+  // which reads "Mr. Hayes — Room 204". Nullable; falls back to the plain
+  // name when blank. Stored as short free text (the API caps the length).
+  title: text("title"),
+
   // ---- Role flags (legacy gates + labels/presets) ----
   isSuperUser: boolean("is_super_user").notNull().default(false),
   // District Admin tier: sits between SuperUser (cross-school within

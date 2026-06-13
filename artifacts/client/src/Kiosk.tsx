@@ -15,6 +15,13 @@ interface LocationRow {
   active: boolean;
 }
 
+// A destination as shown in the kiosk picker. Extends a location row with the
+// teacher of record for that room (e.g. "Mr. Hayes"), resolved server-side
+// from the /kiosk/destinations endpoint. Null when the room has no single
+// unambiguous teacher (the picker then shows just the room name).
+type DestinationOption = Pick<LocationRow, "id" | "name"> &
+  Partial<LocationRow> & { teacherName: string | null };
+
 interface AllowedRow {
   id: number;
   originLocationId: number;
@@ -1649,7 +1656,7 @@ function KioskBody({
   // the activating teacher's per-staff allowlist. Preferred over the old
   // locations × allowed intersection so per-teacher admin edits show up.
   const [tokenDestinations, setTokenDestinations] = useState<
-    { id: number; name: string }[] | null
+    { id: number; name: string; teacherName?: string | null }[] | null
   >(null);
   const [now, setNow] = useState(new Date());
   const [studentId, setStudentId] = useState("");
@@ -1866,8 +1873,13 @@ function KioskBody({
     fetch(`/api/kiosk/destinations/${encodeURIComponent(token)}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(r)))
       .then(
-        (d: { destinations: { id: number; name: string }[] }) =>
-          setTokenDestinations(d.destinations ?? []),
+        (d: {
+          destinations: {
+            id: number;
+            name: string;
+            teacherName?: string | null;
+          }[];
+        }) => setTokenDestinations(d.destinations ?? []),
       )
       .catch(() => setTokenDestinations(null));
   }, [token]);
@@ -1891,7 +1903,10 @@ function KioskBody({
     if (tokenDestinations !== null) {
       const byId = new Map(locations.map((l) => [l.id, l]));
       return tokenDestinations
-        .map((d) => byId.get(d.id) ?? { id: d.id, name: d.name } as LocationRow)
+        .map((d): DestinationOption => {
+          const base = byId.get(d.id) ?? ({ id: d.id, name: d.name } as LocationRow);
+          return { ...base, teacherName: d.teacherName ?? null };
+        })
         .sort((a, b) => a.name.localeCompare(b.name));
     }
     if (!originLocation) return [];
@@ -1908,6 +1923,7 @@ function KioskBody({
           l.isDestination &&
           allowedDestIds.has(l.id),
       )
+      .map((l): DestinationOption => ({ ...l, teacherName: null }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [locations, allowed, originLocation, tokenDestinations]);
 
@@ -2343,7 +2359,7 @@ function KioskBody({
                 <option value="">Select a destination…</option>
                 {destinationOptions.map((d) => (
                   <option key={d.id} value={d.name}>
-                    {d.name}
+                    {d.teacherName ? `${d.teacherName} — ${d.name}` : d.name}
                   </option>
                 ))}
               </select>
@@ -2587,7 +2603,7 @@ function GetInLineOverlay({
   onAdded,
 }: {
   token: string;
-  destinationOptions: LocationRow[];
+  destinationOptions: DestinationOption[];
   onClose: () => void;
   onAdded: () => void;
 }) {
@@ -2761,7 +2777,7 @@ function GetInLineOverlay({
                 <option value="">Select a destination…</option>
                 {destinationOptions.map((d) => (
                   <option key={d.id} value={d.name}>
-                    {d.name}
+                    {d.teacherName ? `${d.teacherName} — ${d.name}` : d.name}
                   </option>
                 ))}
               </select>

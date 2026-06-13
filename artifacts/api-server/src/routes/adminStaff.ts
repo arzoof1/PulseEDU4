@@ -125,6 +125,7 @@ const STAFF_SELECT = {
   id: staffTable.id,
   email: staffTable.email,
   displayName: staffTable.displayName,
+  title: staffTable.title,
   active: staffTable.active,
   isSuperUser: staffTable.isSuperUser,
   isDistrictAdmin: staffTable.isDistrictAdmin,
@@ -439,6 +440,22 @@ router.patch(
         updates.defaultRoom = v.trim();
       } else {
         res.status(400).json({ error: "defaultRoom must be a string or null" });
+        return;
+      }
+    }
+    // Optional string field: title (courtesy title / honorific). Empty string
+    // clears it (NULL). Capped at 16 chars — it's a short prefix like "Mr."
+    // or "Coach", not a free-form note.
+    if ("title" in body) {
+      const v = body.title;
+      if (v === null || (typeof v === "string" && v.trim() === "")) {
+        updates.title = null;
+      } else if (typeof v === "string" && v.trim().length <= 16) {
+        updates.title = v.trim();
+      } else {
+        res
+          .status(400)
+          .json({ error: "title must be a string of 16 characters or fewer" });
         return;
       }
     }

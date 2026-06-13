@@ -360,6 +360,12 @@ export async function ensureHousesSchema() {
   await db.execute(
     sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS department TEXT`,
   );
+  // staff.title — optional courtesy title / honorific (Mr./Mrs./Ms./Dr./…),
+  // admin-set on Staff & Roles, shown on the kiosk destination list as the
+  // teacher of record ("Mr. Hayes — Room 204").
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS title TEXT`,
+  );
   // student_house_changes — append-only audit of every house move.
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS student_house_changes (
