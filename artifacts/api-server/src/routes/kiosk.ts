@@ -1462,6 +1462,158 @@ router.post("/kiosk/hall-passes/return", async (req, res) => {
   });
 });
 
+// Destination check-in (one-way arrival). A kiosk standing AT the destination
+// room receives an inbound student: this ENDS the pass, stamps arrivedAt, and
+// records endedBy as the destination room. Idempotent — a second tap (or a
+// pass already received by a staff member from the app) returns ok rather than
+// erroring. Restroom passes never use this path (they're round-trip).
+router.post("/kiosk/hall-passes/arrive", async (req, res) => {
+  const { passId, token } = req.body ?? {};
+
+  if (typeof token !== "string" || token.length < 16) {
+    res.status(401).json({
+      error: "Kiosk activation token is required",
+      revoked: true,
+    });
+    return;
+  }
+  const numericPassId = Number(passId);
+  if (!Number.isFinite(numericPassId) || numericPassId <= 0) {
+    res.status(400).json({ error: "passId is required" });
+    return;
+  }
+
+  const [act] = await db
+    .select()
+    .from(kioskActivationsTable)
+    .where(
+      and(
+        eq(kioskActivationsTable.tokenHash, hashToken(token)),
+        isNull(kioskActivationsTable.deactivatedAt),
+        gt(kioskActivationsTable.expiresAt, new Date()),
+      ),
+    );
+  if (!act) {
+    res.status(401).json({
+      error: "Kiosk activation not found, revoked, or expired",
+      revoked: true,
+    });
+    return;
+  }
+
+  const [pass] = await db
+    .select()
+    .from(hallPassesTable)
+    .where(
+      and(
+        eq(hallPassesTable.id, numericPassId),
+        eq(hallPassesTable.schoolId, act.schoolId),
+      ),
+    );
+  if (!pass) {
+    res.status(404).json({ error: "Hall pass not found." });
+    return;
+  }
+  // The kiosk can only receive students whose destination IS this room.
+  if (pass.destination !== act.room) {
+    res.status(403).json({
+      error: `That pass is headed to ${pass.destination}, not ${act.room}.`,
+    });
+    return;
+  }
+  // Idempotent: already received / ended → return as-is.
+  if (pass.status !== "active") {
+    res.json({ ...pass, alreadyReceived: true });
+    return;
+  }
+
+  const nowIso = new Date().toISOString();
+  const [updated] = await db
+    .update(hallPassesTable)
+    .set({
+      status: "ended",
+      endedAt: nowIso,
+      arrivedAt: nowIso,
+      endedBy: `${act.room} (kiosk)`,
+    })
+    .where(eq(hallPassesTable.id, pass.id))
+    .returning();
+
+  res.json(updated);
+});
+
+// Token-scoped student photo for kiosk surfaces. The kiosk is an
+// UNAUTHENTICATED device (no staff session) — it only holds a kiosk
+// activation token. So a plain <img src> can't reach the authed
+// /api/storage path. This GET resolves the activation → school, then
+// streams the photo bytes ONLY if a CONSENTING student in that same
+// school actually owns the requested object key. That double gate
+// (school match + consent + ownership) prevents a kiosk token from
+// being used to enumerate arbitrary objects. Missing/!consent/!owned
+// all 404 → the client falls back to the initials disc.
+const kioskPhotoStorage = new ObjectStorageService();
+router.get("/kiosk/photo/:token", async (req, res) => {
+  const token = req.params.token;
+  const key = typeof req.query.key === "string" ? req.query.key : "";
+  if (typeof token !== "string" || token.length < 16 || !key) {
+    res.status(404).end();
+    return;
+  }
+
+  const [act] = await db
+    .select({ schoolId: kioskActivationsTable.schoolId })
+    .from(kioskActivationsTable)
+    .where(
+      and(
+        eq(kioskActivationsTable.tokenHash, hashToken(token)),
+        isNull(kioskActivationsTable.deactivatedAt),
+        gt(kioskActivationsTable.expiresAt, new Date()),
+      ),
+    );
+  if (!act) {
+    res.status(404).end();
+    return;
+  }
+
+  // Confirm a consenting student in this school owns the key.
+  const [owner] = await db
+    .select({ studentId: studentsTable.studentId })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.schoolId, act.schoolId),
+        eq(studentsTable.photoObjectKey, key),
+        eq(studentsTable.photoConsent, true),
+      ),
+    );
+  if (!owner) {
+    res.status(404).end();
+    return;
+  }
+
+  try {
+    const file = await kioskPhotoStorage.getObjectEntityFile(key);
+    const [metadata] = await file.getMetadata();
+    res.setHeader(
+      "Content-Type",
+      (metadata.contentType as string) || "application/octet-stream",
+    );
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    const stream = file.createReadStream();
+    stream.on("error", () => {
+      if (!res.headersSent) res.status(404);
+      res.end();
+    });
+    stream.pipe(res);
+  } catch (err) {
+    if (err instanceof ObjectNotFoundError) {
+      res.status(404).end();
+      return;
+    }
+    res.status(404).end();
+  }
+});
+
 // =====================================================================
 // Phase 1 — Activation cards (per-teacher enrollment tokens).
 //

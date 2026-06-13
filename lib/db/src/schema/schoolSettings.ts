@@ -302,6 +302,12 @@ export const schoolSettingsTable = pgTable(
   //     house id (stringified): { "12": "Welcome home, Phoenix!" }.
   //     Empty / missing key falls back to kioskWelcomeTemplate.
   // -----------------------------------------------------------------
+  // One-way hall pass: minutes a student may be "in route" (left origin,
+  // not yet checked in at the destination) before the overdue-in-route
+  // alert fires to admin/dean/behavior-specialist/core-team. Default 10.
+  inRouteOverdueMinutes: integer("in_route_overdue_minutes")
+    .notNull()
+    .default(10),
   kioskWelcomeTemplate: text("kiosk_welcome_template")
     .notNull()
     .default("Welcome, {firstName}!"),

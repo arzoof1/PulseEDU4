@@ -33,6 +33,7 @@ import {
 } from "@workspace/db";
 import { and, eq, desc, isNull, sql, gte, lt } from "drizzle-orm";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./schoolYear.js";
+import { loadRestroomDestinationNames } from "./oneWayPass.js";
 
 // Returns the YYYY-MM-DD bounds of the current school year. The cutover
 // is Aug 1 — anything before that rolls back to the previous Aug 1 so a
@@ -104,6 +105,11 @@ export interface ParentSnapshot {
       status: string;
       createdAt: string;
       endedAt: string | null;
+      arrivedAt?: string | null;
+      endedBy?: string | null;
+      // True for one-way (non-restroom) passes. Restroom passes are
+      // round-trip; the client must not show them an "in route" state.
+      oneWay: boolean;
     }>;
   };
   attendance: {
@@ -405,6 +411,13 @@ export async function buildParentSnapshot(
         .orderBy(desc(hallPassesTable.createdAt))
         .limit(50)
     : [];
+  // Restroom passes are round-trip ("I'm back" at origin) and never get a
+  // one-way "in route → checked in" lifecycle, so the parent UI must not
+  // mislabel an active restroom pass as "in route". `oneWay` is the flag.
+  const restroomNames =
+    hpRows.length > 0
+      ? await loadRestroomDestinationNames(student.schoolId)
+      : new Set<string>();
   const hpThisWeekCount = hpRows.filter((r) =>
     isWithinDays(r.createdAt, 7),
   ).length;
@@ -919,6 +932,9 @@ export async function buildParentSnapshot(
           status: r.status,
           createdAt: r.createdAt,
           endedAt: r.endedAt,
+          arrivedAt: r.arrivedAt,
+          endedBy: r.endedBy,
+          oneWay: !restroomNames.has(r.destination),
         })),
       },
       attendance: {

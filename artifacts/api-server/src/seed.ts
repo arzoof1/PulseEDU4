@@ -6838,6 +6838,44 @@ export async function ensureHallPassPriorityBypassColumn(): Promise<void> {
   );
 }
 
+// -----------------------------------------------------------------------------
+// One-way hall pass lifecycle (destination check-in).
+//
+// Non-restroom passes become one-way: leave origin -> "in route" -> received
+// at the destination. Adds:
+//   - hall_passes.arrived_at / ended_by  (when + who received them)
+//   - hall_passes.overdue_alerted_at      (overdue-in-route alert dedup)
+//   - school_settings.in_route_overdue_minutes (alert threshold; default 10)
+//   - staff_received_locations            (admin-assigned coverage so staff
+//     see passes headed to non-classroom destinations like Guidance/Clinic)
+// All additive + idempotent — safe on every boot.
+// -----------------------------------------------------------------------------
+export async function ensureOneWayPassSchema(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE hall_passes ADD COLUMN IF NOT EXISTS arrived_at TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE hall_passes ADD COLUMN IF NOT EXISTS ended_by TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE hall_passes ADD COLUMN IF NOT EXISTS overdue_alerted_at TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS in_route_overdue_minutes INTEGER NOT NULL DEFAULT 10`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS staff_received_locations (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      staff_id INTEGER NOT NULL,
+      location_id INTEGER NOT NULL
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS staff_received_locations_unique ON staff_received_locations (school_id, staff_id, location_id)`,
+  );
+}
+
 export async function ensureKioskCardsSchema(): Promise<void> {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS kiosk_enroll_tokens (

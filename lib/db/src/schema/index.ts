@@ -16,6 +16,7 @@ export * from "./schoolAccommodations";
 export * from "./studentAccommodations";
 export * from "./locations";
 export * from "./staffDefaults";
+export * from "./staffReceivedLocations";
 export * from "./locationAllowedDestinations";
 export * from "./staff";
 export * from "./staffPasswordResets";

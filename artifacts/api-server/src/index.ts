@@ -30,6 +30,7 @@ import {
   ensureAstSchema,
   ensureKioskCardsSchema,
   ensureHallPassPriorityBypassColumn,
+  ensureOneWayPassSchema,
   ensureKioskWelcomeSchema,
   ensurePbisInvisibleTierColumns,
   ensureBadgePrintEventsSchema,
@@ -64,6 +65,7 @@ import { startReminderScheduler } from "./lib/scheduler";
 import { runAstYearEndLapse } from "./cron/astLapse";
 import { runFeatureLicensingOverrideSweep } from "./cron/featureLicensingOverrideSweep";
 import { runPickupEndOfDayAutoClear } from "./cron/pickupEndOfDayAutoClear";
+import { runInRouteOverdueSweep } from "./cron/inRouteOverdue";
 import {
   runDemoHeartbeatTick,
   runDemoHeartbeatReset,
@@ -227,6 +229,10 @@ async function runSeed(): Promise<void> {
   await ensureKioskCardsSchema();
   // "Go now" line-bypass audit flag on hall_passes. Additive + idempotent.
   await ensureHallPassPriorityBypassColumn();
+  // One-way pass lifecycle: arrived_at/ended_by/overdue_alerted_at on
+  // hall_passes, in_route_overdue_minutes on school_settings, and the
+  // staff_received_locations coverage table. Additive + idempotent.
+  await ensureOneWayPassSchema();
   // Phase 3 — Kiosk "Sign in to class" welcome messages + class_signins
   // append-only ledger. Idempotent.
   await ensureKioskWelcomeSchema();
@@ -601,6 +607,43 @@ function startListening(): void {
           logger.error(
             { err: schedErr },
             "Failed to schedule pickup end-of-day auto-clear",
+          );
+        }
+
+        // Overdue-in-route hall pass alerts. A one-way (non-restroom) pass
+        // that never checks in at its destination within the school's
+        // in_route_overdue_minutes means a student may be wandering. Sweep
+        // every minute; the sweep itself enforces the per-school threshold
+        // and dedups via hall_passes.overdue_alerted_at. Email always; SMS
+        // once configured. Override cadence via IN_ROUTE_OVERDUE_CRON.
+        const overdueExpr =
+          process.env.IN_ROUTE_OVERDUE_CRON ?? "* * * * *";
+        try {
+          cron.schedule(overdueExpr, async () => {
+            try {
+              const r = await runInRouteOverdueSweep(new Date());
+              const total = r.reduce((n, s) => n + s.alerted, 0);
+              if (total > 0) {
+                logger.info(
+                  { schools: r.length, totalAlerted: total },
+                  "In-route overdue sweep complete",
+                );
+              }
+            } catch (cronErr) {
+              logger.error(
+                { err: cronErr },
+                "In-route overdue sweep failed",
+              );
+            }
+          });
+          logger.info(
+            { expr: overdueExpr },
+            "In-route overdue sweep scheduled",
+          );
+        } catch (schedErr) {
+          logger.error(
+            { err: schedErr },
+            "Failed to schedule in-route overdue sweep",
           );
         }
       }

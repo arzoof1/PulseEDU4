@@ -200,6 +200,8 @@ interface HallPass {
   maxDurationMinutes: number;
   createdAt: string;
   endedAt: string | null;
+  arrivedAt?: string | null;
+  endedBy?: string | null;
   isTardyReturn?: boolean;
 }
 
@@ -4482,7 +4484,13 @@ function App() {
   const [changePwOk, setChangePwOk] = useState(false);
   const [dateFilter, setDateFilter] = useState<"today" | "all">("all");
   const [staffFilter, setStaffFilter] = useState<"all" | "mine">("all");
-  const [passFilter, setPassFilter] = useState<"all" | "mine">("all");
+  const [passFilter, setPassFilter] = useState<"all" | "mine" | "heading">(
+    "all",
+  );
+  // Destination location names the signed-in staff covers (their own room ∪
+  // admin-assigned receiving locations). Drives the "Heading to me" scope in
+  // Out Right Now — active non-restroom passes whose destination is in here.
+  const [coveredLocations, setCoveredLocations] = useState<string[]>([]);
 
   // Hall pass top-level view: overview (current default) vs reports (admin/ESE).
   const [hpView, setHpView] = useState<"overview" | "reports">("overview");
@@ -6115,6 +6123,17 @@ function App() {
       .catch((err) => console.error("Failed to load hall passes:", err));
   };
 
+  const loadMyCoverage = () => {
+    authFetch("/api/hall-passes/my-coverage")
+      .then((res) => (res.ok ? res.json() : { locations: [] }))
+      .then((data: { locations?: string[] }) =>
+        setCoveredLocations(
+          Array.isArray(data?.locations) ? data.locations : [],
+        ),
+      )
+      .catch((err) => console.error("Failed to load hall-pass coverage:", err));
+  };
+
   useEffect(() => {
     import("./lib/authToken").then(({ authFetch, setAuthToken }) => {
       authFetch("/api/auth/me")
@@ -6243,6 +6262,7 @@ function App() {
     loadSchoolAccommodations();
 
     loadHallPasses();
+    loadMyCoverage();
 
     loadTardies();
     loadPbis();
@@ -8055,6 +8075,30 @@ function App() {
     }
   };
 
+  // Receive / check in an inbound one-way pass at its destination. Ends the
+  // pass while stamping arrivedAt + who received it (the signed-in staff).
+  // Idempotent server-side — a double-tap on an already-received pass is a
+  // friendly no-op that still refreshes the list.
+  const handleReceivePass = async (id: number) => {
+    try {
+      const res = await authFetch(`/api/hall-passes/${id}/end`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          endedBy: currentStaffUser,
+          arrived: true,
+        }),
+      });
+      if (!res.ok) {
+        console.error("Failed to check in hall pass:", await res.text());
+        return;
+      }
+      loadHallPasses();
+    } catch (err) {
+      console.error("Failed to check in hall pass:", err);
+    }
+  };
+
   const handleSavePassEdit = async (id: number) => {
     try {
       const endedAtIso = editEndedAt
@@ -8177,7 +8221,10 @@ function App() {
 
   const studentName = (id: string): string => {
     const s = students.find((x) => x.studentId === id);
-    return s ? `${s.firstName} ${s.lastName}` : id;
+    // NEVER fall back to `id` — that is the FLEID (students.student_id) and
+    // must never render to a user. Show a neutral label when the roster cache
+    // misses; the row's localSisId line still shows the human-facing ID.
+    return s ? `${s.firstName} ${s.lastName}` : "Unknown student";
   };
 
   // SuperUser is a strict superset of Admin — anyone with the
@@ -10521,6 +10568,13 @@ function App() {
             </button>
             <button
               type="button"
+              onClick={() => setPassFilter("heading")}
+              disabled={passFilter === "heading"}
+            >
+              Heading to me
+            </button>
+            <button
+              type="button"
               onClick={() => setPassFilter("all")}
               disabled={passFilter === "all"}
             >
@@ -10533,12 +10587,25 @@ function App() {
           (() => {
             const visible = hallPasses
               .filter((p) => p.status === "active")
-              .filter((p) =>
-                passFilter === "mine"
-                  ? p.teacherName === currentStaffUser ||
+              .filter((p) => {
+                if (passFilter === "mine") {
+                  return (
+                    p.teacherName === currentStaffUser ||
                     p.teacherName === `${currentStaffUser} (K)`
-                  : true,
-              )
+                  );
+                }
+                if (passFilter === "heading") {
+                  // Active one-way passes headed to a location this staff
+                  // member covers and not yet checked in. Restroom passes are
+                  // round-trip (no destination check-in) and won't match a
+                  // covered classroom/office destination anyway.
+                  return (
+                    !p.arrivedAt &&
+                    coveredLocations.includes(p.destination)
+                  );
+                }
+                return true;
+              })
               .sort(
                 (a, b) =>
                   new Date(a.createdAt).getTime() -
@@ -10552,7 +10619,9 @@ function App() {
                     padding: "0.75rem 0",
                   }}
                 >
-                  No active passes right now.
+                  {passFilter === "heading"
+                    ? "No students are heading to your locations right now."
+                    : "No active passes right now."}
                 </div>
               );
             }
@@ -10624,7 +10693,8 @@ function App() {
                             with {p.destinationTeacher}
                           </div>
                         )}
-                        {passFilter === "all" && (
+                        {(passFilter === "all" ||
+                          passFilter === "heading") && (
                           <div
                             style={{
                               fontSize: 11,
@@ -10643,12 +10713,21 @@ function App() {
                       >
                         {status}
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleEndPass(p.id)}
-                      >
-                        End Pass
-                      </button>
+                      {passFilter === "heading" ? (
+                        <button
+                          type="button"
+                          onClick={() => handleReceivePass(p.id)}
+                        >
+                          Received / Check in
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleEndPass(p.id)}
+                        >
+                          End Pass
+                        </button>
+                      )}
                     </div>
                   );
                 })}

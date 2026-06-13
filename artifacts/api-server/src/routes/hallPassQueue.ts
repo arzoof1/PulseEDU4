@@ -24,6 +24,7 @@ import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { findPolarityConflict } from "./polarityPairs";
 import { findDailyLimitConflict } from "./studentHallPassLimits";
+import { loadRestroomDestinationNames } from "../lib/oneWayPass.js";
 
 // How long a minted viewer token stays usable. The token is also killed
 // the moment the underlying kiosk activation is deactivated, so this is
@@ -182,6 +183,8 @@ async function clearStaleAndList(act: { id: number; schoolId: number }) {
       // itself stores the internal student_id; the SIS id is the human-facing
       // value students scan/type.
       localSisId: studentsTable.localSisId,
+      photoObjectKey: studentsTable.photoObjectKey,
+      photoConsent: studentsTable.photoConsent,
     })
     .from(hallPassQueueTable)
     .leftJoin(
@@ -205,6 +208,8 @@ function shapeEntry(
     destination: string;
     addedAt: Date | string;
     localSisId?: string | null;
+    photoObjectKey?: string | null;
+    photoConsent?: boolean | null;
   },
   idx: number,
 ) {
@@ -221,6 +226,10 @@ function shapeEntry(
     position: idx + 1,
     addedAt:
       row.addedAt instanceof Date ? row.addedAt.toISOString() : row.addedAt,
+    // Consent-gated photo key for the kiosk QueueStrip / NextUp avatar.
+    // Null when the student withholds consent or no photo path is set, or
+    // when called from a non-joined code path (photoConsent undefined).
+    photoObjectKey: row.photoConsent ? row.photoObjectKey ?? null : null,
   };
 }
 
@@ -258,11 +267,87 @@ router.get("/kiosk/queue/:token", async (req, res) => {
         eq(hallPassesTable.originRoom, act.room),
       ),
     );
+
+  // One-way lifecycle surfaces for this kiosk's room:
+  //   - inRouteFromHere: students who LEFT this room on a one-way pass and
+  //     haven't checked in yet (origin == room). The origin kiosk shows a big
+  //     "IN ROUTE" card per student until they arrive/end.
+  //   - arrivalsToHere: students HEADED to this room (destination == room),
+  //     not yet arrived. A destination kiosk taps one to check them in.
+  // Restroom passes are round-trip and excluded from both.
+  const restroomNames = await loadRestroomDestinationNames(act.schoolId);
+  const oneWayActive = (await db
+    .select({
+      id: hallPassesTable.id,
+      studentId: hallPassesTable.studentId,
+      destination: hallPassesTable.destination,
+      originRoom: hallPassesTable.originRoom,
+      createdAt: hallPassesTable.createdAt,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      localSisId: studentsTable.localSisId,
+      photoObjectKey: studentsTable.photoObjectKey,
+      photoConsent: studentsTable.photoConsent,
+    })
+    .from(hallPassesTable)
+    .leftJoin(
+      studentsTable,
+      and(
+        eq(studentsTable.studentId, hallPassesTable.studentId),
+        eq(studentsTable.schoolId, hallPassesTable.schoolId),
+      ),
+    )
+    .where(
+      and(
+        eq(hallPassesTable.schoolId, act.schoolId),
+        eq(hallPassesTable.status, "active"),
+        isNull(hallPassesTable.arrivedAt),
+      ),
+    )) as Array<{
+    id: number;
+    studentId: string;
+    destination: string;
+    originRoom: string;
+    createdAt: string;
+    firstName: string | null;
+    lastName: string | null;
+    localSisId: string | null;
+    photoObjectKey: string | null;
+    photoConsent: boolean | null;
+  }>;
+
+  const shapeOneWay = (r: (typeof oneWayActive)[number]) => ({
+    id: r.id,
+    studentId: r.studentId,
+    localSisId: r.localSisId ?? null,
+    firstName: r.firstName,
+    lastName: r.lastName,
+    destination: r.destination,
+    originRoom: r.originRoom,
+    createdAt: r.createdAt,
+    // Consent-gated: only expose the key when the student consents, so the
+    // kiosk <img> never even attempts to load a non-consenting photo.
+    photoObjectKey: r.photoConsent ? r.photoObjectKey ?? null : null,
+  });
+
+  const inRouteFromHere = oneWayActive
+    .filter(
+      (r) => r.originRoom === act.room && !restroomNames.has(r.destination),
+    )
+    .map(shapeOneWay);
+  const arrivalsToHere = oneWayActive
+    .filter(
+      (r) => r.destination === act.room && !restroomNames.has(r.destination),
+    )
+    .map(shapeOneWay);
+
   res.json({
     capacity: QUEUE_CAP,
     entries: rows.map((r, i) => shapeEntry(r, i)),
     nextUp,
     activePassIds: activeRows.map((r) => r.id),
+    inRouteFromHere,
+    arrivalsToHere,
   });
 });
 
@@ -495,6 +580,8 @@ async function firstEligible(
     firstName: string | null;
     lastName: string | null;
     destination: string;
+    photoObjectKey?: string | null;
+    photoConsent?: boolean | null;
   }>,
   schoolId: number,
 ) {
@@ -509,6 +596,7 @@ async function firstEligible(
       firstName: row.firstName,
       lastName: row.lastName,
       destination: row.destination,
+      photoObjectKey: row.photoConsent ? row.photoObjectKey ?? null : null,
     };
   }
   return null;

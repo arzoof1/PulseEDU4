@@ -45,6 +45,16 @@ type HouseOption = {
   staffCount: number;
 };
 
+// Destination locations a staff member can be assigned to "receive" for
+// one-way hall passes. Drives the "Heading to me" scope on the staff app.
+type LocationOption = {
+  id: number;
+  name: string;
+  kind: string;
+  isDestination: boolean;
+  active: boolean;
+};
+
 interface Props {
   currentUser: {
     id: number;
@@ -274,6 +284,13 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
   // Recomputed locally on every patchStaff so the counts update without
   // a server round-trip.
   const [houses, setHouses] = useState<HouseOption[]>([]);
+  // Receiving-location coverage for one-way hall passes.
+  const [locations, setLocations] = useState<LocationOption[]>([]);
+  const [receivedByStaff, setReceivedByStaff] = useState<
+    Record<number, number[]>
+  >({});
+  const [coverageTarget, setCoverageTarget] = useState<StaffRow | null>(null);
+  const [coverageSaving, setCoverageSaving] = useState(false);
   const [filter, setFilter] = useState("");
   const [staffScope, setStaffScope] = useState<
     "current" | "historical" | "all"
@@ -373,7 +390,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
 
   async function refresh() {
     try {
-      const [s, r, h] = await Promise.all([
+      const [s, r, h, loc, cov] = await Promise.all([
         authFetch("/api/admin/staff").then((res) =>
           res.ok ? res.json() : Promise.reject(res.statusText),
         ),
@@ -383,12 +400,27 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
         authFetch("/api/houses/with-staff-counts").then((res) =>
           res.ok ? res.json() : { houses: [] },
         ),
+        authFetch("/api/locations").then((res) => (res.ok ? res.json() : [])),
+        authFetch("/api/staff-received-locations").then((res) =>
+          res.ok ? res.json() : [],
+        ),
       ]);
       setStaff(s);
       setCustomRoles(r);
       setHouses(
         (h?.houses ?? []) as HouseOption[],
       );
+      setLocations((Array.isArray(loc) ? loc : []) as LocationOption[]);
+      const covMap: Record<number, number[]> = {};
+      for (const row of (Array.isArray(cov) ? cov : []) as {
+        staffId: number;
+        locationIds: number[];
+      }[]) {
+        covMap[row.staffId] = Array.isArray(row.locationIds)
+          ? row.locationIds
+          : [];
+      }
+      setReceivedByStaff(covMap);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -471,6 +503,47 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
       prev.map((s) => (s.id === id ? { ...s, photoObjectKey: key } : s)),
     );
   }
+
+  // Persist a staff member's receiving-location coverage. The server
+  // replaces the full set, so we send the complete desired array.
+  async function saveReceivedLocations(staffId: number, locationIds: number[]) {
+    setCoverageSaving(true);
+    setError("");
+    try {
+      const res = await authFetch("/api/staff-received-locations", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ staffId, locationIds }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `Save failed (${res.status})`);
+      }
+      const j = (await res.json().catch(() => ({}))) as {
+        locationIds?: number[];
+      };
+      setReceivedByStaff((prev) => ({
+        ...prev,
+        [staffId]: Array.isArray(j.locationIds) ? j.locationIds : locationIds,
+      }));
+      setCoverageTarget(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCoverageSaving(false);
+    }
+  }
+
+  // Destination locations available for receiving assignment — active and
+  // flagged as a destination. Restroom kinds are excluded (round-trip passes
+  // never get a destination check-in).
+  const assignableLocations = useMemo<LocationOption[]>(
+    () =>
+      locations
+        .filter((l) => l.active && l.isDestination && l.kind !== "restroom")
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [locations],
+  );
 
   async function exportCsv() {
     setExporting(true);
@@ -642,6 +715,17 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                 style={{
                   ...stickyTh,
                   zIndex: 4,
+                  minWidth: 200,
+                  textAlign: "left",
+                }}
+                title="Destinations this person 'receives' for one-way hall passes. Students heading to these locations appear under 'Heading to me' in Out Right Now, where staff can check them in. (Their default room is always covered automatically.)"
+              >
+                Receiving locations
+              </th>
+              <th
+                style={{
+                  ...stickyTh,
+                  zIndex: 4,
                   minWidth: 170,
                   textAlign: "left",
                 }}
@@ -784,6 +868,19 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                     style={{
                       padding: "4px 6px",
                       borderBottom: "1px solid #f1f5f9",
+                      minWidth: 200,
+                    }}
+                  >
+                    <ReceivingLocationsCell
+                      assignedIds={receivedByStaff[s.id] ?? []}
+                      locations={assignableLocations}
+                      onEdit={() => setCoverageTarget(s)}
+                    />
+                  </td>
+                  <td
+                    style={{
+                      padding: "4px 6px",
+                      borderBottom: "1px solid #f1f5f9",
                       minWidth: 170,
                     }}
                   >
@@ -852,7 +949,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={6} style={{ padding: 16 }}>
+                <td colSpan={7} style={{ padding: 16 }}>
                   {staffScope === "current"
                     ? "No current staff match."
                     : staffScope === "historical"
@@ -1046,6 +1143,186 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
           }}
         />
       )}
+      {coverageTarget && (
+        <ReceivingLocationsModal
+          staff={coverageTarget}
+          locations={assignableLocations}
+          assignedIds={receivedByStaff[coverageTarget.id] ?? []}
+          defaultRoom={
+            (coverageTarget["defaultRoom"] as string | null) ?? null
+          }
+          saving={coverageSaving}
+          onClose={() => setCoverageTarget(null)}
+          onSave={(ids) => saveReceivedLocations(coverageTarget.id, ids)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ReceivingLocationsCell({
+  assignedIds,
+  locations,
+  onEdit,
+}: {
+  assignedIds: number[];
+  locations: LocationOption[];
+  onEdit: () => void;
+}) {
+  const byId = useMemo(() => {
+    const m = new Map<number, LocationOption>();
+    for (const l of locations) m.set(l.id, l);
+    return m;
+  }, [locations]);
+  const names = assignedIds
+    .map((id) => byId.get(id)?.name)
+    .filter((n): n is string => Boolean(n))
+    .sort((a, b) => a.localeCompare(b));
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+        {names.length > 0 ? (
+          names.map((name) => (
+            <span key={name} style={{ ...pillStyle(true), cursor: "default" }}>
+              {name}
+            </span>
+          ))
+        ) : (
+          <span style={{ fontSize: 11, color: "var(--text-subtle)" }}>
+            None assigned
+          </span>
+        )}
+      </div>
+      <div>
+        <button
+          type="button"
+          className="ghost"
+          onClick={onEdit}
+          style={{ fontSize: 12, padding: "2px 10px" }}
+        >
+          Edit locations
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ReceivingLocationsModal({
+  staff,
+  locations,
+  assignedIds,
+  defaultRoom,
+  saving,
+  onClose,
+  onSave,
+}: {
+  staff: StaffRow;
+  locations: LocationOption[];
+  assignedIds: number[];
+  defaultRoom: string | null;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (ids: number[]) => void;
+}) {
+  const [selected, setSelected] = useState<Set<number>>(
+    () => new Set(assignedIds),
+  );
+  const toggle = (id: number) =>
+    setSelected((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  return (
+    <div className="cp-overlay" onClick={onClose}>
+      <div
+        className="cp-card"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Receiving locations for ${staff.displayName}`}
+      >
+        <div className="cp-header">
+          <div className="cp-title">
+            Receiving locations · {staff.displayName}
+          </div>
+          <button
+            type="button"
+            className="cp-close"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div className="tdp-body">
+          <p className="tdp-intro">
+            Pick the destinations this person checks students in for. Students
+            on a one-way pass to these locations show up under{" "}
+            <strong>Heading to me</strong> in Out Right Now.
+            {defaultRoom ? (
+              <>
+                {" "}
+                Their default room (<strong>{defaultRoom}</strong>) is always
+                covered automatically.
+              </>
+            ) : null}{" "}
+            Nothing changes until you click Save.
+          </p>
+          <div className="tdp-scroll">
+            {locations.length === 0 ? (
+              <div style={{ padding: 12, color: "var(--text-subtle)" }}>
+                No destination locations are set up yet. Add them under Manage
+                Locations.
+              </div>
+            ) : (
+              <ul className="cp-list">
+                {locations.map((l) => (
+                  <li key={l.id}>
+                    <label
+                      className="cp-list-item"
+                      style={{ cursor: "pointer" }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected.has(l.id)}
+                        onChange={() => toggle(l.id)}
+                        style={{ marginRight: "0.6rem" }}
+                      />
+                      <span className="cp-list-text">
+                        <strong>{l.name}</strong>
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            fontSize: 11,
+                            color: "var(--text-subtle)",
+                          }}
+                        >
+                          {l.kind}
+                        </span>
+                      </span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+        <div className="tdp-footer">
+          <span className="tdp-count" style={{ marginRight: "auto" }}>
+            {selected.size} location{selected.size === 1 ? "" : "s"} selected
+          </span>
+          <button
+            type="button"
+            className="cp-send"
+            onClick={() => onSave(Array.from(selected))}
+            disabled={saving}
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

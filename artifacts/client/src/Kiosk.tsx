@@ -136,6 +136,10 @@ interface ActivePass {
   destination: string;
   createdAt: string; // ISO
   maxDurationMinutes: number;
+  // Consent-gated photo key, when the kiosk payload carries one. Usually null
+  // for the pass-create response (a pass row has no photo field) — the avatar
+  // then falls back to initials.
+  photoObjectKey?: string | null;
 }
 
 type Status =
@@ -147,6 +151,7 @@ type Status =
       studentId: string;
       studentFirstName: string | null;
       destination: string;
+      photoObjectKey?: string | null;
     }
   | { kind: "error"; message: string };
 
@@ -161,6 +166,25 @@ interface QueueEntry {
   destination: string;
   position: number;
   addedAt: string;
+  // Consent-gated photo object key for the kiosk avatar. Null when the student
+  // withholds consent / has no photo. Streamed via /api/kiosk/photo/:token.
+  photoObjectKey?: string | null;
+}
+
+// A one-way hall pass surfaced on the kiosk queue poll. `inRouteFromHere` are
+// students who LEFT this kiosk's room and haven't checked in yet; `arrivalsToHere`
+// are students HEADED to this room (tap to check them in). Restroom (round-trip)
+// passes are excluded server-side.
+interface OneWayPass {
+  id: number;
+  studentId: string;
+  localSisId: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  destination: string;
+  originRoom: string;
+  createdAt: string;
+  photoObjectKey: string | null;
 }
 
 // How long the "Welcome [Name] — enter your ID" handoff prompt sits on the
@@ -1691,6 +1715,12 @@ function KioskBody({
   // list; "Get in line" opens an overlay to add yourself.
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [queueCap, setQueueCap] = useState(5);
+  // One-way lifecycle surfaces (P4). `inRoute` = students who left THIS room
+  // and haven't checked in; `arrivals` = students headed HERE (tap to receive).
+  const [inRoute, setInRoute] = useState<OneWayPass[]>([]);
+  const [arrivals, setArrivals] = useState<OneWayPass[]>([]);
+  // Transient banner for arrival check-ins (kiosk has no toast system).
+  const [arriveMessage, setArriveMessage] = useState<string | null>(null);
   const [getInLineOpen, setGetInLineOpen] = useState(false);
   // "Go now" line bypass — opens an overlay that creates an immediate pass for
   // a student summoned to the office/guidance/clinic (any non-restroom dest).
@@ -1748,11 +1778,23 @@ function KioskBody({
             firstName: string | null;
             lastName: string | null;
             destination: string;
+            photoObjectKey?: string | null;
           } | null;
           activePassIds?: number[];
+          inRouteFromHere?: OneWayPass[];
+          arrivalsToHere?: OneWayPass[];
         };
         setQueue(data.entries ?? []);
         if (typeof data.capacity === "number") setQueueCap(data.capacity);
+        // One-way lifecycle cards/strip. Setting from the poll means they
+        // clear automatically the moment the server stops returning them
+        // (i.e. the student arrived / the pass ended).
+        setInRoute(
+          Array.isArray(data.inRouteFromHere) ? data.inRouteFromHere : [],
+        );
+        setArrivals(
+          Array.isArray(data.arrivalsToHere) ? data.arrivalsToHere : [],
+        );
 
         // Remote-end detection. The TimerScreen on THIS device is driven by
         // local state and normally only clears when the student taps "I'm
@@ -1805,6 +1847,7 @@ function KioskBody({
               destination: data.nextUp.destination,
               position: 1,
               addedAt: new Date().toISOString(),
+              photoObjectKey: data.nextUp.photoObjectKey ?? null,
             },
             expiresAt: Date.now() + NEXT_UP_TIMEOUT_MS,
           });
@@ -1900,6 +1943,13 @@ function KioskBody({
     const id = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(id);
   }, []);
+
+  // Auto-dismiss the arrival check-in banner so it doesn't linger.
+  useEffect(() => {
+    if (!arriveMessage) return;
+    const id = setTimeout(() => setArriveMessage(null), 4000);
+    return () => clearTimeout(id);
+  }, [arriveMessage]);
 
   const originLocation = useMemo(
     () => locations.find((l) => l.name === room) ?? null,
@@ -2065,6 +2115,7 @@ function KioskBody({
         createdAt?: string;
         maxDurationMinutes?: number;
         studentFirstName?: string | null;
+        photoObjectKey?: string | null;
         queued?: boolean;
         position?: number | null;
         message?: string;
@@ -2103,6 +2154,7 @@ function KioskBody({
             destination,
             createdAt: data.createdAt,
             maxDurationMinutes: data.maxDurationMinutes,
+            photoObjectKey: data.photoObjectKey ?? null,
           });
           setStudentId("");
           setDestination("");
@@ -2114,6 +2166,7 @@ function KioskBody({
             studentId: studentId.trim(),
             studentFirstName: data.studentFirstName ?? null,
             destination,
+            photoObjectKey: data.photoObjectKey ?? null,
           });
         }
       } else {
@@ -2123,6 +2176,7 @@ function KioskBody({
           studentId: studentId.trim(),
           studentFirstName: data.studentFirstName ?? null,
           destination: data.destination ?? "(unknown)",
+          photoObjectKey: data.photoObjectKey ?? null,
         });
       }
     } catch (err) {
@@ -2130,6 +2184,47 @@ function KioskBody({
         kind: "error",
         message: err instanceof Error ? err.message : "Network error",
       });
+    }
+  }
+
+  // Destination check-in. A staff member at the destination kiosk taps an
+  // inbound student to RECEIVE them — this ends the pass + stamps arrival.
+  // Idempotent: a friendly banner on alreadyReceived, then refetch so the
+  // strip clears.
+  async function handleArrive(pass: OneWayPass) {
+    const name = pass.firstName ?? pass.localSisId ?? "Student";
+    // Optimistic: drop the row immediately so a double-tap can't fire twice.
+    setArrivals((prev) => prev.filter((p) => p.id !== pass.id));
+    try {
+      const res = await fetch("/api/kiosk/hall-passes/arrive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, passId: pass.id }),
+      });
+      if (res.status === 401) {
+        const b = await res.json().catch(() => ({}));
+        if (b.revoked) {
+          onRevoked();
+          return;
+        }
+      }
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        setArriveMessage(b.error ?? `Check-in failed (${res.status})`);
+      } else {
+        const b = (await res.json().catch(() => ({}))) as {
+          alreadyReceived?: boolean;
+        };
+        setArriveMessage(
+          b.alreadyReceived
+            ? `${name} was already checked in.`
+            : `Checked in ${name}.`,
+        );
+      }
+    } catch (err) {
+      setArriveMessage(err instanceof Error ? err.message : "Network error");
+    } finally {
+      await refetchQueue();
     }
   }
 
@@ -2199,6 +2294,7 @@ function KioskBody({
       {activePass ? (
         <TimerScreen
           activePass={activePass}
+          token={token}
           now={now}
           returning={returning}
           returnError={returnError}
@@ -2239,6 +2335,7 @@ function KioskBody({
                   firstName: string | null;
                   lastName: string | null;
                   destination: string;
+                  photoObjectKey?: string | null;
                 } | null;
               };
               setActivePass(null);
@@ -2257,6 +2354,7 @@ function KioskBody({
                     destination: body.nextInQueue.destination,
                     position: 1,
                     addedAt: new Date().toISOString(),
+                    photoObjectKey: body.nextInQueue.photoObjectKey ?? null,
                   },
                   expiresAt: Date.now() + NEXT_UP_TIMEOUT_MS,
                 });
@@ -2276,6 +2374,8 @@ function KioskBody({
           studentId={status.studentId}
           studentFirstName={status.studentFirstName}
           destination={status.destination}
+          token={token}
+          photoObjectKey={status.photoObjectKey}
           onReset={resetForm}
         />
       ) : (
@@ -2428,11 +2528,109 @@ function KioskBody({
         </form>
       )}
 
+      {/* One-way IN ROUTE cards — students who left THIS room and haven't
+          checked in at their destination yet. Clears automatically when the
+          poll stops returning them (arrived / ended). */}
+      {inRoute.length > 0 && (
+        <div
+          style={{
+            width: "min(680px, 88vw)",
+            marginTop: "1.5rem",
+            marginRight: 96,
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.75rem",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "0.875rem",
+              letterSpacing: "0.15em",
+              textTransform: "uppercase",
+              opacity: 0.6,
+              textAlign: "left",
+            }}
+          >
+            In route from here
+          </div>
+          {inRoute.map((p) => (
+            <InRouteCard key={p.id} pass={p} token={token} now={now} />
+          ))}
+        </div>
+      )}
+
+      {/* Destination arrivals strip — students HEADED here. Tap one to check
+          them in (receive). Idempotent on the server. */}
+      {arrivals.length > 0 && (
+        <div
+          style={{
+            width: "min(680px, 88vw)",
+            marginTop: "1.5rem",
+            marginRight: 96,
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.75rem",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "0.875rem",
+              letterSpacing: "0.15em",
+              textTransform: "uppercase",
+              opacity: 0.6,
+              textAlign: "left",
+            }}
+          >
+            Heading here — tap to check in
+          </div>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "0.75rem",
+            }}
+          >
+            {arrivals.map((p) => (
+              <ArrivalChip
+                key={p.id}
+                pass={p}
+                token={token}
+                onArrive={() => handleArrive(p)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {arriveMessage && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: "fixed",
+            bottom: 16,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "rgba(34,197,94,0.18)",
+            border: "1px solid rgba(34,197,94,0.55)",
+            color: "#bbf7d0",
+            padding: "0.6rem 1.1rem",
+            borderRadius: 999,
+            fontSize: "0.95rem",
+            fontWeight: 600,
+            zIndex: 40,
+          }}
+        >
+          {arriveMessage}
+        </div>
+      )}
+
       {/* Persistent queue strip — sibling to TimerScreen so the timer's
           render path is never coupled to queue updates. Sits on the right
           edge with a higher z-index than the timer overlay. */}
       <QueueStrip
         entries={queue}
+        token={token}
         cap={queueCap}
         onAdd={() => setGetInLineOpen(true)}
         onGoNow={() => setGoNowOpen(true)}
@@ -2494,16 +2692,225 @@ function KioskBody({
   );
 }
 
+/* ----------------------------- Student photo ----------------------------- */
+
+// Token-scoped student avatar for kiosk surfaces. When `photoObjectKey` is set
+// (and the student consented, which the server already gates), we render a plain
+// <img> against /api/kiosk/photo/:token — the kiosk has no staff session, so
+// this token-authed route is the only way to fetch the bytes. On any load
+// error (404 / no consent / network) we fall back to the initials disc, so a
+// missing photo never blocks the surface. Circular by default; pass `square`
+// for a rounded-rect.
+function KioskPhoto({
+  token,
+  photoObjectKey,
+  firstName,
+  lastName,
+  size,
+  square,
+}: {
+  token: string;
+  photoObjectKey?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  size: number;
+  square?: boolean;
+}) {
+  const [errored, setErrored] = useState(false);
+  // Reset the error flag if the key changes (a recycled component instance).
+  useEffect(() => {
+    setErrored(false);
+  }, [photoObjectKey]);
+  const initials =
+    ((firstName?.[0] ?? "") + (lastName?.[0] ?? "")).toUpperCase() || "?";
+  const base: React.CSSProperties = {
+    width: size,
+    height: size,
+    borderRadius: square ? Math.round(size * 0.18) : "50%",
+    flexShrink: 0,
+    background: "rgba(255,255,255,0.12)",
+    border: "1px solid rgba(255,255,255,0.2)",
+  };
+  if (photoObjectKey && !errored) {
+    return (
+      <img
+        src={`/api/kiosk/photo/${encodeURIComponent(token)}?key=${encodeURIComponent(photoObjectKey)}`}
+        alt=""
+        aria-hidden="true"
+        onError={() => setErrored(true)}
+        style={{ ...base, objectFit: "cover" }}
+      />
+    );
+  }
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        ...base,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: "#fff",
+        fontWeight: 700,
+        fontSize: Math.round(size * 0.4),
+      }}
+    >
+      {initials}
+    </div>
+  );
+}
+
+/* ------------------------ One-way lifecycle surfaces ------------------------ */
+
+// Big across-room card for a student who left THIS room on a one-way pass and
+// hasn't checked in yet. Shows their photo, name, destination, and elapsed
+// time since departure. Rendered by KioskBody from the queue poll's
+// `inRouteFromHere`; it disappears on the poll after the student arrives.
+function InRouteCard({
+  pass,
+  token,
+  now,
+}: {
+  pass: OneWayPass;
+  token: string;
+  now: Date;
+}) {
+  const elapsedMs = now.getTime() - new Date(pass.createdAt).getTime();
+  const totalSec = Math.max(0, Math.floor(elapsedMs / 1000));
+  const mm = Math.floor(totalSec / 60);
+  const ss = totalSec % 60;
+  const elapsed = `${mm}:${String(ss).padStart(2, "0")}`;
+  const name =
+    `${pass.firstName ?? pass.localSisId ?? "Student"}${pass.lastName ? ` ${pass.lastName}` : ""}`;
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "1rem",
+        background: "rgba(59,130,246,0.14)",
+        border: "1px solid rgba(59,130,246,0.5)",
+        borderRadius: 14,
+        padding: "1rem 1.25rem",
+        textAlign: "left",
+      }}
+    >
+      <KioskPhoto
+        token={token}
+        photoObjectKey={pass.photoObjectKey}
+        firstName={pass.firstName}
+        lastName={pass.lastName}
+        size={72}
+      />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: "clamp(1.4rem, 3vw, 2rem)",
+            fontWeight: 800,
+            lineHeight: 1.1,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {name}
+        </div>
+        <div
+          style={{
+            fontSize: "clamp(1rem, 2vw, 1.25rem)",
+            opacity: 0.85,
+            marginTop: 2,
+          }}
+        >
+          → {pass.destination}
+        </div>
+      </div>
+      <div style={{ textAlign: "right", flexShrink: 0 }}>
+        <div
+          style={{
+            fontSize: "0.7rem",
+            letterSpacing: "0.12em",
+            textTransform: "uppercase",
+            opacity: 0.6,
+          }}
+        >
+          In route
+        </div>
+        <div
+          style={{
+            fontSize: "clamp(1.4rem, 3vw, 2rem)",
+            fontWeight: 800,
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {elapsed}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Tappable chip for a student headed to THIS room. Tapping it receives /
+// checks them in via KioskBody's handleArrive.
+function ArrivalChip({
+  pass,
+  token,
+  onArrive,
+}: {
+  pass: OneWayPass;
+  token: string;
+  onArrive: () => void;
+}) {
+  const name =
+    `${pass.firstName ?? pass.localSisId ?? "Student"}${pass.lastName ? ` ${pass.lastName.charAt(0)}.` : ""}`;
+  return (
+    <button
+      type="button"
+      onClick={onArrive}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "0.75rem",
+        background: "rgba(34,197,94,0.14)",
+        border: "1px solid rgba(34,197,94,0.5)",
+        borderRadius: 12,
+        padding: "0.6rem 0.9rem",
+        color: "#fff",
+        cursor: "pointer",
+        textAlign: "left",
+      }}
+    >
+      <KioskPhoto
+        token={token}
+        photoObjectKey={pass.photoObjectKey}
+        firstName={pass.firstName}
+        lastName={pass.lastName}
+        size={48}
+      />
+      <div>
+        <div style={{ fontSize: "1.1rem", fontWeight: 700, lineHeight: 1.1 }}>
+          {name}
+        </div>
+        <div style={{ fontSize: "0.8rem", opacity: 0.75, marginTop: 2 }}>
+          from {pass.originRoom} · tap to check in
+        </div>
+      </div>
+    </button>
+  );
+}
+
 /* ----------------------------- Queue UI ----------------------------- */
 
 function QueueStrip({
   entries,
+  token,
   cap,
   onAdd,
   onGoNow,
   disabled,
 }: {
   entries: QueueEntry[];
+  token: string;
   cap: number;
   onAdd: () => void;
   onGoNow: () => void;
@@ -2587,8 +2994,19 @@ function QueueStrip({
                 lineHeight: 1.15,
                 textAlign: "center",
                 fontWeight: 600,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 4,
               }}
             >
+              <KioskPhoto
+                token={token}
+                photoObjectKey={e.photoObjectKey}
+                firstName={e.firstName}
+                lastName={e.lastName}
+                size={44}
+              />
               <div>
                 {e.firstName ?? e.localSisId ?? ""}
                 {e.lastName ? ` ${e.lastName.charAt(0)}.` : ""}
@@ -3258,6 +3676,7 @@ function NextUpScreen({
         createdAt?: string;
         maxDurationMinutes?: number;
         studentFirstName?: string | null;
+        photoObjectKey?: string | null;
       };
       if (
         typeof data.id === "number" &&
@@ -3271,6 +3690,9 @@ function NextUpScreen({
           destination: data.destination ?? entry.destination,
           createdAt: data.createdAt,
           maxDurationMinutes: data.maxDurationMinutes,
+          // Pass-create has no photo field; fall back to the queue entry's key
+          // so the timer avatar still resolves when consent allows.
+          photoObjectKey: data.photoObjectKey ?? entry.photoObjectKey ?? null,
         });
       }
     } catch (err) {
@@ -3306,6 +3728,15 @@ function NextUpScreen({
         }}
       >
         Your turn
+      </div>
+      <div style={{ marginBottom: "1rem" }}>
+        <KioskPhoto
+          token={token}
+          photoObjectKey={entry.photoObjectKey}
+          firstName={entry.firstName}
+          lastName={entry.lastName}
+          size={120}
+        />
       </div>
       <div
         style={{
@@ -3829,12 +4260,14 @@ function primaryBtn(
 
 function TimerScreen({
   activePass,
+  token,
   now,
   returning,
   returnError,
   onReturn,
 }: {
   activePass: ActivePass;
+  token: string;
   now: Date;
   returning: boolean;
   returnError: string | null;
@@ -3876,6 +4309,14 @@ function TimerScreen({
         }}
       >
         {overdue ? "Overdue" : "Out on pass"}
+      </div>
+      <div style={{ marginBottom: "0.75rem" }}>
+        <KioskPhoto
+          token={token}
+          photoObjectKey={activePass.photoObjectKey}
+          firstName={activePass.studentFirstName}
+          size={104}
+        />
       </div>
       <div
         style={{
@@ -4066,12 +4507,16 @@ function SuccessCard({
   studentId,
   studentFirstName,
   destination,
+  token,
+  photoObjectKey,
   onReset,
 }: {
   mode: Mode;
   studentId: string;
   studentFirstName: string | null;
   destination: string;
+  token: string;
+  photoObjectKey?: string | null;
   onReset: () => void;
 }) {
   const displayName = studentFirstName ?? "Student";
@@ -4085,6 +4530,14 @@ function SuccessCard({
         width: "min(480px, 92vw)",
       }}
     >
+      <div style={{ marginBottom: "0.75rem" }}>
+        <KioskPhoto
+          token={token}
+          photoObjectKey={photoObjectKey}
+          firstName={studentFirstName}
+          size={88}
+        />
+      </div>
       <div style={{ fontSize: "3rem", marginBottom: "0.5rem" }}>✓</div>
       <div
         style={{ fontSize: "1.5rem", fontWeight: 600, marginBottom: "0.5rem" }}

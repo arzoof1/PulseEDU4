@@ -3,9 +3,11 @@ import {
   db,
   hallPassesTable,
   recordEditsTable,
+  staffTable,
   studentsTable,
 } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
+import { loadRestroomDestinationNames } from "../lib/oneWayPass.js";
 import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
 import {
@@ -225,21 +227,81 @@ router.patch("/hall-passes/:id/end", async (req, res) => {
   if (!schoolId) return;
   const id = Number(req.params.id);
   const system = req.body?.system === true;
+  // One-way check-in: when a staff member receives a student at the
+  // destination, the client sends `arrived: true` (and `endedBy` = the
+  // receiving staff's display name) so we record WHO received them and WHEN.
+  // A plain end (timer cleanup, origin cancel) leaves arrivedAt null.
+  const arrivedRequested = req.body?.arrived === true;
+
+  const [existing] = await db
+    .select()
+    .from(hallPassesTable)
+    .where(
+      and(eq(hallPassesTable.id, id), eq(hallPassesTable.schoolId, schoolId)),
+    );
+  if (!existing) {
+    res.status(404).json({ error: "Hall pass not found" });
+    return;
+  }
+  // Idempotent: a pass that's already closed (double-tap, two counselors
+  // racing on the same student) returns the existing row, not an error.
+  if (existing.status !== "active") {
+    res.json(existing);
+    return;
+  }
+
+  // Restroom passes are round-trip ("I'm back" at origin), never a one-way
+  // destination check-in — so an `arrived` stamp is meaningless for them.
+  // Enforce server-side so a spoofed client can't fabricate a restroom
+  // "arrival". Non-restroom destinations honor the arrival.
+  const restroomNames = await loadRestroomDestinationNames(schoolId);
+  const arrived = arrivedRequested && !restroomNames.has(existing.destination);
+
+  // WHO ended/received the pass is identity, not free text — derive it from
+  // the authenticated staff so the client can't spoof `endedBy`. Only fall
+  // back to the client/sentinel values for non-staff callers (system cleanup
+  // or the unauthenticated origin "I'm back" flow).
+  let endedBy: string | null;
+  if (system) {
+    endedBy = "(system)";
+  } else if (req.staffId) {
+    const [actor] = await db
+      .select({ displayName: staffTable.displayName })
+      .from(staffTable)
+      .where(
+        and(
+          eq(staffTable.id, req.staffId),
+          eq(staffTable.schoolId, schoolId),
+        ),
+      );
+    const endedByRaw = req.body?.endedBy;
+    endedBy =
+      actor?.displayName ??
+      (typeof endedByRaw === "string" && endedByRaw.trim()
+        ? endedByRaw.trim()
+        : null);
+  } else {
+    const endedByRaw = req.body?.endedBy;
+    endedBy =
+      typeof endedByRaw === "string" && endedByRaw.trim()
+        ? endedByRaw.trim()
+        : null;
+  }
+
+  const nowIso = new Date().toISOString();
   const [pass] = await db
     .update(hallPassesTable)
     .set({
       status: system ? "system_ended" : "ended",
-      endedAt: new Date().toISOString(),
+      endedAt: nowIso,
+      arrivedAt: arrived ? nowIso : existing.arrivedAt,
+      endedBy: endedBy ?? existing.endedBy,
     })
     .where(
       and(eq(hallPassesTable.id, id), eq(hallPassesTable.schoolId, schoolId)),
     )
     .returning();
 
-  if (!pass) {
-    res.status(404).json({ error: "Hall pass not found" });
-    return;
-  }
   res.json(pass);
 });
 
