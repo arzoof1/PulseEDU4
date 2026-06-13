@@ -4485,13 +4485,30 @@ function App() {
   const [changePwOk, setChangePwOk] = useState(false);
   const [dateFilter, setDateFilter] = useState<"today" | "all">("all");
   const [staffFilter, setStaffFilter] = useState<"all" | "mine">("all");
-  const [passFilter, setPassFilter] = useState<"all" | "mine" | "heading">(
-    "all",
-  );
+  // "mine" is the combined "Mine & heading to me" view (passes I created OR
+  // passes routed to me); "all" is every active pass school-wide.
+  const [passFilter, setPassFilter] = useState<"all" | "mine">("all");
   // Destination location names the signed-in staff covers (their own room ∪
   // admin-assigned receiving locations). Drives the "Heading to me" scope in
   // Out Right Now — active non-restroom passes whose destination is in here.
   const [coveredLocations, setCoveredLocations] = useState<string[]>([]);
+
+  // Ownership relationship helpers for the Out Right Now panel. Shared by the
+  // active-view filter/tint/button logic and the full-log filter so the two
+  // surfaces always agree on what "mine" vs "heading to me" means.
+  //   - passIsMine: I issued this pass (teacherName is the creator).
+  //   - passHeadingToMe: this pass is routed to me — either to a location I
+  //     cover, or named directly to me via destinationTeacher (the teacher's
+  //     displayName). The destinationTeacher case is why teacher-routed passes
+  //     used to vanish from "Heading to me": the destination string is the
+  //     teacher's displayName, never a covered ROOM name.
+  const passIsMine = (p: HallPass): boolean =>
+    p.teacherName === currentStaffUser ||
+    p.teacherName === `${currentStaffUser} (K)`;
+  const passHeadingToMe = (p: HallPass): boolean =>
+    coveredLocations.includes(p.destination) ||
+    p.destinationTeacher === currentStaffUser ||
+    p.destinationTeacher === `${currentStaffUser} (K)`;
 
   // Hall pass top-level view: overview (current default) vs reports (admin/ESE).
   const [hpView, setHpView] = useState<"overview" | "reports">("overview");
@@ -10578,14 +10595,7 @@ function App() {
               onClick={() => setPassFilter("mine")}
               disabled={passFilter === "mine"}
             >
-              Mine
-            </button>
-            <button
-              type="button"
-              onClick={() => setPassFilter("heading")}
-              disabled={passFilter === "heading"}
-            >
-              Heading to me
+              Mine &amp; heading to me
             </button>
             <button
               type="button"
@@ -10603,19 +10613,12 @@ function App() {
               .filter((p) => p.status === "active")
               .filter((p) => {
                 if (passFilter === "mine") {
-                  return (
-                    p.teacherName === currentStaffUser ||
-                    p.teacherName === `${currentStaffUser} (K)`
-                  );
-                }
-                if (passFilter === "heading") {
-                  // Active one-way passes headed to a location this staff
-                  // member covers and not yet checked in. Restroom passes are
+                  // Combined view: passes I created (green) OR passes routed
+                  // to me and not yet checked in (purple). Restroom passes are
                   // round-trip (no destination check-in) and won't match a
                   // covered classroom/office destination anyway.
                   return (
-                    !p.arrivedAt &&
-                    coveredLocations.includes(p.destination)
+                    passIsMine(p) || (!p.arrivedAt && passHeadingToMe(p))
                   );
                 }
                 return true;
@@ -10633,8 +10636,8 @@ function App() {
                     padding: "0.75rem 0",
                   }}
                 >
-                  {passFilter === "heading"
-                    ? "No students are heading to your locations right now."
+                  {passFilter === "mine"
+                    ? "No passes involving you right now."
                     : "No active passes right now."}
                 </div>
               );
@@ -10647,6 +10650,17 @@ function App() {
                     : getTimeStatusColor(p, now);
                   const status = formatTimeStatus(p, now);
                   const overdue = status === "Overdue";
+                  // Ownership stripe (left border) so it coexists with the
+                  // time-status / tardy background instead of overriding it.
+                  // Green = I created it; purple = routed to me. Green wins
+                  // when a pass is both (I sent a student to myself).
+                  const mine = passIsMine(p);
+                  const headingToMe = !p.arrivedAt && passHeadingToMe(p);
+                  const ownStripe = mine
+                    ? "#16a34a"
+                    : headingToMe
+                      ? "#7c3aed"
+                      : null;
                   return (
                     <div
                       key={p.id}
@@ -10662,6 +10676,9 @@ function App() {
                         border: p.isTardyReturn
                           ? "1px solid #c4b5fd"
                           : "1px solid var(--border)",
+                        borderLeft: ownStripe
+                          ? `5px solid ${ownStripe}`
+                          : undefined,
                       }}
                     >
                       <div>
@@ -10707,8 +10724,7 @@ function App() {
                             with {p.destinationTeacher}
                           </div>
                         )}
-                        {(passFilter === "all" ||
-                          passFilter === "heading") && (
+                        {!mine && (
                           <div
                             style={{
                               fontSize: 11,
@@ -10727,7 +10743,7 @@ function App() {
                       >
                         {status}
                       </div>
-                      {passFilter === "heading" ? (
+                      {headingToMe ? (
                         <button
                           type="button"
                           onClick={() => handleReceivePass(p.id)}
@@ -10777,8 +10793,7 @@ function App() {
                 )
                 .filter((p) =>
                   passFilter === "mine"
-                    ? p.teacherName === currentStaffUser ||
-                      p.teacherName === `${currentStaffUser} (K)`
+                    ? passIsMine(p) || passHeadingToMe(p)
                     : true,
                 )
                 .map((p) => {
