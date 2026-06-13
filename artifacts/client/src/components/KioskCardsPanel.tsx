@@ -418,6 +418,39 @@ export function KioskCardsPanel({
     }
   }
 
+  // Build a ready-to-edit CSV template. When the roster has loaded we
+  // pre-fill one row per teacher — teacher column uses their email when we
+  // have it (an exact, unambiguous match), else their display name — with
+  // their current room pre-filled so the admin only edits what changed. This
+  // guarantees the teacher column matches on re-upload. A leading BOM keeps
+  // Excel happy with accented names; the importer strips it back off.
+  function downloadTemplate() {
+    const header = "teacher,room";
+    const body =
+      rows.length > 0
+        ? rows
+            .map((r) =>
+              [
+                csvCell(r.email?.trim() || r.displayName),
+                csvCell(r.defaultRoom ?? ""),
+              ].join(","),
+            )
+            .join("\r\n")
+        : ["teacher@yourschool.org,Room 101", "Jane Smith,Room 102"].join(
+            "\r\n",
+          );
+    const csv = `\uFEFF${header}\r\n${body}\r\n`;
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "kiosk-teacher-rooms-template.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   const filtered = rows.filter((r) =>
     filter.trim()
       ? r.displayName.toLowerCase().includes(filter.trim().toLowerCase())
@@ -452,6 +485,13 @@ export function KioskCardsPanel({
             disabled={busy}
           >
             Generate missing cards
+          </button>
+          <button
+            type="button"
+            onClick={downloadTemplate}
+            title="Download a ready-to-edit CSV (your teachers pre-filled) for the room import"
+          >
+            Download CSV template
           </button>
           <button
             type="button"
@@ -1145,6 +1185,12 @@ function parseCsv(text: string): string[][] {
 const TEACHER_HEADERS = ["teacher", "name", "staff", "email", "teacher_name"];
 const ROOM_HEADERS = ["room", "location", "default_room", "homeroom", "home_room"];
 
+// Quote a single CSV cell when it contains a comma, quote, or newline so the
+// template round-trips cleanly back through parseCsv on re-upload.
+function csvCell(value: string): string {
+  return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
 // CSV bulk room-assignment. The admin uploads a file with a teacher column
 // (name or email) and a room column. We parse client-side, send the rows to
 // the bulk endpoint for a dry-run preview, then commit on confirm.
@@ -1295,9 +1341,11 @@ function ImportRoomsModal({
           <h3 style={{ margin: 0 }}>Import teacher rooms (CSV)</h3>
           <p style={{ color: "#555", fontSize: "0.85rem", marginTop: 4 }}>
             Upload a CSV with a <b>teacher</b> column (name or email) and a{" "}
-            <b>room</b> column. We match teachers to your staff list and to your
-            origin rooms, show a preview, then save. Blank/“none” clears a
-            teacher’s room (roaming).
+            <b>room</b> column. Easiest path: use{" "}
+            <b>Download CSV template</b> (top of the page) — it comes pre-filled
+            with your teachers, so you only edit the room column. We match
+            teachers to your staff list and to your origin rooms, show a
+            preview, then save. Blank/“none” clears a teacher’s room (roaming).
           </p>
         </div>
 
