@@ -24,7 +24,11 @@ import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { findPolarityConflict } from "./polarityPairs";
 import { findDailyLimitConflict } from "./studentHallPassLimits";
-import { loadRestroomDestinationNames } from "../lib/oneWayPass.js";
+import {
+  loadRestroomDestinationNames,
+  loadKioskTeacherDisplayName,
+  passHeadsToKiosk,
+} from "../lib/oneWayPass.js";
 
 // How long a minted viewer token stays usable. The token is also killed
 // the moment the underlying kiosk activation is deactivated, so this is
@@ -276,6 +280,13 @@ router.get("/kiosk/queue/:token", async (req, res) => {
   //     not yet arrived. A destination kiosk taps one to check them in.
   // Restroom passes are round-trip and excluded from both.
   const restroomNames = await loadRestroomDestinationNames(act.schoolId);
+  // Inbound passes are often addressed to the teacher (destination == teacher
+  // displayName) rather than the kiosk's activated room string, so resolve the
+  // activating teacher to match those too. See passHeadsToKiosk.
+  const kioskTeacher = await loadKioskTeacherDisplayName(
+    act.schoolId,
+    act.staffId,
+  );
   const oneWayActive = (await db
     .select({
       id: hallPassesTable.id,
@@ -337,7 +348,9 @@ router.get("/kiosk/queue/:token", async (req, res) => {
     .map(shapeOneWay);
   const arrivalsToHere = oneWayActive
     .filter(
-      (r) => r.destination === act.room && !restroomNames.has(r.destination),
+      (r) =>
+        passHeadsToKiosk(r, act.room, kioskTeacher) &&
+        !restroomNames.has(r.destination),
     )
     .map(shapeOneWay);
 

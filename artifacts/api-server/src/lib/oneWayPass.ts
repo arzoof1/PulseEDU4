@@ -147,3 +147,37 @@ export async function loadCoverageByDestination(
 
   return result;
 }
+
+// Resolve the activating teacher's display name for a kiosk activation. Used to
+// match inbound passes addressed to that teacher even when the kiosk's
+// activated room string differs from the destination string.
+export async function loadKioskTeacherDisplayName(
+  schoolId: number,
+  staffId: number,
+): Promise<string | null> {
+  const [staff] = await db
+    .select({ displayName: staffTable.displayName })
+    .from(staffTable)
+    .where(and(eq(staffTable.id, staffId), eq(staffTable.schoolId, schoolId)));
+  return staff?.displayName ?? null;
+}
+
+// True when a one-way pass is "heading to" this kiosk. A kiosk is both a
+// physical room AND the teacher who activated it; destinations in this school
+// are frequently named after the teacher's displayName (e.g.
+// "Amy Brown - Math G7") rather than the activated room string (e.g. "203").
+// So a pass matches when its destination equals the kiosk's activated room, OR
+// the destination is the activating teacher's displayName. We deliberately do
+// NOT match on the (currently-unpopulated) destinationTeacher column: that
+// could let a pass whose destination is some OTHER location check in here.
+// Both the kiosk's "Heading here" list and the arrive guard call this so they
+// never disagree.
+export function passHeadsToKiosk(
+  pass: { destination: string },
+  room: string,
+  teacherDisplayName: string | null,
+): boolean {
+  if (pass.destination === room) return true;
+  if (teacherDisplayName && pass.destination === teacherDisplayName) return true;
+  return false;
+}

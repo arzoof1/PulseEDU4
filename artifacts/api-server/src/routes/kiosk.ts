@@ -40,6 +40,11 @@ import { requireSchool } from "../lib/scope.js";
 import { getSchoolTimezone, startOfDayUtc } from "../lib/schoolYear.js";
 import { loadBrandingForSchool } from "./schoolBranding.js";
 import {
+  loadKioskTeacherDisplayName,
+  loadRestroomDestinationNames,
+  passHeadsToKiosk,
+} from "../lib/oneWayPass.js";
+import {
   findPolarityConflict,
   polarityConflictMessage,
 } from "./polarityPairs";
@@ -1514,8 +1519,25 @@ router.post("/kiosk/hall-passes/arrive", async (req, res) => {
     res.status(404).json({ error: "Hall pass not found." });
     return;
   }
-  // The kiosk can only receive students whose destination IS this room.
-  if (pass.destination !== act.room) {
+  // Restroom passes are round-trip: the student taps "I'm back" at their own
+  // room, they are never checked in at a destination kiosk. Mirrors the
+  // "Heading here" list, which excludes restrooms, so the two stay in lockstep.
+  const restroomNames = await loadRestroomDestinationNames(act.schoolId);
+  if (restroomNames.has(pass.destination)) {
+    res.status(400).json({
+      error: `Restroom passes return to the student's own room — there's no destination check-in.`,
+    });
+    return;
+  }
+  // The kiosk can receive students whose pass is headed here — either the
+  // destination IS this room, or it is addressed to the activating teacher
+  // (destinations are often named after the teacher, not the room string).
+  // Kept in lockstep with the "Heading here" list via passHeadsToKiosk.
+  const kioskTeacher = await loadKioskTeacherDisplayName(
+    act.schoolId,
+    act.staffId,
+  );
+  if (!passHeadsToKiosk(pass, act.room, kioskTeacher)) {
     res.status(403).json({
       error: `That pass is headed to ${pass.destination}, not ${act.room}.`,
     });
