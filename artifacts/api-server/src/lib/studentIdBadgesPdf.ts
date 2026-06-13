@@ -380,18 +380,39 @@ async function renderCardBadgeLandscape(
     txtX,
     nameTop,
     txtW,
-    { firstFs: 12, lastFs: 10, color: headerText },
+    { firstFs: 14, lastFs: 12, color: headerText, lastBold: true },
   );
+  // Grade marker — a bold number inside a white disc (instead of the old
+  // "Grade N" words). The disc keeps the digit legible over the colored
+  // header, and the number is tinted to the school's primary color (or
+  // slate when that color is light) so it pops.
   if (badge.grade !== null) {
+    const gr = 9;
+    const gcx = txtX + gr;
+    const gcy = nameTop + nameH + 4 + gr;
+    const gradeInk = !isLight(topColors[0] ?? houseColor)
+      ? (topColors[0] ?? houseColor)
+      : "#0f172a";
     doc
-      .fillColor(headerText)
-      .font("Helvetica")
-      .fontSize(8.5)
-      .text(`Grade ${badge.grade}`, txtX, nameTop + nameH + 2, {
-        width: txtW,
-        ellipsis: true,
+      .save()
+      .fillColor("#ffffff")
+      .circle(gcx, gcy, gr)
+      .fill()
+      .lineWidth(0.8)
+      .strokeColor("#cbd5e1")
+      .circle(gcx, gcy, gr)
+      .stroke()
+      .restore();
+    doc
+      .fillColor(gradeInk)
+      .font("Helvetica-Bold")
+      .fontSize(12)
+      .text(String(badge.grade), gcx - gr, gcy - 6, {
+        width: gr * 2,
+        align: "center",
         lineBreak: false,
       });
+    doc.font("Helvetica");
   }
 
   // --- WHITE region: barcode, optional house footer, crisis line -------
@@ -894,9 +915,20 @@ function drawTwoLineName(
     color: string;
     align?: "left" | "center";
     lineGap?: number;
+    // When true, the last-name line is rendered bold too (default keeps the
+    // lighter regular weight). Used on the printed landscape badge where the
+    // whole name needs to read strongly from a distance.
+    lastBold?: boolean;
   },
 ): number {
-  const { firstFs, lastFs, color, align = "left", lineGap = 1 } = opts;
+  const {
+    firstFs,
+    lastFs,
+    color,
+    align = "left",
+    lineGap = 1,
+    lastBold = false,
+  } = opts;
   const first = (firstName || "").trim();
   const last = (lastName || "").trim();
   doc.fillColor(color);
@@ -911,7 +943,7 @@ function drawTwoLineName(
     cursorY += firstFs + lineGap;
   }
   if (last) {
-    doc.font("Helvetica").fontSize(lastFs);
+    doc.font(lastBold ? "Helvetica-Bold" : "Helvetica").fontSize(lastFs);
     doc.text(fitText(doc, last, maxW), x, cursorY, {
       width: maxW,
       align,
