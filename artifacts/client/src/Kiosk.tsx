@@ -3086,7 +3086,7 @@ function GoNowOverlay({
                     cursor: submitting ? "not-allowed" : "pointer",
                   }}
                 >
-                  {submitting ? "Creating…" : "Go now"}
+                  {submitting ? "Creating…" : "YES, I'm leaving now"}
                 </button>
               </div>
             </div>
