@@ -2260,6 +2260,32 @@ router.get("/kiosk/my-pin", requireStaff, async (req, res) => {
   }
 });
 
+// Teacher self-service: rotate the caller's OWN enrollment token. Kills
+// the old code (any previously printed card / on-screen code stops
+// working for FUTURE activations) and mints a fresh one. Scoped strictly
+// to (req.staff.schoolId, req.staff.id) — there is no staffId parameter,
+// so a teacher can only ever rotate their own code. Works whether the
+// teacher has no token yet ("generate my first code"), a live token
+// ("rotate"), or a legacy badge ("replace with a readable code").
+// Returns the RAW token + RAW PIN ONCE so the client can render an
+// on-screen QR + PIN; never re-displayable after this response. Audit
+// row is tagged reason "self_regenerate" so admins keep full visibility.
+router.post("/kiosk/my-code/regenerate", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const issued = await issueEnrollToken({
+    schoolId: staff.schoolId,
+    staffId: staff.id,
+    actorStaffId: staff.id,
+    reason: "self_regenerate",
+  });
+  res.status(201).json({
+    enrollToken: issued.rawToken,
+    pin: issued.rawPin,
+    tokenId: issued.tokenId,
+  });
+});
+
 // ---- Admin: enrollment-token management ----------------------------
 
 // One row per active teacher with their enrollment-token status.
@@ -2409,7 +2435,7 @@ async function issueEnrollToken(args: {
   schoolId: number;
   staffId: number;
   actorStaffId: number;
-  reason: "regenerate" | "bulk_generate" | "card_print";
+  reason: "regenerate" | "bulk_generate" | "card_print" | "self_regenerate";
   bulkContext?: string;
 }): Promise<{ rawToken: string; rawPin: string; tokenId: number }> {
   const rawToken = generateEnrollToken();

@@ -1,5 +1,44 @@
 import { useEffect, useMemo, useState } from "react";
+import QRCode from "qrcode";
+import { BarcodeFormat, MultiFormatWriter } from "@zxing/library";
 import { authFetch } from "../lib/authToken";
+
+// Render a Code 128 barcode of `text` to a PNG data URL. Mirrors the
+// barcode on the printed kiosk card so a classroom device with a 1D
+// scanner can read the on-screen code off a teacher's phone. QR + the
+// big PIN cover camera kiosks and manual entry; this covers laser/USB
+// scanners. Returns "" if encoding fails (UI then just omits it).
+function code128DataUrl(text: string): string {
+  try {
+    const targetW = 360;
+    const targetH = 90;
+    const matrix = new MultiFormatWriter().encode(
+      text,
+      BarcodeFormat.CODE_128,
+      targetW,
+      targetH,
+      new Map(),
+    );
+    const w = matrix.getWidth();
+    const h = matrix.getHeight();
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return "";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = "#000000";
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (matrix.get(x, y)) ctx.fillRect(x, y, 1, 1);
+      }
+    }
+    return canvas.toDataURL("image/png");
+  } catch {
+    return "";
+  }
+}
 
 interface Props {
   open: boolean;
@@ -54,6 +93,23 @@ export default function TeacherDestinationPicker({
     "ok" | "legacy" | "none" | undefined
   >(undefined);
   const [pinCopied, setPinCopied] = useState(false);
+
+  // Teacher self-service "generate a new code" flow. On success the server
+  // returns the raw token + PIN ONCE; we render an on-screen card (QR +
+  // barcode + big PIN) the teacher can hold up to the kiosk camera or read
+  // off to type — so they never have to write anything down or wait for
+  // an admin to reprint.
+  const [regenBusy, setRegenBusy] = useState(false);
+  const [regenError, setRegenError] = useState<string | null>(null);
+  const [newCode, setNewCode] = useState<{
+    enrollToken: string;
+    pin: string;
+  } | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string>("");
+  const [barcodeDataUrl, setBarcodeDataUrl] = useState<string>("");
+  // "End my live kiosks" — reuses the existing self-scoped revoke-all.
+  const [revokeBusy, setRevokeBusy] = useState(false);
+  const [revokeMsg, setRevokeMsg] = useState<string | null>(null);
 
   // The kiosk screen a teacher opens on a classroom device. Same URL shown
   // in Settings → Kiosk Setup; surfaced here for quick teacher access.
@@ -137,6 +193,11 @@ export default function TeacherDestinationPicker({
     setMyPin(null);
     setPinStatus(undefined);
     setPinCopied(false);
+    setNewCode(null);
+    setQrDataUrl("");
+    setBarcodeDataUrl("");
+    setRegenError(null);
+    setRevokeMsg(null);
     authFetch("/api/kiosk/my-pin")
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error("pin"))))
       .then((data: { pin: string | null; status: "ok" | "legacy" | "none" }) => {
@@ -160,6 +221,64 @@ export default function TeacherDestinationPicker({
       setTimeout(() => setPinCopied(false), 1500);
     } catch {
       setPinCopied(false);
+    }
+  };
+
+  // Kill the teacher's current code and mint a fresh one, then render it
+  // on screen (QR + barcode + PIN). The old card/code stops working right
+  // away, so confirm first.
+  const regenerate = async () => {
+    if (regenBusy) return;
+    const confirmed = window.confirm(
+      "Generate a new kiosk code?\n\nYour current code stops working right away — any printed badge or screenshot you have will no longer activate a kiosk. You'll get a new QR + PIN to use instead.",
+    );
+    if (!confirmed) return;
+    setRegenBusy(true);
+    setRegenError(null);
+    setRevokeMsg(null);
+    try {
+      const res = await authFetch("/api/kiosk/my-code/regenerate", {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error("regen");
+      const data: { enrollToken: string; pin: string } = await res.json();
+      const qrUrl = `${kioskUrl}?enroll=${encodeURIComponent(data.enrollToken)}`;
+      const qr = await QRCode.toDataURL(qrUrl, { width: 240, margin: 1 });
+      setQrDataUrl(qr);
+      setBarcodeDataUrl(code128DataUrl(data.enrollToken));
+      setNewCode({ enrollToken: data.enrollToken, pin: data.pin });
+      // Reflect the new code in the existing PIN reveal too.
+      setMyPin(data.pin);
+      setPinStatus("ok");
+    } catch {
+      setRegenError("Couldn't generate a new code. Try again.");
+    } finally {
+      setRegenBusy(false);
+    }
+  };
+
+  // End any kiosks currently activated under this teacher (e.g. a device
+  // left logged in, or a lost screenshot that's still live). Reuses the
+  // existing self-scoped revoke-all endpoint.
+  const endLiveKiosks = async () => {
+    if (revokeBusy) return;
+    setRevokeBusy(true);
+    setRevokeMsg(null);
+    try {
+      const res = await authFetch("/api/kiosk/my-active/revoke-all", {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error("revoke");
+      const data: { revoked: number } = await res.json();
+      setRevokeMsg(
+        data.revoked > 0
+          ? `Ended ${data.revoked} live kiosk${data.revoked === 1 ? "" : "s"}.`
+          : "No kiosks were active.",
+      );
+    } catch {
+      setRevokeMsg("Couldn't end live kiosks. Try again.");
+    } finally {
+      setRevokeBusy(false);
     }
   };
 
@@ -348,8 +467,92 @@ export default function TeacherDestinationPicker({
                   </p>
                 ) : (
                   <p className="tdp-kiosk-url-hint">
-                    No kiosk code yet. Ask an admin to print your kiosk badge —
-                    your PIN will appear here afterward.
+                    No kiosk code yet. Tap{" "}
+                    <b>Generate a new code</b> below to create your first one —
+                    no admin needed.
+                  </p>
+                )}
+              </div>
+
+              <div className="tdp-kiosk-regen">
+                <div className="tdp-kiosk-url-label">Generate a new code</div>
+                <p className="tdp-kiosk-url-hint">
+                  Lost your badge, or want to replace your code? Generate a new
+                  one here — it works instantly and you don&apos;t need to print
+                  anything. Your old code stops working right away.
+                </p>
+                <div className="tdp-kiosk-url-actions">
+                  <button
+                    type="button"
+                    className="tdp-kiosk-url-copy"
+                    onClick={() => void regenerate()}
+                    disabled={regenBusy}
+                  >
+                    {regenBusy
+                      ? "Generating…"
+                      : newCode
+                        ? "Generate another"
+                        : "Generate a new code"}
+                  </button>
+                </div>
+                {regenError && <div className="cp-error">{regenError}</div>}
+
+                {newCode && (
+                  <div className="tdp-newcode">
+                    <p className="tdp-newcode-instr">
+                      Hold this up to the kiosk camera, or type the code on the
+                      activation screen. No need to write anything down.
+                    </p>
+                    {qrDataUrl && (
+                      <img
+                        className="tdp-newcode-qr"
+                        src={qrDataUrl}
+                        alt="Kiosk activation QR code"
+                        width={240}
+                        height={240}
+                      />
+                    )}
+                    <div className="tdp-newcode-pin">
+                      <span className="tdp-newcode-pin-label">6-digit code</span>
+                      <span className="tdp-newcode-pin-value">
+                        {newCode.pin.slice(0, 3)} {newCode.pin.slice(3)}
+                      </span>
+                    </div>
+                    {barcodeDataUrl && (
+                      <img
+                        className="tdp-newcode-barcode"
+                        src={barcodeDataUrl}
+                        alt="Kiosk activation barcode"
+                      />
+                    )}
+                    <p className="tdp-newcode-note">
+                      Treat this like a password. If you screenshot it and lose
+                      your phone, just come back and generate a new code — that
+                      instantly cancels the old one.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="tdp-kiosk-regen">
+                <div className="tdp-kiosk-url-label">End my live kiosks</div>
+                <p className="tdp-kiosk-url-hint">
+                  Sign out any classroom device that&apos;s currently activated
+                  under your name (for example, one you left logged in).
+                </p>
+                <div className="tdp-kiosk-url-actions">
+                  <button
+                    type="button"
+                    className="tdp-kiosk-url-copy"
+                    onClick={() => void endLiveKiosks()}
+                    disabled={revokeBusy}
+                  >
+                    {revokeBusy ? "Ending…" : "End my live kiosks"}
+                  </button>
+                </div>
+                {revokeMsg && (
+                  <p className="tdp-kiosk-url-hint" style={{ marginTop: "0.4rem" }}>
+                    {revokeMsg}
                   </p>
                 )}
               </div>
