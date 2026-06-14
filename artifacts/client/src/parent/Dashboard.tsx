@@ -951,31 +951,6 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
         </Section>
       )}
 
-      {/* Accommodations */}
-      {sec.accommodations && (
-        <Section
-          title="Accommodations"
-          icon={<GraduationCap className="h-4 w-4 text-blue-600" />}
-        >
-          {snapshot.accommodations.length === 0 ? (
-            <Empty text="No accommodations on file." />
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {snapshot.accommodations.map((a) => (
-                <div
-                  key={a.id}
-                  className="flex items-center gap-2 bg-blue-50 border border-blue-100 text-blue-800 rounded-full px-3 py-1.5 text-xs"
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  <span className="font-medium">{a.name}</span>
-                  <span className="text-blue-600/70">· {a.category}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </Section>
-      )}
-
       {/* Staff notes (only if school enabled) */}
       {sec.staffNotes && snapshot.staffNotes.length > 0 && (
         <Section
@@ -1196,6 +1171,31 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
                 </li>
               ))}
             </ul>
+          )}
+        </Section>
+      )}
+
+      {/* Accommodations — pinned to the bottom of the stack. */}
+      {sec.accommodations && (
+        <Section
+          title="Accommodations"
+          icon={<GraduationCap className="h-4 w-4 text-blue-600" />}
+        >
+          {snapshot.accommodations.length === 0 ? (
+            <Empty text="No accommodations on file." />
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {snapshot.accommodations.map((a) => (
+                <div
+                  key={a.id}
+                  className="flex items-center gap-2 bg-blue-50 border border-blue-100 text-blue-800 rounded-full px-3 py-1.5 text-xs"
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  <span className="font-medium">{a.name}</span>
+                  <span className="text-blue-600/70">· {a.category}</span>
+                </div>
+              ))}
+            </div>
           )}
         </Section>
       )}

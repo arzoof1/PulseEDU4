@@ -96,13 +96,14 @@ function drawDocument(
   if (sec.attendance || sec.hallPasses) drawLostInstructionBlock(doc, s);
   if (sec.recognition) drawRecognitionBlock(doc, s);
   if (sec.attendance || sec.hallPasses) drawAttendanceBlock(doc, s);
-  if (sec.accommodations) drawAccommodationsBlock(doc, s);
   if (sec.fastScores) drawFastScoresBlock(doc, s);
   if (sec.mtss) drawMtssBlock(doc, s);
   if (sec.interventions) drawInterventionsBlock(doc, s);
   if (sec.staffNotes) drawStaffNotesBlock(doc, s);
   if (sec.oss) drawOssBlock(doc, s);
   if (sec.reteach) drawReteachBlock(doc, s);
+  // Accommodations pinned to the bottom of the stack (matches the dashboard).
+  if (sec.accommodations) drawAccommodationsBlock(doc, s);
 
   drawFooter(doc, s);
 }
