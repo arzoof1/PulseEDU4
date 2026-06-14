@@ -51,7 +51,6 @@ import { StudentBadgesPanel } from "./components/StudentBadgesPanel";
 import { RollCallPanel } from "./components/RollCallPanel";
 import SpotlightPanel from "./components/SpotlightPanel";
 import SpotlightLaunchButton from "./components/SpotlightLaunchButton";
-import LogTardyModal from "./components/LogTardyModal";
 import CheckInOutModal from "./components/CheckInOutModal";
 import LogInterventionLauncher from "./components/LogInterventionLauncher";
 import InterventionsBell from "./components/InterventionsBell";
@@ -4839,7 +4838,9 @@ function App() {
     p.destinationTeacher === `${currentStaffUser} (K)`;
 
   // Hall pass top-level view: overview (current default) vs reports (admin/ESE).
-  const [hpView, setHpView] = useState<"overview" | "reports">("overview");
+  const [hpView, setHpView] = useState<"overview" | "reports" | "tardies">(
+    "overview",
+  );
   const [hpReportSection, setHpReportSection] = useState<"hub" | "overview" | "byDay" | "ytd" | "research">("hub");
   const [researchStart, setResearchStart] = useState<string>(() => {
     const d = new Date();
@@ -6736,7 +6737,7 @@ function App() {
       !authUser.isAdmin &&
       !authUser.isSuperUser &&
       !authUser.isEseCoordinator &&
-      hpView !== "overview"
+      hpView === "reports"
     ) {
       setHpView("overview");
     }
@@ -9217,7 +9218,6 @@ function App() {
   };
   const allBaseNavSections: NavSection[] = [
     { key: "hallPasses", label: "Hall Passes", icon: IconDoor },
-    { key: "tardies", label: "Tardy Pass", icon: IconClock },
     { key: "student", label: "Family Communication", icon: IconUser },
     // Teacher Roster moved to Quick Access (rendered directly in the
     // sidebar above the accordions) — kept out of this list to avoid
@@ -9267,7 +9267,7 @@ function App() {
     !authUser?.isSuperUser &&
     !authUser?.isDistrictAdmin;
   const isFrontOfficeOnly = Boolean(authUser?.isFrontOffice);
-  const NON_EXEMPT_ALLOWED_KEYS = new Set(["hallPasses", "tardies", "comp"]);
+  const NON_EXEMPT_ALLOWED_KEYS = new Set(["hallPasses", "comp"]);
   const baseNavSections: NavSection[] = allBaseNavSections.filter((s) => {
     if (isNonExemptOnly && !NON_EXEMPT_ALLOWED_KEYS.has(s.key)) return false;
     if (isFrontOfficeOnly && s.key === "requestPullout") return false;
@@ -9533,13 +9533,6 @@ function App() {
       label: "Hall Passes",
       description: "Issue and end timed passes for student movement.",
       emoji: "🚪",
-      group: "quick",
-    });
-    add(effectiveFeatures.TardyPass !== false, {
-      key: "tardies",
-      label: "Tardy Pass",
-      description: "Log late arrivals and print entry slips.",
-      emoji: "⏰",
       group: "quick",
     });
     add(!isNonExemptOnly, {
@@ -10319,11 +10312,6 @@ function App() {
               label: "Hall Passes",
               icon: IconDoor,
             })}
-            {renderNavItem({
-              key: "tardies",
-              label: "Tardy Pass",
-              icon: IconClock,
-            })}
             {/* Teacher Roster promoted to Quick Access — every teacher's
                 daily landing for their students. Always visible (no
                 feature flag); cross-teacher access still gated server-side. */}
@@ -10818,7 +10806,10 @@ function App() {
           Hall Pass Mgmt.
         </RoleSection>
       </HowToUseHelp>
-      {(authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && (
+      {(authUser?.isAdmin ||
+        authUser?.isSuperUser ||
+        authUser?.isEseCoordinator ||
+        isCoreTeamMember) && (
         <div className="card no-print" style={{ paddingTop: "0.75rem", paddingBottom: "0.75rem" }}>
           <button
             type="button"
@@ -10828,16 +10819,130 @@ function App() {
           >
             Create
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              setHpView("reports");
-              setHpReportSection("hub");
+          {(authUser?.isAdmin ||
+            authUser?.isSuperUser ||
+            authUser?.isEseCoordinator) && (
+            <button
+              type="button"
+              onClick={() => {
+                setHpView("reports");
+                setHpReportSection("hub");
+              }}
+              disabled={hpView === "reports"}
+              style={{ marginRight: "0.25rem" }}
+            >
+              Reports
+            </button>
+          )}
+          {isCoreTeamMember && (
+            <button
+              type="button"
+              onClick={() => setHpView("tardies")}
+              disabled={hpView === "tardies"}
+            >
+              Tardy History
+            </button>
+          )}
+        </div>
+      )}
+      {hpView === "tardies" && isCoreTeamMember && (
+        <div className="card">
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+              gap: "0.5rem",
+              marginBottom: "0.25rem",
             }}
-            disabled={hpView === "reports"}
           >
-            Reports
-          </button>
+            <h2 style={{ margin: 0 }}>Tardy / Check-In History</h2>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <select
+                value={dateFilter}
+                onChange={(e) =>
+                  setDateFilter(e.target.value as "today" | "all")
+                }
+              >
+                <option value="today">Today</option>
+                <option value="all">All dates</option>
+              </select>
+              <select
+                value={staffFilter}
+                onChange={(e) =>
+                  setStaffFilter(e.target.value as "all" | "mine")
+                }
+              >
+                <option value="all">All staff</option>
+                <option value="mine">Mine</option>
+              </select>
+            </div>
+          </div>
+          <p
+            style={{
+              marginTop: 0,
+              color: "var(--text-subtle)",
+              fontSize: "0.85rem",
+            }}
+          >
+            Read-only. To log a tardy, use “+ Create Pass” and check “Log as
+            tardy” — the student is logged and sent back to their
+            current-period teacher.
+          </p>
+          <table
+            className="pulse-table"
+            border={1}
+            cellPadding={6}
+            style={{ borderCollapse: "collapse" }}
+          >
+            <thead>
+              <tr>
+                <th>Student</th>
+                <th>Teacher</th>
+                <th>Type</th>
+                <th>Period</th>
+                <th>Reason</th>
+                <th>Check-In With</th>
+                <th>Notes</th>
+                <th>Created By</th>
+                <th>Logged</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tardies
+                .filter((t) =>
+                  dateFilter === "today" ? isCreatedToday(t.createdAt) : true,
+                )
+                .filter((t) =>
+                  staffFilter === "mine"
+                    ? t.teacherName === currentStaffUser
+                    : true,
+                )
+                .map((t) => (
+                  <tr key={t.id}>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>
+                        {studentName(t.studentId)}
+                      </div>
+                      <div
+                        style={{ fontSize: 11, color: "var(--text-subtle)" }}
+                      >
+                        {t.localSisId ?? "—"}
+                      </div>
+                    </td>
+                    <td>{t.teacherName}</td>
+                    <td>{t.entryType}</td>
+                    <td>{t.period}</td>
+                    <td>{t.reason}</td>
+                    <td>{t.checkInWith ?? "-"}</td>
+                    <td>{t.notes}</td>
+                    <td>{t.createdBy ?? "-"}</td>
+                    <td>{fmtTime(t.createdAt)}</td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
         </div>
       )}
       {hpView === "overview" && (<>
@@ -10911,6 +11016,59 @@ function App() {
         restroomTeacherOverrides={restroomTeacherOverrides}
         maxMinutes={schoolSettings.hallPassMaxMinutes}
         defaultMinutes={schoolSettings.hallPassDefaultMinutes}
+        canLogTardy={isCoreTeamMember}
+        onLogTardy={async ({ studentId, period }) => {
+          const res = await authFetch("/api/tardies", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              studentId,
+              teacherName: currentStaffUser,
+              period,
+              reason: "",
+              entryType: "tardy",
+              checkInWith: null,
+              notes: "",
+            }),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || "Failed to log tardy.");
+          }
+          const lookupRes = await authFetch(
+            `/api/section-lookup?studentId=${encodeURIComponent(studentId)}&period=${encodeURIComponent(period)}`,
+          );
+          if (!lookupRes.ok) {
+            loadTardies();
+            const text = await lookupRes.text();
+            throw new Error(
+              text ||
+                `No teacher found for ${studentName(studentId)} in period ${period}.`,
+            );
+          }
+          const info = await lookupRes.json();
+          try {
+            await submitHallPassWithOverrides(
+              {
+                studentId,
+                destination: info.teacherName,
+                originRoom: "Front Office",
+                teacherName: currentStaffUser,
+                destinationTeacher: info.teacherName,
+                contactedAcknowledged: true,
+                isTardyReturn: true,
+              },
+              { skipMyActivesPrewarning: true },
+            );
+          } catch (err) {
+            loadTardies();
+            if (err instanceof Error && err.message === "Cancelled.") return;
+            throw err instanceof Error
+              ? err
+              : new Error("Failed to create return pass.");
+          }
+          loadTardies();
+        }}
         onCreate={async (payload) => {
           await submitHallPassWithOverrides({
             studentId: payload.studentId,
@@ -13281,283 +13439,6 @@ function App() {
 
       </>)}
 
-      {activeSection === "tardies" && (<>
-      <HowToUseHelp title="How to use Tardies">
-        <HowToSection title="What this page is">
-          Track late arrivals, early check-outs, and mid-day check-ins
-          in one log. Each entry pulls the timestamp from the system
-          so you can't accidentally back-date.
-        </HowToSection>
-        <RoleSection for={["admin", "coreTeam"]} title="Admin uses">
-          Heavy tardies show up in the Insights → Flow dashboard and
-          on the parent HeartBEAT snapshot. Use the export to share
-          weekly attendance stats with the front office.
-        </RoleSection>
-      </HowToUseHelp>
-      <div className="card cp-cta-card">
-        <div className="cp-cta-text">Student Arriving Late?</div>
-        <button
-          type="button"
-          className="cp-cta-button cp-cta-button--blue"
-          onClick={() => setLogTardyOpen(true)}
-        >
-          + Log Tardy
-        </button>
-      </div>
-      <div className="card" style={{ display: "none" }}>
-      <h2>Log Tardy / Check-In</h2>
-      <form onSubmit={handleTardySubmit} style={{ marginBottom: "1rem" }}>
-        <div style={{ marginBottom: "0.5rem" }}>
-          <label>
-            Entry Type:{" "}
-            <select
-              value={tardyEntryType}
-              onChange={(e) =>
-                setTardyEntryType(
-                  e.target.value as "tardy" | "checkin" | "checkout",
-                )
-              }
-            >
-              <option value="tardy">Tardy</option>
-              <option value="checkin">Check-In</option>
-              <option value="checkout">Check-Out</option>
-            </select>
-          </label>
-        </div>
-        <div style={{ marginBottom: "0.5rem" }}>
-          <label>
-            Student:{" "}
-            <input
-              type="text"
-              placeholder="Search by name or ID"
-              value={tardyStudentSearch}
-              onChange={(e) => {
-                setTardyStudentSearch(e.target.value);
-                setTardyStudentId("");
-              }}
-            />
-          </label>
-          {tardyStudentId ? (
-            <div style={{ marginTop: "0.25rem" }}>
-              Selected: <strong>{tardyStudentId}</strong>{" "}
-              {(() => {
-                const s = students.find(
-                  (s) => s.studentId === tardyStudentId,
-                );
-                return s ? `- ${s.firstName} ${s.lastName}` : "";
-              })()}{" "}
-              <button
-                type="button"
-                onClick={() => {
-                  setTardyStudentId("");
-                  setTardyStudentSearch("");
-                }}
-              >
-                Clear
-              </button>
-            </div>
-          ) : (
-            tardyStudentSearch && (
-              <ul
-                style={{
-                  listStyle: "none",
-                  padding: 0,
-                  margin: "0.25rem 0",
-                  border: "1px solid #ccc",
-                  maxWidth: "20rem",
-                }}
-              >
-                {students
-                  .filter((s) => {
-                    const q = tardyStudentSearch.toLowerCase();
-                    return (
-                      s.firstName.toLowerCase().includes(q) ||
-                      s.lastName.toLowerCase().includes(q) ||
-                      s.studentId.toLowerCase().includes(q)
-                    );
-                  })
-                  .map((s) => (
-                    <li key={s.id}>
-                      <button
-                        type="button"
-                        style={{
-                          width: "100%",
-                          textAlign: "left",
-                          padding: "0.25rem 0.5rem",
-                          background: "none",
-                          border: "none",
-                          cursor: "pointer",
-                        }}
-                        onClick={() => {
-                          setTardyStudentId(s.studentId);
-                          setTardyStudentSearch(
-                            `${s.localSisId ?? "—"} - ${s.firstName} ${s.lastName}`,
-                          );
-                        }}
-                      >
-                        {s.localSisId ?? "—"} - {s.firstName} {s.lastName}
-                      </button>
-                    </li>
-                  ))}
-                {students.filter((s) => {
-                  const q = tardyStudentSearch.toLowerCase();
-                  return (
-                    s.firstName.toLowerCase().includes(q) ||
-                    s.lastName.toLowerCase().includes(q) ||
-                    s.studentId.toLowerCase().includes(q)
-                  );
-                }).length === 0 && (
-                  <li style={{ padding: "0.25rem 0.5rem", color: "#666" }}>
-                    No matches
-                  </li>
-                )}
-              </ul>
-            )
-          )}
-        </div>
-        <div style={{ marginBottom: "0.5rem" }}>
-          <label>
-            Period:{" "}
-            <select
-              value={tardyPeriod}
-              onChange={(e) => setTardyPeriod(e.target.value)}
-              required
-            >
-              <option value="">-- select a period --</option>
-              {["1", "2", "3", "4", "5", "6", "7"].map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        {tardyEntryType === "tardy" && (
-          <div style={{ marginBottom: "0.5rem" }}>
-            <label>
-              Reason:{" "}
-              <input
-                type="text"
-                value={tardyReason}
-                onChange={(e) => setTardyReason(e.target.value)}
-              />
-            </label>
-          </div>
-        )}
-        {tardyEntryType === "tardy" && (
-          <div style={{ marginBottom: "0.5rem" }}>
-            <label>
-              <input
-                type="checkbox"
-                checked={tardyCreateReturnPass}
-                onChange={(e) => setTardyCreateReturnPass(e.target.checked)}
-              />{" "}
-              Create return pass to class
-            </label>
-            {tardyCreateReturnPass && (
-              <div style={{ marginTop: "0.25rem" }}>
-                <label>
-                  Receiving Teacher:{" "}
-                  <select
-                    value={tardyReturnPassTeacher}
-                    onChange={(e) => setTardyReturnPassTeacher(e.target.value)}
-                  >
-                    {teachers.map((t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            )}
-          </div>
-        )}
-        {(tardyEntryType === "checkin" || tardyEntryType === "checkout") && (
-          <div style={{ marginBottom: "0.5rem" }}>
-            <label>
-              {tardyEntryType === "checkin" ? "Check-In With:" : "Check-Out With:"}{" "}
-              <select
-                value={tardyCheckInWith}
-                onChange={(e) => setTardyCheckInWith(e.target.value)}
-                required
-              >
-                <option value="">-- select --</option>
-                {checkInWithOptions.map((o) => (
-                  <option key={o} value={o}>
-                    {o}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        )}
-        <div style={{ marginBottom: "0.5rem" }}>
-          <label>
-            Notes (optional):{" "}
-            <input
-              type="text"
-              value={tardyNotes}
-              onChange={(e) => setTardyNotes(e.target.value)}
-            />
-          </label>
-        </div>
-        <button type="submit">
-          {tardyEntryType === "tardy"
-            ? "Log Tardy"
-            : tardyEntryType === "checkin"
-              ? "Log Check-In"
-              : "Log Check-Out"}
-        </button>
-      </form>
-      </div>
-
-      <div className="card">
-      <h2>Tardy / Check-Ins</h2>
-      <table className="pulse-table" border={1} cellPadding={6} style={{ borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th>Student</th>
-            <th>Teacher</th>
-            <th>Type</th>
-            <th>Period</th>
-            <th>Reason</th>
-            <th>Check-In With</th>
-            <th>Notes</th>
-            <th>Created By</th>
-            <th>Logged</th>
-          </tr>
-        </thead>
-        <tbody>
-          {tardies
-            .filter((t) =>
-              dateFilter === "today" ? isCreatedToday(t.createdAt) : true,
-            )
-            .filter((t) =>
-              staffFilter === "mine" ? t.teacherName === currentStaffUser : true,
-            )
-            .map((t) => (
-            <tr key={t.id}>
-              <td>
-                <div style={{ fontWeight: 600 }}>{studentName(t.studentId)}</div>
-                <div style={{ fontSize: 11, color: "var(--text-subtle)" }}>
-                  {t.localSisId ?? "—"}
-                </div>
-              </td>
-              <td>{t.teacherName}</td>
-              <td>{t.entryType}</td>
-              <td>{t.period}</td>
-              <td>{t.reason}</td>
-              <td>{t.checkInWith ?? "-"}</td>
-              <td>{t.notes}</td>
-              <td>{t.createdBy ?? "-"}</td>
-              <td>{fmtTime(t.createdAt)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      </div>
-      </>)}
 
       {activeSection === "student" && (
         <>
@@ -23570,67 +23451,6 @@ function App() {
         </>
       )}
 
-      <LogTardyModal
-        open={logTardyOpen}
-        onClose={() => setLogTardyOpen(false)}
-        students={students}
-        onSubmit={async (payload) => {
-          const res = await authFetch("/api/tardies", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              studentId: payload.studentId,
-              teacherName: currentStaffUser,
-              period: payload.period,
-              reason: "",
-              entryType: "tardy",
-              checkInWith: null,
-              notes: "",
-            }),
-          });
-          if (!res.ok) {
-            const text = await res.text();
-            throw new Error(text || "Failed to log tardy.");
-          }
-          if (payload.createReturnPass) {
-            const lookupRes = await authFetch(
-              `/api/section-lookup?studentId=${encodeURIComponent(payload.studentId)}&period=${encodeURIComponent(payload.period)}`,
-            );
-            if (!lookupRes.ok) {
-              loadTardies();
-              const text = await lookupRes.text();
-              throw new Error(
-                text ||
-                  `No teacher found for student ${studentName(payload.studentId)} in period ${payload.period}.`,
-              );
-            }
-            const info = await lookupRes.json();
-            try {
-              await submitHallPassWithOverrides(
-                {
-                  studentId: payload.studentId,
-                  destination: info.teacherName,
-                  originRoom: "Front Office",
-                  teacherName: currentStaffUser,
-                  destinationTeacher: info.teacherName,
-                  contactedAcknowledged: true,
-                  isTardyReturn: true,
-                },
-                { skipMyActivesPrewarning: true },
-              );
-            } catch (err) {
-              loadTardies();
-              if (err instanceof Error && err.message === "Cancelled.") {
-                return;
-              }
-              throw err instanceof Error
-                ? err
-                : new Error("Failed to create return pass.");
-            }
-          }
-          loadTardies();
-        }}
-      />
 
       <CheckInOutModal
         open={checkInOutOpen}

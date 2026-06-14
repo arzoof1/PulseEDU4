@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { authFetch } from "../lib/authToken";
 
 export interface CreatePassStudent {
   id: number | string;
@@ -56,12 +57,55 @@ interface Props {
   maxMinutes?: number;
   /** Default starting value for the time slider. */
   defaultMinutes?: number;
+  /** When true (core team), a "Log as tardy" toggle appears on step 1. */
+  canLogTardy: boolean;
+  /**
+   * Log a tardy for this student in the given period and send them back to
+   * their teacher of record. The parent owns the POST + return-pass flow.
+   */
+  onLogTardy: (payload: { studentId: string; period: string }) => Promise<void>;
   onCreate: (payload: CreatePassPayload) => Promise<void> | void;
 }
 
 const MIN_MIN = 1;
 const FALLBACK_MAX = 30;
 const FALLBACK_DEFAULT = 5;
+
+// --- Tardy mode: bell-schedule period detection (mirrors LogTardyModal) ---
+interface TardyBellPeriod {
+  id: number;
+  periodNumber: number;
+  name: string;
+  startTime: string;
+  endTime: string;
+}
+interface TardyBellSchedule {
+  id: number;
+  name: string;
+  kind: string;
+  isDefault: boolean;
+  active: boolean;
+  periods: TardyBellPeriod[];
+}
+function tardyToMinutes(t: string): number | null {
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(t);
+  if (!m) return null;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+function findCurrentTardyPeriod(
+  schedule: TardyBellSchedule | null,
+  now: Date,
+): TardyBellPeriod | null {
+  if (!schedule) return null;
+  const mins = now.getHours() * 60 + now.getMinutes();
+  for (const p of schedule.periods) {
+    const s = tardyToMinutes(p.startTime);
+    const e = tardyToMinutes(p.endTime);
+    if (s == null || e == null) continue;
+    if (mins >= s && mins < e) return p;
+  }
+  return null;
+}
 
 function RoomCombobox({
   rooms,
@@ -180,6 +224,8 @@ export default function CreatePassModal({
   restroomTeacherOverrides,
   maxMinutes,
   defaultMinutes,
+  canLogTardy,
+  onLogTardy,
   onCreate,
 }: Props) {
   const MAX_MIN = Math.max(
@@ -218,6 +264,19 @@ export default function CreatePassModal({
   const [error, setError] = useState<string | null>(null);
   const studentInputRef = useRef<HTMLInputElement>(null);
 
+  // --- Tardy mode state ---
+  const [logAsTardy, setLogAsTardy] = useState(false);
+  const [schedule, setSchedule] = useState<TardyBellSchedule | null>(null);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [now, setNow] = useState(() => new Date());
+  const [testTime, setTestTime] = useState("");
+  const [tardyTeacher, setTardyTeacher] = useState<string | null>(null);
+  const [tardyTeacherLoading, setTardyTeacherLoading] = useState(false);
+  const [tardyTeacherError, setTardyTeacherError] = useState<string | null>(
+    null,
+  );
+  const isDev = import.meta.env.DEV;
+
   useEffect(() => {
     if (!open) return;
     setStep(1);
@@ -233,8 +292,111 @@ export default function CreatePassModal({
     setContactedAck(false);
     setError(null);
     setSubmitting(false);
+    setLogAsTardy(false);
+    setSchedule(null);
+    setNow(new Date());
+    setTestTime("");
+    setTardyTeacher(null);
+    setTardyTeacherError(null);
     setTimeout(() => studentInputRef.current?.focus(), 50);
   }, [open, defaultOriginRoom, currentStaffUser]);
+
+  const effectiveNow = useMemo(() => {
+    if (!isDev || !testTime) return now;
+    const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(testTime);
+    if (!m) return now;
+    const d = new Date(now);
+    d.setHours(parseInt(m[1], 10), parseInt(m[2], 10), 0, 0);
+    return d;
+  }, [isDev, testTime, now]);
+
+  const currentTardyPeriod = useMemo(
+    () => findCurrentTardyPeriod(schedule, effectiveNow),
+    [schedule, effectiveNow],
+  );
+  const tardyPeriodValue = currentTardyPeriod
+    ? String(currentTardyPeriod.periodNumber)
+    : "";
+
+  // Load the default regular bell schedule once the modal opens (core team
+  // only) so tardy mode can resolve the current period.
+  useEffect(() => {
+    if (!open || !canLogTardy) return;
+    let cancelled = false;
+    setScheduleLoading(true);
+    (async () => {
+      try {
+        const r = await authFetch("/api/bell-schedules");
+        if (!r.ok) throw new Error("Failed to load bell schedule.");
+        const body: unknown = await r.json();
+        const list: TardyBellSchedule[] = Array.isArray(body)
+          ? (body as TardyBellSchedule[])
+          : Array.isArray(
+                (body as { schedules?: TardyBellSchedule[] })?.schedules,
+              )
+            ? (body as { schedules: TardyBellSchedule[] }).schedules
+            : [];
+        const regular =
+          list.find((s) => s.kind === "regular" && s.isDefault && s.active) ||
+          list.find((s) => s.kind === "regular" && s.active) ||
+          list.find((s) => s.kind === "regular") ||
+          null;
+        if (!cancelled) setSchedule(regular);
+      } catch {
+        if (!cancelled) setSchedule(null);
+      } finally {
+        if (!cancelled) setScheduleLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, canLogTardy]);
+
+  useEffect(() => {
+    if (!open) return;
+    const id = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, [open]);
+
+  // Resolve the student's teacher of record for the detected period so the
+  // tardy-confirm step can show who they'll be sent back to.
+  useEffect(() => {
+    if (!logAsTardy || step !== 2 || !selectedStudent || !tardyPeriodValue) {
+      setTardyTeacher(null);
+      setTardyTeacherError(null);
+      return;
+    }
+    let cancelled = false;
+    setTardyTeacherLoading(true);
+    setTardyTeacherError(null);
+    (async () => {
+      try {
+        const r = await authFetch(
+          `/api/section-lookup?studentId=${encodeURIComponent(selectedStudent.studentId)}&period=${encodeURIComponent(tardyPeriodValue)}`,
+        );
+        if (!r.ok) {
+          if (!cancelled) {
+            setTardyTeacher(null);
+            setTardyTeacherError("No teacher found for this period.");
+          }
+          return;
+        }
+        const info = await r.json();
+        if (!cancelled) setTardyTeacher(info.teacherName ?? null);
+      } catch {
+        if (!cancelled) {
+          setTardyTeacher(null);
+          setTardyTeacherError("Lookup failed.");
+        }
+      } finally {
+        if (!cancelled) setTardyTeacherLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [logAsTardy, step, selectedStudent, tardyPeriodValue]);
 
   const allRooms = useMemo(
     () => Object.keys(destinationsByRoom).sort((a, b) => a.localeCompare(b)),
@@ -437,6 +599,24 @@ export default function CreatePassModal({
     }
   };
 
+  const handleLogTardy = async () => {
+    if (!selectedStudent || !tardyPeriodValue) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onLogTardy({
+        studentId: selectedStudent.studentId,
+        period: tardyPeriodValue,
+      });
+      onClose();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to log tardy.";
+      setError(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const goBack = () => setStep((s) => (s > 1 ? ((s - 1) as 1 | 2 | 3) : s));
 
   return (
@@ -465,7 +645,7 @@ export default function CreatePassModal({
           )}
           <div className="cp-title">
             {step === 1 && "Select Student"}
-            {step === 2 && "Where to?"}
+            {step === 2 && (logAsTardy ? "Confirm Tardy" : "Where to?")}
             {step === 3 && "How long?"}
           </div>
           <button
@@ -494,6 +674,25 @@ export default function CreatePassModal({
                 spellCheck={false}
                 name="cp-student-search"
               />
+              {canLogTardy && (
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.5rem",
+                    margin: "0.5rem 0 0.25rem",
+                    fontSize: "0.9rem",
+                    color: "#334155",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={logAsTardy}
+                    onChange={(e) => setLogAsTardy(e.target.checked)}
+                  />
+                  Log as tardy — send to current-period teacher
+                </label>
+              )}
               <ul className="cp-list">
                 {filteredStudents.map((s) => (
                   <li key={s.id}>
@@ -525,7 +724,123 @@ export default function CreatePassModal({
             </>
           )}
 
-          {step === 2 && selectedStudent && (
+          {step === 2 && selectedStudent && logAsTardy && (
+            <>
+              <div className="cp-context">
+                <div className="cp-context-row">
+                  <span className="cp-context-label">Student</span>
+                  <strong>
+                    {selectedStudent.firstName} {selectedStudent.lastName}
+                  </strong>
+                </div>
+                <div className="cp-context-row">
+                  <span className="cp-context-label">ID</span>
+                  <strong>{selectedStudent.localSisId ?? "—"}</strong>
+                </div>
+                <div className="cp-context-row">
+                  <span className="cp-context-label">Period</span>
+                  <strong>
+                    {scheduleLoading
+                      ? "Loading…"
+                      : currentTardyPeriod
+                        ? `${currentTardyPeriod.periodNumber}${currentTardyPeriod.name ? ` · ${currentTardyPeriod.name}` : ""}`
+                        : "No active period"}
+                  </strong>
+                </div>
+                {isDev && (
+                  <div className="cp-context-row">
+                    <span className="cp-context-label">Test time (dev)</span>
+                    <input
+                      type="time"
+                      value={testTime}
+                      onChange={(e) => setTestTime(e.target.value)}
+                      style={{
+                        padding: "0.25rem 0.5rem",
+                        border: "1px dashed #f59e0b",
+                        borderRadius: 4,
+                        fontSize: "0.85rem",
+                        background: "#fffbeb",
+                      }}
+                      title="Dev only — overrides current time so you can test outside school hours."
+                    />
+                  </div>
+                )}
+                <div className="cp-context-row">
+                  <span className="cp-context-label">Teacher</span>
+                  <strong>
+                    {!tardyPeriodValue
+                      ? "—"
+                      : tardyTeacherLoading
+                        ? "Looking up…"
+                        : tardyTeacher
+                          ? tardyTeacher
+                          : tardyTeacherError || "—"}
+                  </strong>
+                </div>
+              </div>
+
+              {!tardyPeriodValue && !scheduleLoading && (
+                <p
+                  style={{
+                    margin: "0.75rem 0 0",
+                    color: "#b91c1c",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  The current time isn't inside any period of the regular bell
+                  schedule. Wait for the next period to start, or update the
+                  bell schedule.
+                </p>
+              )}
+
+              <p
+                style={{
+                  margin: "0.75rem 0 0",
+                  color: "#64748b",
+                  fontSize: "0.85rem",
+                }}
+              >
+                We'll log the tardy and send {selectedStudent.firstName} back to
+                their current-period teacher.
+              </p>
+
+              {error && (
+                <p
+                  style={{
+                    color: "#b91c1c",
+                    background: "#fef2f2",
+                    border: "1px solid #fecaca",
+                    padding: "0.5rem 0.75rem",
+                    borderRadius: 6,
+                    marginTop: "0.75rem",
+                  }}
+                >
+                  {error}
+                </p>
+              )}
+
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  gap: "0.5rem",
+                  marginTop: "1rem",
+                }}
+              >
+                <button
+                  type="button"
+                  className="cp-cta-button"
+                  disabled={!tardyPeriodValue || submitting}
+                  onClick={handleLogTardy}
+                  style={{ opacity: !tardyPeriodValue || submitting ? 0.6 : 1 }}
+                >
+                  {submitting ? "Saving…" : "Log Tardy & Send to Class"}
+                </button>
+              </div>
+            </>
+          )}
+
+          {step === 2 && selectedStudent && !logAsTardy && (
             <>
               <div className="cp-context">
                 <div className="cp-context-row">

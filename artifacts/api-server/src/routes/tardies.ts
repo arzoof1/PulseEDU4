@@ -3,6 +3,8 @@ import { db, tardiesTable, staffTable, studentsTable } from "@workspace/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { resolveStudentIdInput } from "../lib/studentIdResolver.js";
+import { sendTardySmsStub } from "../lib/tardySms.js";
+import { isCoreTeam } from "../lib/coreTeam.js";
 
 const router: IRouter = Router();
 
@@ -100,6 +102,14 @@ router.post("/tardies", async (req, res) => {
           ? "intervention"
           : "tardy";
 
+  // Tardy logging is a Core-Team-only action (mirrors the client gate on
+  // the CreatePassModal "Log as tardy" checkbox). Check-in / check-out /
+  // intervention entries stay open to any authenticated staff.
+  if (type === "tardy" && !isCoreTeam(sessionStaff)) {
+    res.status(403).json({ error: "Core Team access required to log tardies" });
+    return;
+  }
+
   if (
     (type === "checkin" || type === "checkout" || type === "intervention") &&
     (typeof checkInWith !== "string" || !checkInWith)
@@ -133,6 +143,43 @@ router.post("/tardies", async (req, res) => {
       createdAt: new Date().toISOString(),
     })
     .returning();
+
+  // Stubbed parent notification — only for real tardies (not check-in/out
+  // or interventions). Best-effort: the entire block (student lookup +
+  // stub) is wrapped so neither a failed DB read nor the stub can ever
+  // fail or block the 201 response after the tardy row is already inserted.
+  if (type === "tardy") {
+    try {
+      const [stu] = await db
+        .select({
+          firstName: studentsTable.firstName,
+          lastName: studentsTable.lastName,
+          localSisId: studentsTable.localSisId,
+          parentPhone: studentsTable.parentPhone,
+        })
+        .from(studentsTable)
+        .where(
+          and(
+            eq(studentsTable.schoolId, schoolId),
+            eq(studentsTable.studentId, canonicalStudentId),
+          ),
+        );
+      await sendTardySmsStub({
+        schoolId,
+        studentId: canonicalStudentId,
+        localSisId: stu?.localSisId ?? null,
+        studentName: stu ? `${stu.firstName} ${stu.lastName}` : null,
+        parentPhone: stu?.parentPhone ?? null,
+        period,
+        log: req.log,
+      });
+    } catch (err) {
+      req.log.warn(
+        { err, schoolId, studentId: canonicalStudentId },
+        "tardy parent-notification stub failed (non-fatal)",
+      );
+    }
+  }
 
   res.status(201).json(tardy);
 });
