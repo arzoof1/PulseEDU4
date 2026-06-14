@@ -3,7 +3,7 @@
 // and fetches once per parent. Each message can be acknowledged ("Got it"),
 // which the school sees as a real counter. A "Power Reader" badge surfaces for
 // families who consistently acknowledge — purely derived, no PBIS points.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Mail,
   MailOpen,
@@ -11,6 +11,8 @@ import {
   Star,
   Paperclip,
   Download,
+  Eye,
+  ChevronUp,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -51,6 +53,23 @@ export default function FamilyMessages() {
   const [error, setError] = useState("");
   const [acking, setAcking] = useState<number | null>(null);
   const [downloading, setDownloading] = useState<number | null>(null);
+  // Inline attachment preview: per-message object URL + open/closed state.
+  // We keep the bytes in-document (no new tab) so the staff "preview as
+  // parent" path inside the Replit iframe — where blob tabs render blank —
+  // still works, and so phones never force a download just to peek.
+  const [attach, setAttach] = useState<
+    Record<number, { url: string; open: boolean }>
+  >({});
+  const [viewing, setViewing] = useState<number | null>(null);
+  const objectUrlsRef = useRef<string[]>([]);
+
+  // Revoke every object URL we created when the inbox unmounts.
+  useEffect(() => {
+    return () => {
+      for (const url of objectUrlsRef.current) URL.revokeObjectURL(url);
+      objectUrlsRef.current = [];
+    };
+  }, []);
 
   async function load() {
     try {
@@ -109,10 +128,38 @@ export default function FamilyMessages() {
     }
   }
 
-  // Attachments are downloaded (not opened in a new tab): the session cookie is
-  // blocked inside the Replit preview iframe, and a blob URL opened in a tab
-  // renders blank. parentFetch attaches the Bearer token so the authed read
-  // route returns the bytes; we then synthesize an <a download> click.
+  // Inline view: fetch the authed bytes once (parentFetch carries the Bearer
+  // token), turn them into an object URL, and reveal them in-document — an
+  // <img> for PNGs, an <object> for PDFs. Subsequent taps just toggle the
+  // already-loaded preview open/closed. No new tab, no forced download.
+  async function viewAttachment(m: ParentMessage) {
+    const existing = attach[m.id];
+    if (existing) {
+      setAttach((s) => ({
+        ...s,
+        [m.id]: { ...existing, open: !existing.open },
+      }));
+      return;
+    }
+    if (viewing != null) return;
+    setViewing(m.id);
+    try {
+      const res = await parentFetch(`/api/parent/messages/${m.id}/attachment`);
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      objectUrlsRef.current.push(url);
+      setAttach((s) => ({ ...s, [m.id]: { url, open: true } }));
+    } catch {
+      /* swallow — the Save fallback still works */
+    } finally {
+      setViewing(null);
+    }
+  }
+
+  // Save fallback: synthesize an <a download> click. Kept for the rare mobile
+  // browser that won't render a blob PDF inline, and for parents who want the
+  // file on disk. parentFetch attaches the Bearer token for the authed read.
   async function downloadAttachment(m: ParentMessage) {
     if (downloading != null) return;
     setDownloading(m.id);
@@ -232,22 +279,70 @@ export default function FamilyMessages() {
                 </p>
 
                 {m.hasAttachment && (
-                  <div className="mt-3">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-2"
-                      disabled={downloading === m.id}
-                      onClick={() => downloadAttachment(m)}
-                    >
-                      <Paperclip className="h-4 w-4" />
-                      <span className="truncate max-w-[200px]">
-                        {downloading === m.id
-                          ? "Preparing…"
-                          : m.attachmentName || "Attachment"}
-                      </span>
-                      <Download className="h-4 w-4" />
-                    </Button>
+                  <div className="mt-3 space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-2"
+                        disabled={viewing === m.id}
+                        onClick={() => viewAttachment(m)}
+                      >
+                        <Paperclip className="h-4 w-4" />
+                        <span className="truncate max-w-[200px]">
+                          {viewing === m.id
+                            ? "Opening…"
+                            : m.attachmentName || "Attachment"}
+                        </span>
+                        {attach[m.id]?.open ? (
+                          <ChevronUp className="h-4 w-4" />
+                        ) : (
+                          <Eye className="h-4 w-4" />
+                        )}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="gap-1.5 text-slate-500"
+                        disabled={downloading === m.id}
+                        onClick={() => downloadAttachment(m)}
+                      >
+                        <Download className="h-4 w-4" />
+                        {downloading === m.id ? "Saving…" : "Save"}
+                      </Button>
+                    </div>
+
+                    {attach[m.id]?.open && (
+                      <div className="rounded-lg border border-slate-200 overflow-hidden bg-slate-50">
+                        {m.attachmentType === "application/pdf" ? (
+                          <object
+                            data={attach[m.id].url}
+                            type="application/pdf"
+                            className="w-full"
+                            style={{ height: 480 }}
+                            aria-label={m.attachmentName || "PDF attachment"}
+                          >
+                            <div className="p-4 text-sm text-slate-600">
+                              Can&apos;t preview this here.{" "}
+                              <button
+                                type="button"
+                                className="underline text-teal-700"
+                                onClick={() => downloadAttachment(m)}
+                              >
+                                Tap to download
+                              </button>
+                              .
+                            </div>
+                          </object>
+                        ) : (
+                          <img
+                            src={attach[m.id].url}
+                            alt={m.attachmentName || "Attachment"}
+                            className="w-full h-auto block"
+                          />
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 
