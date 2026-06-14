@@ -329,6 +329,13 @@ export default function RecordingStudio({
     if (prompterRef.current) prompterRef.current.scrollTop = 0;
   }
 
+  // From the review screen: drop the current take and jump straight back into
+  // the script editor. The script text persists, so nothing is lost.
+  function editScriptFromReview() {
+    reRecord();
+    setEditingScript(true);
+  }
+
   function keepTake() {
     setKept(true);
     if (recordedBlobRef.current) {
@@ -560,7 +567,10 @@ export default function RecordingStudio({
                 Happy with it? Keep this take, or record again.
               </p>
             )}
-            <div style={{ display: "flex", gap: "0.75rem" }}>
+            <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", justifyContent: "center" }}>
+              <button style={btn} onClick={editScriptFromReview}>
+                Edit script
+              </button>
               <button style={btn} onClick={reRecord}>
                 Record again
               </button>
