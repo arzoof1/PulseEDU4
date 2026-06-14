@@ -303,13 +303,7 @@ export default function AlgebraPlacementReview({
       )}
 
       {data && data.rows.length > 0 && (
-        <div
-          style={{
-            overflowX: "auto",
-            overflowY: "auto",
-            maxHeight: "calc(100vh - 230px)",
-          }}
-        >
+        <div>
           <table
             style={{
               width: "100%",
