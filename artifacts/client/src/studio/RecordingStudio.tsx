@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { openRecordingStudio, STUDIO_SCRIPT_KEY } from "./launch";
-import { beginStudioSession, endStudioSession } from "./recordingActivity";
 
 // Locked product decision: 5-minute maximum recording length.
 const MAX_SECONDS = 5 * 60;
@@ -143,12 +142,6 @@ export default function RecordingStudio({
   const recordedBlobRef = useRef<Blob | null>(null);
   const recordingRef = useRef(false);
   const elapsedRef = useRef(0);
-  // Refs for the live timer so the per-second tick updates the DOM directly
-  // instead of via setState. A React re-render during recording would reconcile
-  // the whole studio (including the large teleprompter text) once per second and
-  // hitch the scroll; writing text/color imperatively keeps the main thread free.
-  const timerWrapRef = useRef<HTMLDivElement>(null);
-  const elapsedValueRef = useRef<HTMLSpanElement>(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -168,14 +161,6 @@ export default function RecordingStudio({
   useEffect(() => {
     recordingRef.current = recording;
   }, [recording]);
-
-  // Tell the staff app underneath to pause its background timers while the
-  // studio overlay is open, so its per-second re-renders don't stall the
-  // teleprompter scroll. Released on unmount.
-  useEffect(() => {
-    beginStudioSession();
-    return () => endStudioSession();
-  }, []);
 
   // Acquire camera + mic once on mount.
   useEffect(() => {
@@ -373,12 +358,7 @@ export default function RecordingStudio({
     timerRef.current = window.setInterval(() => {
       const e = Math.floor((Date.now() - startedAt) / 1000);
       elapsedRef.current = e;
-      // Imperative DOM update — no React re-render, so the teleprompter scroll
-      // never hitches once per second while recording.
-      if (elapsedValueRef.current) elapsedValueRef.current.textContent = fmt(e);
-      if (timerWrapRef.current) {
-        timerWrapRef.current.style.color = MAX_SECONDS - e <= 30 ? "#fbbf24" : "#f87171";
-      }
+      setElapsed(e);
       if (e >= MAX_SECONDS) stopRecording();
     }, 250);
   }, [stopRecording]);
@@ -524,8 +504,8 @@ export default function RecordingStudio({
           />
           Recording Studio
         </div>
-        <div ref={timerWrapRef} style={{ fontVariantNumeric: "tabular-nums", fontSize: "1.05rem", color: timerColor, fontWeight: 700 }}>
-          <span ref={elapsedValueRef}>{fmt(elapsed)}</span> <span style={{ color: "#6b7280", fontWeight: 500 }}>/ {fmt(MAX_SECONDS)}</span>
+        <div style={{ fontVariantNumeric: "tabular-nums", fontSize: "1.05rem", color: timerColor, fontWeight: 700 }}>
+          {fmt(elapsed)} <span style={{ color: "#6b7280", fontWeight: 500 }}>/ {fmt(MAX_SECONDS)}</span>
         </div>
         <div style={{ display: "flex", gap: "0.5rem" }}>
           <button style={btn} onClick={() => setShowHelp(true)}>
