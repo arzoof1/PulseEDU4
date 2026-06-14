@@ -216,7 +216,21 @@ export default function AlgebraPlacementReview({
   };
 
   return (
-    <div style={{ padding: "1rem 1.25rem" }}>
+    <div
+      style={{
+        padding: "1rem 1.25rem",
+        boxSizing: "border-box",
+        // Fill the visible app-main region (viewport minus the sticky
+        // app-header and app-main's own vertical padding) and lay the page
+        // out as a flex column. This makes the table wrapper below a real,
+        // self-contained scroll container so its sticky <th> headers pin
+        // correctly — the window itself no longer scrolls the page away.
+        height: "calc(100vh - 64px - 3rem)",
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+      }}
+    >
       <div
         style={{
           display: "flex",
@@ -303,12 +317,18 @@ export default function AlgebraPlacementReview({
       )}
 
       {data && data.rows.length > 0 && (
-        <div>
+        <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
           <table
             style={{
               width: "100%",
-              borderCollapse: "collapse",
+              borderCollapse: "separate",
+              borderSpacing: 0,
               fontSize: 13,
+              // The global `table { overflow: hidden }` rule (index.css) makes
+              // the table its OWN sticky scroll-container, so sticky <th> pins
+              // to the table (which scrolls away) instead of the wrapper below.
+              // Override to visible so the headers pin to the scroll wrapper.
+              overflow: "visible",
             }}
           >
             <thead>

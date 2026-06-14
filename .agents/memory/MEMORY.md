@@ -31,6 +31,7 @@
 - [E-sign PDF render reliability](esign-pdf-render.md) — "Link not valid" was a client render crash, not a token bug: render only after canvas mounts, never swallow render errors; pin pdfjs-dist to v4 (v5 calls unshipped Map.getOrInsertComputed → throws in all browsers).
 - [External share tokens linkifier-safe](esign-share-token-linkifier.md) — emailed/QR URL tokens must be base62 (no base64url); trailing -/_ get stripped by linkifiers → 404 "invalid/expired".
 - [E-sign document tenancy](esign-tenancy.md) — e-sign docs are creator-private (school_id AND created_by); public /sign/:token is unauthenticated by design, gated by 192-bit token + race-safe 409.
+- [Sticky table headers](sticky-table-headers.md) — global `table { overflow: hidden }` captures sticky <th> so it pins to the table not your wrapper; override `overflow: visible` inline on that table.
 - [Embedded modal inner width](embedded-modal-inner-width.md) — adding an in-flow `embedded` mode to a fullscreen modal: fix HARDCODED inner widths too, not just the outer wrapper, or they overflow the narrower parent column.
 - [Demo/test-mode data isolation](demo-data-isolation.md) — synthetic rows sharing a prod table need a key prefix excluded from ALL real aggregation paths (not UI-only); clear-then-redraw in a tx; additive demo cols need a seed.ts ensure* boot migration.
 - [attendance_checkins createdAt timestamp](attendance-checkins-timestamp.md) — its createdAt is a real timestamp(Date), unlike text created_at on tardies/pbis_entries; filter by Date or the `day` TEXT column, not ISO strings.
