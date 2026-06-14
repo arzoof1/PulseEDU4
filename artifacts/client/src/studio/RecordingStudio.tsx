@@ -30,6 +30,10 @@ function fmt(sec: number): string {
 const page: React.CSSProperties = {
   position: "fixed",
   inset: 0,
+  // Sit above the app's global floating "?" help bubble (z-index ~1200) so it
+  // doesn't bleed through and cover the studio's own controls. The studio has
+  // its own "? Help" in the header.
+  zIndex: 2000,
   background: "#0b0f14",
   color: "#e5e7eb",
   display: "flex",
@@ -693,7 +697,14 @@ export default function RecordingStudio({
             Condense blank lines
           </label>
 
-          <span style={{ marginLeft: "auto", color: "#6b7280", fontSize: "0.75rem" }}>
+          <span
+            style={{
+              marginLeft: "auto",
+              color: "#facc15",
+              fontSize: "0.8rem",
+              fontWeight: 600,
+            }}
+          >
             Space play/pause · ↑/↓ speed · R record/stop
           </span>
         </div>
