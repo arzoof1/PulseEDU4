@@ -17,6 +17,7 @@ import * as pdfjsLib from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import mammoth from "mammoth";
 import { authFetch } from "../lib/authToken";
+import RecordingStudio from "../studio/RecordingStudio";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -384,6 +385,9 @@ function CreateTab() {
   const dictationBaseRef = useRef("");
   const finalTranscriptRef = useRef("");
   const speechSupported = getSpeechRecognitionCtor() !== null;
+  const [studioOpen, setStudioOpen] = useState(false);
+  const [studioScript, setStudioScript] = useState("");
+  const [videoReady, setVideoReady] = useState(false);
 
   async function generate() {
     if (!roughInput.trim()) {
@@ -608,9 +612,22 @@ function CreateTab() {
         </label>
       </div>
 
-      <button className="btn primary" onClick={() => void generate()} disabled={generating}>
-        {generating ? "Generating…" : output ? "Regenerate" : "Generate draft"}
-      </button>
+      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+        <button className="btn primary" onClick={() => void generate()} disabled={generating}>
+          {generating ? "Generating…" : output ? "Regenerate" : "Generate draft"}
+        </button>
+        <button
+          className="btn"
+          type="button"
+          onClick={() => {
+            setStudioScript(output || roughInput);
+            setStudioOpen(true);
+          }}
+          title="Open the video recording studio with a teleprompter"
+        >
+          Record a video
+        </button>
+      </div>
 
       {error && (
         <p style={{ color: "var(--danger, #b91c1c)", marginTop: "0.75rem" }}>{error}</p>
@@ -650,12 +667,37 @@ function CreateTab() {
               marginTop: "0.5rem",
             }}
           />
-          <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+          <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem", flexWrap: "wrap" }}>
             <button className="btn" onClick={() => void copy()}>
               {copied ? "Copied!" : "Copy to clipboard"}
             </button>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => {
+                setStudioScript(output);
+                setStudioOpen(true);
+              }}
+              title="Read this draft on camera with a teleprompter"
+            >
+              Record a video with this script
+            </button>
           </div>
         </div>
+      )}
+
+      {videoReady && (
+        <p style={{ color: "var(--text-subtle)", marginTop: "0.75rem", fontSize: "0.85rem" }}>
+          Video recorded and ready — sending it to families arrives in the next update.
+        </p>
+      )}
+
+      {studioOpen && (
+        <RecordingStudio
+          initialScript={studioScript}
+          onClose={() => setStudioOpen(false)}
+          onKeepTake={() => setVideoReady(true)}
+        />
       )}
     </section>
   );
