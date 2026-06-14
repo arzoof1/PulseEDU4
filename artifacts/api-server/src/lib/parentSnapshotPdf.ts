@@ -93,6 +93,7 @@ function drawDocument(
   drawHeader(doc, s, opts);
   drawIdentityStrip(doc, s);
 
+  if (sec.attendance || sec.hallPasses) drawLostInstructionBlock(doc, s);
   if (sec.recognition) drawRecognitionBlock(doc, s);
   if (sec.attendance || sec.hallPasses) drawAttendanceBlock(doc, s);
   if (sec.accommodations) drawAccommodationsBlock(doc, s);
@@ -290,6 +291,49 @@ function drawRecognitionBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
   }
 }
 
+// ---------- Lost Instructional Time ----------
+function drawLostInstructionBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
+  sectionTitle(doc, "Lost Instructional Time (this school year)");
+  const li = s.lostInstruction;
+  const stats: Array<{ label: string; value: string; color: string }> = [];
+  stats.push({
+    label: "Total lost",
+    value: `${li.totalMinutes} min`,
+    color: li.totalMinutes === 0 ? COLORS.positive : COLORS.warn,
+  });
+  if (s.sectionsAvailable.hallPasses) {
+    stats.push({
+      label: `Hall passes · ${li.hallPasses.count}`,
+      value: `${li.hallPasses.minutes} min`,
+      color: COLORS.muted,
+    });
+  }
+  if (s.sectionsAvailable.attendance) {
+    stats.push({
+      label: `Tardies · ${li.tardies.count}`,
+      value: `${li.tardies.minutes} min`,
+      color: COLORS.muted,
+    });
+    stats.push({
+      label: `Absences · ${li.absences.count}`,
+      value: `${li.absences.minutes} min`,
+      color: COLORS.muted,
+    });
+  }
+  drawStatRow(doc, stats);
+  if (s.sectionsAvailable.attendance) {
+    doc.moveDown(0.2);
+    doc
+      .fontSize(8)
+      .font("Helvetica")
+      .fillColor(COLORS.muted)
+      .text(
+        "Absences are estimated from class periods with no door-kiosk check-in, not official daily attendance.",
+      );
+    doc.fillColor(COLORS.text);
+  }
+}
+
 // ---------- Attendance / Hall passes ----------
 function drawAttendanceBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
   sectionTitle(doc, "Attendance & Hall Passes");
@@ -303,16 +347,6 @@ function drawAttendanceBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
     stats.push({
       label: "Check-ins (this wk)",
       value: String(s.attendance.checkInsThisWeek),
-      color: COLORS.muted,
-    });
-    stats.push({
-      label: "Tardies (YTD)",
-      value: String(s.attendance.tardiesYtd),
-      color: s.attendance.tardiesYtd === 0 ? COLORS.positive : COLORS.warn,
-    });
-    stats.push({
-      label: "Lost instr (YTD)",
-      value: `${s.attendance.lostInstructionMinutesYtd} min`,
       color: COLORS.muted,
     });
     // Aggregate attendance metrics mirroring the parent Dashboard.

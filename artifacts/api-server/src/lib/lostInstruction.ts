@@ -16,6 +16,11 @@ import { DEFAULT_SCHOOL_TZ } from "./schoolYear.js";
 // mistyped/late log from inflating the total with an unbounded value.
 const DEFAULT_PERIOD_CAP_MIN = 90;
 
+// Cap (minutes) for a single hall pass. A pass left open (student forgot
+// to check back in) shouldn't bill a whole day of lost instruction, so a
+// single pass contributes at most this many minutes.
+const HALL_PASS_CAP_MIN = 240;
+
 export interface PeriodWindow {
   startMin: number;
   // Minutes from start to end; null when the schedule lacks a sane end
@@ -75,6 +80,31 @@ export async function loadDefaultPeriodWindows(
     out.set(p.periodNumber, { startMin, lengthMin });
   }
   return out;
+}
+
+// Instructional minutes attributable to a single period when a student
+// is absent for it: the period's length, or the fallback cap when the
+// schedule lacks a sane end time.
+export function periodLengthMinutes(w: PeriodWindow): number {
+  return w.lengthMin ?? DEFAULT_PERIOD_CAP_MIN;
+}
+
+// Minutes a single hall pass kept a student out of class = (return time)
+// − (checkout time), clamped to [0, HALL_PASS_CAP_MIN]. Returns null when
+// the pass never ended (no return logged) so callers can skip it rather
+// than guess a duration.
+export function hallPassLostMinutes(
+  createdAtIso: string,
+  endedAtIso: string | null,
+): number | null {
+  if (!endedAtIso) return null;
+  const a = new Date(createdAtIso).getTime();
+  const b = new Date(endedAtIso).getTime();
+  if (Number.isNaN(a) || Number.isNaN(b)) return null;
+  let m = Math.round((b - a) / 60000);
+  if (m < 0) m = 0;
+  if (m > HALL_PASS_CAP_MIN) m = HALL_PASS_CAP_MIN;
+  return m;
 }
 
 const minuteFmtCache = new Map<string, Intl.DateTimeFormat>();

@@ -87,11 +87,15 @@ interface Snapshot {
       oneWay?: boolean;
     }>;
   };
+  lostInstruction: {
+    hallPasses: { count: number; minutes: number };
+    tardies: { count: number; minutes: number };
+    absences: { count: number; minutes: number };
+    totalMinutes: number;
+  };
   attendance: {
     tardiesThisWeek: number;
     checkInsThisWeek: number;
-    tardiesYtd: number;
-    lostInstructionMinutesYtd: number;
     pct: {
       ytd: { presentDays: number; totalDays: number; pct: number } | null;
       last30: { presentDays: number; totalDays: number; pct: number } | null;
@@ -647,6 +651,73 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
         )}
       </div>
 
+      {/* Lost Instructional Time — pinned to the top. Grand total plus a
+          per-source breakdown (hall passes / tardies / absences), all
+          school-year-to-date. Each row respects its own section toggle:
+          hall passes hide with the Hall Passes section, tardies + absences
+          with the Attendance section, and the grand total only sums the
+          rows that are visible. Absences are KIOSK-DERIVED (periods with no
+          door-kiosk check-in), not official daily attendance. */}
+      {(sec.hallPasses || sec.attendance) && (
+        <Section
+          title="Lost Instructional Time"
+          icon={<Clock className="h-4 w-4 text-rose-600" />}
+        >
+          <div className="rounded-lg border border-rose-100 bg-rose-50/60 p-4 mb-3">
+            <div className="text-[10px] uppercase tracking-wide text-rose-700/80">
+              Total this school year
+            </div>
+            <div className="text-3xl font-bold tabular-nums text-rose-700">
+              {snapshot.lostInstruction.totalMinutes} min
+            </div>
+            <div className="text-[11px] text-slate-500">
+              estimated instruction missed
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            {sec.hallPasses && (
+              <AttendanceTile
+                label="Hall passes"
+                value={`${snapshot.lostInstruction.hallPasses.minutes} min`}
+                sub={`${snapshot.lostInstruction.hallPasses.count} ${
+                  snapshot.lostInstruction.hallPasses.count === 1
+                    ? "pass"
+                    : "passes"
+                }`}
+              />
+            )}
+            {sec.attendance && (
+              <AttendanceTile
+                label="Tardies"
+                value={`${snapshot.lostInstruction.tardies.minutes} min`}
+                sub={`${snapshot.lostInstruction.tardies.count} ${
+                  snapshot.lostInstruction.tardies.count === 1
+                    ? "tardy"
+                    : "tardies"
+                }`}
+              />
+            )}
+            {sec.attendance && (
+              <AttendanceTile
+                label="Absences"
+                value={`${snapshot.lostInstruction.absences.minutes} min`}
+                sub={`${snapshot.lostInstruction.absences.count} ${
+                  snapshot.lostInstruction.absences.count === 1
+                    ? "period missed"
+                    : "periods missed"
+                }`}
+              />
+            )}
+          </div>
+          {sec.attendance && (
+            <p className="text-[11px] text-slate-400 mt-2">
+              Absences are estimated from class periods with no door-kiosk
+              check-in, not official daily attendance.
+            </p>
+          )}
+        </Section>
+      )}
+
       {/* Recognition */}
       {sec.recognition && (
         <Section
@@ -698,24 +769,6 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
           title="Attendance"
           icon={<Calendar className="h-4 w-4 text-orange-600" />}
         >
-          {/* School-year-to-date tardy totals — always shown when the
-              attendance section is visible (count works even without a
-              bell schedule; lost minutes are 0 until one is configured). */}
-          <div className="grid grid-cols-2 gap-2 mb-4">
-            <AttendanceTile
-              label="Tardies · YTD"
-              value={`${snapshot.attendance.tardiesYtd}`}
-              sub="this school year"
-              accent={
-                snapshot.attendance.tardiesYtd === 0 ? "emerald" : "slate"
-              }
-            />
-            <AttendanceTile
-              label="Lost instruction · YTD"
-              value={`${snapshot.attendance.lostInstructionMinutesYtd} min`}
-              sub="time after the bell"
-            />
-          </div>
           {/* Aggregate tiles. Attendance % (YTD + 30d) shows whenever
               any attendance-day data exists. On-time streak tiles only
               appear when the school has a default bell schedule with

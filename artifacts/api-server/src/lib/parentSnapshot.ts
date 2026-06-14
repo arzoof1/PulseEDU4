@@ -42,6 +42,8 @@ import { loadRestroomDestinationNames } from "./oneWayPass.js";
 import {
   loadDefaultPeriodWindows,
   tardyLostMinutes,
+  hallPassLostMinutes,
+  periodLengthMinutes,
 } from "./lostInstruction.js";
 
 // Returns the YYYY-MM-DD bounds of the current school year. The cutover
@@ -121,16 +123,21 @@ export interface ParentSnapshot {
       oneWay: boolean;
     }>;
   };
+  // School-year-to-date "Lost Instructional Time" summary, surfaced at the
+  // TOP of the parent portal. Three contributors, each with a count and the
+  // minutes of instruction lost, plus a grand total. Pieces whose parent
+  // section is hidden are zeroed (and excluded from `totalMinutes`). See the
+  // computation block for the definitions — note ABSENCES are kiosk-derived
+  // (class periods with no door-kiosk check-in), not official SIS attendance.
+  lostInstruction: {
+    hallPasses: { count: number; minutes: number };
+    tardies: { count: number; minutes: number };
+    absences: { count: number; minutes: number };
+    totalMinutes: number;
+  };
   attendance: {
     tardiesThisWeek: number;
     checkInsThisWeek: number;
-    // School-year-to-date tardy totals for this student. `tardiesYtd` is
-    // every 'tardy' entry logged this SY; `lostInstructionMinutesYtd` sums
-    // each tardy's lateness (check-in time − scheduled period start, from
-    // the default bell schedule). Minutes are 0 when the school has no
-    // default bell schedule configured (count still works).
-    tardiesYtd: number;
-    lostInstructionMinutesYtd: number;
     // Aggregated attendance %. `null` when the window has zero logged
     // school days for the student (avoids showing a meaningless "0%").
     // `present` counts attendance_day rows with status='present' OR
@@ -683,13 +690,50 @@ export async function buildParentSnapshot(
     }
   }
 
-  // ----- SY-to-date tardy totals + lost instruction (this student) -----
-  // Mirrors the staff Hall Passes tardy summary: a YTD count plus summed
-  // lateness minutes (check-in time − scheduled period start). The count
-  // works even with no default bell schedule; minutes need the schedule.
+  // ----- Lost Instructional Time (top-of-portal SY-to-date summary) -----
+  // Three contributors, all school-year-to-date, per child. Each piece is
+  // gated on its parent section toggle so a hidden section never leaks a
+  // count/minutes into this summary or its grand total.
+  //  • Hall passes — minutes out of class (return − checkout, capped).
+  //  • Tardies     — lateness minutes (check-in − scheduled period start).
+  //  • Absences    — KIOSK-DERIVED: class periods the student never scanned
+  //    into at a door kiosk. "Expected" periods are the (day, period) slots
+  //    where the attendance module actually ran for the school (some student
+  //    checked in) AND the period is on the default bell schedule; each is
+  //    valued by that period's length. This is an estimate, NOT official SIS
+  //    attendance — it over-counts when kiosks aren't run every period.
+  let hpLostCount = 0;
+  let hpLostMinutes = 0;
+  if (sectionsAvailable.hallPasses) {
+    const syPasses = await db
+      .select({
+        createdAt: hallPassesTable.createdAt,
+        endedAt: hallPassesTable.endedAt,
+      })
+      .from(hallPassesTable)
+      .where(
+        and(
+          eq(hallPassesTable.schoolId, student.schoolId),
+          eq(hallPassesTable.studentId, student.studentId),
+          gte(hallPassesTable.createdAt, syStartIso),
+          lt(hallPassesTable.createdAt, syEndIso),
+        ),
+      );
+    hpLostCount = syPasses.length;
+    for (const p of syPasses) {
+      const m = hallPassLostMinutes(p.createdAt, p.endedAt);
+      if (m != null) hpLostMinutes += m;
+    }
+  }
+
   let tardiesYtd = 0;
   let lostInstructionMinutesYtd = 0;
+  let absenceCount = 0;
+  let absenceMinutes = 0;
   if (sectionsAvailable.attendance) {
+    const windows = await loadDefaultPeriodWindows(student.schoolId);
+
+    // Tardies — count works even with no bell schedule; minutes need it.
     const syTardyRows = await db
       .select({
         createdAt: tardiesTable.createdAt,
@@ -706,17 +750,67 @@ export async function buildParentSnapshot(
         ),
       );
     tardiesYtd = syTardyRows.length;
-    if (syTardyRows.length > 0) {
-      const windows = await loadDefaultPeriodWindows(student.schoolId);
-      if (windows.size > 0) {
-        const tz = await getSchoolTimezone(student.schoolId);
-        for (const t of syTardyRows) {
-          const lm = tardyLostMinutes(windows, t.period, t.createdAt, tz);
-          if (lm != null) lostInstructionMinutesYtd += lm;
+    if (syTardyRows.length > 0 && windows.size > 0) {
+      const tz = await getSchoolTimezone(student.schoolId);
+      for (const t of syTardyRows) {
+        const lm = tardyLostMinutes(windows, t.period, t.createdAt, tz);
+        if (lm != null) lostInstructionMinutesYtd += lm;
+      }
+    }
+
+    // Absences — only computable once a bell schedule exists (to value the
+    // missed minutes) AND the attendance module has actually run this SY.
+    if (windows.size > 0) {
+      const operatingSlots = await db
+        .selectDistinct({
+          day: attendanceCheckinsTable.day,
+          periodNumber: attendanceCheckinsTable.periodNumber,
+        })
+        .from(attendanceCheckinsTable)
+        .where(
+          and(
+            eq(attendanceCheckinsTable.schoolId, student.schoolId),
+            eq(attendanceCheckinsTable.kind, "checkin"),
+            gte(attendanceCheckinsTable.day, syStartIso),
+            lt(attendanceCheckinsTable.day, syEndIso),
+          ),
+        );
+      if (operatingSlots.length > 0) {
+        const studentSlots = await db
+          .selectDistinct({
+            day: attendanceCheckinsTable.day,
+            periodNumber: attendanceCheckinsTable.periodNumber,
+          })
+          .from(attendanceCheckinsTable)
+          .where(
+            and(
+              eq(attendanceCheckinsTable.schoolId, student.schoolId),
+              eq(attendanceCheckinsTable.studentId, student.studentId),
+              eq(attendanceCheckinsTable.kind, "checkin"),
+              gte(attendanceCheckinsTable.day, syStartIso),
+              lt(attendanceCheckinsTable.day, syEndIso),
+            ),
+          );
+        const present = new Set(
+          studentSlots.map((r) => `${r.day}|${r.periodNumber}`),
+        );
+        for (const slot of operatingSlots) {
+          const w = windows.get(slot.periodNumber);
+          if (!w) continue; // off-schedule / non-instructional period
+          if (present.has(`${slot.day}|${slot.periodNumber}`)) continue;
+          absenceCount += 1;
+          absenceMinutes += periodLengthMinutes(w);
         }
       }
     }
   }
+
+  const lostInstruction = {
+    hallPasses: { count: hpLostCount, minutes: hpLostMinutes },
+    tardies: { count: tardiesYtd, minutes: lostInstructionMinutesYtd },
+    absences: { count: absenceCount, minutes: absenceMinutes },
+    totalMinutes: hpLostMinutes + lostInstructionMinutesYtd + absenceMinutes,
+  };
 
   // ----- Accommodations -----
   let accommodations: Array<{ id: number; name: string; category: string }> = [];
@@ -1040,11 +1134,10 @@ export async function buildParentSnapshot(
           oneWay: !restroomNames.has(r.destination),
         })),
       },
+      lostInstruction,
       attendance: {
         tardiesThisWeek: tardyThisWeek,
         checkInsThisWeek: checkInThisWeek,
-        tardiesYtd,
-        lostInstructionMinutesYtd,
         pct: attendancePct,
         onTimeStreak,
         onTimeArrivals,
