@@ -240,8 +240,13 @@ export default function RecordingStudio({
     if (distance < 1) return;
 
     const duration = (distance / SCROLL_BASE_SPEED) * 1000;
+    // translate3d (not translateY) forces the element onto its own GPU layer so
+    // the animation is driven by the COMPOSITOR thread. This is the difference
+    // that matters: the staff app underneath keeps re-rendering on the main
+    // thread (plain setInterval polling), and a main-thread animation visibly
+    // pauses then jumps to catch up. A composited transform ignores that churn.
     const anim = inner.animate(
-      [{ transform: "translateY(0px)" }, { transform: `translateY(${-distance}px)` }],
+      [{ transform: "translate3d(0,0,0)" }, { transform: `translate3d(0,${-distance}px,0)` }],
       { duration, easing: "linear", fill: "both" },
     );
     anim.playbackRate = speed / SCROLL_BASE_SPEED;
@@ -565,6 +570,8 @@ export default function RecordingStudio({
                 marginLeft: "auto",
                 marginRight: "auto",
                 willChange: "transform",
+                backfaceVisibility: "hidden",
+                transform: "translateZ(0)",
               }}
             >
               {hasScript ? displayScript : "No script yet — use “Edit script” to add one, or record freely."}
