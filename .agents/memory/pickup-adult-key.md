@@ -51,6 +51,16 @@ grouping.
 
 - **No FLEID on tags/office strip** — `local_sis_id` only.
 
+- **Hang tag = ONE PER ADULT, not one per (student, adult).** The hang-tag
+  PDF loader groups active auths by `tagGroupKey` (adultKey → `p:parentId` →
+  `a:id` fallback) and emits ONE tag per adult listing every child that adult
+  picks up (name + grade). Representative code = the group's LOWEST base; the QR
+  encodes that one full code (the curb resolver re-expands it to all siblings
+  via adultKey, so any of the adult's codes works). The big code + circled
+  letter is the hero of the layout. A passed `authIds` filter selects whole
+  GROUPS only (never partial families). **Why:** matches the curb's
+  deliver-to-many model — one tag per car, not one slip per child.
+
 ## Legacy letterless-code upgrade (lives in bulk-assign)
 
 Rows created before the letter scheme are `active`, `letter IS NULL`, with a

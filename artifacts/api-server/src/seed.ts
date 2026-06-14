@@ -6614,6 +6614,167 @@ export async function ensurePickupSchema(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// ensurePickupDemoFamily — seed showcase families for the family hang-tag PDF
+//
+// Creates a handful of demo families on the demo school (SCHOOL_ID 1) so the
+// redesigned "one family tag per adult" PDF has something realistic to show:
+//   • Rivera   — 3 siblings, TWO guardians (Mom → A, Dad → B): shows the
+//                circled-letter scheme + multi-sibling grouping.
+//   • Brooks   — 2 siblings, ONE guardian (Mom → A): plain two-kid family.
+//   • Coleman  — 1 student, ONE guardian (Dad → A): plain single-kid family.
+// None are restricted, so the tags render clean (no red NO-CONTACT markers).
+//
+// Each guardian is written as a shared SIS emergency contact across that
+// family's children (same name/relationship/phone), so the school-wide
+// bulk-assign re-derives the SAME adult_key and treats these rows as already
+// issued (never double-mints). adult_key is computed to byte-match
+// adultKeyFor() in routes/pickup.ts: `c:<lower name>|<lower rel>|<digits>`.
+//
+// Idempotent PER FAMILY: a family is skipped when its primary guardian's
+// contact already exists on the school. Students already carrying one of our
+// demo guardians are excluded from selection so families never overlap.
+// ---------------------------------------------------------------------------
+type DemoGuardian = {
+  name: string;
+  relationship: string;
+  phone: string;
+  slot: number;
+  letter: string;
+};
+type DemoFamily = { kids: number; guardians: DemoGuardian[] };
+
+export async function ensurePickupDemoFamily(): Promise<void> {
+  const SCHOOL_ID = 1;
+
+  // Only seed the demo school (mirrors the school_accommodations demo guard).
+  const demoCheck = await db.execute<{ c: number }>(sql`
+    SELECT COUNT(*)::int AS c FROM school_accommodations WHERE school_id = ${SCHOOL_ID}
+  `);
+  if (!demoCheck.rows[0] || demoCheck.rows[0].c === 0) return;
+
+  const families: DemoFamily[] = [
+    {
+      kids: 3,
+      guardians: [
+        { name: "Maria Rivera", relationship: "Mother", phone: "(555) 010-1100", slot: 1, letter: "A" },
+        { name: "David Rivera", relationship: "Father", phone: "(555) 010-1200", slot: 2, letter: "B" },
+      ],
+    },
+    {
+      kids: 2,
+      guardians: [
+        { name: "Tasha Brooks", relationship: "Mother", phone: "(555) 010-2100", slot: 1, letter: "A" },
+      ],
+    },
+    {
+      kids: 1,
+      guardians: [
+        { name: "Marcus Coleman", relationship: "Father", phone: "(555) 010-3100", slot: 1, letter: "A" },
+      ],
+    },
+  ];
+
+  const adultKey = (g: DemoGuardian): string =>
+    `c:${g.name.trim().toLowerCase().replace(/\s+/g, " ")}|${g.relationship
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ")}|${g.phone.replace(/\D+/g, "")}`;
+
+  // Which families still need seeding? (primary guardian contact absent)
+  const allGuardianNames = families.flatMap((f) => f.guardians.map((g) => g.name));
+  const presentRes = await db.execute<{ contact_name: string }>(sql`
+    SELECT DISTINCT contact_name FROM student_emergency_contacts
+    WHERE school_id = ${SCHOOL_ID}
+      AND contact_name IN (${sql.join(allGuardianNames.map((n) => sql`${n}`), sql`, `)})
+  `);
+  const presentNames = new Set(presentRes.rows.map((r) => r.contact_name));
+  const toSeed = families.filter((f) => !presentNames.has(f.guardians[0]!.name));
+  if (toSeed.length === 0) return;
+
+  const totalKids = toSeed.reduce((n, f) => n + f.kids, 0);
+
+  // Pick distinct students, excluding any already carrying a demo guardian
+  // (so re-runs that add a new family don't reuse another family's kids).
+  const excludeKeys = families.flatMap((f) => f.guardians.map(adultKey));
+  const studentsRes = await db.execute<{
+    id: number;
+    student_id: string;
+    grade: number;
+  }>(sql`
+    SELECT s.id, s.student_id, s.grade
+    FROM students s
+    WHERE s.school_id = ${SCHOOL_ID}
+      AND s.id NOT IN (
+        SELECT DISTINCT a.student_id FROM student_pickup_authorizations a
+        WHERE a.school_id = ${SCHOOL_ID}
+          AND a.adult_key IN (${sql.join(excludeKeys.map((k) => sql`${k}`), sql`, `)})
+      )
+    ORDER BY s.grade, s.id
+    LIMIT ${totalKids}
+  `);
+  const pool = studentsRes.rows;
+  if (pool.length < totalKids) {
+    logger.info(
+      { schoolId: SCHOOL_ID, needed: totalKids, available: pool.length },
+      "[seed] not enough students for pickup demo families; skipping",
+    );
+    return;
+  }
+
+  // Allocate fresh bases above the school's current max (>= 1001) so we never
+  // collide with existing/printed tags or what bulk-assign would mint.
+  const maxRes = await db.execute<{ m: number }>(sql`
+    SELECT COALESCE(MAX(NULLIF(base_number, '')::int), 1000) AS m
+    FROM student_pickup_authorizations WHERE school_id = ${SCHOOL_ID}
+  `);
+  let nextBase = Math.max(1000, Number(maxRes.rows[0]?.m ?? 1000)) + 1;
+
+  let cursor = 0;
+  await db.transaction(async (tx) => {
+    for (const fam of toSeed) {
+      const kids = pool.slice(cursor, cursor + fam.kids);
+      cursor += fam.kids;
+      for (const stu of kids) {
+        const base = String(nextBase++);
+        // Clear any existing active codes so the family tag is clean.
+        await tx.execute(sql`
+          UPDATE student_pickup_authorizations
+          SET active = FALSE, deactivated_at = NOW()
+          WHERE school_id = ${SCHOOL_ID} AND student_id = ${stu.id} AND active = TRUE
+        `);
+        for (const g of fam.guardians) {
+          // Shared SIS contact (lets bulk-assign re-derive the same adult_key).
+          await tx.execute(sql`
+            INSERT INTO student_emergency_contacts
+              (school_id, student_id, slot, contact_name, relationship, phone, phone_label)
+            VALUES
+              (${SCHOOL_ID}, ${stu.student_id}, ${g.slot}, ${g.name}, ${g.relationship}, ${g.phone}, 'Cell')
+            ON CONFLICT (school_id, student_id, slot) DO UPDATE SET
+              contact_name = EXCLUDED.contact_name,
+              relationship = EXCLUDED.relationship,
+              phone = EXCLUDED.phone,
+              phone_label = EXCLUDED.phone_label
+          `);
+          await tx.execute(sql`
+            INSERT INTO student_pickup_authorizations
+              (school_id, student_id, parent_id, guardian_label, contact_slot,
+               base_number, letter, adult_key, pickup_number, restricted_from, active)
+            VALUES
+              (${SCHOOL_ID}, ${stu.id}, NULL, ${g.name}, ${g.slot},
+               ${base}, ${g.letter}, ${adultKey(g)}, ${base + g.letter}, FALSE, TRUE)
+          `);
+        }
+      }
+    }
+  });
+
+  logger.info(
+    { schoolId: SCHOOL_ID, families: toSeed.length, students: totalKids },
+    "[seed] ensured pickup demo families for hang-tag showcase",
+  );
+}
+
+// ---------------------------------------------------------------------------
 // AST (Alternate Schedule Time) schema. HCTA-contract earn/use bank with
 // quarter-hour increments and a per-staff append-only ledger. See
 // lib/db/src/schema/staffAst.ts for the state machine. Idempotent on every

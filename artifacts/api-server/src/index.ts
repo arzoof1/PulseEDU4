@@ -27,6 +27,7 @@ import {
   seedStudentRetentionsIfEmpty,
   ensureDataImporterRollbackSchema,
   ensurePickupSchema,
+  ensurePickupDemoFamily,
   ensureAstSchema,
   ensureKioskCardsSchema,
   ensureHallPassPriorityBypassColumn,
@@ -227,6 +228,7 @@ async function runSeed(): Promise<void> {
   // manual_roster_upload_enabled toggle. Idempotent — safe on every boot.
   await ensureDataImporterRollbackSchema();
   await ensurePickupSchema();
+  await ensurePickupDemoFamily();
   await ensureAstSchema();
   await ensureFeaturePlansSchema();
   // Phase 1 — Hall pass kiosk activation cards (per-teacher enrollment
