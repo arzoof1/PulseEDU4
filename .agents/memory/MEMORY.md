@@ -42,3 +42,4 @@
 
 - [Staff PATCH batched gating](staff-patch-batched-gating.md) — batched PATCH /admin/staff/:id must OMIT role flags/sensitive caps actor cant set AND self-revoked caps, or one bad field sinks the whole save.
 - [Parent-route school scoping](parent-route-school-scoping.md) — parentId-authed routes must STILL add explicit school_id predicate (resolve from parents.school_id); don't rely on parentId being globally unique.
+- [Family Messages attribution](family-messages-attribution.md) — deliver to many, attribute to one: ack/Power Reader rolls up to ONE primary (portal account); SIS adapter feeds no guardian emails today.

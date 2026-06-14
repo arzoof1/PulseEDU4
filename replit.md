@@ -84,6 +84,29 @@ of `docs/shipped.md`.
 
 ### Open work
 
+- **Family Messages — multi-contact email (Phase 2).** Phase 1
+  SHIPPED: Core Team broadcast → Parent Portal inbox + Resend email
+  nudge; audience whole-school/grade/house/CSV(local_sis_id);
+  Sent→Reached→Got it counters; derived **Power Reader** badge
+  (non-points). Core design decision to preserve: **deliver to many,
+  attribute to one** — delivery may fan out to every authorized
+  contact, but acknowledgment/Power Reader rolls up to ONE primary
+  per family (today = the portal account, since `parents` is already
+  an email-keyed adult identity grouped across siblings via
+  `parent_students`). Phase 2 = true multi-contact email, deferred
+  because **ClassLink/the SIS adapter does not feed guardian emails
+  today** (the `RosterAdapter` only pulls staff/students/rooms;
+  `student_emergency_contacts` holds phone only, no email). To build:
+  (a) extend the SIS adapter to pull guardian contacts WITH email +
+  a primary/authorized flag; (b) add `email` + `is_primary` /
+  `portal_authorized` columns to `student_emergency_contacts` (or a
+  new `student_contacts`); (c) fan delivery out to all authorized
+  contact emails; (d) keep attribution rolling up to the one primary
+  so the badge stays a single family-level signal. Interim option if
+  needed sooner: let staff add extra contact emails manually / via
+  the Data Importer and mark one primary (no ClassLink dependency,
+  but manual upkeep).
+
 - **E-sign signing campaigns (bulk send → per-student return).**
   Idea only (no build yet). Today e-sign is 1 doc = 1 link = 1
   signer with NO student tie by design. For field-trip-style
