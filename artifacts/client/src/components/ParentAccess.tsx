@@ -502,10 +502,19 @@ async function previewAsParentOf(studentRowId: number): Promise<void> {
       alert("Could not open preview: " + text);
       return;
     }
+    // The preview tab can't see the staff session cookie (blocked in the
+    // Replit preview iframe) and has its own sessionStorage, so the swapped
+    // parent cookie session alone leaves it at the login gate. Hand the parent
+    // Bearer token to the new tab via the URL hash; ParentApp consumes it on
+    // boot and strips it from the URL.
+    const body = (await r.json().catch(() => ({}))) as { authToken?: string };
+    const dest = body.authToken
+      ? `/parent#pt=${encodeURIComponent(body.authToken)}`
+      : "/parent";
     if (win) {
-      win.location.href = "/parent";
+      win.location.href = dest;
     } else {
-      window.location.href = "/parent";
+      window.location.href = dest;
     }
   } catch (err) {
     if (win) win.close();

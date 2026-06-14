@@ -7,6 +7,7 @@ import {
   staffTable,
 } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
+import { issueParentAuthToken } from "../lib/authToken.js";
 
 const router: IRouter = Router();
 
@@ -124,7 +125,15 @@ router.post(
           res.status(500).json({ error: "Could not save preview session" });
           return;
         }
-        res.json({ ok: true, redirectTo: "/parent" });
+        // Also mint a parent Bearer token. Inside the Replit preview iframe the
+        // session COOKIE is blocked, so the parent app authenticates off a
+        // Bearer token in sessionStorage (`pulseed.parentToken`). Hand it back
+        // so the staff client can pass it to the freshly opened preview tab.
+        res.json({
+          ok: true,
+          redirectTo: "/parent",
+          authToken: issueParentAuthToken(preview.id),
+        });
       });
     });
   },

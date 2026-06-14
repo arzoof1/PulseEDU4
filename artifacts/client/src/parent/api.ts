@@ -20,6 +20,31 @@ export function getParentToken(): string | null {
   }
 }
 
+// Staff "Preview as parent" hands the parent Bearer token to this freshly
+// opened tab via the URL hash (`#pt=<token>`), because the swapped session
+// COOKIE is blocked inside the Replit preview iframe and the new tab has its
+// own sessionStorage. Consume it once on module load — before ParentApp runs
+// its first auth check — then strip it from the URL so it isn't left in
+// history or shared on copy.
+function consumePreviewTokenFromHash() {
+  try {
+    const hash = window.location.hash || "";
+    const m = hash.match(/[#&]pt=([^&]+)/);
+    if (!m) return;
+    const token = decodeURIComponent(m[1]);
+    if (token) setParentToken(token);
+    const cleaned = hash.replace(/[#&]pt=[^&]+/, "").replace(/^#$/, "");
+    window.history.replaceState(
+      {},
+      "",
+      window.location.pathname + window.location.search + cleaned,
+    );
+  } catch {
+    /* ignore */
+  }
+}
+consumePreviewTokenFromHash();
+
 function buildHeaders(init: RequestInit): Headers {
   const headers = new Headers(init.headers ?? {});
   const t = getParentToken();

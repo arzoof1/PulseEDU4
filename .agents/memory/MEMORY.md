@@ -33,6 +33,7 @@
 - [External share tokens linkifier-safe](esign-share-token-linkifier.md) — emailed/QR URL tokens must be base62 (no base64url); trailing -/_ get stripped by linkifiers → 404 "invalid/expired".
 - [E-sign document tenancy](esign-tenancy.md) — e-sign docs are creator-private (school_id AND created_by); public /sign/:token is unauthenticated by design, gated by 192-bit token + race-safe 409.
 - [Attendance two systems](attendance-two-systems.md) — official student_attendance_day (drives %/ADA) vs kiosk attendance_checkins (drives streak + lost-instruction absences); status MUST be present|tardy|excused|unexcused (NOT absent_*).
+- [Preview-as-parent iframe auth](parent-preview-iframe-auth.md) — staff→parent "open new tab" needs a Bearer-token handoff via URL hash; cookie-swap alone gates because iframe blocks cookies + sessionStorage is per-tab.
 - [Sticky table headers](sticky-table-headers.md) — global `table { overflow: hidden }` captures sticky <th> so it pins to the table not your wrapper; override `overflow: visible` inline on that table.
 - [Embedded modal inner width](embedded-modal-inner-width.md) — adding an in-flow `embedded` mode to a fullscreen modal: fix HARDCODED inner widths too, not just the outer wrapper, or they overflow the narrower parent column.
 - [Demo/test-mode data isolation](demo-data-isolation.md) — synthetic rows sharing a prod table need a key prefix excluded from ALL real aggregation paths (not UI-only); clear-then-redraw in a tx; additive demo cols need a seed.ts ensure* boot migration.
