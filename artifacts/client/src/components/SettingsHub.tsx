@@ -25,7 +25,6 @@ export type SettingsTileId =
   | "house-logos"
   | "iss-settings"
   | "pickup"
-  | "pickup-tags"
   | "school-tours"
   | "event-tickets"
   | "e-sign"

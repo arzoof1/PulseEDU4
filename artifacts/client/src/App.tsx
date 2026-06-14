@@ -4985,6 +4985,7 @@ function App() {
     | "comp"
     | "compAdmin"
     | "compInsights"
+    | "pickupTags"
     | "classComposer"
     | "familyMessages"
     | "tileHome"
@@ -9746,9 +9747,13 @@ function App() {
       emoji: "🖥️",
       group: "admin",
     });
-    // Pickup Tags now lives as a Settings tile under Family & Signage
-    // (alongside Parent Pick-Up), so it is intentionally NOT added to the
-    // Tile Home launcher or the Quick Access sidebar.
+    add(canManagePickupTags, {
+      key: "pickupTags",
+      label: "Pickup Tags",
+      description: "Print car-rider and walker dismissal tags.",
+      emoji: "🎫",
+      group: "admin",
+    });
 
     return (
       <RoleProvider value={rolesFromAuthUser(authUser)}>
@@ -10451,10 +10456,18 @@ function App() {
               <span className="nav-icon">🚗</span>
               Pickup Line Viewer
             </a>
-            {/* Pickup Tags moved to Settings → Family & Signage (see the
-                "pickup-tags" tile) so the in-app printing surface lives
-                next to the Parent Pick-Up settings rather than the
-                Quick Access sidebar. */}
+            {/* Pickup Tags — in-app printing surface for office staff
+                and Core Team. Server gate is canManagePickup() in
+                lib/coreTeam.ts; canManagePickupTags above mirrors that
+                so teachers don't see this entry. Lives in the main app
+                shell (not /pickup/admin) so non-admins don't need to
+                bookmark a separate URL. */}
+            {canManagePickupTags &&
+              renderNavItem({
+                key: "pickupTags",
+                label: "Pickup Tags",
+                icon: "🖨️",
+              })}
             {/* Spotlight — anchored at the bottom of Quick Access by user
                 request so it reads as the "fun bonus" tool sitting under
                 the workhorse items. Custom standout button (not a regular
@@ -21029,7 +21042,7 @@ function App() {
         />
       )}
 
-      {activeSection === "settings" && canManagePickupTags && settingsTile === "pickup-tags" && (
+      {activeSection === "pickupTags" && canManagePickupTags && (
         <PickupTagsPanel />
       )}
 
@@ -21330,21 +21343,6 @@ function App() {
                 "Reconciliation cutoff, teacher release scope, kiosk URLs.",
               group: "family-signage",
             });
-            // Pickup Tags — in-app printing surface for car-rider/walker
-            // dismissal tags. Server gate is canManagePickup() in
-            // lib/coreTeam.ts; canManagePickupTags mirrors that so office
-            // staff and Core Team can reprint without the /pickup/admin URL.
-            // Moved here from the Quick Access sidebar / Tile Home launcher.
-            if (canManagePickupTags) {
-              tiles.push({
-                id: "pickup-tags",
-                icon: "🎫",
-                title: "Pickup Tags",
-                subtitle:
-                  "Print car-rider and walker dismissal tags.",
-                group: "family-signage",
-              });
-            }
             // School Tours — enrollment lead pipeline + public brag-page
             // editor. Visible to tour-notify staff (admin / Core Team /
             // counselors / confidential secretary / capTourNotify).
