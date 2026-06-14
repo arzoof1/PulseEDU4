@@ -38,6 +38,7 @@ import {
   ensureSchoolsTimezoneColumn,
   ensureStudentPhotoColumns,
   ensureOnTimeTestModeColumns,
+  ensureParentMessagesSchema,
   ensureStudentLocalSisIdBackfill,
   ensureStudentAccommodationsBackfill,
   ensureLocationAllowedDestinationsBackfill,
@@ -266,6 +267,10 @@ async function runSeed(): Promise<void> {
   // On-Time Attendance / Tardy Lottery TEST MODE columns (test loop +
   // simulated demo clock). Additive + idempotent.
   await ensureOnTimeTestModeColumns();
+  // Family Messages — admin → parent broadcast announcements with real
+  // acknowledge receipts (parent_messages + parent_message_recipients).
+  // Idempotent.
+  await ensureParentMessagesSchema();
   // Backfill local_sis_id from the FLEID for any students missing it
   // (legacy rows). Local SIS ID is the student-facing credential
   // everywhere in the app; FLEID stays internal for FAST joins.

@@ -35,6 +35,7 @@ import {
 import QRCode from "qrcode";
 import { Ticket } from "lucide-react";
 import { parentFetch, setParentToken, navigate, type ParentMe } from "./api";
+import FamilyMessages from "./FamilyMessages";
 
 interface Snapshot {
   parent: { displayName: string; email: string };
@@ -537,6 +538,11 @@ export default function Dashboard({ me }: { me: ParentMe }) {
             {pdfError}
           </div>
         )}
+
+        {/* Family Messages — school broadcasts. Family-scoped (not tied to the
+            active student), so it renders above the per-student snapshot and
+            stays visible while switching siblings. */}
+        <FamilyMessages />
 
         {loading && (
           <div className="text-sm text-slate-500 text-center py-12">

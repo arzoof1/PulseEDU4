@@ -18,6 +18,7 @@ import {
   HelpToggleButton,
 } from "./components/HowToUseHelp";
 import AdminHubPage from "./components/AdminHubPage";
+import FamilyMessagesHub from "./components/FamilyMessagesHub";
 import HelpAssistant from "./components/HelpAssistant";
 import { TileHome, type Tile as TileHomeTile } from "./pages/TileHome";
 import StaffAstPage from "./components/ast/StaffAstPage";
@@ -4144,7 +4145,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "behaviorReview",
   ],
   specialPrograms: ["accommodations", "ese"],
-  family: ["student", "parentAccess"],
+  family: ["student", "familyMessages", "parentAccess"],
   people: ["teacherRoster", "staffRoles"],
   // hallPassMgmt is reached via the Hall Passes admin tools; it has no
   // dedicated nav item so we anchor it to School Admin so the sidebar
@@ -4986,6 +4987,7 @@ function App() {
     | "compInsights"
     | "pickupTags"
     | "classComposer"
+    | "familyMessages"
     | "tileHome"
   >("hallPasses");
   // Tile Home is a full-screen launcher that takes over the viewport.
@@ -10704,6 +10706,13 @@ function App() {
                   renderNavItem({
                     key: "student",
                     label: "Family Communication",
+                    icon: IconUser,
+                  })}
+                {effectiveFeatures.FamilyComm &&
+                  isCoreTeamMember &&
+                  renderNavItem({
+                    key: "familyMessages",
+                    label: "Family Messages",
                     icon: IconUser,
                   })}
                 {canManageSettings && (
@@ -21740,6 +21749,14 @@ function App() {
           onBack={() => setActiveSection("insights")}
         />
       )}
+
+      {activeSection === "familyMessages" &&
+        effectiveFeatures.FamilyComm &&
+        isCoreTeamMember && (
+          <FamilyMessagesHub
+            grades={Array.from(new Set(students.map((s) => s.grade)))}
+          />
+        )}
 
       {activeSection === "insightsWatchlist" && (
         <InsightsWatchlist

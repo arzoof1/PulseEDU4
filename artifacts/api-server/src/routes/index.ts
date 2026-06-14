@@ -105,6 +105,7 @@ import toursRouter from "./tours";
 import ticketingRouter from "./ticketing";
 import parentTicketsRouter from "./parentTickets";
 import schoolGradeRouter from "./schoolGrade";
+import parentMessagesRouter from "./parentMessages";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -200,6 +201,13 @@ router.use(
   requireFeatureForParent("parentPortal"),
 );
 
+// Family Messages — Core-Team → parent broadcast. Staff compose/monitor
+// surface gated on the school's `familyComm` license; the parent-facing inbox
+// + acknowledge surface gated on the same license resolved from the parent's
+// school. Mounted ahead of parentMessagesRouter so the gate fires first.
+router.use("/family-messages", requireFeature("familyComm"));
+router.use("/parent/messages", requireFeatureForParent("familyComm"));
+
 router.use(parentEmailRouter);
 router.use(pulloutReasonsRouter);
 router.use(pulloutNoteTemplatesRouter);
@@ -272,5 +280,6 @@ router.use(helpAssistantRouter);
 router.use(toursRouter);
 router.use(ticketingRouter);
 router.use(schoolGradeRouter);
+router.use(parentMessagesRouter);
 
 export default router;

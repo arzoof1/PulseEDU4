@@ -126,3 +126,5 @@ export * from "./schoolGradeManualInputs";
 export * from "./schoolGradeSurveys";
 export * from "./attendanceCheckins";
 export * from "./onTimeLotteryDraws";
+
+export * from "./parentMessages";

@@ -416,6 +416,66 @@ export async function ensureHousesSchema() {
   `);
 }
 
+// -----------------------------------------------------------------------------
+// FAMILY MESSAGES: admin/Core-Team → parent broadcast announcements with real
+// acknowledge receipts. Idempotent CREATE TABLE IF NOT EXISTS at boot mirrors
+// the houses / MTSS pattern because drizzle-kit push refuses to apply these
+// non-interactively. Safe to re-run on every boot.
+// -----------------------------------------------------------------------------
+export async function ensureParentMessagesSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS parent_messages (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      created_by_staff_id INTEGER NOT NULL,
+      subject TEXT NOT NULL,
+      body TEXT NOT NULL,
+      attachment_object_key TEXT,
+      attachment_name TEXT,
+      attachment_type TEXT,
+      audience_type TEXT NOT NULL DEFAULT 'school',
+      audience_grades TEXT[],
+      audience_house_ids INTEGER[],
+      audience_student_ids INTEGER[],
+      email_nudge BOOLEAN NOT NULL DEFAULT TRUE,
+      total_recipients INTEGER NOT NULL DEFAULT 0,
+      reached_recipients INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS parent_messages_by_school
+      ON parent_messages (school_id, created_at)
+  `);
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS parent_message_recipients (
+      id SERIAL PRIMARY KEY,
+      message_id INTEGER NOT NULL,
+      school_id INTEGER NOT NULL,
+      recipient_key TEXT NOT NULL,
+      parent_id INTEGER,
+      email TEXT,
+      student_ids INTEGER[] NOT NULL DEFAULT '{}',
+      delivered_portal BOOLEAN NOT NULL DEFAULT FALSE,
+      delivered_email BOOLEAN NOT NULL DEFAULT FALSE,
+      acknowledged_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS parent_message_recipients_unique
+      ON parent_message_recipients (message_id, recipient_key)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS parent_message_recipients_by_message
+      ON parent_message_recipients (message_id)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS parent_message_recipients_by_parent
+      ON parent_message_recipients (school_id, parent_id)
+  `);
+}
+
 export async function seedHousesIfEmpty() {
   await ensureHousesSchema();
   const schools = await db.select().from(schoolsTable);
