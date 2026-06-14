@@ -166,10 +166,16 @@ router.post("/on-time/test/loop", requireCoreTeam, async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
   const enabled = Boolean((req.body as { enabled?: unknown })?.enabled);
-  await db
+  const result = await db
     .update(schoolSettingsTable)
     .set({ onTimeTestLoopEnabled: enabled })
     .where(eq(schoolSettingsTable.schoolId, schoolId));
+  // A blind UPDATE that matches zero rows (no school_settings row yet) would
+  // otherwise report success while the toggle silently stays off — surface it.
+  if (result.rowCount === 0) {
+    res.status(409).json({ error: "School settings not initialized" });
+    return;
+  }
   res.json({ ok: true, enabled });
 });
 

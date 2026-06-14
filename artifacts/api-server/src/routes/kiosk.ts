@@ -2251,6 +2251,13 @@ async function resolveAttendanceContext(token: unknown): Promise<
 
   const win = await loadAttendanceWindow(act.schoolId);
 
+  // Test loop is a self-contained admin demo: when its synthetic window is
+  // active (periodKey prefixed "testloop:") the kiosk must flip to Attendance
+  // mode even if the school hasn't turned the On-Time Attendance feature on —
+  // the whole point is to demo without any setup. In normal operation the
+  // periodKey is never "testloop:" so this never relaxes the real gate.
+  const isTestLoopWindow = win.periodKey?.startsWith("testloop:") ?? false;
+
   // Roster gate context: does the kiosk's teacher have a class for the
   // incoming period, and is it their planning period?
   let sectionId: number | null = null;
@@ -2277,7 +2284,7 @@ async function resolveAttendanceContext(token: unknown): Promise<
 
   return {
     act,
-    enabled: settings?.enabled ?? false,
+    enabled: (settings?.enabled ?? false) || isTestLoopWindow,
     maxPoints: settings?.maxPoints ?? 4,
     win,
     sectionId,
