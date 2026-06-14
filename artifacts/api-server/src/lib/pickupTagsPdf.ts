@@ -42,13 +42,32 @@ export interface PickupOfficeStripFamily {
   schoolName: string;
 }
 
-const PAGE_MARGIN = 36;
-const TAGS_PER_ROW = 2;
-const TAGS_PER_COL = 2;
+const PAGE_MARGIN = 36; // used by the office-reference strip only
 const PAGE_WIDTH = 612; // Letter, 8.5in x 72dpi
 const PAGE_HEIGHT = 792;
-const TAG_W = (PAGE_WIDTH - PAGE_MARGIN * 2) / TAGS_PER_ROW;
-const TAG_H = (PAGE_HEIGHT - PAGE_MARGIN * 2) / TAGS_PER_COL;
+
+// --- TG-0194 die-cut hang-tag stock geometry --------------------------------
+// 6 tags per Letter sheet: 3 columns x 2 rows, each cell 204 x 396 pt
+// (2.83in x 5.5in), edge-to-edge (no outer page margin). Each tag has a
+// punched hanging hole centered near the top and a diagonal "shoulder" cut on
+// the top-right corner. The numbers below were measured directly from the
+// supplied TG-0194 template (Y measured DOWN from each cell's top edge).
+const COLS = 3;
+const ROWS = 2;
+const CELL_W = PAGE_WIDTH / COLS; // 204
+const CELL_H = PAGE_HEIGHT / ROWS; // 396
+const TAGS_PER_PAGE = COLS * ROWS; // 6
+
+const HOLE_CX = CELL_W / 2; // 102 — hole is horizontally centered
+const HOLE_CY = 71.6; // hole center, from cell top
+const HOLE_R = 34.9;
+const SHOULDER_FROM = { x: 133.9, y: 88.16 }; // diagonal start (by the hole)
+const SHOULDER_TO = { x: CELL_W, y: 128.6 }; // diagonal end (right cut edge)
+// Reserve the whole top band (hole + diagonal shoulder) so nothing important
+// is punched through or trimmed away.
+const TOP_KEEPOUT = SHOULDER_TO.y + 10; // ~139
+const SIDE_PAD = 16;
+const BOTTOM_PAD = 16;
 
 const COLORS = {
   border: "#0f172a",
@@ -60,6 +79,7 @@ const COLORS = {
 
 export async function renderPickupTagsPdf(
   tags: PickupTagInput[],
+  opts: { drawGuides?: boolean } = {},
 ): Promise<Buffer> {
   // QR encodes the FULL code (base+letter) so one scan resolves the adult.
   const qrPngByCode = new Map<string, Buffer>();
@@ -69,25 +89,22 @@ export async function renderPickupTagsPdf(
         type: "png",
         errorCorrectionLevel: "M",
         margin: 0,
-        width: 200,
+        width: 220,
       });
       qrPngByCode.set(t.pickupNumber, png);
     }
   }
 
   return new Promise<Buffer>((resolve, reject) => {
+    // margin 0 — the die-cut cells run edge-to-edge, so a new page must not
+    // inherit pdfkit's default 72pt margin (it would shift the whole grid).
     const doc = new PDFDocument({
       size: "LETTER",
-      margins: {
-        top: PAGE_MARGIN,
-        bottom: PAGE_MARGIN,
-        left: PAGE_MARGIN,
-        right: PAGE_MARGIN,
-      },
+      margin: 0,
       info: {
         Title: "PulseEDU Pickup Tags",
         Author: "PulseEDU",
-        Subject: "Car-rider pickup tags",
+        Subject: "Car-rider pickup tags (TG-0194 hang-tag stock)",
       },
     });
     const chunks: Buffer[] = [];
@@ -97,13 +114,20 @@ export async function renderPickupTagsPdf(
 
     try {
       tags.forEach((tag, idx) => {
-        const slotOnPage = idx % (TAGS_PER_ROW * TAGS_PER_COL);
-        if (idx > 0 && slotOnPage === 0) doc.addPage();
-        const col = slotOnPage % TAGS_PER_ROW;
-        const row = Math.floor(slotOnPage / TAGS_PER_ROW);
-        const x = PAGE_MARGIN + col * TAG_W;
-        const y = PAGE_MARGIN + row * TAG_H;
-        drawTag(doc, x, y, tag, qrPngByCode.get(tag.pickupNumber)!);
+        const slot = idx % TAGS_PER_PAGE;
+        if (idx > 0 && slot === 0) doc.addPage();
+        const col = slot % COLS;
+        const row = Math.floor(slot / COLS);
+        const cellX = col * CELL_W;
+        const cellY = row * CELL_H;
+        drawTag(
+          doc,
+          cellX,
+          cellY,
+          tag,
+          qrPngByCode.get(tag.pickupNumber)!,
+          !!opts.drawGuides,
+        );
       });
       doc.end();
     } catch (err) {
@@ -114,38 +138,53 @@ export async function renderPickupTagsPdf(
 
 function drawTag(
   doc: PDFKit.PDFDocument,
-  x: number,
-  y: number,
+  cellX: number,
+  cellY: number,
   tag: PickupTagInput,
   qrPng: Buffer,
+  drawGuides: boolean,
 ) {
-  const pad = 12;
-  const borderColor = tag.restricted ? COLORS.restricted : COLORS.border;
-  doc
-    .save()
-    .lineWidth(tag.restricted ? 3 : 1.5)
-    .strokeColor(borderColor)
-    .roundedRect(x + 6, y + 6, TAG_W - 12, TAG_H - 12, 10)
-    .stroke()
-    .restore();
+  // Optional die-cut guides (cut border, hole, diagonal shoulder). OFF for
+  // pre-die-cut TG-0194 blanks; ON for proofing or for offices that print on
+  // plain stock and trim by hand.
+  if (drawGuides) {
+    doc
+      .save()
+      .lineWidth(0.5)
+      .strokeColor("#94a3b8")
+      .dash(2, { space: 1 });
+    doc.rect(cellX, cellY, CELL_W, CELL_H).stroke();
+    doc.circle(cellX + HOLE_CX, cellY + HOLE_CY, HOLE_R).stroke();
+    doc
+      .moveTo(cellX + SHOULDER_FROM.x, cellY + SHOULDER_FROM.y)
+      .lineTo(cellX + SHOULDER_TO.x, cellY + SHOULDER_TO.y)
+      .stroke();
+    doc.undash().restore();
+  }
 
-  // School name (small, top)
+  const bodyX = cellX + SIDE_PAD;
+  const bodyW = CELL_W - SIDE_PAD * 2; // 172
+  const bodyTop = cellY + TOP_KEEPOUT;
+  const bodyBottom = cellY + CELL_H - BOTTOM_PAD;
+
+  // School name (small)
   doc
     .font("Helvetica")
-    .fontSize(9)
+    .fontSize(8)
     .fillColor(COLORS.muted)
-    .text(tag.schoolName, x + pad, y + pad + 4, {
-      width: TAG_W - pad * 2,
+    .text(tag.schoolName, bodyX, bodyTop, {
+      width: bodyW,
       align: "center",
+      ellipsis: true,
     });
 
   // Student name
   doc
     .font("Helvetica-Bold")
-    .fontSize(14)
+    .fontSize(15)
     .fillColor(COLORS.text)
-    .text(tag.studentName, x + pad, y + pad + 22, {
-      width: TAG_W - pad * 2,
+    .text(tag.studentName, bodyX, bodyTop + 12, {
+      width: bodyW,
       align: "center",
       ellipsis: true,
     });
@@ -155,41 +194,83 @@ function drawTag(
     .font("Helvetica")
     .fontSize(11)
     .fillColor(COLORS.muted)
-    .text(`Pickup: ${tag.guardianLabel}`, x + pad, y + pad + 42, {
-      width: TAG_W - pad * 2,
+    .text(`Pickup: ${tag.guardianLabel}`, bodyX, bodyTop + 32, {
+      width: bodyW,
       align: "center",
       ellipsis: true,
     });
 
-  // Big base number + software-ringed letter, centered as one unit.
+  let labelsBottom = bodyTop + 50;
+  if (tag.restricted) {
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(10)
+      .fillColor(COLORS.restricted)
+      .text("RESTRICTED — NO-CONTACT", bodyX, labelsBottom, {
+        width: bodyW,
+        align: "center",
+      });
+    labelsBottom += 16;
+  }
+
+  // QR — bottom center (encodes the FULL code).
+  const qrSize = 92;
+  const captionH = 10;
+  const qrX = cellX + (CELL_W - qrSize) / 2;
+  const qrY = bodyBottom - captionH - qrSize;
+  doc.image(qrPng, qrX, qrY, { width: qrSize, height: qrSize });
+  doc
+    .font("Helvetica")
+    .fontSize(7)
+    .fillColor(COLORS.muted)
+    .text("Scan or type at the curb", bodyX, qrY + qrSize + 2, {
+      width: bodyW,
+      align: "center",
+    });
+
+  // Big base number + software-ringed letter, auto-fit to the tag width and
+  // centered in the space between the labels and the QR.
   const baseStr = tag.baseNumber ?? tag.pickupNumber;
   const letter = tag.letter ?? "";
-  const numSize = 60;
-  doc.font("Helvetica-Bold").fontSize(numSize);
+  const ringRatio = 0.82;
+  const gapRatio = 0.18;
+  doc.font("Helvetica-Bold");
+  let numSize = 58;
+  for (; numSize >= 18; numSize -= 1) {
+    doc.fontSize(numSize);
+    const bw = doc.widthOfString(baseStr);
+    const ringD = letter ? numSize * ringRatio : 0;
+    const gap = letter ? numSize * gapRatio : 0;
+    if (bw + gap + ringD <= bodyW) break;
+  }
+  doc.fontSize(numSize);
   const baseW = doc.widthOfString(baseStr);
-  const ringD = letter ? 46 : 0;
-  const gap = letter ? 12 : 0;
+  const ringD = letter ? numSize * ringRatio : 0;
+  const gap = letter ? numSize * gapRatio : 0;
   const totalW = baseW + gap + ringD;
-  const startX = x + (TAG_W - totalW) / 2;
-  const numY = y + TAG_H * 0.42 - numSize / 2;
+  const numRegionTop = labelsBottom;
+  const numRegionBottom = qrY - 6;
+  const numY =
+    numRegionTop + Math.max(0, (numRegionBottom - numRegionTop - numSize) / 2);
+  const startX = cellX + (CELL_W - totalW) / 2;
   doc
     .font("Helvetica-Bold")
     .fontSize(numSize)
     .fillColor(COLORS.number)
     .text(baseStr, startX, numY, { lineBreak: false });
   if (letter) {
-    // Ring the letter beside the base. Vertically centered on the digits'
-    // optical middle (~0.36em below the text top for Helvetica caps).
+    // Ring the letter beside the base, centered on the digits' optical middle
+    // (~0.36em below the text top for Helvetica caps).
     const ringCY = numY + numSize * 0.36;
     const ringCX = startX + baseW + gap + ringD / 2;
     doc
       .save()
-      .lineWidth(3)
+      .lineWidth(2.5)
       .strokeColor(COLORS.number)
       .circle(ringCX, ringCY, ringD / 2)
       .stroke()
       .restore();
-    const letterSize = 26;
+    const letterSize = ringD * 0.62;
     doc
       .font("Helvetica-Bold")
       .fontSize(letterSize)
@@ -201,32 +282,20 @@ function drawTag(
       });
   }
 
-  // QR — bottom center (encodes the FULL code).
-  const qrSize = 84;
-  const qrX = x + (TAG_W - qrSize) / 2;
-  const qrY = y + TAG_H - qrSize - pad - 16;
-  doc.image(qrPng, qrX, qrY, { width: qrSize, height: qrSize });
-
-  // QR caption
-  doc
-    .font("Helvetica")
-    .fontSize(7)
-    .fillColor(COLORS.muted)
-    .text("Scan or type code at the curb", x + pad, qrY + qrSize + 2, {
-      width: TAG_W - pad * 2,
-      align: "center",
-    });
-
+  // Restricted: red inner frame inside the safe area (never on the cut line).
   if (tag.restricted) {
     doc
       .save()
-      .font("Helvetica-Bold")
-      .fontSize(10)
-      .fillColor(COLORS.restricted)
-      .text("RESTRICTED — NO-CONTACT", x + pad, y + pad + 60, {
-        width: TAG_W - pad * 2,
-        align: "center",
-      })
+      .lineWidth(2)
+      .strokeColor(COLORS.restricted)
+      .roundedRect(
+        cellX + 8,
+        cellY + TOP_KEEPOUT - 6,
+        CELL_W - 16,
+        CELL_H - TOP_KEEPOUT - 2,
+        6,
+      )
+      .stroke()
       .restore();
   }
 }

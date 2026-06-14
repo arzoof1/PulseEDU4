@@ -312,3 +312,15 @@ id = "7_c8XGRub8fLFR8KdN33R"
 uri = "file://docs/templates/intervention_lessons_template.csv"
 type = "table"
 title = "Intervention Lessons — CSV template"
+
+[[outputs]]
+id = "Rbf4H6KSbqAnX3CrUL6Tx"
+uri = "file://attached_assets/tag-proof-guides.pdf"
+type = "pdf"
+title = "Tag proof WITH die guides (registration check)"
+
+[[outputs]]
+id = "wf09xdLWBbNqwfVNouKZV"
+uri = "file://attached_assets/tag-proof-clean.pdf"
+type = "pdf"
+title = "Tag proof — production output (no guides)"
