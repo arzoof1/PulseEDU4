@@ -203,6 +203,11 @@ export default function AlgebraPlacementReview({
           display: "flex",
           alignItems: "center",
           gap: 12,
+          position: "sticky",
+          top: 0,
+          zIndex: 5,
+          background: "var(--bg, #f6f8fb)",
+          padding: "0.75rem 0",
           marginBottom: 16,
         }}
       >
