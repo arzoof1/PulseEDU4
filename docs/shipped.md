@@ -3,6 +3,24 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- PulseDNA Studio — **Phase 1 (profile + AI drafting)**. A per-school saved
+  "communication profile" (PulseDNA) that schools upload (client-side parse of
+  .txt/.md/.pdf/.docx) and/or paste, edit/replace anytime, with an
+  enable/disable toggle; the AI uses it as background context. New **PulseDNA
+  Studio** (Profile + Create tabs) under the Family nav group, Core-Team gated
+  (`isCoreTeam` / `requireFamilyMessenger`) under the existing `FamilyComm`
+  feature flag. AI drafting via `@workspace/integrations-anthropic-ai`
+  (`anthropic.messages.create`, claude-sonnet-4-6 — same pattern as
+  helpAssistant.ts, no API key), rate-limited 12/min/staff and logged to
+  `pulse_dna_generations`. Tables `pulse_dna_profiles` (one-per-school unique
+  index) + `pulse_dna_generations` in `lib/db/src/schema/pulseDna.ts`; route
+  `routes/pulseDna.ts` (GET/PUT `/pulse-dna` atomic upsert on `school_id`,
+  PATCH `/pulse-dna/toggle`, POST `/pulse-dna/draft`). Phases 2–4 (in-app video
+  recording studio + teleprompter, ffmpeg transcode / object-storage video
+  attach / two-tier retention purge, and accessibility: captions, transcript
+  send, translation, readability, approval workflow) were **scoped but not
+  built** — deferred by user decision.
+
 - Pickup car-tag PDF — **landscape fold-over plain-paper sheet** + **legacy
   letterless code upgrade**. (1) Tag PDF rewritten to an 8.5×11 LANDSCAPE
   sheet, one tag/page: bottom panel upright + top panel rotated 180° around a
