@@ -213,7 +213,12 @@ export default function RecordingStudio({
       const el = prompterRef.current;
       if (el) {
         if (lastTsRef.current != null) {
-          const dt = (ts - lastTsRef.current) / 1000;
+          // Clamp the per-frame delta. If the main thread stalls briefly
+          // (camera encoding, a re-render, GC), the next frame would otherwise
+          // report a large dt and lurch the script forward in one big jump —
+          // the "pause then jump" stutter. Capping dt makes it simply resume
+          // gliding from where it left off.
+          const dt = Math.min((ts - lastTsRef.current) / 1000, 0.05);
           // Accumulate sub-pixel movement so low speeds glide smoothly instead
           // of stuttering on integer scrollTop rounding.
           scrollAccumRef.current += speed * dt;
