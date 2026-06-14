@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CameraScanner } from "./components/CameraScanner";
 import { useSchoolBranding } from "./lib/branding";
 
@@ -5075,6 +5075,43 @@ function AttendanceMode({
   // Per-id debounce so a camera that re-decodes the same badge many times a
   // second only submits it once per ~2s.
   const lastScanRef = useRef<{ id: string; at: number } | null>(null);
+  // Web Audio chime + screen flash on each scan result. The AudioContext is
+  // built lazily; the teacher's kiosk-activation tap satisfies the browser
+  // autoplay gesture requirement so later camera scans can play sound.
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+
+  const playChime = useCallback((kind: "success" | "error") => {
+    try {
+      let ctx = audioCtxRef.current;
+      if (!ctx) {
+        ctx = new AudioContext();
+        audioCtxRef.current = ctx;
+      }
+      const audio = ctx;
+      if (audio.state === "suspended") void audio.resume().catch(() => {});
+      const now = audio.currentTime;
+      // Success: a bright rising two-note ding. Error: a low two-note buzz.
+      const notes = kind === "success" ? [659.25, 987.77] : [196, 146.83];
+      notes.forEach((freq, i) => {
+        const osc = audio.createOscillator();
+        const gain = audio.createGain();
+        osc.type = kind === "success" ? "sine" : "triangle";
+        osc.frequency.value = freq;
+        const start = now + i * 0.12;
+        const dur = 0.18;
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.25, start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+        osc.connect(gain);
+        gain.connect(audio.destination);
+        osc.start(start);
+        osc.stop(start + dur);
+      });
+    } catch {
+      // Audio unavailable (no AudioContext / autoplay blocked) — non-fatal.
+    }
+  }, []);
 
   const active = state?.mode === "attendance";
 
@@ -5113,12 +5150,28 @@ function AttendanceMode({
     if (active && !result) inputRef.current?.focus();
   }, [active, result]);
 
-  // Result card auto-dismiss so the next student isn't blocked.
+  // On each result: play the chime, flash the screen, and auto-dismiss the
+  // card so the next student isn't blocked.
   useEffect(() => {
     if (!result) return;
-    const id = setTimeout(() => setResult(null), 4000);
-    return () => clearTimeout(id);
-  }, [result]);
+    const isSuccess = result.kind === "ok" || result.kind === "already";
+    playChime(isSuccess ? "success" : "error");
+    setFlash(isSuccess ? "rgba(34,197,94,0.55)" : "rgba(239,68,68,0.5)");
+    const flashId = window.setTimeout(() => setFlash(null), 320);
+    const id = window.setTimeout(() => setResult(null), 4000);
+    return () => {
+      window.clearTimeout(flashId);
+      window.clearTimeout(id);
+    };
+  }, [result, playChime]);
+
+  // Release the AudioContext when the kiosk overlay unmounts.
+  useEffect(() => {
+    return () => {
+      void audioCtxRef.current?.close().catch(() => {});
+      audioCtxRef.current = null;
+    };
+  }, []);
 
   async function submit(rawId: string, source: "usb" | "keypad" | "camera") {
     const id = rawId.trim();
@@ -5239,6 +5292,20 @@ function AttendanceMode({
         overflowY: "auto",
       }}
     >
+      {flash && (
+        <div
+          aria-hidden
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: flash,
+            zIndex: 70,
+            pointerEvents: "none",
+            animation: "attFlash 320ms ease-out forwards",
+          }}
+        />
+      )}
+      <style>{`@keyframes attFlash{from{opacity:1}to{opacity:0}}`}</style>
       <div
         style={{
           fontSize: "0.8rem",
