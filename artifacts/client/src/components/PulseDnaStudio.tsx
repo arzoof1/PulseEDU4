@@ -216,7 +216,17 @@ function StudioHelpModal({ onClose }: { onClose: () => void }) {
         <ul style={helpUl}>
           <li>Click <strong>Record a video</strong> to open the studio with a teleprompter loaded from your draft.</li>
           <li>Allow the browser to use your <strong>camera</strong> and <strong>microphone</strong> the first time.</li>
-          <li>Inside the studio, click <strong>? Help</strong> (top right) for teleprompter and recording directions.</li>
+          <li>Hit <strong>● Record</strong> to start, <strong>◼ Stop</strong> when done, then <strong>Use this take</strong> or <strong>Record again</strong>.</li>
+          <li>Use <strong>Play script</strong> to scroll the teleprompter, and the sliders to set speed, text size, reading width, and visible lines.</li>
+          <li>Inside the studio, click <strong>? Help</strong> (top right) for the full teleprompter guide.</li>
+        </ul>
+
+        <h3>Keyboard &amp; clicker shortcuts (in the studio)</h3>
+        <ul style={helpUl}>
+          <li><strong>Space</strong> — play / pause the scrolling script.</li>
+          <li><strong>↑ / ↓</strong> (or Page Up / Page Down) — speed the script up / slow it down.</li>
+          <li><strong>R</strong> — start / stop recording.</li>
+          <li>A Bluetooth presentation clicker sends these same keys, so you can drive the studio from across the room.</li>
         </ul>
 
         <p style={{ color: "var(--text-subtle)", marginBottom: 0 }}>
