@@ -575,6 +575,45 @@ router.get("/pulse-dna/videos/:id/file", async (req, res) => {
   }
 });
 
+// PATCH /pulse-dna/videos/:id — rename a video (title only).
+const RenameVideoBody = z.object({
+  title: z.string().max(255),
+});
+router.patch("/pulse-dna/videos/:id", async (req, res) => {
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(401).json({ error: "School context required" });
+    return;
+  }
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "bad_id" });
+    return;
+  }
+  const parsed = RenameVideoBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body" });
+    return;
+  }
+  const row = await loadVideo(schoolId, id);
+  if (!row) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const trimmed = parsed.data.title.trim();
+  const [updated] = await db
+    .update(pulseDnaVideosTable)
+    .set({ title: trimmed === "" ? null : trimmed, updatedAt: new Date() })
+    .where(
+      and(
+        eq(pulseDnaVideosTable.id, id),
+        eq(pulseDnaVideosTable.schoolId, schoolId),
+      ),
+    )
+    .returning();
+  res.json(videoToClient(updated));
+});
+
 // POST /pulse-dna/videos/:id/postpone — one-time +7-day extension before an
 // unsent video's purge. No-op (409) if already postponed or already sent.
 router.post("/pulse-dna/videos/:id/postpone", async (req, res) => {

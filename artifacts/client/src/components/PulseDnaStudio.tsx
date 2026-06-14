@@ -539,6 +539,7 @@ function CreateTab() {
   const speechSupported = getSpeechRecognitionCtor() !== null;
   const [studioOpen, setStudioOpen] = useState(false);
   const [studioScript, setStudioScript] = useState("");
+  const [studioTitle, setStudioTitle] = useState("");
   const [uploadState, setUploadState] = useState<
     "idle" | "uploading" | "processing" | "ready" | "error"
   >("idle");
@@ -624,6 +625,7 @@ function CreateTab() {
           durationSec: Math.max(1, Math.round(video.durationSec)),
           sizeBytes: video.blob.size,
           script: studioScript,
+          title: studioTitle.trim() || undefined,
         }),
       });
       if (!regRes.ok) throw new Error("register failed");
@@ -890,6 +892,29 @@ function CreateTab() {
         </label>
       </div>
 
+      <label style={{ display: "grid", gap: 4, marginBottom: "0.75rem" }}>
+        <span style={{ fontWeight: 600, fontSize: "0.85rem" }}>
+          Video name (optional)
+        </span>
+        <input
+          type="text"
+          value={studioTitle}
+          onChange={(e) => setStudioTitle(e.target.value)}
+          maxLength={255}
+          placeholder="e.g. Principal welcome — Aug 2026"
+          style={{
+            padding: "0.5rem 0.6rem",
+            borderRadius: "8px",
+            border: "1px solid var(--border)",
+            fontSize: "0.9rem",
+          }}
+        />
+        <span style={{ fontSize: "0.78rem", color: "var(--text-subtle)" }}>
+          Helps you find it in the library and the message picker. You can rename
+          it anytime.
+        </span>
+      </label>
+
       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
         <button className="btn primary" onClick={() => void generate()} disabled={generating}>
           {generating ? "Generating…" : output ? "Regenerate" : "Generate draft"}
@@ -1123,6 +1148,25 @@ function VideoLibraryTab() {
     }
   }
 
+  async function rename(v: VideoItem) {
+    const next = window.prompt("Video name:", v.title ?? "");
+    if (next == null) return;
+    if (busyId != null) return;
+    setBusyId(v.id);
+    try {
+      const res = await authFetch(`/api/pulse-dna/videos/${v.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: next }),
+      });
+      if (res.ok) await load();
+    } catch {
+      /* swallow */
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function postpone(v: VideoItem) {
     if (busyId != null) return;
     setBusyId(v.id);
@@ -1304,6 +1348,14 @@ function VideoLibraryTab() {
                     Keep 7 more days
                   </button>
                 )}
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={busyId === v.id}
+                  onClick={() => void rename(v)}
+                >
+                  Rename
+                </button>
                 <button
                   type="button"
                   className="btn danger"
