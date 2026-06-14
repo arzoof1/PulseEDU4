@@ -24,6 +24,10 @@ interface Props {
   // holds their activation card up to the screen.
   facingMode?: "environment" | "user";
   label?: string;
+  // When true, render in-flow (no fullscreen dark backdrop) so the scanner
+  // can sit inside a column alongside other content — e.g. the attendance
+  // kiosk, where the live name feed must stay visible while scanning.
+  embedded?: boolean;
 }
 
 // Minimal subset of the BarcodeDetector API we actually use.
@@ -44,6 +48,7 @@ export function CameraScanner({
   onCancel,
   facingMode = "environment",
   label,
+  embedded = false,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -172,20 +177,30 @@ export function CameraScanner({
 
   return (
     <div
-      role="dialog"
-      aria-modal="true"
+      role={embedded ? "group" : "dialog"}
+      aria-modal={embedded ? undefined : "true"}
       aria-label="Scan badge"
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.85)",
-        zIndex: 100,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "1rem",
-      }}
+      style={
+        embedded
+          ? {
+              width: "100%",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              padding: 0,
+            }
+          : {
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.85)",
+              zIndex: 100,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "1rem",
+            }
+      }
     >
       <div
         style={{

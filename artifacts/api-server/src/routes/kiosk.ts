@@ -37,7 +37,7 @@ import {
   ObjectStorageService,
   ObjectNotFoundError,
 } from "../lib/objectStorage.js";
-import { and, eq, inArray, isNull, gt, desc, sql, ne, asc } from "drizzle-orm";
+import { and, eq, inArray, isNull, gt, desc, sql, ne, asc, like } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
@@ -2313,9 +2313,15 @@ router.get("/kiosk/attendance/state", async (req, res) => {
     return;
   }
 
-  // Last few scans this passing window (newest first) for the slide-down list.
+  // Recent scans (newest first) for the on-screen slide-down name list.
+  // During a test loop the periodKey changes every cycle (~4 min), which would
+  // otherwise wipe the list each rollover. Span all of today's test-loop cycles
+  // so names persist and accumulate; a real period keeps its single periodKey.
+  const isTestLoop = (win.periodKey ?? "").startsWith("testloop:");
+  const FEED_LIMIT = 8;
   const recentRows = await db
     .select({
+      studentId: attendanceCheckinsTable.studentId,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
       localSisId: studentsTable.localSisId,
@@ -2335,12 +2341,36 @@ router.get("/kiosk/attendance/state", async (req, res) => {
       and(
         eq(attendanceCheckinsTable.schoolId, act.schoolId),
         eq(attendanceCheckinsTable.kioskActivationId, act.id),
-        eq(attendanceCheckinsTable.periodKey, win.periodKey as string),
+        isTestLoop
+          ? like(attendanceCheckinsTable.periodKey, `testloop:%:${win.dayKey}`)
+          : eq(attendanceCheckinsTable.periodKey, win.periodKey as string),
         eq(attendanceCheckinsTable.kind, "checkin"),
       ),
     )
     .orderBy(desc(attendanceCheckinsTable.createdAt))
-    .limit(4);
+    .limit(FEED_LIMIT * 4);
+
+  // Newest scan per student, capped — so a student re-scanning across cycles
+  // appears once (at the top) and older names slide off the bottom.
+  const seenStudents = new Set<string>();
+  const recent: {
+    firstName: string;
+    lastName: string;
+    points: number;
+    postBell: boolean;
+  }[] = [];
+  for (const r of recentRows) {
+    const key = r.studentId ?? `${r.firstName ?? ""}|${r.lastName ?? ""}`;
+    if (seenStudents.has(key)) continue;
+    seenStudents.add(key);
+    recent.push({
+      firstName: r.firstName ?? "",
+      lastName: r.lastName ?? "",
+      points: r.points,
+      postBell: r.postBell,
+    });
+    if (recent.length >= FEED_LIMIT) break;
+  }
 
   res.json({
     enabled: true,
@@ -2352,12 +2382,7 @@ router.get("/kiosk/attendance/state", async (req, res) => {
     periodKey: win.periodKey,
     // The big Done button only appears once the bell has rung.
     showDone: win.phase === "post_bell",
-    recent: recentRows.map((r) => ({
-      firstName: r.firstName ?? "",
-      lastName: r.lastName ?? "",
-      points: r.points,
-      postBell: r.postBell,
-    })),
+    recent,
   });
 });
 

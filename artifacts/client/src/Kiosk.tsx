@@ -5276,6 +5276,82 @@ function AttendanceMode({
 
   const keypadDigits = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
+  // Welcome/result card — fills whatever column wraps it.
+  const resultCardSlot = (
+    <div style={{ width: "100%", minHeight: result ? undefined : 0 }}>
+      {result && <AttendanceResultCard result={result} />}
+    </div>
+  );
+
+  // Live "just checked in" name list (newest on top, slides in).
+  const nameFeed = (
+    <div style={{ width: "100%" }}>
+      <style>{`@keyframes attRowIn{from{opacity:0;transform:translateY(-16px) scale(0.97)}to{opacity:1;transform:translateY(0) scale(1)}}`}</style>
+      <div
+        style={{
+          fontSize: "0.85rem",
+          textTransform: "uppercase",
+          letterSpacing: "0.14em",
+          opacity: 0.65,
+          marginBottom: "0.6rem",
+          textAlign: "center",
+        }}
+      >
+        ✅ Just checked in
+      </div>
+      {state?.recent && state.recent.length > 0 ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+          {state.recent.map((r, i) => (
+            <div
+              key={`${r.firstName}-${r.lastName}-${i}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                background:
+                  i === 0
+                    ? "rgba(134,239,172,0.16)"
+                    : "rgba(255,255,255,0.06)",
+                border: `1px solid ${
+                  i === 0 ? "rgba(134,239,172,0.5)" : "rgba(255,255,255,0.1)"
+                }`,
+                borderRadius: 12,
+                padding: "0.8rem 1.1rem",
+                fontSize: "1.35rem",
+                fontWeight: 700,
+                animation: "attRowIn 320ms ease-out",
+              }}
+            >
+              <span>
+                {r.firstName} {r.lastName}
+              </span>
+              <span
+                style={{
+                  fontWeight: 800,
+                  color: "#86efac",
+                  fontSize: "1.1rem",
+                }}
+              >
+                {r.postBell ? "On time" : `+${r.points}`}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div
+          style={{
+            textAlign: "center",
+            opacity: 0.45,
+            fontSize: "1rem",
+            padding: "0.75rem 0",
+          }}
+        >
+          Scan a badge to get on the board
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div
       style={{
@@ -5350,18 +5426,64 @@ function AttendanceMode({
             : "Open now"}
       </div>
 
-      {/* Slide-down result card */}
-      <div
-        style={{
-          width: "min(560px, 94vw)",
-          marginTop: "1rem",
-          minHeight: result ? undefined : 0,
-        }}
-      >
-        {result && <AttendanceResultCard result={result} />}
-      </div>
+      {/* Live board: camera viewer on the LEFT, names populate on the RIGHT.
+          With the camera off it collapses to a single centered column that
+          sits above the keypad. */}
+      {cameraOn ? (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            justifyContent: "center",
+            alignItems: "flex-start",
+            gap: "1.5rem",
+            width: "100%",
+            maxWidth: 1180,
+            marginTop: "1.25rem",
+          }}
+        >
+          {/* LEFT — camera viewer */}
+          <div style={{ flex: "0 0 auto", width: "min(480px, 94vw)" }}>
+            <CameraScanner
+              key={cameraKey}
+              embedded
+              onScan={onCameraScan}
+              onCancel={() => setCameraOn(false)}
+            />
+          </div>
+          {/* RIGHT — welcome card flowing into the live name list */}
+          <div
+            style={{
+              flex: "1 1 360px",
+              minWidth: 280,
+              maxWidth: 560,
+              display: "flex",
+              flexDirection: "column",
+              gap: "1rem",
+            }}
+          >
+            {resultCardSlot}
+            {nameFeed}
+          </div>
+        </div>
+      ) : (
+        <div
+          style={{
+            width: "min(560px, 94vw)",
+            marginTop: "1.25rem",
+            display: "flex",
+            flexDirection: "column",
+            gap: "1rem",
+          }}
+        >
+          {resultCardSlot}
+          {nameFeed}
+        </div>
+      )}
 
-      {/* Scan field — serves the USB scanner AND the on-screen keypad. */}
+      {/* Scan field — serves the USB scanner AND the on-screen keypad.
+          Hidden while the camera is open (the camera is the input then). */}
+      {!cameraOn && (
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -5466,56 +5588,6 @@ function AttendanceMode({
           </button>
         </div>
       </form>
-
-      {/* Camera scanner (continuous via re-arm key). */}
-      {cameraOn && (
-        <div style={{ width: "min(560px, 94vw)", marginTop: "1rem" }}>
-          <CameraScanner
-            key={cameraKey}
-            onScan={onCameraScan}
-            onCancel={() => setCameraOn(false)}
-          />
-        </div>
-      )}
-
-      {/* Recent scans (last few this passing window). */}
-      {state?.recent && state.recent.length > 0 && (
-        <div style={{ width: "min(560px, 94vw)", marginTop: "1.25rem" }}>
-          <div
-            style={{
-              fontSize: "0.8rem",
-              textTransform: "uppercase",
-              letterSpacing: "0.12em",
-              opacity: 0.5,
-              marginBottom: "0.5rem",
-            }}
-          >
-            Just checked in
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-            {state.recent.map((r, i) => (
-              <div
-                key={i}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  background: "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.08)",
-                  borderRadius: 8,
-                  padding: "0.55rem 0.85rem",
-                  fontSize: "1rem",
-                }}
-              >
-                <span>
-                  {r.firstName} {r.lastName}
-                </span>
-                <span style={{ fontWeight: 700, color: "#86efac" }}>
-                  {r.postBell ? "On time" : `+${r.points}`}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
       )}
 
       {/* Teacher "Done" — only at the bell. One tap reverts to hall pass. */}
