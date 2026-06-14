@@ -833,7 +833,11 @@ function ClassesView({
           const sectionStudents = sec.studentIds
             .map((id) => studentById.get(id))
             .filter((s): s is Student => Boolean(s))
-            .sort((a, b) => a.firstName.localeCompare(b.firstName));
+            .sort(
+              (a, b) =>
+                a.lastName.localeCompare(b.lastName) ||
+                a.firstName.localeCompare(b.firstName),
+            );
           const sectionIds = sectionStudents.map((s) => s.studentId);
           const selectedHere = sectionIds.filter((id) =>
             selectedIds.has(id),
