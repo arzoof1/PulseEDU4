@@ -26,3 +26,13 @@ with `history.replaceState`. Fragment isn't sent to the server; immediate strip
 limits history exposure. Endpoint stays admin/superuser-gated; preview parent is
 a sentinel with NULL password. This same pattern applies to ANY staff→other-role
 "open in new tab" impersonation in this app.
+
+**Shareable demo link variant:** there is also a no-session-swap sibling that
+returns an absolute `${publicAppOrigin(req)}/parent#pt=<token>` URL for sending
+to another device (e.g. a live demo). Two non-obvious constraints: (1) build the
+origin with the `publicAppOrigin` precedence (PUBLIC_APP_URL → REPLIT_DOMAINS →
+forwarded host → localhost), NEVER REPLIT_DEV_DOMAIN-first, or the link points at
+a dead dev host in prod; (2) the preview parent is ONE shared sentinel per
+school whose `parent_students` links are REPLACED on every preview/link call —
+so only one student preview is live at a time and a newer link/button click
+supersedes any older outstanding link.

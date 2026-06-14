@@ -522,6 +522,24 @@ async function previewAsParentOf(studentRowId: number): Promise<void> {
   }
 }
 
+async function generateParentLinkFor(studentRowId: number): Promise<string> {
+  // Build a shareable parent-preview link WITHOUT swapping this staff session.
+  // The server points the sentinel preview parent at the student and returns a
+  // `/parent#pt=<token>` URL that opens the parent HeartBEAT on any device for
+  // ~12h. Used to hand a live-demo audience the parent view on their own phone.
+  const r = await authFetch("/api/admin/parent-preview/link", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ studentRowId }),
+  });
+  if (!r.ok) {
+    throw new Error(await r.text());
+  }
+  const body = (await r.json().catch(() => ({}))) as { url?: string };
+  if (!body.url) throw new Error("No link returned");
+  return body.url;
+}
+
 function StudentInviteRow({
   row,
   busyId,
@@ -545,6 +563,8 @@ function StudentInviteRow({
   const [showAddForm, setShowAddForm] = useState(invites.length === 0);
   const sendKey = `send:${student.id}`;
   const isSendingRow = busyId === sendKey;
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   const handleSend = async () => {
     const email = draftEmail.trim();
@@ -553,6 +573,32 @@ function StudentInviteRow({
     if (ok) {
       setDraftEmail("");
       setShowAddForm(false);
+    }
+  };
+
+  const handleCopyParentLink = async () => {
+    setLinkBusy(true);
+    try {
+      const url = await generateParentLinkFor(student.id);
+      let copied = false;
+      try {
+        await navigator.clipboard.writeText(url);
+        copied = true;
+      } catch {
+        copied = false;
+      }
+      if (copied) {
+        setLinkCopied(true);
+        setTimeout(() => setLinkCopied(false), 2500);
+      } else {
+        // Clipboard is blocked inside the Replit preview iframe — surface the
+        // link so it can be copied by hand.
+        window.prompt("Copy this parent-preview link:", url);
+      }
+    } catch (err) {
+      alert("Could not generate link: " + (err as Error).message);
+    } finally {
+      setLinkBusy(false);
     }
   };
 
@@ -593,6 +639,15 @@ function StudentInviteRow({
             onClick={() => void previewAsParentOf(student.id)}
           >
             Preview as parent
+          </button>
+          <button
+            type="button"
+            style={btnGhost}
+            title="Copy a shareable link to this student's parent HeartBEAT. Send it to an admin during a demo so they can experience the parent view on their own device. Link works for ~12 hours."
+            disabled={linkBusy}
+            onClick={() => void handleCopyParentLink()}
+          >
+            {linkBusy ? "Generating…" : linkCopied ? "Link copied!" : "Generate link"}
           </button>
           <StatusPill status={overallStatus} />
         </div>
