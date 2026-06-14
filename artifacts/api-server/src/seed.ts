@@ -476,6 +476,40 @@ export async function ensureParentMessagesSchema() {
   `);
 }
 
+// PulseDNA videos (Recording Studio) + the parent_messages.video_id link.
+// Additive ALTER per the non-interactive schema-change convention.
+export async function ensurePulseDnaVideosSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pulse_dna_videos (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      created_by_staff_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'processing',
+      title TEXT,
+      script TEXT NOT NULL DEFAULT '',
+      duration_sec INTEGER,
+      original_object_key TEXT,
+      mp4_object_key TEXT,
+      audio_object_key TEXT,
+      size_bytes INTEGER,
+      error_reason TEXT,
+      sent_at TIMESTAMPTZ,
+      retention_postponed BOOLEAN NOT NULL DEFAULT FALSE,
+      purge_after TIMESTAMPTZ,
+      purged_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS pulse_dna_videos_school_created_idx
+      ON pulse_dna_videos (school_id, created_at)
+  `);
+  await db.execute(
+    sql`ALTER TABLE parent_messages ADD COLUMN IF NOT EXISTS video_id INTEGER`,
+  );
+}
+
 export async function seedHousesIfEmpty() {
   await ensureHousesSchema();
   const schools = await db.select().from(schoolsTable);

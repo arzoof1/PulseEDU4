@@ -39,6 +39,7 @@ import {
   ensureStudentPhotoColumns,
   ensureOnTimeTestModeColumns,
   ensureParentMessagesSchema,
+  ensurePulseDnaVideosSchema,
   ensureStudentLocalSisIdBackfill,
   ensureStudentAccommodationsBackfill,
   ensureLocationAllowedDestinationsBackfill,
@@ -69,6 +70,8 @@ import { runAstYearEndLapse } from "./cron/astLapse";
 import { runFeatureLicensingOverrideSweep } from "./cron/featureLicensingOverrideSweep";
 import { runPickupEndOfDayAutoClear } from "./cron/pickupEndOfDayAutoClear";
 import { runInRouteOverdueSweep } from "./cron/inRouteOverdue";
+import { runPulseDnaVideoPurge } from "./cron/pulseDnaVideoPurge";
+import { recoverStuckPulseDnaVideos } from "./lib/videoTranscode";
 import {
   runDemoHeartbeatTick,
   runDemoHeartbeatReset,
@@ -271,6 +274,9 @@ async function runSeed(): Promise<void> {
   // acknowledge receipts (parent_messages + parent_message_recipients).
   // Idempotent.
   await ensureParentMessagesSchema();
+  // PulseDNA videos (Recording Studio) + parent_messages.video_id link.
+  // Idempotent.
+  await ensurePulseDnaVideosSchema();
   // Backfill local_sis_id from the FLEID for any students missing it
   // (legacy rows). Local SIS ID is the student-facing credential
   // everywhere in the app; FLEID stays internal for FAST joins.
@@ -708,6 +714,47 @@ function startListening(): void {
             "Failed to schedule in-route overdue sweep",
           );
         }
+
+        // PulseDNA video retention purge. Two-tier: unsent library videos
+        // purge after their 14-day (+7 postpone) window; videos attached to a
+        // sent family message purge at school-year rollover. Only the media
+        // files are deleted — the row + script transcript persist. Default
+        // 03:30 school-local daily; override via PULSEDNA_PURGE_CRON / _TZ.
+        const pulseVideoPurgeExpr =
+          process.env.PULSEDNA_PURGE_CRON ?? "30 3 * * *";
+        const pulseVideoPurgeTz =
+          process.env.PULSEDNA_PURGE_TZ ?? "America/New_York";
+        try {
+          cron.schedule(
+            pulseVideoPurgeExpr,
+            async () => {
+              try {
+                const r = await runPulseDnaVideoPurge(new Date());
+                if (r.purged > 0) {
+                  logger.info(r, "PulseDNA video purge complete");
+                }
+              } catch (cronErr) {
+                logger.error({ err: cronErr }, "PulseDNA video purge failed");
+              }
+            },
+            { timezone: pulseVideoPurgeTz },
+          );
+          logger.info(
+            { expr: pulseVideoPurgeExpr, tz: pulseVideoPurgeTz },
+            "PulseDNA video purge scheduled",
+          );
+        } catch (schedErr) {
+          logger.error(
+            { err: schedErr },
+            "Failed to schedule PulseDNA video purge",
+          );
+        }
+
+        // Re-kick any transcode jobs left "processing" by a crash/restart
+        // mid-encode. Fire-and-forget; does not block boot.
+        recoverStuckPulseDnaVideos().catch((err) =>
+          logger.error({ err }, "PulseDNA stuck-transcode recovery failed"),
+        );
       }
 
       // Demo Heartbeat — ambient fake PBIS awards for the houses signage.

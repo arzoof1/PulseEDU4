@@ -78,3 +78,63 @@ export const pulseDnaGenerationsTable = pgTable(
 );
 
 export type PulseDnaGenerationRow = typeof pulseDnaGenerationsTable.$inferSelect;
+
+// PulseDNA videos — a recorded "principal-to-families" clip captured in the
+// in-app Recording Studio. Only the ACCEPTED take is ever stored (retakes are
+// discarded in the browser before upload). The original WebM is uploaded, then
+// the server transcodes it to a broadly-playable MP4 (H.264/AAC, +faststart)
+// and extracts an audio-only MP3. The teleprompter script is kept on the row
+// as a permanent transcript even after the media files purge.
+//
+// TWO-TIER RETENTION (the media files only — the row + script persist):
+//   - SENT to a family message (sentAt set) → kept for the school year, purged
+//     at year rollover (cron compares the school-year label of sentAt vs now).
+//   - NOT sent (library/draft) → purged at `purgeAfter` (createdAt + 14 days),
+//     with ONE +7-day postpone (retentionPostponed). Hard stop ~21 days.
+// On purge: media object keys are nulled, files deleted from storage, status
+// flips to "purged"; the row stays for the audit/transcript.
+export const pulseDnaVideosTable = pgTable(
+  "pulse_dna_videos",
+  {
+    id: serial("id").primaryKey(),
+    schoolId: integer("school_id").notNull(),
+    createdByStaffId: integer("created_by_staff_id").notNull(),
+    // processing | ready | failed | purged
+    status: text("status").notNull().default("processing"),
+    title: text("title"),
+    // The teleprompter script, retained permanently as a transcript.
+    script: text("script").notNull().default(""),
+    durationSec: integer("duration_sec"),
+    // Uploaded source (WebM) + server-derived MP4 / MP3. Nulled on purge.
+    originalObjectKey: text("original_object_key"),
+    mp4ObjectKey: text("mp4_object_key"),
+    audioObjectKey: text("audio_object_key"),
+    // Total stored bytes (original + derived) for a rough library footprint.
+    sizeBytes: integer("size_bytes"),
+    // Populated when transcode fails (status="failed").
+    errorReason: text("error_reason"),
+    // Set when the video is attached to a SENT family message → school-year
+    // retention. Null = unsent (14-day library retention).
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    // One-time +7-day postpone for an unsent video before its 14-day purge.
+    retentionPostponed: boolean("retention_postponed").notNull().default(false),
+    // When an unsent video becomes eligible for purge (createdAt + 14d, +7 if
+    // postponed). Ignored once sentAt is set (school-year rule takes over).
+    purgeAfter: timestamp("purge_after", { withTimezone: true }),
+    purgedAt: timestamp("purged_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    bySchool: index("pulse_dna_videos_school_created_idx").on(
+      t.schoolId,
+      t.createdAt,
+    ),
+  }),
+);
+
+export type PulseDnaVideoRow = typeof pulseDnaVideosTable.$inferSelect;

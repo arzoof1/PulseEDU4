@@ -20,10 +20,17 @@ import {
 } from "express";
 import { z } from "zod";
 import { db, staffTable, pulseDnaProfilesTable } from "@workspace/db";
-import { pulseDnaGenerationsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { pulseDnaGenerationsTable, pulseDnaVideosTable } from "@workspace/db";
+import { eq, and, ne, desc } from "drizzle-orm";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { anthropic } from "@workspace/integrations-anthropic-ai";
+import {
+  issueSchoolUploadUrl,
+  bindObjectToSchool,
+  streamObjectToResponse,
+  deleteStoredObject,
+} from "./storage.js";
+import { transcodePulseDnaVideo } from "../lib/videoTranscode.js";
 
 const router: IRouter = Router();
 
@@ -362,6 +369,305 @@ router.post("/pulse-dna/draft", rateLimitDraft, async (req, res) => {
   }
 
   res.json({ output, usedPulseDna });
+});
+
+// ---------------------------------------------------------------------------
+// Videos (Recording Studio)
+//
+// Flow: the client records a single accepted take (WebM), asks for an upload
+// URL (POST /videos/upload-url → presigned PUT, higher cap than the generic
+// 10MB /api/storage path), PUTs the blob, then registers the upload
+// (POST /videos). The server binds the object to the school, creates a
+// "processing" row, and kicks an off-thread ffmpeg transcode (MP4 + MP3). The
+// client polls GET /videos/:id until status="ready", then can attach it to a
+// family message or download the derived files.
+// ---------------------------------------------------------------------------
+
+// ~300MB ceiling — a 5-minute 720p WebM is well under this; the cap just stops
+// an absurd upload. Enforced when registering the upload (we can't see the
+// presigned PUT body size, so we trust the client-reported size + re-check the
+// stored object size at transcode where it would simply fail gracefully).
+const MAX_VIDEO_BYTES = 300 * 1024 * 1024;
+const MAX_VIDEO_DURATION_SEC = 5 * 60 + 5; // 5 min + small slack
+
+// 14-day base retention for an unsent library video.
+const UNSENT_RETENTION_DAYS = 14;
+
+// POST /pulse-dna/videos/upload-url — mint a presigned PUT for the school.
+router.post("/pulse-dna/videos/upload-url", async (req, res) => {
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(401).json({ error: "School context required" });
+    return;
+  }
+  const { uploadURL, objectPath } = await issueSchoolUploadUrl(schoolId);
+  res.json({ uploadURL, objectPath });
+});
+
+const CreateVideoBody = z.object({
+  objectPath: z.string().min(1),
+  mimeType: z.string().max(120).optional(),
+  durationSec: z.number().int().min(1).max(MAX_VIDEO_DURATION_SEC).optional(),
+  sizeBytes: z.number().int().min(1).max(MAX_VIDEO_BYTES).optional(),
+  script: z.string().max(MAX_PROFILE_CHARS).optional(),
+  title: z.string().max(255).optional(),
+});
+
+// POST /pulse-dna/videos — register an uploaded take + kick transcode.
+router.post("/pulse-dna/videos", async (req, res) => {
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(401).json({ error: "School context required" });
+    return;
+  }
+  const parsed = CreateVideoBody.safeParse(req.body);
+  if (!parsed.success) {
+    res
+      .status(400)
+      .json({ error: "invalid_body", detail: parsed.error.message });
+    return;
+  }
+  const { objectPath, mimeType, durationSec, sizeBytes, script, title } =
+    parsed.data;
+
+  // Claim the uploaded object for this school. False = the upload URL was not
+  // issued to this school (or it's already bound elsewhere) → reject.
+  const bound = await bindObjectToSchool(objectPath, schoolId);
+  if (!bound) {
+    res.status(403).json({ error: "upload_not_bound" });
+    return;
+  }
+
+  const now = new Date();
+  const purgeAfter = new Date(
+    now.getTime() + UNSENT_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+  );
+
+  const [row] = await db
+    .insert(pulseDnaVideosTable)
+    .values({
+      schoolId,
+      createdByStaffId: staffOf(req).id,
+      status: "processing",
+      title: title ?? null,
+      script: script ?? "",
+      durationSec: durationSec ?? null,
+      originalObjectKey: objectPath,
+      sizeBytes: sizeBytes ?? null,
+      purgeAfter,
+    })
+    .returning();
+
+  // Fire-and-forget transcode; the client polls for status.
+  void transcodePulseDnaVideo(row.id, schoolId);
+
+  res.status(202).json({ id: row.id, status: row.status });
+});
+
+// Shape a row for the client (no raw object keys — those are fetched via the
+// /file proxy below).
+function videoToClient(row: typeof pulseDnaVideosTable.$inferSelect) {
+  return {
+    id: row.id,
+    status: row.status,
+    title: row.title,
+    script: row.script,
+    durationSec: row.durationSec,
+    sizeBytes: row.sizeBytes,
+    errorReason: row.errorReason,
+    sent: row.sentAt != null,
+    sentAt: row.sentAt,
+    retentionPostponed: row.retentionPostponed,
+    purgeAfter: row.purgeAfter,
+    hasMp4: row.mp4ObjectKey != null,
+    hasAudio: row.audioObjectKey != null,
+    createdAt: row.createdAt,
+  };
+}
+
+// GET /pulse-dna/videos — the school's video library (newest first), excluding
+// purged rows (their media is gone).
+router.get("/pulse-dna/videos", async (req, res) => {
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(401).json({ error: "School context required" });
+    return;
+  }
+  const rows = await db
+    .select()
+    .from(pulseDnaVideosTable)
+    .where(
+      and(
+        eq(pulseDnaVideosTable.schoolId, schoolId),
+        ne(pulseDnaVideosTable.status, "purged"),
+      ),
+    )
+    .orderBy(desc(pulseDnaVideosTable.createdAt));
+  res.json({ videos: rows.map(videoToClient) });
+});
+
+// Helper: load a school-scoped video row by id (or null).
+async function loadVideo(schoolId: number, id: number) {
+  const [row] = await db
+    .select()
+    .from(pulseDnaVideosTable)
+    .where(
+      and(
+        eq(pulseDnaVideosTable.id, id),
+        eq(pulseDnaVideosTable.schoolId, schoolId),
+      ),
+    );
+  return row ?? null;
+}
+
+// GET /pulse-dna/videos/:id — poll a single video's status.
+router.get("/pulse-dna/videos/:id", async (req, res) => {
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(401).json({ error: "School context required" });
+    return;
+  }
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "bad_id" });
+    return;
+  }
+  const row = await loadVideo(schoolId, id);
+  if (!row) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json(videoToClient(row));
+});
+
+// GET /pulse-dna/videos/:id/file?kind=mp4|audio|original — stream a derived
+// file. School-scoped; the object itself is also school-ACL'd.
+router.get("/pulse-dna/videos/:id/file", async (req, res) => {
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(401).json({ error: "School context required" });
+    return;
+  }
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "bad_id" });
+    return;
+  }
+  const row = await loadVideo(schoolId, id);
+  if (!row) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const kind = String(req.query.kind ?? "mp4");
+  const key =
+    kind === "audio"
+      ? row.audioObjectKey
+      : kind === "original"
+        ? row.originalObjectKey
+        : row.mp4ObjectKey;
+  if (!key) {
+    res.status(404).json({ error: "file_not_available" });
+    return;
+  }
+  const ok = await streamObjectToResponse(key, res);
+  if (!ok && !res.headersSent) {
+    res.status(404).json({ error: "file_not_available" });
+  }
+});
+
+// POST /pulse-dna/videos/:id/postpone — one-time +7-day extension before an
+// unsent video's purge. No-op (409) if already postponed or already sent.
+router.post("/pulse-dna/videos/:id/postpone", async (req, res) => {
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(401).json({ error: "School context required" });
+    return;
+  }
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "bad_id" });
+    return;
+  }
+  const row = await loadVideo(schoolId, id);
+  if (!row) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (row.sentAt != null) {
+    res.status(409).json({ error: "already_sent" });
+    return;
+  }
+  if (row.retentionPostponed) {
+    res.status(409).json({ error: "already_postponed" });
+    return;
+  }
+  const base = row.purgeAfter ? new Date(row.purgeAfter) : new Date();
+  const extended = new Date(base.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const [updated] = await db
+    .update(pulseDnaVideosTable)
+    .set({
+      retentionPostponed: true,
+      purgeAfter: extended,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(pulseDnaVideosTable.id, id),
+        eq(pulseDnaVideosTable.schoolId, schoolId),
+      ),
+    )
+    .returning();
+  res.json(videoToClient(updated));
+});
+
+// DELETE /pulse-dna/videos/:id — purge a video now (manual library cleanup).
+// Deletes media files, nulls keys, flips to "purged". The row + transcript stay.
+router.delete("/pulse-dna/videos/:id", async (req, res) => {
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(401).json({ error: "School context required" });
+    return;
+  }
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "bad_id" });
+    return;
+  }
+  const row = await loadVideo(schoolId, id);
+  if (!row) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  for (const key of [
+    row.originalObjectKey,
+    row.mp4ObjectKey,
+    row.audioObjectKey,
+  ]) {
+    if (key) {
+      try {
+        await deleteStoredObject(key);
+      } catch (err) {
+        req.log?.warn({ err, key }, "pulse-dna video delete: object purge failed");
+      }
+    }
+  }
+  await db
+    .update(pulseDnaVideosTable)
+    .set({
+      status: "purged",
+      originalObjectKey: null,
+      mp4ObjectKey: null,
+      audioObjectKey: null,
+      purgedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(pulseDnaVideosTable.id, id),
+        eq(pulseDnaVideosTable.schoolId, schoolId),
+      ),
+    );
+  res.json({ ok: true });
 });
 
 export default router;

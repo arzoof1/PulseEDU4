@@ -150,6 +150,20 @@ export async function streamObjectToResponse(
   return true;
 }
 
+// Delete a stored object by its /objects/... path. Best-effort: a missing
+// object is treated as success (idempotent purge). The CALLER is responsible
+// for authorizing the delete (e.g. the retention cron owns the rows it purges).
+export async function deleteStoredObject(objectPath: string): Promise<void> {
+  let file;
+  try {
+    file = await objectStorageService.getObjectEntityFile(objectPath);
+  } catch (err) {
+    if (err instanceof ObjectNotFoundError) return;
+    throw err;
+  }
+  await file.delete({ ignoreNotFound: true });
+}
+
 // Synthetic ACL "owner" used to scope private uploads to a single school.
 // We intentionally use the string form `school:<id>` instead of a per-staff
 // owner so that any staffer in the same school can fetch the thumbnail

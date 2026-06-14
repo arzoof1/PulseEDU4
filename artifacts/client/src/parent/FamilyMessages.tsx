@@ -19,6 +19,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { parentFetch } from "./api";
 
+interface ParentVideoMeta {
+  id: number;
+  status: string;
+  durationSec: number | null;
+  hasMp4: boolean;
+  hasAudio: boolean;
+  purged: boolean;
+}
+
 interface ParentMessage {
   id: number;
   subject: string;
@@ -26,6 +35,8 @@ interface ParentMessage {
   hasAttachment: boolean;
   attachmentName: string | null;
   attachmentType: string | null;
+  videoId: number | null;
+  video: ParentVideoMeta | null;
   senderName: string;
   acknowledgedAt: string | null;
   createdAt: string;
@@ -61,6 +72,12 @@ export default function FamilyMessages() {
     Record<number, { url: string; open: boolean }>
   >({});
   const [viewing, setViewing] = useState<number | null>(null);
+  // Inline video preview: per-message object URL + open state (same in-document
+  // pattern as attachments, so the preview works inside the Replit iframe).
+  const [videoUrls, setVideoUrls] = useState<
+    Record<number, { url: string; open: boolean }>
+  >({});
+  const [loadingVideo, setLoadingVideo] = useState<number | null>(null);
   const objectUrlsRef = useRef<string[]>([]);
 
   // Revoke every object URL we created when the inbox unmounts.
@@ -173,6 +190,61 @@ export default function FamilyMessages() {
       const a = document.createElement("a");
       a.href = url;
       a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch {
+      /* swallow */
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  // Inline video: fetch the authed MP4 bytes once (parentFetch carries the
+  // Bearer token), turn them into an object URL, and reveal an in-document
+  // <video>. Subsequent taps toggle the loaded player open/closed.
+  async function viewVideo(m: ParentMessage) {
+    const existing = videoUrls[m.id];
+    if (existing) {
+      setVideoUrls((s) => ({
+        ...s,
+        [m.id]: { ...existing, open: !existing.open },
+      }));
+      return;
+    }
+    if (loadingVideo != null) return;
+    setLoadingVideo(m.id);
+    try {
+      const res = await parentFetch(
+        `/api/parent/messages/${m.id}/video?kind=mp4`,
+      );
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      objectUrlsRef.current.push(url);
+      setVideoUrls((s) => ({ ...s, [m.id]: { url, open: true } }));
+    } catch {
+      /* swallow */
+    } finally {
+      setLoadingVideo(null);
+    }
+  }
+
+  // Save the audio-only track to disk (parentFetch attaches the Bearer token).
+  async function downloadVideoAudio(m: ParentMessage) {
+    if (downloading != null) return;
+    setDownloading(m.id);
+    try {
+      const res = await parentFetch(
+        `/api/parent/messages/${m.id}/video?kind=audio`,
+      );
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `message-${m.id}-audio.mp3`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -341,6 +413,50 @@ export default function FamilyMessages() {
                             className="w-full h-auto block"
                           />
                         )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {m.video && !m.video.purged && m.video.hasMp4 && (
+                  <div className="mt-3 space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-2"
+                        disabled={loadingVideo === m.id}
+                        onClick={() => viewVideo(m)}
+                      >
+                        <Eye className="h-4 w-4" />
+                        <span>
+                          {loadingVideo === m.id ? "Opening…" : "Watch video"}
+                        </span>
+                        {videoUrls[m.id]?.open && (
+                          <ChevronUp className="h-4 w-4" />
+                        )}
+                      </Button>
+                      {m.video.hasAudio && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="gap-1.5 text-slate-500"
+                          disabled={downloading === m.id}
+                          onClick={() => downloadVideoAudio(m)}
+                        >
+                          <Download className="h-4 w-4" />
+                          {downloading === m.id ? "Saving…" : "Audio only"}
+                        </Button>
+                      )}
+                    </div>
+
+                    {videoUrls[m.id]?.open && (
+                      <div className="rounded-lg border border-slate-200 overflow-hidden bg-black">
+                        <video
+                          src={videoUrls[m.id].url}
+                          controls
+                          className="w-full h-auto block"
+                        />
                       </div>
                     )}
                   </div>

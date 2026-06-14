@@ -42,6 +42,10 @@ export const parentMessagesTable = pgTable(
     attachmentObjectKey: text("attachment_object_key"),
     attachmentName: text("attachment_name"),
     attachmentType: text("attachment_type"),
+    // Optional PulseDNA video attachment (pulse_dna_videos.id). When set, the
+    // message renders an inline video the family can play/download. Attaching a
+    // video to a sent message flips that video to school-year retention.
+    videoId: integer("video_id"),
     // Audience selector. One of:
     //   "school"   — every family in the school.
     //   "grade"    — families with a student in `audienceGrades`.

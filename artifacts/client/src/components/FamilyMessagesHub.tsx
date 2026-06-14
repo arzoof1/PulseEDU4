@@ -7,6 +7,7 @@
 // Talks to /api/family-messages via authFetch (repo convention — no codegen).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import type { VideoItem } from "./PulseDnaStudio";
 
 interface SentMessage {
   id: number;
@@ -19,10 +20,29 @@ interface SentMessage {
   attachmentName: string | null;
   attachmentType: string | null;
   emailNudge: boolean;
+  videoId: number | null;
+  video: HubVideoMeta | null;
   totalRecipients: number;
   reachedRecipients: number;
   acknowledgedRecipients: number;
   senderName: string;
+  createdAt: string;
+}
+
+interface HubVideoMeta {
+  id: number;
+  status: string;
+  durationSec: number | null;
+  hasMp4: boolean;
+  hasAudio: boolean;
+  purged: boolean;
+}
+
+// A ready PulseDNA video available to attach to a message.
+interface ReadyVideo {
+  id: number;
+  title: string | null;
+  durationSec: number | null;
   createdAt: string;
 }
 
@@ -47,6 +67,8 @@ interface MessageDetail {
   attachmentName: string | null;
   attachmentType: string | null;
   emailNudge: boolean;
+  videoId: number | null;
+  video: HubVideoMeta | null;
   totalRecipients: number;
   reachedRecipients: number;
   acknowledgedRecipients: number;
@@ -60,6 +82,13 @@ interface House {
 }
 
 type AudienceType = "school" | "grade" | "house" | "students";
+
+// mm:ss for the video picker labels.
+function formatVideoDuration(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
 
 const ALLOWED_ATTACHMENT_TYPES = new Set(["image/png", "application/pdf"]);
 
@@ -126,6 +155,8 @@ export default function FamilyMessagesHub({ grades }: { grades: number[] }) {
   const [attachment, setAttachment] = useState<File | null>(null);
   const [attachmentError, setAttachmentError] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [readyVideos, setReadyVideos] = useState<ReadyVideo[]>([]);
+  const [selectedVideoId, setSelectedVideoId] = useState<number | null>(null);
 
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
@@ -177,6 +208,24 @@ export default function FamilyMessagesHub({ grades }: { grades: number[] }) {
         }
       } catch {
         /* houses are optional — picker just shows none */
+      }
+      // Ready PulseDNA videos available to attach.
+      try {
+        const res = await authFetch("/api/pulse-dna/videos");
+        if (!cancelled && res.ok) {
+          const body = (await res.json()) as { videos?: VideoItem[] };
+          const ready = (Array.isArray(body.videos) ? body.videos : [])
+            .filter((v) => v.status === "ready" && v.hasMp4)
+            .map((v) => ({
+              id: v.id,
+              title: v.title,
+              durationSec: v.durationSec,
+              createdAt: v.createdAt,
+            }));
+          setReadyVideos(ready);
+        }
+      } catch {
+        /* videos are optional — picker just shows none */
       }
       if (!cancelled) await loadMessages();
     })();
@@ -240,6 +289,7 @@ export default function FamilyMessagesHub({ grades }: { grades: number[] }) {
     setEmailNudge(true);
     setAttachment(null);
     setAttachmentError("");
+    setSelectedVideoId(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -297,6 +347,7 @@ export default function FamilyMessagesHub({ grades }: { grades: number[] }) {
         attachmentObjectKey,
         attachmentName: attachment?.name ?? null,
         attachmentType: attachment?.type ?? null,
+        videoId: selectedVideoId,
       };
 
       const res = await authFetch("/api/family-messages", {
@@ -565,6 +616,44 @@ export default function FamilyMessagesHub({ grades }: { grades: number[] }) {
             )}
           </div>
 
+          {/* PulseDNA video picker */}
+          {readyVideos.length > 0 && (
+            <div style={{ display: "grid", gap: 6 }}>
+              <span style={{ fontWeight: 600, fontSize: "0.85rem" }}>
+                Attach a PulseDNA video (optional)
+              </span>
+              <select
+                value={selectedVideoId == null ? "" : String(selectedVideoId)}
+                onChange={(e) =>
+                  setSelectedVideoId(
+                    e.target.value === "" ? null : Number(e.target.value),
+                  )
+                }
+                style={{
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  border: "1px solid var(--border, #cbd5e1)",
+                  fontSize: "0.9rem",
+                }}
+              >
+                <option value="">No video</option>
+                {readyVideos.map((v) => (
+                  <option key={v.id} value={String(v.id)}>
+                    {(v.title || "Untitled video") +
+                      (v.durationSec != null
+                        ? ` (${formatVideoDuration(v.durationSec)})`
+                        : "")}
+                  </option>
+                ))}
+              </select>
+              <span
+                style={{ fontSize: "0.8rem", color: "var(--muted, #64748b)" }}
+              >
+                Record videos in the PulseDNA Studio. Ready videos appear here.
+              </span>
+            </div>
+          )}
+
           {/* Email nudge */}
           <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <input
@@ -652,6 +741,7 @@ export default function FamilyMessagesHub({ grades }: { grades: number[] }) {
                   <div style={{ fontSize: "0.8rem", color: "var(--muted, #64748b)" }}>
                     {m.senderName} · {formatWhen(m.createdAt)}
                     {m.hasAttachment ? " · 📎 attachment" : ""}
+                    {m.videoId ? " · 🎥 video" : ""}
                     {m.emailNudge ? " · email nudge" : ""}
                   </div>
                 </div>

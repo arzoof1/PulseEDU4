@@ -28,6 +28,38 @@ interface ProfileState {
   updatedAt: string | null;
 }
 
+// A PulseDNA video as returned by the server (videoToClient shape).
+export interface VideoItem {
+  id: number;
+  status: string; // processing | ready | failed | purged
+  title: string | null;
+  script: string;
+  durationSec: number | null;
+  sizeBytes: number | null;
+  errorReason: string | null;
+  sent: boolean;
+  sentAt: string | null;
+  retentionPostponed: boolean;
+  purgeAfter: string | null;
+  hasMp4: boolean;
+  hasAudio: boolean;
+  createdAt: string;
+}
+
+function formatDuration(sec: number | null): string {
+  if (sec == null) return "—";
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function formatBytes(bytes: number | null): string {
+  if (bytes == null) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 const OUTPUT_TYPES = [
   "Family announcement",
   "Email to families",
@@ -105,7 +137,7 @@ async function extractTextFromFile(file: File): Promise<string> {
 }
 
 export default function PulseDnaStudio() {
-  const [tab, setTab] = useState<"profile" | "create">("profile");
+  const [tab, setTab] = useState<"profile" | "create" | "library">("profile");
   const [showHelp, setShowHelp] = useState(false);
 
   return (
@@ -144,10 +176,22 @@ export default function PulseDnaStudio() {
           >
             Create a message
           </button>
+          <button
+            className={tab === "library" ? "btn primary" : "btn"}
+            onClick={() => setTab("library")}
+          >
+            Video library
+          </button>
         </div>
       </section>
 
-      {tab === "profile" ? <ProfileTab /> : <CreateTab />}
+      {tab === "profile" ? (
+        <ProfileTab />
+      ) : tab === "create" ? (
+        <CreateTab />
+      ) : (
+        <VideoLibraryTab />
+      )}
 
       {showHelp && <StudioHelpModal onClose={() => setShowHelp(false)} />}
     </div>
@@ -495,7 +539,133 @@ function CreateTab() {
   const speechSupported = getSpeechRecognitionCtor() !== null;
   const [studioOpen, setStudioOpen] = useState(false);
   const [studioScript, setStudioScript] = useState("");
-  const [videoReady, setVideoReady] = useState(false);
+  const [uploadState, setUploadState] = useState<
+    "idle" | "uploading" | "processing" | "ready" | "error"
+  >("idle");
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadedVideo, setUploadedVideo] = useState<VideoItem | null>(null);
+  // Media elements don't carry the Bearer token, so a plain <video src="/api/…">
+  // 401s inside the Replit preview iframe. Fetch the MP4 bytes with authFetch
+  // and play them from an object URL instead.
+  const [readyVideoUrl, setReadyVideoUrl] = useState<string | null>(null);
+  const pollRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current != null) window.clearTimeout(pollRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (uploadState !== "ready" || !uploadedVideo || !uploadedVideo.hasMp4) {
+      return;
+    }
+    let revoked = false;
+    let url: string | null = null;
+    (async () => {
+      try {
+        const res = await authFetch(
+          `/api/pulse-dna/videos/${uploadedVideo.id}/file?kind=mp4`,
+        );
+        if (!res.ok) return;
+        const blob = await res.blob();
+        if (revoked) return;
+        url = URL.createObjectURL(blob);
+        setReadyVideoUrl(url);
+      } catch {
+        /* swallow — the library tab is the reliable surface */
+      }
+    })();
+    return () => {
+      revoked = true;
+      if (url) URL.revokeObjectURL(url);
+      setReadyVideoUrl(null);
+    };
+  }, [uploadState, uploadedVideo]);
+
+  // Upload a kept take, register it, then poll until the server finishes
+  // transcoding it to MP4 + audio.
+  async function uploadTake(video: {
+    blob: Blob;
+    mimeType: string;
+    durationSec: number;
+  }) {
+    setStudioOpen(false);
+    // Cancel any in-flight poll from a previous take so we don't run two loops.
+    if (pollRef.current != null) {
+      window.clearTimeout(pollRef.current);
+      pollRef.current = null;
+    }
+    setUploadState("uploading");
+    setUploadError(null);
+    setUploadedVideo(null);
+    try {
+      const urlRes = await authFetch("/api/pulse-dna/videos/upload-url", {
+        method: "POST",
+      });
+      if (!urlRes.ok) throw new Error("upload-url failed");
+      const { uploadURL, objectPath } = (await urlRes.json()) as {
+        uploadURL: string;
+        objectPath: string;
+      };
+      const putRes = await fetch(uploadURL, {
+        method: "PUT",
+        headers: { "content-type": video.mimeType || "video/webm" },
+        body: video.blob,
+      });
+      if (!putRes.ok) throw new Error("upload failed");
+
+      const regRes = await authFetch("/api/pulse-dna/videos", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          objectPath,
+          mimeType: video.mimeType || "video/webm",
+          durationSec: Math.max(1, Math.round(video.durationSec)),
+          sizeBytes: video.blob.size,
+          script: studioScript,
+        }),
+      });
+      if (!regRes.ok) throw new Error("register failed");
+      const { id } = (await regRes.json()) as { id: number; status: string };
+
+      setUploadState("processing");
+      poll(id);
+    } catch {
+      setUploadState("error");
+      setUploadError(
+        "Couldn't save the recording. Please check your connection and try again.",
+      );
+    }
+  }
+
+  function poll(id: number) {
+    const tick = async () => {
+      try {
+        const res = await authFetch(`/api/pulse-dna/videos/${id}`);
+        if (!res.ok) throw new Error("poll failed");
+        const v = (await res.json()) as VideoItem;
+        if (v.status === "ready") {
+          setUploadedVideo(v);
+          setUploadState("ready");
+          return;
+        }
+        if (v.status === "failed" || v.status === "purged") {
+          setUploadState("error");
+          setUploadError(
+            v.errorReason ||
+              "Processing failed. Please try recording again.",
+          );
+          return;
+        }
+        pollRef.current = window.setTimeout(tick, 2500);
+      } catch {
+        setUploadState("error");
+        setUploadError("Lost contact while processing. Please try again.");
+      }
+    };
+    pollRef.current = window.setTimeout(tick, 2000);
+  }
 
   async function generate() {
     if (!roughInput.trim()) {
@@ -794,19 +964,371 @@ function CreateTab() {
         </div>
       )}
 
-      {videoReady && (
-        <p style={{ color: "var(--text-subtle)", marginTop: "0.75rem", fontSize: "0.85rem" }}>
-          Video recorded and ready — sending it to families arrives in the next update.
-        </p>
+      {uploadState !== "idle" && (
+        <div
+          className="card"
+          style={{
+            marginTop: "1rem",
+            background: "var(--surface-subtle, #f8fafc)",
+          }}
+        >
+          {uploadState === "uploading" && (
+            <p style={{ margin: 0, color: "var(--text)" }}>
+              Uploading your recording…
+            </p>
+          )}
+          {uploadState === "processing" && (
+            <p style={{ margin: 0, color: "var(--text)" }}>
+              Processing your video — this can take a minute. You can keep
+              working; check the <strong>Video library</strong> tab anytime.
+            </p>
+          )}
+          {uploadState === "error" && (
+            <p style={{ margin: 0, color: "var(--danger, #b91c1c)" }}>
+              {uploadError}
+            </p>
+          )}
+          {uploadState === "ready" && uploadedVideo && (
+            <div>
+              <p style={{ marginTop: 0, color: "var(--text)", fontWeight: 600 }}>
+                Your video is ready ({formatDuration(uploadedVideo.durationSec)}).
+              </p>
+              {readyVideoUrl ? (
+                <video
+                  src={readyVideoUrl}
+                  controls
+                  style={{
+                    width: "100%",
+                    maxWidth: "480px",
+                    borderRadius: "8px",
+                    background: "#000",
+                  }}
+                />
+              ) : (
+                <p style={{ margin: 0, color: "var(--text-subtle)" }}>
+                  Loading preview…
+                </p>
+              )}
+              <p
+                style={{
+                  color: "var(--text-subtle)",
+                  fontSize: "0.85rem",
+                  marginBottom: 0,
+                }}
+              >
+                Find it under the <strong>Video library</strong> tab to download
+                it or attach it to a family message. Unsent videos are kept for
+                14 days.
+              </p>
+            </div>
+          )}
+        </div>
       )}
 
       {studioOpen && (
         <RecordingStudio
           initialScript={studioScript}
           onClose={() => setStudioOpen(false)}
-          onKeepTake={() => setVideoReady(true)}
+          onKeepTake={(video) => void uploadTake(video)}
         />
       )}
+    </section>
+  );
+}
+
+// Video library — the school's recorded videos (newest first). Plays + downloads
+// stream the authed bytes through authFetch → object URL (a plain media src 401s
+// inside the Replit preview iframe), and offers postpone (unsent only) + delete.
+function VideoLibraryTab() {
+  const [videos, setVideos] = useState<VideoItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  // Per-video inline player object URL + open state.
+  const [players, setPlayers] = useState<
+    Record<number, { url: string; open: boolean }>
+  >({});
+  const [loadingPlayer, setLoadingPlayer] = useState<number | null>(null);
+  const urlsRef = useRef<string[]>([]);
+
+  async function load() {
+    try {
+      const res = await authFetch("/api/pulse-dna/videos");
+      if (!res.ok) {
+        setError(`Could not load videos (${res.status})`);
+        return;
+      }
+      const body = (await res.json()) as { videos?: VideoItem[] };
+      setVideos(Array.isArray(body.videos) ? body.videos : []);
+      setError(null);
+    } catch {
+      setError("Could not load videos");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    return () => {
+      for (const u of urlsRef.current) URL.revokeObjectURL(u);
+      urlsRef.current = [];
+    };
+  }, []);
+
+  async function togglePlayer(v: VideoItem) {
+    const existing = players[v.id];
+    if (existing) {
+      setPlayers((s) => ({ ...s, [v.id]: { ...existing, open: !existing.open } }));
+      return;
+    }
+    if (loadingPlayer != null) return;
+    setLoadingPlayer(v.id);
+    try {
+      const res = await authFetch(`/api/pulse-dna/videos/${v.id}/file?kind=mp4`);
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      urlsRef.current.push(url);
+      setPlayers((s) => ({ ...s, [v.id]: { url, open: true } }));
+    } catch {
+      /* swallow */
+    } finally {
+      setLoadingPlayer(null);
+    }
+  }
+
+  async function download(v: VideoItem, kind: "mp4" | "audio") {
+    if (busyId != null) return;
+    setBusyId(v.id);
+    try {
+      const res = await authFetch(
+        `/api/pulse-dna/videos/${v.id}/file?kind=${kind}`,
+      );
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download =
+        kind === "mp4" ? `pulsedna-video-${v.id}.mp4` : `pulsedna-audio-${v.id}.mp3`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch {
+      /* swallow */
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function postpone(v: VideoItem) {
+    if (busyId != null) return;
+    setBusyId(v.id);
+    try {
+      const res = await authFetch(`/api/pulse-dna/videos/${v.id}/postpone`, {
+        method: "POST",
+      });
+      if (res.ok) await load();
+    } catch {
+      /* swallow */
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function remove(v: VideoItem) {
+    if (busyId != null) return;
+    if (
+      !window.confirm(
+        "Delete this video file? The written message and transcript are kept; only the video is removed.",
+      )
+    ) {
+      return;
+    }
+    setBusyId(v.id);
+    try {
+      const res = await authFetch(`/api/pulse-dna/videos/${v.id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        // Drop any open player for this video and revoke its object URL.
+        setPlayers((s) => {
+          const existing = s[v.id];
+          if (existing) URL.revokeObjectURL(existing.url);
+          const next = { ...s };
+          delete next[v.id];
+          return next;
+        });
+        await load();
+      }
+    } catch {
+      /* swallow */
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  if (loading) {
+    return (
+      <section className="card" style={{ padding: 16 }}>
+        <p style={{ margin: 0, color: "var(--text-subtle)" }}>Loading videos…</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="card" style={{ padding: 16, display: "grid", gap: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+        <h3 style={{ margin: 0 }}>Video library</h3>
+        <button type="button" className="btn" onClick={() => void load()}>
+          Refresh
+        </button>
+      </div>
+      {error && (
+        <p style={{ margin: 0, color: "var(--danger, #b91c1c)" }}>{error}</p>
+      )}
+      {videos.length === 0 && !error && (
+        <p style={{ margin: 0, color: "var(--text-subtle)" }}>
+          No videos yet. Record one from the <strong>Create</strong> tab. Unsent
+          videos are kept for 14 days; videos attached to a family message are
+          kept for the school year.
+        </p>
+      )}
+      {videos.map((v) => (
+        <div
+          key={v.id}
+          style={{
+            border: "1px solid var(--border, #e2e8f0)",
+            borderRadius: 10,
+            padding: 12,
+            display: "grid",
+            gap: 8,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 8,
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ display: "grid", gap: 2 }}>
+              <strong style={{ color: "var(--text)" }}>
+                {v.title || "Untitled video"}
+              </strong>
+              <span style={{ fontSize: "0.8rem", color: "var(--text-subtle)" }}>
+                {formatDuration(v.durationSec)} · {formatBytes(v.sizeBytes)} ·{" "}
+                {new Date(v.createdAt).toLocaleDateString()}
+              </span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {v.sent ? (
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    fontWeight: 600,
+                    color: "#047857",
+                  }}
+                >
+                  Sent · kept for the school year
+                </span>
+              ) : v.purgeAfter ? (
+                <span
+                  style={{ fontSize: "0.75rem", color: "var(--text-subtle)" }}
+                >
+                  Purges {new Date(v.purgeAfter).toLocaleDateString()}
+                  {v.retentionPostponed ? " (postponed)" : ""}
+                </span>
+              ) : null}
+            </div>
+          </div>
+
+          {v.status === "processing" && (
+            <span style={{ fontSize: "0.85rem", color: "var(--text-subtle)" }}>
+              Still processing…
+            </span>
+          )}
+          {v.status === "failed" && (
+            <span style={{ fontSize: "0.85rem", color: "var(--danger, #b91c1c)" }}>
+              {v.errorReason || "Processing failed."}
+            </span>
+          )}
+
+          {v.status === "ready" && (
+            <>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {v.hasMp4 && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={loadingPlayer === v.id}
+                    onClick={() => void togglePlayer(v)}
+                  >
+                    {loadingPlayer === v.id
+                      ? "Opening…"
+                      : players[v.id]?.open
+                        ? "Hide"
+                        : "Watch"}
+                  </button>
+                )}
+                {v.hasMp4 && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busyId === v.id}
+                    onClick={() => void download(v, "mp4")}
+                  >
+                    Download MP4
+                  </button>
+                )}
+                {v.hasAudio && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busyId === v.id}
+                    onClick={() => void download(v, "audio")}
+                  >
+                    Download audio
+                  </button>
+                )}
+                {!v.sent && !v.retentionPostponed && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busyId === v.id}
+                    onClick={() => void postpone(v)}
+                  >
+                    Keep 7 more days
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn danger"
+                  disabled={busyId === v.id}
+                  onClick={() => void remove(v)}
+                >
+                  Delete
+                </button>
+              </div>
+              {players[v.id]?.open && (
+                <video
+                  src={players[v.id].url}
+                  controls
+                  style={{
+                    width: "100%",
+                    maxWidth: 480,
+                    borderRadius: 8,
+                    background: "#000",
+                  }}
+                />
+              )}
+            </>
+          )}
+        </div>
+      ))}
     </section>
   );
 }

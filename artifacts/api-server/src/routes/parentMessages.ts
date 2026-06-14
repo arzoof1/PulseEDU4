@@ -34,6 +34,7 @@ import {
   parentStudentsTable,
   parentMessagesTable,
   parentMessageRecipientsTable,
+  pulseDnaVideosTable,
 } from "@workspace/db";
 import { and, eq, inArray, desc, sql, isNotNull } from "drizzle-orm";
 import { isCoreTeam } from "../lib/coreTeam.js";
@@ -316,6 +317,48 @@ async function buildRecipients(
   return Array.from(byKey.values());
 }
 
+// Load a school-scoped lookup of attachable video metadata for a set of
+// (possibly null/duplicate) videoIds. Returns only display-safe fields; the
+// media itself streams through the dedicated file routes.
+type VideoMeta = {
+  id: number;
+  status: string;
+  durationSec: number | null;
+  hasMp4: boolean;
+  hasAudio: boolean;
+  purged: boolean;
+};
+async function loadVideoMeta(
+  schoolId: number,
+  ids: Array<number | null>,
+): Promise<Map<number, VideoMeta>> {
+  const wanted = Array.from(
+    new Set(ids.filter((v): v is number => v != null)),
+  );
+  const map = new Map<number, VideoMeta>();
+  if (wanted.length === 0) return map;
+  const rows = await db
+    .select()
+    .from(pulseDnaVideosTable)
+    .where(
+      and(
+        eq(pulseDnaVideosTable.schoolId, schoolId),
+        inArray(pulseDnaVideosTable.id, wanted),
+      ),
+    );
+  for (const r of rows) {
+    map.set(r.id, {
+      id: r.id,
+      status: r.status,
+      durationSec: r.durationSec,
+      hasMp4: r.mp4ObjectKey != null,
+      hasAudio: r.audioObjectKey != null,
+      purged: r.status === "purged",
+    });
+  }
+  return map;
+}
+
 // POST /family-messages — compose + send.
 router.post(
   "/family-messages",
@@ -385,6 +428,35 @@ router.post(
       }
     }
 
+    // Optional PulseDNA video attachment. Must be a "ready" video belonging to
+    // this school. Attaching it to a sent message flips it to school-year
+    // retention (sentAt stamped after the message row is created).
+    const videoId =
+      req.body?.videoId != null ? Number(req.body.videoId) : null;
+    let videoRow: typeof pulseDnaVideosTable.$inferSelect | null = null;
+    if (videoId != null) {
+      if (!Number.isInteger(videoId)) {
+        res.status(400).json({ error: "Invalid video selection" });
+        return;
+      }
+      const [v] = await db
+        .select()
+        .from(pulseDnaVideosTable)
+        .where(
+          and(
+            eq(pulseDnaVideosTable.id, videoId),
+            eq(pulseDnaVideosTable.schoolId, schoolId),
+          ),
+        );
+      if (!v || v.status !== "ready") {
+        res
+          .status(400)
+          .json({ error: "Selected video is not ready to attach" });
+        return;
+      }
+      videoRow = v;
+    }
+
     const resolved = await resolveAudienceStudentIds(schoolId, audienceType, {
       grades,
       houseIds,
@@ -433,10 +505,26 @@ router.post(
         audienceStudentIds:
           audienceType === "students" ? resolved.studentIds : null,
         emailNudge,
+        videoId: videoRow ? videoRow.id : null,
         totalRecipients: recipients.length,
         reachedRecipients: reachedCount,
       })
       .returning();
+
+    // Attaching the video to a sent message flips it to school-year retention
+    // (purged at rollover, not after the 14-day library window). Idempotent —
+    // only stamps sentAt the first time it's attached.
+    if (videoRow && videoRow.sentAt == null) {
+      await db
+        .update(pulseDnaVideosTable)
+        .set({ sentAt: new Date(), updatedAt: new Date() })
+        .where(
+          and(
+            eq(pulseDnaVideosTable.id, videoRow.id),
+            eq(pulseDnaVideosTable.schoolId, schoolId),
+          ),
+        );
+    }
 
     // Fan out recipient rows.
     await db.insert(parentMessageRecipientsTable).values(
@@ -569,6 +657,11 @@ router.get(
       : [];
     const senderById = new Map(senders.map((s) => [s.id, s.displayName]));
 
+    const videoMeta = await loadVideoMeta(
+      schoolId,
+      messages.map((m) => m.videoId),
+    );
+
     res.json(
       messages.map((m) => ({
         id: m.id,
@@ -581,6 +674,8 @@ router.get(
         attachmentName: m.attachmentName,
         attachmentType: m.attachmentType,
         emailNudge: m.emailNudge,
+        videoId: m.videoId,
+        video: m.videoId != null ? videoMeta.get(m.videoId) ?? null : null,
         totalRecipients: m.totalRecipients,
         reachedRecipients: m.reachedRecipients,
         acknowledgedRecipients: ackByMessage.get(m.id) ?? 0,
@@ -685,6 +780,13 @@ router.get(
       attachmentName: message.attachmentName,
       attachmentType: message.attachmentType,
       emailNudge: message.emailNudge,
+      videoId: message.videoId,
+      video:
+        message.videoId != null
+          ? (await loadVideoMeta(schoolId, [message.videoId])).get(
+              message.videoId,
+            ) ?? null
+          : null,
       totalRecipients: message.totalRecipients,
       reachedRecipients: message.reachedRecipients,
       acknowledgedRecipients,
@@ -808,6 +910,7 @@ router.get("/parent/messages", async (req: Request, res: Response) => {
       attachmentObjectKey: parentMessagesTable.attachmentObjectKey,
       attachmentName: parentMessagesTable.attachmentName,
       attachmentType: parentMessagesTable.attachmentType,
+      videoId: parentMessagesTable.videoId,
       createdByStaffId: parentMessagesTable.createdByStaffId,
       createdAt: parentMessagesTable.createdAt,
     })
@@ -836,6 +939,11 @@ router.get("/parent/messages", async (req: Request, res: Response) => {
   const total = rows.length;
   const acknowledged = rows.filter((r) => r.acknowledgedAt != null).length;
 
+  const videoMeta = await loadVideoMeta(
+    schoolId,
+    rows.map((r) => r.videoId),
+  );
+
   res.json({
     powerReader: isPowerReader(total, acknowledged),
     unreadCount: total - acknowledged,
@@ -846,6 +954,11 @@ router.get("/parent/messages", async (req: Request, res: Response) => {
       hasAttachment: !!r.attachmentObjectKey,
       attachmentName: r.attachmentName,
       attachmentType: r.attachmentType,
+      videoId: r.videoId,
+      video:
+        r.videoId != null && videoMeta.get(r.videoId)?.purged === false
+          ? videoMeta.get(r.videoId) ?? null
+          : null,
       senderName: senderById.get(r.createdByStaffId) ?? "School",
       acknowledgedAt: r.acknowledgedAt,
       createdAt: r.createdAt,
@@ -936,6 +1049,75 @@ router.get(
       return;
     }
     await streamMessageAttachment(message, res);
+  },
+);
+
+// GET /parent/messages/:id/video?kind=mp4|audio — stream the attached PulseDNA
+// video (or its audio-only track) for a parent recipient of this message.
+router.get(
+  "/parent/messages/:id/video",
+  async (req: Request, res: Response) => {
+    const ctx = await resolveParentContext(req);
+    if (!ctx) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    const { pid, schoolId } = ctx;
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Invalid message id" });
+      return;
+    }
+    const kind = req.query.kind === "audio" ? "audio" : "mp4";
+    const [row] = await db
+      .select({ id: parentMessageRecipientsTable.id })
+      .from(parentMessageRecipientsTable)
+      .where(
+        and(
+          eq(parentMessageRecipientsTable.messageId, id),
+          eq(parentMessageRecipientsTable.parentId, pid),
+          eq(parentMessageRecipientsTable.schoolId, schoolId),
+        ),
+      );
+    if (!row) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const [message] = await db
+      .select({ videoId: parentMessagesTable.videoId })
+      .from(parentMessagesTable)
+      .where(
+        and(
+          eq(parentMessagesTable.id, id),
+          eq(parentMessagesTable.schoolId, schoolId),
+        ),
+      );
+    if (!message || message.videoId == null) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const [video] = await db
+      .select()
+      .from(pulseDnaVideosTable)
+      .where(
+        and(
+          eq(pulseDnaVideosTable.id, message.videoId),
+          eq(pulseDnaVideosTable.schoolId, schoolId),
+        ),
+      );
+    if (!video || video.status === "purged") {
+      res.status(404).json({ error: "Video is no longer available" });
+      return;
+    }
+    const objectKey =
+      kind === "audio" ? video.audioObjectKey : video.mp4ObjectKey;
+    if (!objectKey) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    res.setHeader("Content-Type", kind === "audio" ? "audio/mpeg" : "video/mp4");
+    const ok = await streamObjectToResponse(objectKey, res);
+    if (!ok) res.status(404).json({ error: "Not found" });
   },
 );
 
