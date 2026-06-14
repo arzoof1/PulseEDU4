@@ -61,6 +61,7 @@ import {
   ensureClassComposerSkillClusterSchema,
   ensureStaffPasswordResetsSchema,
 } from "./seed";
+import { seedDistrictDemoExtras } from "./seedDemoExtras";
 import { backfillWitnessSequences } from "./lib/witnessStatementId";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
@@ -355,6 +356,14 @@ async function runSeed(): Promise<void> {
     }
   } catch (err) {
     logger.warn({ err }, "[boot] witness ws_seq backfill failed");
+  }
+  // District-demo data extras (Parrott / school 1 only): Comp Time workflow,
+  // HeartBEAT connections, academic Tier 3 history, and Lobby TV signage.
+  // Fully idempotent + self-guarded; own try/catch so it can never block boot.
+  try {
+    await seedDistrictDemoExtras();
+  } catch (err) {
+    logger.error({ err }, "[boot] district demo extras seed failed");
   }
 }
 
