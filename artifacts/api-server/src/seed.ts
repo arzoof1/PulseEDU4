@@ -6641,7 +6641,7 @@ type DemoGuardian = {
   slot: number;
   letter: string;
 };
-type DemoFamily = { kids: number; guardians: DemoGuardian[] };
+type DemoFamily = { surname: string; kids: number; guardians: DemoGuardian[] };
 
 export async function ensurePickupDemoFamily(): Promise<void> {
   const SCHOOL_ID = 1;
@@ -6654,6 +6654,7 @@ export async function ensurePickupDemoFamily(): Promise<void> {
 
   const families: DemoFamily[] = [
     {
+      surname: "Rivera",
       kids: 3,
       guardians: [
         { name: "Maria Rivera", relationship: "Mother", phone: "(555) 010-1100", slot: 1, letter: "A" },
@@ -6661,12 +6662,14 @@ export async function ensurePickupDemoFamily(): Promise<void> {
       ],
     },
     {
+      surname: "Brooks",
       kids: 2,
       guardians: [
         { name: "Tasha Brooks", relationship: "Mother", phone: "(555) 010-2100", slot: 1, letter: "A" },
       ],
     },
     {
+      surname: "Coleman",
       kids: 1,
       guardians: [
         { name: "Marcus Coleman", relationship: "Father", phone: "(555) 010-3100", slot: 1, letter: "A" },
@@ -6736,6 +6739,15 @@ export async function ensurePickupDemoFamily(): Promise<void> {
       cursor += fam.kids;
       for (const stu of kids) {
         const base = String(nextBase++);
+        // Give each child the family's surname so the demo is coherent and
+        // searchable. last_name is a display-only column — every other table
+        // references the student by student_id (FLEID FK), never by name, so
+        // this touches nothing else. (hall_pass_queue keeps a transient name
+        // snapshot that resets per period; the live UI joins to students.)
+        await tx.execute(sql`
+          UPDATE students SET last_name = ${fam.surname}
+          WHERE school_id = ${SCHOOL_ID} AND id = ${stu.id}
+        `);
         // Clear any existing active codes so the family tag is clean.
         await tx.execute(sql`
           UPDATE student_pickup_authorizations
