@@ -110,12 +110,14 @@ export default function RecordingStudio({
   const [elapsed, setElapsed] = useState(0);
   const [recordedUrl, setRecordedUrl] = useState<string | null>(null);
   const [kept, setKept] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
 
   const [scrolling, setScrolling] = useState(false);
   const [speed, setSpeed] = useState(40); // px/sec
   const [fontSize, setFontSize] = useState(36); // px
   const [lineHeight, setLineHeight] = useState(1.3);
   const [promptWidth, setPromptWidth] = useState(55); // % of screen width
+  const [linesVisible, setLinesVisible] = useState(3);
   const [condenseBlanks, setCondenseBlanks] = useState(true);
   const [mirrorCam, setMirrorCam] = useState(true);
   const [mirrorText, setMirrorText] = useState(false);
@@ -127,6 +129,7 @@ export default function RecordingStudio({
   const prompterRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const lastTsRef = useRef<number | null>(null);
+  const scrollAccumRef = useRef(0);
   const timerRef = useRef<number | null>(null);
   const recordedUrlRef = useRef<string | null>(null);
   const recordedBlobRef = useRef<Blob | null>(null);
@@ -207,11 +210,16 @@ export default function RecordingStudio({
       if (el) {
         if (lastTsRef.current != null) {
           const dt = (ts - lastTsRef.current) / 1000;
-          el.scrollTop += speed * dt;
+          // Accumulate sub-pixel movement so low speeds glide smoothly instead
+          // of stuttering on integer scrollTop rounding.
+          scrollAccumRef.current += speed * dt;
+          el.scrollTop = scrollAccumRef.current;
           if (el.scrollTop + el.clientHeight >= el.scrollHeight - 1) {
             setScrolling(false);
             return;
           }
+        } else {
+          scrollAccumRef.current = el.scrollTop;
         }
         lastTsRef.current = ts;
       }
@@ -348,12 +356,12 @@ export default function RecordingStudio({
         case "ArrowUp":
         case "PageUp":
           e.preventDefault();
-          setSpeed((v) => Math.min(200, v + 10));
+          setSpeed((v) => Math.min(200, v + 5));
           break;
         case "ArrowDown":
         case "PageDown":
           e.preventDefault();
-          setSpeed((v) => Math.max(10, v - 10));
+          setSpeed((v) => Math.max(10, v - 5));
           break;
         case "r":
         case "R":
@@ -413,6 +421,10 @@ export default function RecordingStudio({
   const displayScript = condenseBlanks
     ? script.replace(/\n{2,}/g, "\n")
     : script;
+  // Clamp the prompter window to a chosen number of lines so the eye stays in a
+  // tight band near the lens instead of travelling down the page. 56px ≈ the
+  // container's top (1.5rem) + bottom (2rem) padding.
+  const prompterHeight = Math.round(linesVisible * fontSize * lineHeight + 56);
 
   return (
     <div style={page}>
@@ -432,6 +444,9 @@ export default function RecordingStudio({
           {fmt(elapsed)} <span style={{ color: "#6b7280", fontWeight: 500 }}>/ {fmt(MAX_SECONDS)}</span>
         </div>
         <div style={{ display: "flex", gap: "0.5rem" }}>
+          <button style={btn} onClick={() => setShowHelp(true)}>
+            ? Help
+          </button>
           <button
             style={btn}
             onClick={() => setEditingScript((v) => !v)}
@@ -468,7 +483,8 @@ export default function RecordingStudio({
               top: 0,
               left: 0,
               right: 0,
-              maxHeight: "62%",
+              height: `${prompterHeight}px`,
+              maxHeight: "85%",
               overflow: "hidden",
               padding: "1.5rem 8% 2rem",
               background: "linear-gradient(180deg, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0.55) 70%, rgba(0,0,0,0) 100%)",
@@ -604,7 +620,7 @@ export default function RecordingStudio({
               type="range"
               min={10}
               max={200}
-              step={5}
+              step={1}
               value={speed}
               onChange={(e) => setSpeed(Number(e.target.value))}
             />
@@ -642,6 +658,17 @@ export default function RecordingStudio({
               onChange={(e) => setPromptWidth(Number(e.target.value))}
             />
           </label>
+          <label style={sliderLabel}>
+            <span>Visible lines: {linesVisible}</span>
+            <input
+              type="range"
+              min={1}
+              max={8}
+              step={1}
+              value={linesVisible}
+              onChange={(e) => setLinesVisible(Number(e.target.value))}
+            />
+          </label>
 
           <label style={checkLabel}>
             <input type="checkbox" checked={mirrorCam} onChange={(e) => setMirrorCam(e.target.checked)} />
@@ -661,6 +688,123 @@ export default function RecordingStudio({
           </span>
         </div>
       )}
+
+      {showHelp && <HelpPanel onClose={() => setShowHelp(false)} />}
     </div>
   );
 }
+
+/**
+ * Self-contained directions panel for the studio. Lives inside the
+ * full-screen overlay because the app's global "?" help bubble sits
+ * behind this overlay and isn't aware of the studio (the studio has no
+ * URL of its own). Plain static guidance — no AI round-trip needed.
+ */
+function HelpPanel({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      role="dialog"
+      aria-label="Recording studio help"
+      onClick={onClose}
+      style={{
+        position: "absolute",
+        inset: 0,
+        background: "rgba(2,6,12,0.78)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "1.5rem",
+        zIndex: 50,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(720px, 100%)",
+          maxHeight: "86vh",
+          overflowY: "auto",
+          background: "#0f1620",
+          border: "1px solid #334155",
+          borderRadius: "14px",
+          padding: "1.5rem 1.6rem 1.75rem",
+          boxShadow: "0 24px 60px rgba(0,0,0,0.55)",
+          lineHeight: 1.5,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: "1rem",
+            marginBottom: "0.5rem",
+          }}
+        >
+          <h2 style={{ margin: 0, fontSize: "1.2rem" }}>Recording studio — how it works</h2>
+          <button style={btn} onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <p style={{ color: "#9ca3af", marginTop: 0, fontSize: "0.9rem" }}>
+          Look into the camera (the small lens at the top of your screen), not at the
+          words. Keep the teleprompter near the top so your eyes stay close to the lens.
+        </p>
+
+        <h3 style={helpHeading}>Record a video</h3>
+        <ol style={helpList}>
+          <li>Hit <strong>● Record</strong> to start. The timer turns red and counts up to the 5-minute limit.</li>
+          <li>When you’re done, hit <strong>◼ Stop</strong>.</li>
+          <li>Review your take, then choose <strong>Use this take</strong> to keep it or <strong>Record again</strong> to retry.</li>
+        </ol>
+
+        <h3 style={helpHeading}>Use the teleprompter</h3>
+        <ol style={helpList}>
+          <li><strong>Edit script</strong> (top right) to paste or type what you want to read.</li>
+          <li><strong>Play script</strong> starts the text scrolling; <strong>Pause script</strong> stops it.</li>
+          <li><strong>Restart script</strong> jumps back to the top.</li>
+          <li>You can start scrolling before or after you hit Record — they’re independent.</li>
+        </ol>
+
+        <h3 style={helpHeading}>Dial in the reading experience</h3>
+        <ul style={helpList}>
+          <li><strong>Speed</strong> — how fast the text scrolls. Nudge it a point or two at a time until it matches your pace.</li>
+          <li><strong>Text size</strong> — bigger is easier to read from a step back.</li>
+          <li><strong>Line spacing</strong> — more space between lines if they feel crowded.</li>
+          <li><strong>Reading width</strong> — narrows the text into a center column so your eyes stay by the lens.</li>
+          <li><strong>Visible lines</strong> — limits how many lines show at once. Set it low (2–3) so you read across, not down the page.</li>
+          <li><strong>Mirror camera / Mirror text</strong> — flip the picture or the words (handy with a glass teleprompter rig).</li>
+          <li><strong>Condense blank lines</strong> — closes the gaps an AI draft leaves between paragraphs.</li>
+        </ul>
+
+        <h3 style={helpHeading}>Keyboard & clicker shortcuts</h3>
+        <ul style={helpList}>
+          <li><strong>Space</strong> — play / pause the script.</li>
+          <li><strong>↑ / ↓</strong> (or Page Up / Page Down) — speed up / slow down.</li>
+          <li><strong>R</strong> — start / stop recording.</li>
+          <li>A Bluetooth presentation clicker sends these same keys, so you can drive the studio from across the room.</li>
+        </ul>
+
+        <p style={{ color: "#9ca3af", fontSize: "0.85rem", marginBottom: 0 }}>
+          Tip: do one practice run with <strong>Play script</strong> before you hit
+          Record so the speed feels natural.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+const helpHeading: React.CSSProperties = {
+  margin: "1.1rem 0 0.4rem",
+  fontSize: "0.95rem",
+  color: "#e5e7eb",
+};
+
+const helpList: React.CSSProperties = {
+  margin: "0 0 0.4rem",
+  paddingLeft: "1.2rem",
+  display: "flex",
+  flexDirection: "column",
+  gap: "0.3rem",
+  color: "#cbd5e1",
+  fontSize: "0.9rem",
+};
