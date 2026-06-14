@@ -50,3 +50,23 @@ grouping.
   is in `/pickup/queue/add` (403 unless admin + justification).
 
 - **No FLEID on tags/office strip** — `local_sis_id` only.
+
+## Legacy letterless-code upgrade (lives in bulk-assign)
+
+Rows created before the letter scheme are `active`, `letter IS NULL`, with a
+bare `pickup_number` (e.g. `1026`). The ONE-CLICK fix is the bulk
+**"Assign pickup codes"** action: a "3b" pre-pass (runs BEFORE new issuance,
+same txn) upgrades each active letterless row IN PLACE — base+letter assigned,
+`pickup_number` rewritten, `adultKey` backfilled from the guardian label. It
+**reuses the old bare number as the base** when valid+free (`1026 → 1026A`) so
+no number is wasted (do NOT pre-reserve ACTIVE bares or reuse breaks); RETIRED
+letterless bares ARE pre-reserved into `usedBases` (anchor safety). Returns an
+`upgraded` count; the code changes so those tags must be reprinted (warned in
+the confirm dialog + result toast).
+**Why:** curb lookup is exact-match on the full code, so a reused base can
+never mis-resolve an old bare tag — but the documented base-anchor invariant
+still says never mint a base equal to a number a *printed* (retired) tag
+references.
+**How to apply:** the Family (no-contact) fallback only fires when
+`!studentsWithAnyActive.has(student)`, so the pre-pass marking the student
+active is what prevents a duplicate "Family" row on the same run.

@@ -3,6 +3,23 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- Pickup car-tag PDF — **landscape fold-over plain-paper sheet** + **legacy
+  letterless code upgrade**. (1) Tag PDF rewritten to an 8.5×11 LANDSCAPE
+  sheet, one tag/page: bottom panel upright + top panel rotated 180° around a
+  mid-page fold line ("FOLD HERE — drape over the hanger's top bar and tape")
+  so both halves read upright when folded over a kid's clothes-hanger bar and
+  taped (hang-tag stock was too expensive). Office reference strip unchanged;
+  caller interfaces unchanged. (2) Bulk **"Assign pickup codes"** now upgrades
+  LEGACY letterless rows (created before per-adult letters: active,
+  `letter IS NULL`, bare `pickup_number` like `1026`) IN PLACE — assigns the
+  student's base + next free A–H letter, rewrites the full code (reusing the
+  old bare number as the base when it's a valid free number, `1026 → 1026A`,
+  else mints fresh), and backfills a missing `adultKey` from the guardian
+  label so curb adult-lookup groups it. Runs before new issuance (no
+  duplicates), idempotent, soft-cap respected. Codes change → those tags must
+  be reprinted; surfaced via an `upgraded` count + a reprint warning in the
+  confirm dialog and result toast.
+
 - Tardy metrics — **Total tardies + lost-instruction minutes (YTD)**.
   The staff Hall Passes "Tardy / Check-In History" tab now shows two
   school-year-to-date summary tiles (Total Tardies, Lost Instruction

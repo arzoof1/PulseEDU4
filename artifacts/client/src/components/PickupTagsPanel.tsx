@@ -296,7 +296,10 @@ export default function PickupTagsPanel() {
         "Each student gets ONE base number; each authorized adult on file " +
         "gets a letter suffix (1001A = Mom, 1001B = Dad). One adult's code " +
         "releases all of that adult's kids. Students/adults already covered " +
-        "are skipped — it is safe to run after each roster import.",
+        "are skipped — it is safe to run after each roster import.\n\n" +
+        "Older letterless codes (e.g. 1026) are upgraded to add a letter " +
+        "(1026 → 1026A). That changes the code, so those tags must be " +
+        "reprinted.",
     );
     if (!ok) return;
     setBulkBusy(true);
@@ -310,6 +313,7 @@ export default function PickupTagsPanel() {
       });
       const b = (await res.json().catch(() => ({}))) as {
         assigned?: number;
+        upgraded?: number;
         studentsTouched?: number;
         cappedStudents?: number;
         error?: string;
@@ -319,6 +323,7 @@ export default function PickupTagsPanel() {
         return;
       }
       const assigned = b.assigned ?? 0;
+      const upgraded = b.upgraded ?? 0;
       const touched = b.studentsTouched ?? 0;
       const capped = b.cappedStudents ?? 0;
       const cappedNote =
@@ -326,10 +331,18 @@ export default function PickupTagsPanel() {
           ? ` ${capped} student(s) hit the 8-adult cap — extra contacts ` +
             "were skipped."
           : "";
+      const upgradedNote =
+        upgraded > 0
+          ? ` Upgraded ${upgraded} older code(s) to add a letter (e.g. 1026 → ` +
+            "1026A) — reprint those tags."
+          : "";
       setBulkResult(
-        assigned === 0
+        assigned === 0 && upgraded === 0
           ? "All students are already assigned — nothing to do." + cappedNote
-          : `Issued ${assigned} new code(s) across ${touched} student(s).` +
+          : assigned === 0
+            ? "No new codes needed." + upgradedNote + cappedNote
+            : `Issued ${assigned} new code(s) across ${touched} student(s).` +
+              upgradedNote +
               cappedNote,
       );
       if (studentDbId !== null) void refresh(studentDbId);

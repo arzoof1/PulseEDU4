@@ -1923,6 +1923,7 @@ router.post(
         if (students.length === 0) {
           return {
             assigned: 0,
+            upgraded: 0,
             studentsTouched: 0,
             cappedStudents: 0,
             capacityHit: false,
@@ -1955,7 +1956,10 @@ router.post(
         //    already have a live code (idempotency).
         const allAuths = await tx
           .select({
+            id: studentPickupAuthorizationsTable.id,
             studentId: studentPickupAuthorizationsTable.studentId,
+            parentId: studentPickupAuthorizationsTable.parentId,
+            guardianLabel: studentPickupAuthorizationsTable.guardianLabel,
             pickupNumber: studentPickupAuthorizationsTable.pickupNumber,
             baseNumber: studentPickupAuthorizationsTable.baseNumber,
             letter: studentPickupAuthorizationsTable.letter,
@@ -1979,6 +1983,18 @@ router.post(
             usedBases.add(a.baseNumber);
             if (!baseByStudent.has(a.studentId)) {
               baseByStudent.set(a.studentId, a.baseNumber);
+            }
+          } else if (!a.active && !a.letter) {
+            // RETIRED legacy bare-number row (no base/letter): its bare number
+            // was printed on a tag that may still be in circulation, so reserve
+            // it as a base — anchor safety means we never mint/reuse a base
+            // that equals a number a printed tag references. (Active legacy
+            // bares are reused IN PLACE by the 3b upgrade pre-pass below, so we
+            // deliberately do NOT pre-reserve those here.)
+            const bare = a.pickupNumber.trim();
+            const n = Number(bare);
+            if (/^\d+$/.test(bare) && n >= NUMBER_RANGE_MIN && n <= NUMBER_RANGE_MAX) {
+              usedBases.add(bare);
             }
           }
           if (a.active) {
@@ -2043,6 +2059,60 @@ router.post(
           });
           return true;
         };
+
+        // 3b. Upgrade LEGACY bare-number codes (rows created before per-adult
+        //     letters existed: active, letter IS NULL). We give each its
+        //     student's base + the next free A–H letter and rewrite the full
+        //     code IN PLACE, reusing the old bare number AS the base when it's
+        //     a valid, still-free number (1026 → 1026A) so the change is
+        //     minimal; otherwise we mint a fresh base. A missing adultKey is
+        //     backfilled from the guardian label so curb adult-lookup can
+        //     group the code. Done BEFORE new issuance so the rest of the run
+        //     treats the upgraded code as the adult's live code (no
+        //     duplicates). Already-printed bare tags MUST be reprinted — their
+        //     code changed. Soft cap respected (skip if A–H already burned).
+        let upgraded = 0;
+        for (const a of allAuths) {
+          if (!a.active || a.letter) continue; // only legacy letterless rows.
+          // Prefer the student's existing base; else reuse the old bare number
+          // if it's a valid, currently-free base; else mint a fresh one.
+          let base = baseByStudent.get(a.studentId) ?? null;
+          if (!base) {
+            const bare = a.pickupNumber.trim();
+            const n = Number(bare);
+            if (
+              /^\d+$/.test(bare) &&
+              n >= NUMBER_RANGE_MIN &&
+              n <= NUMBER_RANGE_MAX &&
+              !usedBases.has(bare)
+            ) {
+              base = bare;
+              usedBases.add(base);
+              baseByStudent.set(a.studentId, base);
+            } else {
+              base = ensureBase(a.studentId);
+            }
+          }
+          const burned =
+            lettersThisYearByStudent.get(a.studentId) ?? new Set<string>();
+          const letter = nextLetter(burned);
+          if (!letter) continue; // student already burned A–H this year.
+          const code = `${base}${letter}`;
+          if (usedFullCodes.has(code)) continue; // defensive collision guard.
+          const adultKey =
+            a.adultKey ??
+            adultKeyFor({ parentId: a.parentId, fallbackLabel: a.guardianLabel });
+          burned.add(letter);
+          lettersThisYearByStudent.set(a.studentId, burned);
+          usedFullCodes.add(code);
+          activeAdultPairs.add(`${a.studentId}:${adultKey}`);
+          studentsWithAnyActive.add(a.studentId);
+          await tx
+            .update(studentPickupAuthorizationsTable)
+            .set({ baseNumber: base, letter, adultKey, pickupNumber: code })
+            .where(eq(studentPickupAuthorizationsTable.id, a.id));
+          upgraded++;
+        }
 
         let assigned = 0;
         const touched = new Set<number>();
@@ -2113,6 +2183,7 @@ router.post(
         }
         return {
           assigned,
+          upgraded,
           studentsTouched: touched.size,
           cappedStudents: capped.size,
           capacityHit: false,
