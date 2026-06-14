@@ -1,0 +1,57 @@
+Build a web application called "PhotoWave" that creates MP4 videos from a sequence of photographs based on the time each picture was taken.
+
+Product Vision
+
+The purpose of this app is to create a "digital wave" effect. For example, 100 people could stand in a circle around a person in the middle. As the person turns and points at each individual, that person takes a photo. Although the photos are taken by 100 different devices, their metadata timestamps will differ by only fractions of a second or a few seconds. The application will read those timestamps, arrange the images in chronological order, and play them back as a smooth animated sequence, creating the effect of moving around the circle.
+
+Required User Workflow
+Upload Photos
+Allow drag-and-drop or file selection for 10–500 images.
+Support JPG, JPEG, PNG, and HEIC formats.
+Create thumbnail previews after upload.
+Analyze Photo Metadata
+Read EXIF data from every image.
+Detect the original capture time (DateTimeOriginal).
+Automatically sort the images from earliest to latest capture.
+Display the exact timestamp under each thumbnail.
+Review and Adjust Order
+Show the images in a horizontal timeline.
+Allow drag-and-drop reordering.
+Allow users to choose:
+Sort by photo timestamp
+Sort by upload order
+Manual order
+Video Controls
+Create a simple control panel with:
+A slider for image display duration from 0.05 seconds to 5 seconds.
+A live estimate of the final video length.
+Frame rate settings.
+Transition options:
+No transition
+Fade
+Crossfade
+Preview Mode
+Generate a low-resolution preview video quickly so users can verify the motion before exporting.
+Include play, pause, and restart controls.
+Export MP4
+Generate a high-quality H.264 MP4.
+Allow export options:
+720p
+1080p
+4K (if performance allows)
+Provide a download button when rendering is complete.
+Technical Expectations
+Use modern web technologies.
+Use a clean, mobile-friendly interface.
+Use EXIF libraries to read image timestamps.
+Use FFmpeg (ffmpeg.wasm or server-side FFmpeg) for video generation.
+Optimize for large batches of images without freezing the browser.
+Handle missing metadata gracefully and notify the user of any photos that cannot be timestamped.
+Future Enhancement Ideas (Design the architecture with these in mind)
+Add background music.
+Add automatic stabilization between images.
+Add AI-powered frame interpolation to create smoother movement.
+Create 360-degree “bullet time” style effects from multiple cameras.
+Allow users to share generated videos directly to social media.
+
+Create a polished MVP first, but structure the code so that future advanced media effects can be added easily.
