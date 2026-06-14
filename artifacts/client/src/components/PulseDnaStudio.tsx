@@ -106,6 +106,7 @@ async function extractTextFromFile(file: File): Promise<string> {
 
 export default function PulseDnaStudio() {
   const [tab, setTab] = useState<"profile" | "create">("profile");
+  const [showHelp, setShowHelp] = useState(false);
 
   return (
     <div>
@@ -113,7 +114,19 @@ export default function PulseDnaStudio() {
       <div className="section-header-band-hub" style={{ width: "100%", margin: 0 }} />
 
       <section className="card" style={{ overflow: "visible" }}>
-        <h2 style={{ marginTop: 0 }}>PulseDNA Studio</h2>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: "1rem",
+          }}
+        >
+          <h2 style={{ marginTop: 0 }}>PulseDNA Studio</h2>
+          <button className="btn" onClick={() => setShowHelp(true)}>
+            ? Help
+          </button>
+        </div>
         <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
           Save your school's communication voice once, then turn rough ideas
           into polished, ready-to-send messages that sound like you.
@@ -135,9 +148,94 @@ export default function PulseDnaStudio() {
       </section>
 
       {tab === "profile" ? <ProfileTab /> : <CreateTab />}
+
+      {showHelp && <StudioHelpModal onClose={() => setShowHelp(false)} />}
     </div>
   );
 }
+
+// Page-level directions for the whole PulseDNA Studio (both tabs). The app's
+// global "?" help bubble is grounded in the help knowledge base, but a direct
+// in-page panel is faster for first-time users right where they are.
+function StudioHelpModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      role="dialog"
+      aria-label="PulseDNA Studio help"
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,23,42,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "1.5rem",
+        zIndex: 1000,
+      }}
+    >
+      <div
+        className="card"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(680px, 100%)",
+          maxHeight: "86vh",
+          overflowY: "auto",
+          margin: 0,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: "1rem",
+          }}
+        >
+          <h2 style={{ margin: 0 }}>How PulseDNA Studio works</h2>
+          <button className="btn" onClick={onClose}>
+            Close
+          </button>
+        </div>
+
+        <h3>1. Save your school's voice (PulseDNA Profile)</h3>
+        <ul style={helpUl}>
+          <li>Open the <strong>PulseDNA Profile</strong> tab.</li>
+          <li><strong>Upload</strong> a .txt, .md, .pdf, or .docx — or paste your text — describing your tone, values, and sign-off.</li>
+          <li>Click <strong>Save profile</strong>. Toggle <strong>Use this profile when drafting</strong> on or off anytime.</li>
+        </ul>
+
+        <h3>2. Create a message</h3>
+        <ul style={helpUl}>
+          <li>On the <strong>Create a message</strong> tab, type what it's about — or click <strong>Dictate</strong> to speak it.</li>
+          <li>Pick the <strong>output type</strong>, <strong>audience</strong>, <strong>tone</strong>, and <strong>language</strong>.</li>
+          <li>Click <strong>Generate draft</strong>, then edit the result and copy it wherever you need it.</li>
+        </ul>
+
+        <h3>3. Record a video</h3>
+        <ul style={helpUl}>
+          <li>Click <strong>Record a video</strong> to open the studio with a teleprompter loaded from your draft.</li>
+          <li>Allow the browser to use your <strong>camera</strong> and <strong>microphone</strong> the first time.</li>
+          <li>Inside the studio, click <strong>? Help</strong> (top right) for teleprompter and recording directions.</li>
+        </ul>
+
+        <p style={{ color: "var(--text-subtle)", marginBottom: 0 }}>
+          Tip: dictation and the camera need permission, which the Replit
+          preview can block — if so, open the app in its own browser tab.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+const helpUl: React.CSSProperties = {
+  margin: "0.4rem 0 0.5rem",
+  paddingLeft: "1.2rem",
+  display: "flex",
+  flexDirection: "column",
+  gap: "0.3rem",
+  color: "var(--text)",
+};
 
 function ProfileTab() {
   const [profile, setProfile] = useState<ProfileState | null>(null);
