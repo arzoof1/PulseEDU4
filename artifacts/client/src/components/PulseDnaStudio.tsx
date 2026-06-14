@@ -1074,6 +1074,14 @@ function VideoLibraryTab() {
     Record<number, { url: string; open: boolean }>
   >({});
   const [loadingPlayer, setLoadingPlayer] = useState<number | null>(null);
+  // Inline rename: which video is being renamed + the draft title. We use an
+  // in-document input instead of window.prompt() because the Replit preview
+  // iframe is sandboxed and silently suppresses prompt()/alert()/confirm().
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  // Which video has an armed inline "confirm delete" (window.confirm is also
+  // suppressed inside the sandboxed preview iframe, so we two-step in-document).
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const urlsRef = useRef<string[]>([]);
 
   async function load() {
@@ -1148,10 +1156,19 @@ function VideoLibraryTab() {
     }
   }
 
-  async function rename(v: VideoItem) {
-    const next = window.prompt("Video name:", v.title ?? "");
-    if (next == null) return;
+  function startRename(v: VideoItem) {
+    setRenamingId(v.id);
+    setRenameDraft(v.title ?? "");
+  }
+
+  function cancelRename() {
+    setRenamingId(null);
+    setRenameDraft("");
+  }
+
+  async function saveRename(v: VideoItem) {
     if (busyId != null) return;
+    const next = renameDraft.trim();
     setBusyId(v.id);
     try {
       const res = await authFetch(`/api/pulse-dna/videos/${v.id}`, {
@@ -1159,7 +1176,10 @@ function VideoLibraryTab() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ title: next }),
       });
-      if (res.ok) await load();
+      if (res.ok) {
+        cancelRename();
+        await load();
+      }
     } catch {
       /* swallow */
     } finally {
@@ -1184,19 +1204,13 @@ function VideoLibraryTab() {
 
   async function remove(v: VideoItem) {
     if (busyId != null) return;
-    if (
-      !window.confirm(
-        "Delete this video file? The written message and transcript are kept; only the video is removed.",
-      )
-    ) {
-      return;
-    }
     setBusyId(v.id);
     try {
       const res = await authFetch(`/api/pulse-dna/videos/${v.id}`, {
         method: "DELETE",
       });
       if (res.ok) {
+        setConfirmDeleteId(null);
         // Drop any open player for this video and revoke its object URL.
         setPlayers((s) => {
           const existing = s[v.id];
@@ -1260,9 +1274,53 @@ function VideoLibraryTab() {
             }}
           >
             <div style={{ display: "grid", gap: 2 }}>
-              <strong style={{ color: "var(--text)" }}>
-                {v.title || "Untitled video"}
-              </strong>
+              {renamingId === v.id ? (
+                <div
+                  style={{ display: "flex", alignItems: "center", gap: 6 }}
+                >
+                  <input
+                    type="text"
+                    value={renameDraft}
+                    autoFocus
+                    placeholder="Video name"
+                    onChange={(e) => setRenameDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void saveRename(v);
+                      if (e.key === "Escape") cancelRename();
+                    }}
+                    disabled={busyId === v.id}
+                    style={{
+                      padding: "4px 8px",
+                      fontSize: "0.9rem",
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      background: "var(--surface)",
+                      color: "var(--text)",
+                      minWidth: 180,
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => void saveRename(v)}
+                    disabled={busyId === v.id}
+                  >
+                    {busyId === v.id ? "Saving…" : "Save"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    onClick={cancelRename}
+                    disabled={busyId === v.id}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <strong style={{ color: "var(--text)" }}>
+                  {v.title || "Untitled video"}
+                </strong>
+              )}
               <span style={{ fontSize: "0.8rem", color: "var(--text-subtle)" }}>
                 {formatDuration(v.durationSec)} · {formatBytes(v.sizeBytes)} ·{" "}
                 {new Date(v.createdAt).toLocaleDateString()}
@@ -1351,19 +1409,48 @@ function VideoLibraryTab() {
                 <button
                   type="button"
                   className="btn"
-                  disabled={busyId === v.id}
-                  onClick={() => void rename(v)}
+                  disabled={busyId === v.id || renamingId === v.id}
+                  onClick={() => startRename(v)}
                 >
                   Rename
                 </button>
-                <button
-                  type="button"
-                  className="btn danger"
-                  disabled={busyId === v.id}
-                  onClick={() => void remove(v)}
-                >
-                  Delete
-                </button>
+                {confirmDeleteId === v.id ? (
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span
+                      style={{
+                        fontSize: "0.8rem",
+                        color: "var(--text-subtle)",
+                      }}
+                    >
+                      Delete video file?
+                    </span>
+                    <button
+                      type="button"
+                      className="btn danger"
+                      disabled={busyId === v.id}
+                      onClick={() => void remove(v)}
+                    >
+                      {busyId === v.id ? "Deleting…" : "Confirm"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      disabled={busyId === v.id}
+                      onClick={() => setConfirmDeleteId(null)}
+                    >
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn danger"
+                    disabled={busyId === v.id}
+                    onClick={() => setConfirmDeleteId(v.id)}
+                  >
+                    Delete
+                  </button>
+                )}
               </div>
               {players[v.id]?.open && (
                 <video
