@@ -632,6 +632,16 @@ export default function RecordingStudio({
           >
             Restart script
           </button>
+          <button
+            style={btn}
+            onClick={() => {
+              setScrolling(false);
+              setEditingScript(true);
+            }}
+            disabled={recording}
+          >
+            ✎ Edit script
+          </button>
 
           <label style={sliderLabel}>
             <span>Speed: {speed}</span>
