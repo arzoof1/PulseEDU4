@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { openRecordingStudio, STUDIO_SCRIPT_KEY } from "./launch";
+import { beginStudioSession, endStudioSession } from "./recordingActivity";
 
 // Locked product decision: 5-minute maximum recording length.
 const MAX_SECONDS = 5 * 60;
@@ -161,6 +162,14 @@ export default function RecordingStudio({
   useEffect(() => {
     recordingRef.current = recording;
   }, [recording]);
+
+  // Tell the staff app underneath to pause its background timers while the
+  // studio overlay is open, so its per-second re-renders don't stall the
+  // teleprompter scroll. Released on unmount.
+  useEffect(() => {
+    beginStudioSession();
+    return () => endStudioSession();
+  }, []);
 
   // Acquire camera + mic once on mount.
   useEffect(() => {

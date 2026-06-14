@@ -38,6 +38,7 @@ import ClassPhotoDayPage from "./components/ClassPhotoDayPage";
 import IssSettingsPage from "./components/IssSettingsPage";
 import PickupSettingsPage from "./components/PickupSettingsPage";
 import TourAdminPage, { TourLeadBanner } from "./components/TourAdminPage";
+import { isStudioSessionActive } from "./studio/recordingActivity";
 import TicketingAdminPage from "./components/TicketingAdminPage";
 import SchoolGradeCalculatorPage from "./components/SchoolGradeCalculatorPage";
 import EsignManagerPage from "./components/EsignManagerPage";
@@ -1900,6 +1901,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
   useEffect(() => {
     refresh();
     const interval = setInterval(() => {
+      if (isStudioSessionActive()) return;
       refresh();
     }, 15000);
     return () => clearInterval(interval);
@@ -6371,7 +6373,12 @@ function App() {
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 1000);
+    const interval = setInterval(() => {
+      // Skip the per-second re-render while the Recording Studio overlay is open
+      // so its teleprompter scroll isn't stalled by App-tree reconciliation.
+      if (isStudioSessionActive()) return;
+      setNow(Date.now());
+    }, 1000);
     return () => clearInterval(interval);
   }, []);
 
@@ -6660,6 +6667,7 @@ function App() {
   useEffect(() => {
     if (!authUser) return;
     const interval = setInterval(() => {
+      if (isStudioSessionActive()) return;
       loadHallPasses();
     }, 15000);
     return () => clearInterval(interval);
@@ -8978,6 +8986,7 @@ function App() {
     }
     let cancelled = false;
     const fetchCount = () => {
+      if (isStudioSessionActive()) return;
       authFetch("/api/pullouts?scope=pending")
         .then((r) => (r.ok ? r.json() : []))
         .then((rows: unknown) => {
@@ -9003,6 +9012,7 @@ function App() {
     }
     let cancelled = false;
     const fetchCount = () => {
+      if (isStudioSessionActive()) return;
       authFetch("/api/pullouts?scope=active")
         .then((r) => (r.ok ? r.json() : []))
         .then((rows: unknown) => {
