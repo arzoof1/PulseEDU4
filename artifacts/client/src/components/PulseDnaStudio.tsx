@@ -318,6 +318,55 @@ function ProfileTab() {
   );
 }
 
+// --- Voice-to-text (browser Web Speech API) -------------------------------
+// Lets staff dictate the rough idea instead of typing. Uses the built-in
+// SpeechRecognition API (Chrome/Edge/Safari) — no dependency, no API key. The
+// mic is blocked inside the Replit preview iframe, so dictation works in the
+// published app or when the app is opened in its own browser tab.
+interface SpeechRecognitionAlternativeLike {
+  transcript: string;
+}
+interface SpeechRecognitionResultLike {
+  isFinal: boolean;
+  0: SpeechRecognitionAlternativeLike;
+}
+interface SpeechRecognitionEventLike {
+  resultIndex: number;
+  results: { length: number } & Record<number, SpeechRecognitionResultLike>;
+}
+interface SpeechRecognitionLike {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((e: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((e: { error: string }) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+}
+type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
+
+function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
+  const w = window as unknown as {
+    SpeechRecognition?: SpeechRecognitionCtor;
+    webkitSpeechRecognition?: SpeechRecognitionCtor;
+  };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+
+// Best-effort map from the chosen output language to a dictation locale. The
+// speaker may use any language; this is just a sensible default.
+const SPEECH_LOCALES: Record<string, string> = {
+  English: "en-US",
+  Spanish: "es-ES",
+  "Haitian Creole": "ht-HT",
+  Portuguese: "pt-BR",
+  French: "fr-FR",
+  Vietnamese: "vi-VN",
+  Arabic: "ar-SA",
+};
+
 function CreateTab() {
   const [roughInput, setRoughInput] = useState("");
   const [outputType, setOutputType] = useState<string>(OUTPUT_TYPES[0]);
@@ -329,6 +378,12 @@ function CreateTab() {
   const [usedPulseDna, setUsedPulseDna] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [speechError, setSpeechError] = useState<string | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const dictationBaseRef = useRef("");
+  const finalTranscriptRef = useRef("");
+  const speechSupported = getSpeechRecognitionCtor() !== null;
 
   async function generate() {
     if (!roughInput.trim()) {
@@ -369,6 +424,68 @@ function CreateTab() {
     }
   }
 
+  function startDictation() {
+    if (recognitionRef.current) return;
+    const Ctor = getSpeechRecognitionCtor();
+    if (!Ctor) {
+      setSpeechError("Voice typing isn't supported in this browser.");
+      return;
+    }
+    setSpeechError(null);
+    const rec = new Ctor();
+    rec.lang = SPEECH_LOCALES[language] ?? "en-US";
+    rec.continuous = true;
+    rec.interimResults = true;
+    // Anchor on the text already in the box; dictation appends after it.
+    const base = roughInput.trim();
+    dictationBaseRef.current = base ? base + " " : "";
+    finalTranscriptRef.current = "";
+    rec.onresult = (e) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        const text = r[0].transcript;
+        if (r.isFinal) finalTranscriptRef.current += text;
+        else interim += text;
+      }
+      setRoughInput(
+        dictationBaseRef.current + finalTranscriptRef.current + interim,
+      );
+    };
+    rec.onerror = (e) => {
+      setSpeechError(
+        e.error === "not-allowed" || e.error === "service-not-allowed"
+          ? "Microphone access was blocked. Dictation can't run inside the Replit preview — open the app in its own tab and allow the mic."
+          : e.error === "no-speech"
+            ? "Didn't catch any speech — try again."
+            : "Voice typing stopped unexpectedly. Please try again.",
+      );
+    };
+    rec.onend = () => {
+      setListening(false);
+      recognitionRef.current = null;
+    };
+    recognitionRef.current = rec;
+    try {
+      rec.start();
+      setListening(true);
+    } catch {
+      setSpeechError("Couldn't start voice typing. Please try again.");
+      setListening(false);
+    }
+  }
+
+  function toggleDictation() {
+    if (listening) recognitionRef.current?.stop();
+    else startDictation();
+  }
+
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.abort();
+    };
+  }, []);
+
   const selectStyle: React.CSSProperties = {
     padding: "0.5rem",
     borderRadius: "8px",
@@ -387,9 +504,41 @@ function CreateTab() {
         in your school's voice. Edit it, then copy it wherever you need it.
       </p>
 
-      <label style={{ display: "block", fontWeight: 600, marginBottom: "0.25rem", color: "var(--text)" }}>
-        What's the message about?
-      </label>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "0.5rem",
+          marginBottom: "0.25rem",
+        }}
+      >
+        <label style={{ fontWeight: 600, color: "var(--text)" }}>
+          What's the message about?
+        </label>
+        {speechSupported && (
+          <button
+            type="button"
+            className={listening ? "btn primary" : "btn"}
+            onClick={toggleDictation}
+            aria-pressed={listening}
+            title="Dictate with your microphone"
+            style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}
+          >
+            <span
+              aria-hidden
+              style={{
+                width: "0.5rem",
+                height: "0.5rem",
+                borderRadius: "50%",
+                background: listening ? "#dc2626" : "currentColor",
+                opacity: listening ? 1 : 0.6,
+              }}
+            />
+            {listening ? "Stop dictation" : "Dictate"}
+          </button>
+        )}
+      </div>
       <textarea
         value={roughInput}
         onChange={(e) => setRoughInput(e.target.value)}
@@ -406,6 +555,16 @@ function CreateTab() {
           resize: "vertical",
         }}
       />
+      {listening && (
+        <p style={{ color: "var(--accent, #0d9488)", fontSize: "0.85rem", marginTop: "0.35rem" }}>
+          Listening… speak now, then click "Stop dictation" when you're done.
+        </p>
+      )}
+      {speechError && (
+        <p style={{ color: "var(--danger, #b91c1c)", fontSize: "0.85rem", marginTop: "0.35rem" }}>
+          {speechError}
+        </p>
+      )}
 
       <div
         style={{
