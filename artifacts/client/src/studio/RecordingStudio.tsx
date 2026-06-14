@@ -4,6 +4,10 @@ import { openRecordingStudio, STUDIO_SCRIPT_KEY } from "./launch";
 // Locked product decision: 5-minute maximum recording length.
 const MAX_SECONDS = 5 * 60;
 
+// Reference px/sec the teleprompter animation is built at; live speed is applied
+// as a playbackRate multiple of this so changing speed never resets position.
+const SCROLL_BASE_SPEED = 100;
+
 function pickMimeType(): string | undefined {
   if (typeof MediaRecorder === "undefined") return undefined;
   const candidates = [
@@ -131,9 +135,8 @@ export default function RecordingStudio({
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const prompterRef = useRef<HTMLDivElement | null>(null);
-  const rafRef = useRef<number | null>(null);
-  const lastTsRef = useRef<number | null>(null);
-  const scrollAccumRef = useRef(0);
+  const prompterInnerRef = useRef<HTMLDivElement | null>(null);
+  const animRef = useRef<Animation | null>(null);
   const timerRef = useRef<number | null>(null);
   const recordedUrlRef = useRef<string | null>(null);
   const recordedBlobRef = useRef<Blob | null>(null);
@@ -206,41 +209,71 @@ export default function RecordingStudio({
     }
   }, [stream]);
 
-  // Teleprompter auto-scroll loop (re-armed when speed changes so it stays live).
+  // Teleprompter scroll is driven by the Web Animations API animating a
+  // translateY transform on the script, NOT by setting scrollTop each rAF
+  // frame. A transform animation is handed to the COMPOSITOR thread, so it
+  // keeps gliding smoothly even when the main thread is briefly busy (camera
+  // encoding, the rest of the staff app polling/re-rendering underneath this
+  // overlay). That main-thread contention is exactly what caused the script to
+  // pause. Speed = playbackRate so changing it never restarts the position.
+  //
+  // Effect 1: build/rebuild the animation whenever the content geometry changes
+  // (script text, font, width, visible-lines, etc.). Progress is preserved
+  // across a rebuild so resizing mid-read doesn't snap the script back.
   useEffect(() => {
-    if (!scrolling) return;
-    function step(ts: number) {
-      const el = prompterRef.current;
-      if (el) {
-        if (lastTsRef.current != null) {
-          // Clamp the per-frame delta. If the main thread stalls briefly
-          // (camera encoding, a re-render, GC), the next frame would otherwise
-          // report a large dt and lurch the script forward in one big jump —
-          // the "pause then jump" stutter. Capping dt makes it simply resume
-          // gliding from where it left off.
-          const dt = Math.min((ts - lastTsRef.current) / 1000, 0.05);
-          // Accumulate sub-pixel movement so low speeds glide smoothly instead
-          // of stuttering on integer scrollTop rounding.
-          scrollAccumRef.current += speed * dt;
-          el.scrollTop = scrollAccumRef.current;
-          if (el.scrollTop + el.clientHeight >= el.scrollHeight - 1) {
-            setScrolling(false);
-            return;
-          }
-        } else {
-          scrollAccumRef.current = el.scrollTop;
-        }
-        lastTsRef.current = ts;
-      }
-      rafRef.current = requestAnimationFrame(step);
+    const container = prompterRef.current;
+    const inner = prompterInnerRef.current;
+
+    const prev = animRef.current;
+    let prevFraction = 0;
+    if (prev) {
+      const t = typeof prev.currentTime === "number" ? prev.currentTime : 0;
+      const d = Number(prev.effect?.getComputedTiming().duration) || 0;
+      prevFraction = d > 0 ? Math.min(1, t / d) : 0;
+      prev.cancel();
+      animRef.current = null;
     }
-    rafRef.current = requestAnimationFrame(step);
+
+    if (!container || !inner) return;
+    // Same distance the browser would allow scrollTop to travel.
+    const distance = container.scrollHeight - container.clientHeight;
+    if (distance < 1) return;
+
+    const duration = (distance / SCROLL_BASE_SPEED) * 1000;
+    const anim = inner.animate(
+      [{ transform: "translateY(0px)" }, { transform: `translateY(${-distance}px)` }],
+      { duration, easing: "linear", fill: "both" },
+    );
+    anim.playbackRate = speed / SCROLL_BASE_SPEED;
+    anim.currentTime = prevFraction * duration;
+    anim.onfinish = () => setScrolling(false);
+    if (scrolling) anim.play();
+    else anim.pause();
+    animRef.current = anim;
+
     return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-      lastTsRef.current = null;
+      anim.cancel();
+      if (animRef.current === anim) animRef.current = null;
     };
-  }, [scrolling, speed]);
+    // `scrolling` is intentionally omitted — play/pause is handled in Effect 2
+    // so toggling it doesn't tear down and rebuild the animation. The geometry
+    // deps below are the raw state the prompter size/content derive from.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [script, fontSize, lineHeight, promptWidth, linesVisible, condenseBlanks, editingScript, recordedUrl]);
+
+  // Effect 2: play / pause without rebuilding (preserves position).
+  useEffect(() => {
+    const anim = animRef.current;
+    if (!anim) return;
+    if (scrolling) anim.play();
+    else anim.pause();
+  }, [scrolling]);
+
+  // Effect 3: live speed changes map to playbackRate (no position reset).
+  useEffect(() => {
+    const anim = animRef.current;
+    if (anim) anim.playbackRate = speed / SCROLL_BASE_SPEED;
+  }, [speed]);
 
   // Full teardown on unmount: mark unmounted (so async recorder/getUserMedia
   // callbacks skip state writes), detach recorder handlers, stop any in-flight
@@ -314,7 +347,7 @@ export default function RecordingStudio({
     setRecording(true);
     setElapsed(0);
     elapsedRef.current = 0;
-    if (prompterRef.current) prompterRef.current.scrollTop = 0;
+    resetScroll();
     setScrolling(true);
     const startedAt = Date.now();
     timerRef.current = window.setInterval(() => {
@@ -324,6 +357,16 @@ export default function RecordingStudio({
       if (e >= MAX_SECONDS) stopRecording();
     }, 250);
   }, [stopRecording]);
+
+  // Send the teleprompter back to the top. With the WebAnimation driving a
+  // transform, "top" = currentTime 0; we also clear any held transform in case
+  // the animation hasn't been built yet (short script / not visible).
+  function resetScroll() {
+    const anim = animRef.current;
+    if (anim) anim.currentTime = 0;
+    const inner = prompterInnerRef.current;
+    if (inner) inner.style.transform = "translateY(0px)";
+  }
 
   function reRecord() {
     if (recordedUrlRef.current) {
@@ -335,7 +378,7 @@ export default function RecordingStudio({
     setKept(false);
     setElapsed(0);
     elapsedRef.current = 0;
-    if (prompterRef.current) prompterRef.current.scrollTop = 0;
+    resetScroll();
   }
 
   // From the review screen: drop the current take and jump straight back into
@@ -509,6 +552,7 @@ export default function RecordingStudio({
             }}
           >
             <div
+              ref={prompterInnerRef}
               style={{
                 fontSize: `${fontSize}px`,
                 lineHeight,
@@ -520,6 +564,7 @@ export default function RecordingStudio({
                 maxWidth: `${promptWidth}%`,
                 marginLeft: "auto",
                 marginRight: "auto",
+                willChange: "transform",
               }}
             >
               {hasScript ? displayScript : "No script yet — use “Edit script” to add one, or record freely."}
@@ -625,8 +670,8 @@ export default function RecordingStudio({
           <button
             style={btn}
             onClick={() => {
-              if (prompterRef.current) prompterRef.current.scrollTop = 0;
               setScrolling(false);
+              resetScroll();
             }}
             disabled={!hasScript || editingScript}
           >
