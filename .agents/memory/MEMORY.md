@@ -41,5 +41,6 @@
 - [Kiosk destination precedence](kiosk-destination-precedence.md) — teacher allowlist is authoritative over the (auto-seeded ~everything) room matrix, NOT a union; GET listing + POST create must share precedence + active/visible/isDestination filter.
 
 - [Staff PATCH batched gating](staff-patch-batched-gating.md) — batched PATCH /admin/staff/:id must OMIT role flags/sensitive caps actor cant set AND self-revoked caps, or one bad field sinks the whole save.
+- [Pickup adult-key model](pickup-adult-key.md) — student owns one base, adult gets letter A–H; adultKey groups across siblings (non-portal MUST include phone or families cross-link); base/letter must stay consistent with pickup_number.
 - [Parent-route school scoping](parent-route-school-scoping.md) — parentId-authed routes must STILL add explicit school_id predicate (resolve from parents.school_id); don't rely on parentId being globally unique.
 - [Family Messages attribution](family-messages-attribution.md) — deliver to many, attribute to one: ack/Power Reader rolls up to ONE primary (portal account); SIS adapter feeds no guardian emails today.

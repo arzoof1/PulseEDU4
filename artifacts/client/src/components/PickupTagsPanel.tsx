@@ -292,10 +292,11 @@ export default function PickupTagsPanel() {
   // School-wide assign — Path B (one number per emergency contact).
   const runBulkAssign = async () => {
     const ok = window.confirm(
-      "Assign pickup numbers to every student?\n\n" +
-        "This issues one 4-digit number per emergency contact on file " +
-        "(each number releases one child). Students already covered are " +
-        "skipped — it is safe to run after each roster import.",
+      "Assign pickup codes to every student?\n\n" +
+        "Each student gets ONE base number; each authorized adult on file " +
+        "gets a letter suffix (1001A = Mom, 1001B = Dad). One adult's code " +
+        "releases all of that adult's kids. Students/adults already covered " +
+        "are skipped — it is safe to run after each roster import.",
     );
     if (!ok) return;
     setBulkBusy(true);
@@ -310,6 +311,7 @@ export default function PickupTagsPanel() {
       const b = (await res.json().catch(() => ({}))) as {
         assigned?: number;
         studentsTouched?: number;
+        cappedStudents?: number;
         error?: string;
       };
       if (!res.ok) {
@@ -318,10 +320,17 @@ export default function PickupTagsPanel() {
       }
       const assigned = b.assigned ?? 0;
       const touched = b.studentsTouched ?? 0;
+      const capped = b.cappedStudents ?? 0;
+      const cappedNote =
+        capped > 0
+          ? ` ${capped} student(s) hit the 8-adult cap — extra contacts ` +
+            "were skipped."
+          : "";
       setBulkResult(
         assigned === 0
-          ? "All students are already assigned — nothing to do."
-          : `Issued ${assigned} new number(s) across ${touched} student(s).`,
+          ? "All students are already assigned — nothing to do." + cappedNote
+          : `Issued ${assigned} new code(s) across ${touched} student(s).` +
+              cappedNote,
       );
       if (studentDbId !== null) void refresh(studentDbId);
     } catch (err) {
@@ -585,6 +594,16 @@ export default function PickupTagsPanel() {
 
   const viewAllActive = () => viewPdf(`/api/pickup/tags.pdf`);
 
+  // Per-family OFFICE REFERENCE STRIP — one row per student listing the base
+  // number + every authorized adult's letter/label, for the front desk.
+  const printOfficeStrip = () =>
+    downloadPdf(
+      `/api/pickup/office-strip.pdf`,
+      `pickup-office-reference-${new Date().toISOString().slice(0, 10)}.pdf`,
+    );
+
+  const viewOfficeStrip = () => viewPdf(`/api/pickup/office-strip.pdf`);
+
   return (
     <div style={wrap}>
       <h2 style={{ marginTop: 0 }}>Parent Pickup</h2>
@@ -653,6 +672,33 @@ export default function PickupTagsPanel() {
             title="Open the PDF in a new tab to preview before printing."
           >
             View PDF
+          </button>
+        </div>
+        <div
+          style={{
+            fontSize: 13,
+            color: "#6b7280",
+            margin: "14px 0 8px",
+          }}
+        >
+          Office reference strip — one row per student showing the base number
+          and every authorized adult's letter (1001 — A Mom · B Dad · C
+          Grandma). Keep at the front desk; shows the local SIS ID only.
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            onClick={printOfficeStrip}
+            style={secondaryBtn}
+            title="Download the per-family office reference list."
+          >
+            Download office reference
+          </button>
+          <button
+            onClick={viewOfficeStrip}
+            style={secondaryBtn}
+            title="Open the office reference list in a new tab."
+          >
+            View office reference
           </button>
         </div>
       </div>

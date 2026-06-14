@@ -6507,6 +6507,26 @@ export async function ensurePickupSchema(): Promise<void> {
     ALTER TABLE student_pickup_authorizations
       ADD COLUMN IF NOT EXISTS contact_slot INTEGER
   `);
+  // Student-anchored alphanumeric scheme (redesign). base_number is shared
+  // across a student's adult rows; letter is the per-adult suffix; adult_key
+  // groups one adult's authorizations across siblings. pickup_number keeps
+  // the FULL code (base+letter) so the existing lookup + unique index are
+  // untouched. All nullable + additive — legacy rows keep their bare 4-digit
+  // pickup_number and fall back to parentId-based grouping at the curb until a
+  // school runs the start-of-year cutover (re-run of bulk-assign).
+  await db.execute(sql`
+    ALTER TABLE student_pickup_authorizations
+      ADD COLUMN IF NOT EXISTS base_number TEXT
+  `);
+  await db.execute(sql`
+    ALTER TABLE student_pickup_authorizations
+      ADD COLUMN IF NOT EXISTS letter TEXT
+  `);
+  await db.execute(sql`
+    ALTER TABLE student_pickup_authorizations
+      ADD COLUMN IF NOT EXISTS adult_key TEXT
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_auth_by_adult_key ON student_pickup_authorizations(school_id, adult_key)`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_auth_number_per_school ON student_pickup_authorizations(school_id, pickup_number)`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_auth_by_student ON student_pickup_authorizations(student_id)`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_auth_by_parent ON student_pickup_authorizations(parent_id)`);

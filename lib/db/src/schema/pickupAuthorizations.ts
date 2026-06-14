@@ -49,7 +49,27 @@ export const studentPickupAuthorizationsTable = pgTable(
     // and for the single "Family" fallback issued to students with no
     // emergency contacts on file.
     contactSlot: integer("contact_slot"),
-    // 4-digit number printed on the hanger. Unique per (school, active=true)
+    // ---- Student-anchored alphanumeric scheme (redesign) ----------------
+    // Each STUDENT owns ONE base number (e.g. "1001"); each authorized adult
+    // on that student gets a letter suffix (A, B, C ...). The full code the
+    // family reads/scans is base+letter (e.g. "1001C"), stored in
+    // pickupNumber below so the existing lookup + partial-unique index keep
+    // working unchanged. baseNumber is shared across all of a student's adult
+    // rows; letter is the per-adult suffix.
+    //
+    // Legacy rows issued before the redesign have a bare 4-digit pickupNumber
+    // and NULL base/letter/adultKey — the curb lookup falls back to the old
+    // parentId-based sibling grouping for those until a school runs the
+    // start-of-year cutover (re-run of bulk-assign), so nothing breaks.
+    baseNumber: text("base_number"),
+    letter: text("letter"),
+    // Groups one real adult's authorizations across siblings so typing ONE
+    // adult's code resolves ALL their kids. Portal parents → `p:<parentId>`;
+    // non-portal SIS contacts → `c:<normalized name>|<normalized relationship>`.
+    // NULL on legacy rows (see above).
+    adultKey: text("adult_key"),
+    // Full code printed on the hanger: base+letter for redesigned rows,
+    // a bare 4-digit number for legacy rows. Unique per (school, active=true)
     // — see the partial unique index below. Re-issued when an authorization
     // is deactivated.
     pickupNumber: text("pickup_number").notNull(),
@@ -71,6 +91,8 @@ export const studentPickupAuthorizationsTable = pgTable(
     ),
     byStudent: index("pickup_auth_by_student").on(t.studentId),
     byParent: index("pickup_auth_by_parent").on(t.parentId),
+    // Curb lookup resolves an adult's code → all their kids by adultKey.
+    byAdultKey: index("pickup_auth_by_adult_key").on(t.schoolId, t.adultKey),
   }),
 );
 
