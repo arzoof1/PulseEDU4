@@ -639,14 +639,30 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
             accent="from-orange-500 to-amber-500"
           />
         )}
-        {sec.accommodations && (
+        {sec.attendance && (
           <PulseCard
-            label="Accommodations"
-            value={snapshot.accommodations.length}
-            delta="active"
-            deltaPositive
-            icon={<GraduationCap className="h-4 w-4 text-blue-500" />}
-            accent="from-blue-500 to-violet-500"
+            label="Attendance"
+            value={
+              snapshot.attendance.pct.ytd
+                ? `${snapshot.attendance.pct.ytd.pct}%`
+                : snapshot.attendance.pct.last30
+                  ? `${snapshot.attendance.pct.last30.pct}%`
+                  : "—"
+            }
+            delta={
+              snapshot.attendance.pct.ytd
+                ? "present YTD"
+                : snapshot.attendance.pct.last30
+                  ? "present (30d)"
+                  : "no data yet"
+            }
+            deltaPositive={
+              (snapshot.attendance.pct.ytd?.pct ??
+                snapshot.attendance.pct.last30?.pct ??
+                100) >= 90
+            }
+            icon={<Calendar className="h-4 w-4 text-emerald-500" />}
+            accent="from-emerald-500 to-teal-500"
           />
         )}
       </div>
@@ -1416,7 +1432,7 @@ function PulseCard({
   sparkline,
 }: {
   label: string;
-  value: number;
+  value: number | string;
   delta: string;
   deltaPositive: boolean;
   icon: React.ReactNode;
@@ -1429,16 +1445,16 @@ function PulseCard({
       <div className={`h-1 w-full bg-gradient-to-r ${accent}`} />
       <CardContent className="p-5">
         <div className="flex justify-between items-start mb-2">
-          <p className="text-sm font-medium text-slate-500">{label}</p>
+          <p className="text-sm font-bold text-slate-600">{label}</p>
           {icon}
         </div>
         <div className="flex items-baseline gap-2">
-          <h3 className="text-3xl font-bold text-slate-800">{value}</h3>
+          <h3 className="text-3xl font-extrabold text-slate-900">{value}</h3>
           <span
-            className={`text-xs font-medium px-1.5 py-0.5 rounded-full ${
+            className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${
               deltaPositive
-                ? "text-green-600 bg-green-50"
-                : "text-amber-700 bg-amber-50"
+                ? "text-green-700 bg-green-50"
+                : "text-amber-800 bg-amber-50"
             }`}
           >
             {delta}
