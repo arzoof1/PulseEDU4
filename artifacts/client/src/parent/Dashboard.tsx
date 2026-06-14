@@ -36,6 +36,7 @@ import QRCode from "qrcode";
 import { Ticket } from "lucide-react";
 import { parentFetch, setParentToken, navigate, type ParentMe } from "./api";
 import FamilyMessages from "./FamilyMessages";
+import ParentTabBar, { type ParentTab } from "./ParentTabBar";
 
 interface Snapshot {
   parent: { displayName: string; email: string };
@@ -265,6 +266,22 @@ export default function Dashboard({ me }: { me: ParentMe }) {
   // hitting the server twice.
   const [pdfDownloading, setPdfDownloading] = useState(false);
   const [pdfError, setPdfError] = useState("");
+  // Active bottom-tab. Persisted to sessionStorage so a refresh (or the
+  // Bearer-token re-auth inside the preview iframe) keeps the parent on
+  // the same screen instead of snapping back to Home.
+  const [activeTab, setActiveTab] = useState<ParentTab>(() => {
+    const saved = sessionStorage.getItem("pulseed.parentTab");
+    return saved === "home" ||
+      saved === "behavior" ||
+      saved === "academics" ||
+      saved === "messages" ||
+      saved === "more"
+      ? saved
+      : "home";
+  });
+  useEffect(() => {
+    sessionStorage.setItem("pulseed.parentTab", activeTab);
+  }, [activeTab]);
 
   useEffect(() => {
     if (activeStudentId === null) {
@@ -420,151 +437,135 @@ export default function Dashboard({ me }: { me: ParentMe }) {
     );
   }
 
+  // Home / Behavior / Academics read from the per-student snapshot;
+  // Messages + More are family/account-scoped and render without it.
+  const snapshotNeeded =
+    activeTab === "home" ||
+    activeTab === "behavior" ||
+    activeTab === "academics";
+
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-24">
       <div className="h-1.5 w-full bg-gradient-to-r from-violet-600 via-teal-600 to-green-600" />
 
-      <main className="max-w-6xl mx-auto px-6 pt-8 space-y-8">
-        {/* Identity strip */}
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6 bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-          <div className="flex items-center gap-5 min-w-0">
-            <Avatar className="h-20 w-20 border-4 border-slate-50 shadow-sm ring-1 ring-slate-100">
-              <AvatarFallback className="bg-gradient-to-br from-violet-100 to-teal-100 text-violet-700 text-2xl font-bold">
-                {initials(activeStudent.firstName, activeStudent.lastName)}
-              </AvatarFallback>
-            </Avatar>
-            <div className="space-y-1 min-w-0">
-              <div className="flex items-center gap-3 flex-wrap">
-                {me.students.length > 1 ? (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-                        <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-                          {activeStudent.firstName} {activeStudent.lastName}
-                        </h1>
-                        <ChevronDown className="h-5 w-5 text-slate-400" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-64">
-                      {me.students.map((s) => (
-                        <DropdownMenuItem
-                          key={s.id}
-                          className={
-                            s.id === activeStudent.id
-                              ? "font-medium bg-slate-50"
-                              : ""
-                          }
-                          onSelect={() => setActiveStudentId(s.id)}
-                        >
-                          {s.firstName} {s.lastName} ({gradeLabel(s.grade)})
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                ) : (
-                  <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-                    {activeStudent.firstName} {activeStudent.lastName}
-                  </h1>
-                )}
-              </div>
-              <p className="text-slate-500 font-medium flex items-center gap-2">
-                <span>
-                  {gradeLabel(activeStudent.grade)} · ID {activeStudent.localSisId ?? "—"}
-                </span>
-                {snapshot?.student.retainedGrades &&
-                  snapshot.student.retainedGrades.length > 0 && (
-                    <span
-                      title={`Retained: ${snapshot.student.retainedGrades
-                        .map((g: number) => `Grade ${g}`)
-                        .join(", ")}`}
-                      aria-label={`Retained at ${snapshot.student.retainedGrades
-                        .map((g: number) => `Grade ${g}`)
-                        .join(", ")}`}
-                      className="inline-flex items-center justify-center rounded-full bg-slate-900 text-white text-[11px] font-extrabold leading-none cursor-help"
-                      style={{ width: 18, height: 18 }}
+      {/* Persistent app header — student identity + sibling switcher. Slim
+          and sticky so it reads like a native app's nav bar across all
+          tabs. Account actions (PDF / preferences / sign out) live on the
+          More tab to keep this bar uncluttered. */}
+      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-slate-100">
+        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center gap-3">
+          <Avatar className="h-11 w-11 border-2 border-slate-50 shadow-sm ring-1 ring-slate-100 shrink-0">
+            <AvatarFallback className="bg-gradient-to-br from-violet-100 to-teal-100 text-violet-700 text-sm font-bold">
+              {initials(activeStudent.firstName, activeStudent.lastName)}
+            </AvatarFallback>
+          </Avatar>
+          <div className="min-w-0 flex-1">
+            {me.students.length > 1 ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity max-w-full">
+                    <h1 className="text-lg font-bold text-slate-900 tracking-tight truncate">
+                      {activeStudent.firstName} {activeStudent.lastName}
+                    </h1>
+                    <ChevronDown className="h-4 w-4 text-slate-400 shrink-0" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-64">
+                  {me.students.map((s) => (
+                    <DropdownMenuItem
+                      key={s.id}
+                      className={
+                        s.id === activeStudent.id
+                          ? "font-medium bg-slate-50"
+                          : ""
+                      }
+                      onSelect={() => setActiveStudentId(s.id)}
                     >
-                      R
-                    </span>
-                  )}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <div className="text-right hidden sm:block">
-              <p className="text-xs text-slate-400 uppercase tracking-wider">
-                Signed in
-              </p>
-              <p className="text-sm font-medium text-slate-700">
-                {me.displayName}
-              </p>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleDownloadPdf}
-              disabled={pdfDownloading || !snapshot}
-              className="gap-2"
-              title="Download a PDF copy of this report"
-            >
-              <Download className="h-4 w-4" />
-              <span className="hidden sm:inline">
-                {pdfDownloading ? "Preparing…" : "Download PDF"}
+                      {s.firstName} {s.lastName} ({gradeLabel(s.grade)})
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <h1 className="text-lg font-bold text-slate-900 tracking-tight truncate">
+                {activeStudent.firstName} {activeStudent.lastName}
+              </h1>
+            )}
+            <p className="text-xs text-slate-500 font-medium flex items-center gap-1.5">
+              <span className="truncate">
+                {gradeLabel(activeStudent.grade)} · ID{" "}
+                {activeStudent.localSisId ?? "—"}
               </span>
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setView("prefs")}
-              className="gap-2"
-            >
-              <SlidersHorizontal className="h-4 w-4" />
-              <span className="hidden sm:inline">What I see</span>
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleSignOut}
-              className="gap-2"
-            >
-              <LogOut className="h-4 w-4" />
-              Sign out
-            </Button>
+              {snapshot?.student.retainedGrades &&
+                snapshot.student.retainedGrades.length > 0 && (
+                  <span
+                    title={`Retained: ${snapshot.student.retainedGrades
+                      .map((g: number) => `Grade ${g}`)
+                      .join(", ")}`}
+                    aria-label={`Retained at ${snapshot.student.retainedGrades
+                      .map((g: number) => `Grade ${g}`)
+                      .join(", ")}`}
+                    className="inline-flex items-center justify-center rounded-full bg-slate-900 text-white text-[10px] font-extrabold leading-none cursor-help shrink-0"
+                    style={{ width: 16, height: 16 }}
+                  >
+                    R
+                  </span>
+                )}
+            </p>
           </div>
         </div>
+      </header>
 
-        {pdfError && (
-          <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 text-sm">
-            {pdfError}
-          </div>
-        )}
-
-        {/* Family Messages — school broadcasts. Family-scoped (not tied to the
-            active student), so it renders above the per-student snapshot and
-            stays visible while switching siblings. */}
-        <FamilyMessages />
-
-        {loading && (
+      <main className="max-w-2xl mx-auto px-4 pt-5">
+        {snapshotNeeded && loading && (
           <div className="text-sm text-slate-500 text-center py-12">
-            Loading snapshot…
+            Loading…
           </div>
         )}
 
-        {error && !loading && (
+        {snapshotNeeded && error && !loading && (
           <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">
             {error}
           </div>
         )}
 
-        {snapshot && !loading && (
-          <SnapshotBody snapshot={snapshot} />
+        {activeTab === "home" && snapshot && !loading && (
+          <HomeTab snapshot={snapshot} />
+        )}
+        {activeTab === "behavior" && snapshot && !loading && (
+          <BehaviorTab snapshot={snapshot} />
+        )}
+        {activeTab === "academics" && snapshot && !loading && (
+          <AcademicsTab snapshot={snapshot} />
+        )}
+        {/* Family Messages — school broadcasts. Family-scoped (not tied to
+            the active student) so it lives on its own tab and is unaffected
+            by sibling switching or the snapshot load state. */}
+        {activeTab === "messages" && <FamilyMessages />}
+        {activeTab === "more" && (
+          <MoreTab
+            signedInAs={me.displayName}
+            onDownloadPdf={handleDownloadPdf}
+            pdfDownloading={pdfDownloading}
+            pdfDisabled={!snapshot}
+            pdfError={pdfError}
+            onPrefs={() => setView("prefs")}
+            onSignOut={handleSignOut}
+          />
         )}
       </main>
+
+      <ParentTabBar active={activeTab} onChange={setActiveTab} />
     </div>
   );
 }
 
-function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
+// -----------------------------------------------------------------------------
+// HomeTab — the week-at-a-glance screen. Self-contained: takes the shared
+// snapshot and renders the overview surfaces (status, tickets, house, mood,
+// pulse cards, lost instructional time). Maps 1:1 to a native "Home" screen.
+// -----------------------------------------------------------------------------
+function HomeTab({ snapshot }: { snapshot: Snapshot }) {
   const { sectionsAvailable: sec } = snapshot;
   const onTrack = useMemo(() => {
     if (snapshot.pbis.thisWeek >= 5) return true;
@@ -573,7 +574,7 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
   }, [snapshot.pbis.thisWeek, snapshot.attendance.tardiesThisWeek]);
 
   return (
-    <>
+    <div className="space-y-6">
       {/* Status badge */}
       <div className="flex items-center gap-2">
         <Badge
@@ -609,7 +610,7 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
       {sec.recognition && <ParentMoodMeter snapshot={snapshot} />}
 
       {/* Pulse cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-3">
         {sec.recognition && (
           <PulseCard
             label="PBIS Points"
@@ -739,7 +740,31 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
           )}
         </Section>
       )}
+    </div>
+  );
+}
 
+// -----------------------------------------------------------------------------
+// BehaviorTab — day-to-day conduct & attendance screen: recognition (PBIS),
+// attendance log, hall passes, staff notes, and out-of-school suspension.
+// Renders a friendly empty state when the school has disabled every section
+// it would otherwise show.
+// -----------------------------------------------------------------------------
+function BehaviorTab({ snapshot }: { snapshot: Snapshot }) {
+  const { sectionsAvailable: sec } = snapshot;
+  const hasAny =
+    sec.recognition ||
+    sec.attendance ||
+    sec.hallPasses ||
+    (sec.staffNotes && snapshot.staffNotes.length > 0) ||
+    sec.oss;
+  if (!hasAny) {
+    return (
+      <TabEmpty text="Nothing to show here yet. Recognition, attendance, and hall-pass updates will appear on this tab." />
+    );
+  }
+  return (
+    <div className="space-y-6">
       {/* Recognition */}
       {sec.recognition && (
         <Section
@@ -998,6 +1023,99 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
         </Section>
       )}
 
+      {/* OSS — out-of-school suspension. Always rendered when sec.oss is
+          true (a "0 days this year" tile is itself meaningful — it tells
+          parents the school is sharing OSS info AND there's nothing on
+          file). Reason / notes only appear when the school separately
+          enabled showOssReason; the server already nulls those fields
+          out otherwise so we just render whatever's present. */}
+      {sec.oss && (
+        <Section
+          title="Out-of-School Suspension"
+          icon={<ShieldAlert className="h-4 w-4 text-rose-600" />}
+        >
+          <div className="mb-4 flex items-center gap-3">
+            <div
+              className={
+                "flex items-baseline gap-2 px-3 py-2 rounded-lg border " +
+                ((snapshot.oss?.daysThisYear ?? 0) === 0
+                  ? "bg-emerald-50 border-emerald-200"
+                  : "bg-rose-50 border-rose-200")
+              }
+            >
+              <span
+                className={
+                  "text-2xl font-bold tabular-nums " +
+                  ((snapshot.oss?.daysThisYear ?? 0) === 0
+                    ? "text-emerald-700"
+                    : "text-rose-700")
+                }
+              >
+                {snapshot.oss?.daysThisYear ?? 0}
+              </span>
+              <span className="text-xs text-slate-600 font-medium">
+                day{(snapshot.oss?.daysThisYear ?? 0) === 1 ? "" : "s"} this
+                school year
+              </span>
+            </div>
+          </div>
+          {(snapshot.oss?.recent ?? []).length === 0 ? (
+            <Empty text="No OSS days on file this school year." />
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {(snapshot.oss?.recent ?? []).map((r) => (
+                <li
+                  key={r.day}
+                  className="flex items-start justify-between py-3 gap-4"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-slate-800">
+                      {fmtDate(r.day)}
+                    </div>
+                    {r.reason && (
+                      <div className="text-xs text-slate-600 mt-0.5">
+                        {r.reason}
+                      </div>
+                    )}
+                    {r.notes && (
+                      <div className="text-xs text-slate-500 mt-1 italic">
+                        {r.notes}
+                      </div>
+                    )}
+                  </div>
+                  <Badge className="bg-rose-100 text-rose-700 hover:bg-rose-100 shrink-0">
+                    OSS
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
+      )}
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// AcademicsTab — formal academic & support record: FAST scores, MTSS support
+// plan, focused reteach, recent interventions, and accommodations. Empty state
+// when every section is gated off.
+// -----------------------------------------------------------------------------
+function AcademicsTab({ snapshot }: { snapshot: Snapshot }) {
+  const { sectionsAvailable: sec } = snapshot;
+  const hasAny =
+    (sec.fastScores && (snapshot.fastScores ?? []).length > 0) ||
+    sec.mtss ||
+    (sec.reteach && (snapshot.reteach?.items ?? []).length > 0) ||
+    (sec.interventions && (snapshot.interventions ?? []).length > 0) ||
+    sec.accommodations;
+  if (!hasAny) {
+    return (
+      <TabEmpty text="Nothing to show here yet. FAST scores, support plans, and accommodations will appear on this tab." />
+    );
+  }
+  return (
+    <div className="space-y-6">
       {/* Academics — FAST progress monitoring scores. Each subject is a
           separate tile so families can read ELA and Math independently;
           we always show all three PMs (PM1=fall, PM2=winter, PM3=spring)
@@ -1127,76 +1245,6 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
         </Section>
       )}
 
-      {/* OSS — out-of-school suspension. Always rendered when sec.oss is
-          true (a "0 days this year" tile is itself meaningful — it tells
-          parents the school is sharing OSS info AND there's nothing on
-          file). Reason / notes only appear when the school separately
-          enabled showOssReason; the server already nulls those fields
-          out otherwise so we just render whatever's present. */}
-      {sec.oss && (
-        <Section
-          title="Out-of-School Suspension"
-          icon={<ShieldAlert className="h-4 w-4 text-rose-600" />}
-        >
-          <div className="mb-4 flex items-center gap-3">
-            <div
-              className={
-                "flex items-baseline gap-2 px-3 py-2 rounded-lg border " +
-                ((snapshot.oss?.daysThisYear ?? 0) === 0
-                  ? "bg-emerald-50 border-emerald-200"
-                  : "bg-rose-50 border-rose-200")
-              }
-            >
-              <span
-                className={
-                  "text-2xl font-bold tabular-nums " +
-                  ((snapshot.oss?.daysThisYear ?? 0) === 0
-                    ? "text-emerald-700"
-                    : "text-rose-700")
-                }
-              >
-                {snapshot.oss?.daysThisYear ?? 0}
-              </span>
-              <span className="text-xs text-slate-600 font-medium">
-                day{(snapshot.oss?.daysThisYear ?? 0) === 1 ? "" : "s"} this
-                school year
-              </span>
-            </div>
-          </div>
-          {(snapshot.oss?.recent ?? []).length === 0 ? (
-            <Empty text="No OSS days on file this school year." />
-          ) : (
-            <ul className="divide-y divide-slate-100">
-              {(snapshot.oss?.recent ?? []).map((r) => (
-                <li
-                  key={r.day}
-                  className="flex items-start justify-between py-3 gap-4"
-                >
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium text-slate-800">
-                      {fmtDate(r.day)}
-                    </div>
-                    {r.reason && (
-                      <div className="text-xs text-slate-600 mt-0.5">
-                        {r.reason}
-                      </div>
-                    )}
-                    {r.notes && (
-                      <div className="text-xs text-slate-500 mt-1 italic">
-                        {r.notes}
-                      </div>
-                    )}
-                  </div>
-                  <Badge className="bg-rose-100 text-rose-700 hover:bg-rose-100 shrink-0">
-                    OSS
-                  </Badge>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Section>
-      )}
-
       {/* Accommodations — pinned to the bottom of the stack. */}
       {sec.accommodations && (
         <Section
@@ -1221,13 +1269,93 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
           )}
         </Section>
       )}
+    </div>
+  );
+}
+
+// Friendly placeholder shown when every section a tab would render is gated
+// off by the school or the parent's "What I see" preferences.
+function TabEmpty({ text }: { text: string }) {
+  return (
+    <div className="text-center py-16 text-sm text-slate-400">{text}</div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// MoreTab — account & settings screen. Holds the actions that used to live in
+// the old header (download PDF, "What I see" preferences, sign out) plus the
+// signed-in identity and the HeartBEAT footer. Maps to a native "More"/Settings
+// screen.
+// -----------------------------------------------------------------------------
+function MoreTab({
+  signedInAs,
+  onDownloadPdf,
+  pdfDownloading,
+  pdfDisabled,
+  pdfError,
+  onPrefs,
+  onSignOut,
+}: {
+  signedInAs: string;
+  onDownloadPdf: () => void;
+  pdfDownloading: boolean;
+  pdfDisabled: boolean;
+  pdfError: string;
+  onPrefs: () => void;
+  onSignOut: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-2xl border border-slate-100 p-4">
+        <div className="text-xs text-slate-400 uppercase tracking-wider">
+          Signed in as
+        </div>
+        <div className="text-sm font-medium text-slate-700 break-words">
+          {signedInAs}
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-100 divide-y divide-slate-100 overflow-hidden">
+        <button
+          type="button"
+          onClick={onDownloadPdf}
+          disabled={pdfDownloading || pdfDisabled}
+          className="w-full flex items-center gap-3 px-4 py-3.5 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Download a PDF copy of this report"
+        >
+          <Download className="h-4 w-4 text-slate-400 shrink-0" />
+          {pdfDownloading ? "Preparing…" : "Download PDF report"}
+        </button>
+        <button
+          type="button"
+          onClick={onPrefs}
+          className="w-full flex items-center gap-3 px-4 py-3.5 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          <SlidersHorizontal className="h-4 w-4 text-slate-400 shrink-0" />
+          What I see
+        </button>
+        <button
+          type="button"
+          onClick={onSignOut}
+          className="w-full flex items-center gap-3 px-4 py-3.5 text-left text-sm font-medium text-rose-600 hover:bg-rose-50"
+        >
+          <LogOut className="h-4 w-4 shrink-0" />
+          Sign out
+        </button>
+      </div>
+
+      {pdfError && (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 text-sm">
+          {pdfError}
+        </div>
+      )}
 
       <EkgDivider />
-      <div className="text-center text-xs text-slate-400 flex items-center justify-center gap-1.5">
+      <div className="text-center text-xs text-slate-400 flex items-center justify-center gap-1.5 pb-2">
         <Heart className="h-3 w-3" fill="currentColor" />
         Pulse<span className="font-semibold">EDU</span> HeartBEAT Snapshot
       </div>
-    </>
+    </div>
   );
 }
 
