@@ -25,7 +25,7 @@ import { canManageDismissal, canManagePickup } from "../lib/coreTeam.js";
 import {
   renderPickupTagsPdf,
   renderPickupOfficeStripPdf,
-  type PickupTagInput,
+  type PickupFamilyTagInput,
   type PickupOfficeStripFamily,
 } from "../lib/pickupTagsPdf.js";
 import { schoolYearStartDate } from "../lib/schoolYear.js";
@@ -2357,21 +2357,53 @@ router.post(
 );
 
 // Internal helper used by both single-tag and batch-tag PDF endpoints.
-async function loadTagInputs(
+// Stable group key tying one adult's authorizations together across siblings,
+// mirroring the curb resolver: adultKey first, then legacy parentId grouping,
+// then a per-row fallback (the adult only picks up the one named student).
+function tagGroupKey(row: {
+  adultKey: string | null;
+  parentId: number | null;
+  id: number;
+}): string {
+  if (row.adultKey) return row.adultKey;
+  if (row.parentId !== null) return `p:${row.parentId}`;
+  return `a:${row.id}`;
+}
+
+// Numeric value of a base for "representative = lowest base" selection; legacy
+// bare-number rows fall back to the digits in their full code.
+function baseValueOf(row: {
+  baseNumber: string | null;
+  pickupNumber: string;
+}): number {
+  const raw = row.baseNumber ?? row.pickupNumber.replace(/\D+/g, "");
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
+}
+
+// Build ONE FAMILY TAG PER ADULT: active authorizations are grouped by the
+// adult (adultKey), and each group becomes a single tag carrying the adult's
+// representative code (lowest base) + every child that adult picks up (with
+// grade). The QR encodes the representative full code; the curb resolver
+// expands it back to all siblings via adultKey, so any one of the adult's
+// codes works. Optional authIds (auth row ids) limit the output to the adult
+// GROUPS that contain at least one of those ids — so a "print this tag" or a
+// "homeroom stack" request still yields whole-family tags, never partials.
+async function loadFamilyTagInputs(
   schoolId: number,
   authIds: number[] | null,
-): Promise<PickupTagInput[]> {
-  const conds = [
-    eq(studentPickupAuthorizationsTable.schoolId, schoolId),
-    eq(studentPickupAuthorizationsTable.active, true),
-  ];
-  if (authIds !== null) {
-    conds.push(inArray(studentPickupAuthorizationsTable.id, authIds));
-  }
+): Promise<PickupFamilyTagInput[]> {
+  // Always load the whole school's active auths so a group is never truncated;
+  // authIds only selects WHICH groups we keep, never which rows form a group.
   const auths = await db
     .select()
     .from(studentPickupAuthorizationsTable)
-    .where(and(...conds));
+    .where(
+      and(
+        eq(studentPickupAuthorizationsTable.schoolId, schoolId),
+        eq(studentPickupAuthorizationsTable.active, true),
+      ),
+    );
   if (auths.length === 0) return [];
 
   const studentIds = Array.from(new Set(auths.map((a) => a.studentId)));
@@ -2380,6 +2412,7 @@ async function loadTagInputs(
       id: studentsTable.id,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
+      grade: studentsTable.grade,
     })
     .from(studentsTable)
     .where(
@@ -2396,41 +2429,70 @@ async function loadTagInputs(
     .where(eq(schoolSettingsTable.schoolId, schoolId));
   const schoolName = settings?.name ?? "School";
 
-  // Sort by student last name, then first name, then pickup number
-  // (multi-guardian rows for one student stay grouped together in a
-  // deterministic order). Done in JS rather than SQL because the
-  // student join is loaded via a second query and the row order out
-  // of `inArray` isn't guaranteed. Locale-aware compare so e.g.
-  // "Ñ" sorts after "N" instead of with the Z-tail.
+  // Group rows by adult.
+  const groups = new Map<string, (typeof auths)[number][]>();
+  for (const a of auths) {
+    const key = tagGroupKey(a);
+    const arr = groups.get(key);
+    if (arr) arr.push(a);
+    else groups.set(key, [a]);
+  }
+
+  // Restrict to the groups containing a requested auth id (whole groups only).
+  let keep: Set<string> | null = null;
+  if (authIds !== null) {
+    const wanted = new Set(authIds);
+    keep = new Set<string>();
+    for (const a of auths) if (wanted.has(a.id)) keep.add(tagGroupKey(a));
+  }
+
   const cmp = (a: string, b: string) =>
     a.localeCompare(b, undefined, { sensitivity: "base" });
-  return auths
-    .map((a) => {
-      const s = studentById.get(a.studentId);
-      const firstName = s?.firstName ?? "";
-      const lastName = s?.lastName ?? "";
+
+  const tags: Array<PickupFamilyTagInput & { _sortBase: number }> = [];
+  for (const [key, rows] of groups) {
+    if (keep !== null && !keep.has(key)) continue;
+    // Representative = the row with the lowest base number (deterministic).
+    const rep = rows.reduce((lo, r) =>
+      baseValueOf(r) < baseValueOf(lo) ? r : lo,
+    );
+    // One student entry per distinct child in the group.
+    const byStudent = new Map<number, (typeof rows)[number]>();
+    for (const r of rows) if (!byStudent.has(r.studentId)) byStudent.set(r.studentId, r);
+    const studentEntries = Array.from(byStudent.values()).map((r) => {
+      const s = studentById.get(r.studentId);
       const name = s
-        ? `${firstName} ${lastName}`.trim()
-        : `Student #${a.studentId}`;
+        ? `${s.firstName} ${s.lastName}`.trim()
+        : `Student #${r.studentId}`;
       return {
-        pickupNumber: a.pickupNumber,
-        baseNumber: a.baseNumber ?? null,
-        letter: a.letter ?? null,
-        studentName: name,
-        guardianLabel: a.guardianLabel,
-        restricted: a.restrictedFrom,
-        schoolName,
-        _sortLast: lastName,
-        _sortFirst: firstName,
+        name,
+        grade: s ? s.grade : null,
+        restricted: r.restrictedFrom,
       };
-    })
+    });
+    studentEntries.sort(
+      (a, b) => (a.grade ?? 99) - (b.grade ?? 99) || cmp(a.name, b.name),
+    );
+    const restrictedAll =
+      studentEntries.length > 0 && studentEntries.every((s) => s.restricted);
+    tags.push({
+      pickupNumber: rep.pickupNumber,
+      baseNumber: rep.baseNumber ?? null,
+      letter: rep.letter ?? null,
+      guardianLabel: rep.guardianLabel,
+      students: studentEntries,
+      restrictedAll,
+      schoolName,
+      _sortBase: baseValueOf(rep),
+    });
+  }
+
+  return tags
     .sort(
       (a, b) =>
-        cmp(a._sortLast, b._sortLast) ||
-        cmp(a._sortFirst, b._sortFirst) ||
-        cmp(a.pickupNumber, b.pickupNumber),
+        cmp(a.guardianLabel, b.guardianLabel) || a._sortBase - b._sortBase,
     )
-    .map(({ _sortLast: _l, _sortFirst: _f, ...rest }) => rest);
+    .map(({ _sortBase: _b, ...rest }) => rest);
 }
 
 function sendTagsPdf(
@@ -2465,7 +2527,7 @@ router.get(
       res.status(400).json({ error: "Invalid id" });
       return;
     }
-    const tags = await loadTagInputs(schoolId, [id]);
+    const tags = await loadFamilyTagInputs(schoolId, [id]);
     if (tags.length === 0) {
       res.status(404).json({ error: "Authorization not found or inactive" });
       return;
@@ -2669,7 +2731,7 @@ router.get("/pickup/tags.pdf", requireStaff, async (req, res) => {
       return;
     }
   }
-  const tags = await loadTagInputs(schoolId, ids);
+  const tags = await loadFamilyTagInputs(schoolId, ids);
   if (tags.length === 0) {
     res.status(404).json({ error: "No active authorizations to print" });
     return;

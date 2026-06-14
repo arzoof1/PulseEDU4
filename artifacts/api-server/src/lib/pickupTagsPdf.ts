@@ -27,13 +27,25 @@
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
 
-export interface PickupTagInput {
-  pickupNumber: string; // full code (base+letter), encoded in the QR
+// One sibling listed on a family tag.
+export interface PickupFamilyTagStudent {
+  name: string;
+  grade: number | null; // students.grade (integer); <=0 renders as "K"
+  restricted: boolean; // this adult is no-contact for THIS child
+}
+
+// ONE FAMILY TAG PER ADULT. The adult's representative code (base + ringed
+// letter) is the hero of the sheet; every child that adult may pick up is
+// listed with their grade. The QR encodes the full representative code so one
+// scan/keystroke resolves ALL of that adult's kids at the curb (the curb
+// resolver groups siblings by adultKey, so any one of the adult's codes works).
+export interface PickupFamilyTagInput {
+  pickupNumber: string; // representative full code (base+letter), encoded in QR
   baseNumber: string | null; // big number; falls back to pickupNumber
   letter: string | null; // ringed suffix; omitted for legacy bare numbers
-  studentName: string;
-  guardianLabel: string;
-  restricted: boolean;
+  guardianLabel: string; // the adult this tag belongs to
+  students: PickupFamilyTagStudent[]; // every child this adult picks up
+  restrictedAll: boolean; // true only if the adult is no-contact for ALL kids
   schoolName: string;
 }
 
@@ -79,7 +91,7 @@ const COLORS = {
 };
 
 export async function renderPickupTagsPdf(
-  tags: PickupTagInput[],
+  tags: PickupFamilyTagInput[],
   opts: { drawGuides?: boolean } = {},
 ): Promise<Buffer> {
   // QR encodes the FULL code (base+letter) so one scan resolves the adult.
@@ -136,7 +148,7 @@ export async function renderPickupTagsPdf(
 // the hanger.
 function drawTagSheet(
   doc: PDFKit.PDFDocument,
-  tag: PickupTagInput,
+  tag: PickupFamilyTagInput,
   qrPng: Buffer,
   drawGuides: boolean,
 ) {
@@ -199,65 +211,91 @@ function drawFoldLine(doc: PDFKit.PDFDocument) {
 // (ox, oy) and whose size is LAND_W x PANEL_H. The fold-keep-out band is always
 // at the panel's TOP edge: for the bottom panel that is the crease; for the
 // rotated top panel the 180° turn maps that same band back onto the crease too.
+// Format a grade integer for the sibling list: <=0 is kindergarten ("K"),
+// otherwise the plain number. Null (legacy/unknown) renders as a dash.
+function gradeLabel(grade: number | null): string {
+  if (grade === null) return "—";
+  if (grade <= 0) return "K";
+  return String(grade);
+}
+
 function drawPanel(
   doc: PDFKit.PDFDocument,
   ox: number,
   oy: number,
-  tag: PickupTagInput,
+  tag: PickupFamilyTagInput,
   qrPng: Buffer,
 ) {
   const contentTop = oy + FOLD_KEEPOUT;
   const contentBottom = oy + PANEL_H - EDGE_PAD;
   const contentH = contentBottom - contentTop;
 
-  // Right column: school + name + guardian + QR. Left region: the big number.
-  const rightW = 256;
+  // The alphanumeric CODE is the hero — it gets the entire left region at the
+  // largest size that fits. A narrow right column carries the secondary detail
+  // (school, the adult, the sibling list, and the QR). Keeping the right
+  // column tight (just wide enough for the QR) maximizes the code's width.
+  const rightW = 168;
   const rightX = ox + LAND_W - SIDE_PAD - rightW;
   const numLeft = ox + SIDE_PAD;
-  const numRegionRight = rightX - 28;
+  const numRegionRight = rightX - 22;
   const numRegionW = numRegionRight - numLeft;
 
-  // --- Right info column ---
+  // --- Right info column: school → adult → siblings (top), QR (bottom) ---
+  let ry = contentTop;
   doc
     .font("Helvetica")
-    .fontSize(12)
+    .fontSize(11)
     .fillColor(COLORS.muted)
-    .text(tag.schoolName, rightX, contentTop, {
+    .text(tag.schoolName, rightX, ry, {
       width: rightW,
       align: "center",
       ellipsis: true,
     });
+  ry += 16;
   doc
     .font("Helvetica-Bold")
-    .fontSize(22)
+    .fontSize(13)
     .fillColor(COLORS.text)
-    .text(tag.studentName, rightX, contentTop + 16, {
+    .text(tag.guardianLabel, rightX, ry, {
       width: rightW,
       align: "center",
       ellipsis: true,
     });
+  ry += 20;
   doc
-    .font("Helvetica")
-    .fontSize(14)
+    .font("Helvetica-Bold")
+    .fontSize(9)
     .fillColor(COLORS.muted)
-    .text(`Pickup: ${tag.guardianLabel}`, rightX, contentTop + 44, {
-      width: rightW,
-      align: "center",
-      ellipsis: true,
-    });
-  if (tag.restricted) {
+    .text("PICKS UP", rightX, ry, { width: rightW, align: "center" });
+  ry += 13;
+
+  // Sibling list — auto-shrink the line height so even a big family fits the
+  // space between the "PICKS UP" header and the QR block.
+  const qrSize = 120;
+  const qrBlockH = qrSize + 14; // QR + caption
+  const listTop = ry;
+  const listBottom = contentBottom - qrBlockH - 6;
+  const listH = Math.max(0, listBottom - listTop);
+  const n = Math.max(1, tag.students.length);
+  const lineH = Math.max(10, Math.min(15, listH / n));
+  const listFont = Math.min(11, lineH - 2);
+  tag.students.forEach((s, i) => {
+    const ly = listTop + i * lineH;
+    if (ly + lineH > listBottom + 0.5) return; // overflow guard (rare)
+    const label = `${s.name}  (Gr ${gradeLabel(s.grade)})`;
     doc
-      .font("Helvetica-Bold")
-      .fontSize(12)
-      .fillColor(COLORS.restricted)
-      .text("RESTRICTED — NO-CONTACT", rightX, contentTop + 64, {
+      .font("Helvetica")
+      .fontSize(listFont)
+      .fillColor(s.restricted ? COLORS.restricted : COLORS.text)
+      .text(s.restricted ? `${label}  NO-CONTACT` : label, rightX, ly, {
         width: rightW,
         align: "center",
+        ellipsis: true,
+        lineBreak: false,
       });
-  }
+  });
 
   // QR + caption pinned to the bottom of the right column.
-  const qrSize = 116;
   const qrX = rightX + (rightW - qrSize) / 2;
   const qrY = contentBottom - 12 - qrSize;
   doc.image(qrPng, qrX, qrY, { width: qrSize, height: qrSize });
@@ -270,19 +308,20 @@ function drawPanel(
       align: "center",
     });
 
-  // --- Big base number + software-ringed letter (auto-fit) ---
+  // --- HERO: big base number + software-ringed letter (auto-fit) ---
   const baseStr = tag.baseNumber ?? tag.pickupNumber;
   const letter = tag.letter ?? "";
   const ringRatio = 0.84;
   const gapRatio = 0.16;
+  const maxNumH = contentH * 0.94; // leave a little vertical breathing room
   doc.font("Helvetica-Bold");
-  let numSize = 200;
+  let numSize = 320;
   for (; numSize >= 28; numSize -= 2) {
     doc.fontSize(numSize);
     const bw = doc.widthOfString(baseStr);
     const ringD = letter ? numSize * ringRatio : 0;
     const gap = letter ? numSize * gapRatio : 0;
-    if (bw + gap + ringD <= numRegionW && numSize <= contentH) break;
+    if (bw + gap + ringD <= numRegionW && numSize <= maxNumH) break;
   }
   doc.fontSize(numSize);
   const baseW = doc.widthOfString(baseStr);
@@ -318,8 +357,9 @@ function drawPanel(
       });
   }
 
-  // Restricted: red frame around the whole panel's safe area.
-  if (tag.restricted) {
+  // Restricted: red frame + badge only when the adult is no-contact for EVERY
+  // child (mixed families flag the affected child inline in the list instead).
+  if (tag.restrictedAll) {
     doc
       .save()
       .lineWidth(2.5)
@@ -333,6 +373,15 @@ function drawPanel(
       )
       .stroke()
       .restore();
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(12)
+      .fillColor(COLORS.restricted)
+      .text("RESTRICTED — NO-CONTACT", numLeft, contentBottom - 14, {
+        width: numRegionW,
+        align: "center",
+        lineBreak: false,
+      });
   }
 }
 
