@@ -283,6 +283,31 @@ export default function Dashboard({ me }: { me: ParentMe }) {
     sessionStorage.setItem("pulseed.parentTab", activeTab);
   }, [activeTab]);
 
+  // Unread Family Messages count for the bottom-tab "Messages" badge. Family-
+  // (parent-) scoped, not per-student, so it's independent of sibling switching.
+  // We seed it from a lightweight count endpoint on mount + poll, and let the
+  // open inbox push live updates (load / "Got it") via onUnreadCountChange.
+  const [unreadMessages, setUnreadMessages] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    async function loadUnread() {
+      try {
+        const res = await parentFetch("/api/parent/messages/unread-count");
+        if (cancelled || !res.ok) return;
+        const body = (await res.json()) as { unreadCount: number };
+        if (!cancelled) setUnreadMessages(body.unreadCount ?? 0);
+      } catch {
+        /* swallow — badge is best-effort */
+      }
+    }
+    void loadUnread();
+    const timer = window.setInterval(loadUnread, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
   useEffect(() => {
     if (activeStudentId === null) {
       setLoading(false);
@@ -541,7 +566,9 @@ export default function Dashboard({ me }: { me: ParentMe }) {
         {/* Family Messages — school broadcasts. Family-scoped (not tied to
             the active student) so it lives on its own tab and is unaffected
             by sibling switching or the snapshot load state. */}
-        {activeTab === "messages" && <FamilyMessages />}
+        {activeTab === "messages" && (
+          <FamilyMessages onUnreadCountChange={setUnreadMessages} />
+        )}
         {activeTab === "more" && (
           <MoreTab
             signedInAs={me.displayName}
@@ -555,7 +582,11 @@ export default function Dashboard({ me }: { me: ParentMe }) {
         )}
       </main>
 
-      <ParentTabBar active={activeTab} onChange={setActiveTab} />
+      <ParentTabBar
+        active={activeTab}
+        onChange={setActiveTab}
+        unreadMessages={unreadMessages}
+      />
     </div>
   );
 }

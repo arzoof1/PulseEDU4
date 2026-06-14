@@ -58,7 +58,11 @@ function formatWhen(iso: string): string {
   });
 }
 
-export default function FamilyMessages() {
+export default function FamilyMessages({
+  onUnreadCountChange,
+}: {
+  onUnreadCountChange?: (count: number) => void;
+} = {}) {
   const [data, setData] = useState<InboxResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -87,6 +91,12 @@ export default function FamilyMessages() {
       objectUrlsRef.current = [];
     };
   }, []);
+
+  // Surface the live unread count to the parent shell so the bottom-tab
+  // "Messages" badge stays in sync after a load or a "Got it" tap.
+  useEffect(() => {
+    if (data) onUnreadCountChange?.(data.unreadCount);
+  }, [data, onUnreadCountChange]);
 
   async function load() {
     try {

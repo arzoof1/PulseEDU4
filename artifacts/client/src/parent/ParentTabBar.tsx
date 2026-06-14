@@ -19,9 +19,11 @@ const TABS: Array<{ id: ParentTab; label: string; icon: LucideIcon }> = [
 export default function ParentTabBar({
   active,
   onChange,
+  unreadMessages = 0,
 }: {
   active: ParentTab;
   onChange: (tab: ParentTab) => void;
+  unreadMessages?: number;
 }) {
   return (
     <nav
@@ -48,11 +50,19 @@ export default function ParentTabBar({
             >
               <span
                 className={
-                  "flex items-center justify-center h-9 w-9 rounded-full transition-colors " +
+                  "relative flex items-center justify-center h-9 w-9 rounded-full transition-colors " +
                   (isActive ? "bg-violet-100" : "")
                 }
               >
                 <Icon className="h-5 w-5" />
+                {t.id === "messages" && unreadMessages > 0 && (
+                  <span
+                    className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-full bg-rose-600 text-white text-[10px] font-bold leading-none ring-2 ring-white"
+                    aria-label={`${unreadMessages} unread messages`}
+                  >
+                    {unreadMessages > 9 ? "9+" : unreadMessages}
+                  </span>
+                )}
               </span>
               {t.label}
             </button>

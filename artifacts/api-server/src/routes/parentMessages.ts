@@ -966,6 +966,33 @@ router.get("/parent/messages", async (req: Request, res: Response) => {
   });
 });
 
+// GET /parent/messages/unread-count — lightweight badge count of messages this
+// parent hasn't acknowledged yet. Defined before the "/:id/..." routes so the
+// literal path can't be shadowed by a dynamic segment.
+router.get(
+  "/parent/messages/unread-count",
+  async (req: Request, res: Response) => {
+    const ctx = await resolveParentContext(req);
+    if (!ctx) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    const { pid, schoolId } = ctx;
+    const [row] = await db
+      .select({
+        unread: sql<number>`count(*) filter (where ${parentMessageRecipientsTable.acknowledgedAt} is null)`,
+      })
+      .from(parentMessageRecipientsTable)
+      .where(
+        and(
+          eq(parentMessageRecipientsTable.parentId, pid),
+          eq(parentMessageRecipientsTable.schoolId, schoolId),
+        ),
+      );
+    res.json({ unreadCount: Number(row?.unread ?? 0) });
+  },
+);
+
 // POST /parent/messages/:id/ack — explicit "Got it" tap. Idempotent.
 router.post(
   "/parent/messages/:id/ack",
