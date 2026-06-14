@@ -4651,6 +4651,22 @@ function OnTimeTestingPanel() {
   );
 }
 
+// Consistent "← Back to Insights Hub" bar rendered above each Insights
+// domain dashboard so a user who opens the wrong tile always has a way back
+// in the same place (these dashboards otherwise have no back control, leaving
+// the sidebar as the only escape).
+function InsightsBackBar({ onBack }: { onBack: () => void }) {
+  return (
+    <button
+      type="button"
+      className="back-button-purple"
+      onClick={onBack}
+    >
+      ← Back to Insights Hub
+    </button>
+  );
+}
+
 function App() {
   // Apply per-school branding (header gradient, logo) to the document root
   // so any component reading var(--brand-header-bg) retints automatically.
@@ -21813,99 +21829,123 @@ function App() {
       )}
 
       {activeSection === "engagementDashboard" && canAccessMtssHub && (
-        <EngagementDashboard
-          onOpenProfile={(studentId) => {
-            setSelectedInsightsStudentId(studentId);
-            // Pin the back-target so the profile's Back button returns
-            // to the engagement dashboard (not the watchlist or
-            // wherever the user was before).
-            setStudentProfileReturnTo("engagementDashboard");
-            setActiveSection("studentProfile");
-          }}
-        />
+        <>
+          <InsightsBackBar onBack={() => setActiveSection("insights")} />
+          <EngagementDashboard
+            onOpenProfile={(studentId) => {
+              setSelectedInsightsStudentId(studentId);
+              // Pin the back-target so the profile's Back button returns
+              // to the engagement dashboard (not the watchlist or
+              // wherever the user was before).
+              setStudentProfileReturnTo("engagementDashboard");
+              setActiveSection("studentProfile");
+            }}
+          />
+        </>
       )}
 
       {activeSection === "behaviorDashboard" && canAccessMtssHub && (
-        <BehaviorDashboard
-          onOpenProfile={(studentId) => {
-            setSelectedInsightsStudentId(studentId);
-            // Pin the back-target so the profile's Back button returns
-            // to the behavior dashboard.
-            setStudentProfileReturnTo("behaviorDashboard");
-            setActiveSection("studentProfile");
-          }}
-        />
+        <>
+          <InsightsBackBar onBack={() => setActiveSection("insights")} />
+          <BehaviorDashboard
+            onOpenProfile={(studentId) => {
+              setSelectedInsightsStudentId(studentId);
+              // Pin the back-target so the profile's Back button returns
+              // to the behavior dashboard.
+              setStudentProfileReturnTo("behaviorDashboard");
+              setActiveSection("studentProfile");
+            }}
+          />
+        </>
       )}
 
       {activeSection === "academicsDashboard" && canAccessMtssHub && (
-        <AcademicsDashboard
-          onOpenProfile={(studentId) => {
-            setSelectedInsightsStudentId(studentId);
-            // Pin the back-target so the profile's Back button returns
-            // to the academics dashboard.
-            setStudentProfileReturnTo("academicsDashboard");
-            setActiveSection("studentProfile");
-          }}
-        />
+        <>
+          <InsightsBackBar onBack={() => setActiveSection("insights")} />
+          <AcademicsDashboard
+            onOpenProfile={(studentId) => {
+              setSelectedInsightsStudentId(studentId);
+              // Pin the back-target so the profile's Back button returns
+              // to the academics dashboard.
+              setStudentProfileReturnTo("academicsDashboard");
+              setActiveSection("studentProfile");
+            }}
+          />
+        </>
       )}
 
       {activeSection === "academicsTrajectory" && canAccessMtssHub && (
-        <AcademicsTrajectory
-          onOpenProfile={(studentId) => {
-            setSelectedInsightsStudentId(studentId);
-            // Pin the back-target so the profile's Back button returns
-            // to the trajectory dashboard.
-            setStudentProfileReturnTo("academicsTrajectory");
-            setActiveSection("studentProfile");
-          }}
-        />
+        <>
+          <InsightsBackBar onBack={() => setActiveSection("insights")} />
+          <AcademicsTrajectory
+            onOpenProfile={(studentId) => {
+              setSelectedInsightsStudentId(studentId);
+              // Pin the back-target so the profile's Back button returns
+              // to the trajectory dashboard.
+              setStudentProfileReturnTo("academicsTrajectory");
+              setActiveSection("studentProfile");
+            }}
+          />
+        </>
       )}
 
       {activeSection === "attendanceDashboard" && canAccessMtssHub && (
-        <AttendanceDashboard
-          onOpenProfile={(studentId) => {
-            setSelectedInsightsStudentId(studentId);
-            // Pin the back-target so the profile's Back button returns
-            // to the attendance dashboard.
-            setStudentProfileReturnTo("attendanceDashboard");
-            setActiveSection("studentProfile");
-          }}
-        />
+        <>
+          <InsightsBackBar onBack={() => setActiveSection("insights")} />
+          <AttendanceDashboard
+            onOpenProfile={(studentId) => {
+              setSelectedInsightsStudentId(studentId);
+              // Pin the back-target so the profile's Back button returns
+              // to the attendance dashboard.
+              setStudentProfileReturnTo("attendanceDashboard");
+              setActiveSection("studentProfile");
+            }}
+          />
+        </>
       )}
 
       {activeSection === "sebSelDashboard" && canAccessMtssHub && (
-        <SebSelDashboard
-          onOpenProfile={(studentId) => {
-            setSelectedInsightsStudentId(studentId);
-            // Pin the back-target so the profile's Back button returns
-            // to the SEB/SEL dashboard.
-            setStudentProfileReturnTo("sebSelDashboard");
-            setActiveSection("studentProfile");
-          }}
-        />
+        <>
+          <InsightsBackBar onBack={() => setActiveSection("insights")} />
+          <SebSelDashboard
+            onOpenProfile={(studentId) => {
+              setSelectedInsightsStudentId(studentId);
+              // Pin the back-target so the profile's Back button returns
+              // to the SEB/SEL dashboard.
+              setStudentProfileReturnTo("sebSelDashboard");
+              setActiveSection("studentProfile");
+            }}
+          />
+        </>
       )}
 
       {activeSection === "equityDashboard" && canAccessMtssHub && (
-        <EquityDashboard
-          onOpenProfile={(studentId) => {
-            setSelectedInsightsStudentId(studentId);
-            // V1 equity view is aggregate-only (no per-student lists yet),
-            // but we wire the return-to anyway so a future drill-in can
-            // navigate back to this dashboard cleanly.
-            setStudentProfileReturnTo("equityDashboard");
-            setActiveSection("studentProfile");
-          }}
-        />
+        <>
+          <InsightsBackBar onBack={() => setActiveSection("insights")} />
+          <EquityDashboard
+            onOpenProfile={(studentId) => {
+              setSelectedInsightsStudentId(studentId);
+              // V1 equity view is aggregate-only (no per-student lists yet),
+              // but we wire the return-to anyway so a future drill-in can
+              // navigate back to this dashboard cleanly.
+              setStudentProfileReturnTo("equityDashboard");
+              setActiveSection("studentProfile");
+            }}
+          />
+        </>
       )}
 
       {activeSection === "earlyWarningDashboard" && canAccessMtssHub && (
-        <EarlyWarningDashboard
-          onOpenProfile={(studentId) => {
-            setSelectedInsightsStudentId(studentId);
-            setStudentProfileReturnTo("earlyWarningDashboard");
-            setActiveSection("studentProfile");
-          }}
-        />
+        <>
+          <InsightsBackBar onBack={() => setActiveSection("insights")} />
+          <EarlyWarningDashboard
+            onOpenProfile={(studentId) => {
+              setSelectedInsightsStudentId(studentId);
+              setStudentProfileReturnTo("earlyWarningDashboard");
+              setActiveSection("studentProfile");
+            }}
+          />
+        </>
       )}
 
       {activeSection === "studentProfile" && selectedInsightsStudentId && (
