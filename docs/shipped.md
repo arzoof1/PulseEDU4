@@ -3,6 +3,24 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- Tardy metrics — **Total tardies + lost-instruction minutes (YTD)**.
+  The staff Hall Passes "Tardy / Check-In History" tab now shows two
+  school-year-to-date summary tiles (Total Tardies, Lost Instruction
+  minutes) plus a per-row "Min Lost" column; the parent HeartBEAT
+  attendance section + PDF show the same two totals per-child. Window is
+  Aug-1 school-year-to-date (matches the parent `schoolYearBounds`).
+  Lost-instruction minutes = tardy check-in time (`tardies.createdAt`,
+  in the school's tz) − scheduled period start from the school's DEFAULT
+  active bell schedule, clamped to `[0, period length]` with a 90-min
+  fallback cap. New shared helper `artifacts/api-server/src/lib/
+  lostInstruction.ts`; `GET /api/tardies` enriches each row with
+  `lostMinutes` (null when the period isn't on the default schedule or no
+  default schedule exists — surfaced as a "not counted — no bell time"
+  note rather than a fake 0). `parentSnapshot.ts` computes per-student
+  `tardiesYtd` + `lostInstructionMinutesYtd`. Staff totals are computed
+  client-side from the enriched rows with an exclusive Aug-1→next-Aug-1
+  window. Per-school timezone threaded via `getSchoolTimezone`.
+
 - School Grade Estimated Calculator — **PM3 result-upload request**.
   When PM3 is selected from the window dropdown, the calculator surfaces a
   dedicated "PM3 result uploads" card requesting the Civics (Gr 7), Science

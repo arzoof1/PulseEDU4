@@ -90,6 +90,8 @@ interface Snapshot {
   attendance: {
     tardiesThisWeek: number;
     checkInsThisWeek: number;
+    tardiesYtd: number;
+    lostInstructionMinutesYtd: number;
     pct: {
       ytd: { presentDays: number; totalDays: number; pct: number } | null;
       last30: { presentDays: number; totalDays: number; pct: number } | null;
@@ -696,6 +698,24 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
           title="Attendance"
           icon={<Calendar className="h-4 w-4 text-orange-600" />}
         >
+          {/* School-year-to-date tardy totals — always shown when the
+              attendance section is visible (count works even without a
+              bell schedule; lost minutes are 0 until one is configured). */}
+          <div className="grid grid-cols-2 gap-2 mb-4">
+            <AttendanceTile
+              label="Tardies · YTD"
+              value={`${snapshot.attendance.tardiesYtd}`}
+              sub="this school year"
+              accent={
+                snapshot.attendance.tardiesYtd === 0 ? "emerald" : "slate"
+              }
+            />
+            <AttendanceTile
+              label="Lost instruction · YTD"
+              value={`${snapshot.attendance.lostInstructionMinutesYtd} min`}
+              sub="time after the bell"
+            />
+          </div>
           {/* Aggregate tiles. Attendance % (YTD + 30d) shows whenever
               any attendance-day data exists. On-time streak tiles only
               appear when the school has a default bell schedule with

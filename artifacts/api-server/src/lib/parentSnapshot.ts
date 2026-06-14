@@ -33,8 +33,16 @@ import {
   attendanceCheckinsTable,
 } from "@workspace/db";
 import { and, eq, desc, isNull, sql, gte, lt } from "drizzle-orm";
-import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./schoolYear.js";
+import {
+  schoolYearLabelFor,
+  DEFAULT_SCHOOL_TZ,
+  getSchoolTimezone,
+} from "./schoolYear.js";
 import { loadRestroomDestinationNames } from "./oneWayPass.js";
+import {
+  loadDefaultPeriodWindows,
+  tardyLostMinutes,
+} from "./lostInstruction.js";
 
 // Returns the YYYY-MM-DD bounds of the current school year. The cutover
 // is Aug 1 — anything before that rolls back to the previous Aug 1 so a
@@ -116,6 +124,13 @@ export interface ParentSnapshot {
   attendance: {
     tardiesThisWeek: number;
     checkInsThisWeek: number;
+    // School-year-to-date tardy totals for this student. `tardiesYtd` is
+    // every 'tardy' entry logged this SY; `lostInstructionMinutesYtd` sums
+    // each tardy's lateness (check-in time − scheduled period start, from
+    // the default bell schedule). Minutes are 0 when the school has no
+    // default bell schedule configured (count still works).
+    tardiesYtd: number;
+    lostInstructionMinutesYtd: number;
     // Aggregated attendance %. `null` when the window has zero logged
     // school days for the student (avoids showing a meaningless "0%").
     // `present` counts attendance_day rows with status='present' OR
@@ -668,6 +683,41 @@ export async function buildParentSnapshot(
     }
   }
 
+  // ----- SY-to-date tardy totals + lost instruction (this student) -----
+  // Mirrors the staff Hall Passes tardy summary: a YTD count plus summed
+  // lateness minutes (check-in time − scheduled period start). The count
+  // works even with no default bell schedule; minutes need the schedule.
+  let tardiesYtd = 0;
+  let lostInstructionMinutesYtd = 0;
+  if (sectionsAvailable.attendance) {
+    const syTardyRows = await db
+      .select({
+        createdAt: tardiesTable.createdAt,
+        period: tardiesTable.period,
+      })
+      .from(tardiesTable)
+      .where(
+        and(
+          eq(tardiesTable.schoolId, student.schoolId),
+          eq(tardiesTable.studentId, student.studentId),
+          eq(tardiesTable.entryType, "tardy"),
+          gte(tardiesTable.createdAt, syStartIso),
+          lt(tardiesTable.createdAt, syEndIso),
+        ),
+      );
+    tardiesYtd = syTardyRows.length;
+    if (syTardyRows.length > 0) {
+      const windows = await loadDefaultPeriodWindows(student.schoolId);
+      if (windows.size > 0) {
+        const tz = await getSchoolTimezone(student.schoolId);
+        for (const t of syTardyRows) {
+          const lm = tardyLostMinutes(windows, t.period, t.createdAt, tz);
+          if (lm != null) lostInstructionMinutesYtd += lm;
+        }
+      }
+    }
+  }
+
   // ----- Accommodations -----
   let accommodations: Array<{ id: number; name: string; category: string }> = [];
   if (sectionsAvailable.accommodations) {
@@ -993,6 +1043,8 @@ export async function buildParentSnapshot(
       attendance: {
         tardiesThisWeek: tardyThisWeek,
         checkInsThisWeek: checkInThisWeek,
+        tardiesYtd,
+        lostInstructionMinutesYtd,
         pct: attendancePct,
         onTimeStreak,
         onTimeArrivals,

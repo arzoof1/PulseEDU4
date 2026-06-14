@@ -5,6 +5,11 @@ import { requireSchool } from "../lib/scope.js";
 import { resolveStudentIdInput } from "../lib/studentIdResolver.js";
 import { sendTardySmsStub } from "../lib/tardySms.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
+import {
+  loadDefaultPeriodWindows,
+  tardyLostMinutes,
+} from "../lib/lostInstruction.js";
+import { getSchoolTimezone } from "../lib/schoolYear.js";
 
 const router: IRouter = Router();
 
@@ -35,8 +40,20 @@ router.get("/tardies", async (req, res) => {
       );
     for (const s of stu) localBySid.set(s.studentId, s.localSisId);
   }
+  // Lost-instruction minutes per tardy (check-in time − scheduled period
+  // start, from the default bell schedule). Only 'tardy' rows carry a
+  // value; other entry types and unmatched periods stay null.
+  const periodWindows = await loadDefaultPeriodWindows(schoolId);
+  const tz = await getSchoolTimezone(schoolId);
   res.json(
-    rows.map((r) => ({ ...r, localSisId: localBySid.get(r.studentId) ?? null })),
+    rows.map((r) => ({
+      ...r,
+      localSisId: localBySid.get(r.studentId) ?? null,
+      lostMinutes:
+        r.entryType === "tardy"
+          ? tardyLostMinutes(periodWindows, r.period, r.createdAt, tz)
+          : null,
+    })),
   );
 });
 

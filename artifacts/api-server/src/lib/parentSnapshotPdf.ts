@@ -305,6 +305,16 @@ function drawAttendanceBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
       value: String(s.attendance.checkInsThisWeek),
       color: COLORS.muted,
     });
+    stats.push({
+      label: "Tardies (YTD)",
+      value: String(s.attendance.tardiesYtd),
+      color: s.attendance.tardiesYtd === 0 ? COLORS.positive : COLORS.warn,
+    });
+    stats.push({
+      label: "Lost instr (YTD)",
+      value: `${s.attendance.lostInstructionMinutesYtd} min`,
+      color: COLORS.muted,
+    });
     // Aggregate attendance metrics mirroring the parent Dashboard.
     // Render dashes when the school hasn't loaded any attendance-day
     // data yet so the PDF doesn't pretend to know a 0% rate.

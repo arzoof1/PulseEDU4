@@ -1,4 +1,5 @@
 - [api-server stale bundle](api-server-stale-bundle.md) — api-server dev is `build && start` (no watch); restart to pick up merged/edited server code before suspecting an app bug.
+- [Tardy lost-instruction metrics](tardy-lost-instruction.md) — staff + parent YTD tardy/lost-min totals must share the Aug-1 window; lost-min from default+active bell schedule via lib/lostInstruction.ts, per-school tz.
 - [Staff & Roles active-school scope](object-bind-uploader-vs-owner.md) — roster list/export/photo scope to req.schoolId (active school) for ALL incl SuperUser; object bind/read are same-school only; district reach lives on capability-gated district routes.
 - [Display live remote control](display-live-control.md) — bump revision atomically in SQL (sole TV change-detector); public signage-by-id is unauthenticated by design.
 - [Mutating production data](prod-data-mutation.md) — agent tools are read-only on prod; change prod rows via an idempotent boot one-shot (marker in `app_one_shot_markers`) that runs on Publish.

@@ -222,6 +222,22 @@ interface Tardy {
   notes: string;
   createdBy: string | null;
   createdAt: string;
+  // Lost-instruction minutes (server-computed: check-in time − scheduled
+  // period start). Only 'tardy' rows carry a value; null = not computable
+  // (no bell time for the period, or non-tardy entry type).
+  lostMinutes?: number | null;
+}
+
+// YYYY-MM-DD bounds of the current school year. Aug 1 cutover, matching
+// the parent HeartBEAT (`schoolYearBounds` on the server) so the staff
+// tardy totals and the parent portal agree on the window. `end` is
+// exclusive (next Aug 1) so future-dated rows don't leak into the total.
+function schoolYearBoundsIso(now: Date = new Date()): {
+  start: string;
+  end: string;
+} {
+  const y = now.getMonth() >= 7 ? now.getFullYear() : now.getFullYear() - 1;
+  return { start: `${y}-08-01`, end: `${y + 1}-08-01` };
 }
 
 interface PbisEntry {
@@ -10890,6 +10906,57 @@ function App() {
             tardy” — the student is logged and sent back to their
             current-period teacher.
           </p>
+          {(() => {
+            const { start: syStart, end: syEnd } = schoolYearBoundsIso();
+            const syTardies = tardies.filter(
+              (t) =>
+                t.entryType === "tardy" &&
+                t.createdAt >= syStart &&
+                t.createdAt < syEnd,
+            );
+            const totalTardies = syTardies.length;
+            let totalLost = 0;
+            let uncomputable = 0;
+            for (const t of syTardies) {
+              if (typeof t.lostMinutes === "number") totalLost += t.lostMinutes;
+              else uncomputable++;
+            }
+            return (
+              <>
+                <div className="stat-grid" style={{ marginBottom: "0.5rem" }}>
+                  <div className="stat-card">
+                    <span className="stat-label">Total Tardies (SY)</span>
+                    <span className="stat-value">
+                      {totalTardies.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="stat-card">
+                    <span className="stat-label">
+                      Lost Instruction · min (SY)
+                    </span>
+                    <span className="stat-value">
+                      {totalLost.toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+                {uncomputable > 0 && (
+                  <p
+                    style={{
+                      marginTop: 0,
+                      marginBottom: "0.5rem",
+                      color: "var(--text-subtle)",
+                      fontSize: "0.8rem",
+                    }}
+                  >
+                    {uncomputable.toLocaleString()}{" "}
+                    {uncomputable === 1 ? "tardy is" : "tardies are"} not counted
+                    toward lost minutes — no bell time for their period.
+                    Configure a default bell schedule to include them.
+                  </p>
+                )}
+              </>
+            );
+          })()}
           <table
             className="pulse-table"
             border={1}
@@ -10902,6 +10969,7 @@ function App() {
                 <th>Teacher</th>
                 <th>Type</th>
                 <th>Period</th>
+                <th>Min Lost</th>
                 <th>Reason</th>
                 <th>Check-In With</th>
                 <th>Notes</th>
@@ -10934,6 +11002,11 @@ function App() {
                     <td>{t.teacherName}</td>
                     <td>{t.entryType}</td>
                     <td>{t.period}</td>
+                    <td>
+                      {typeof t.lostMinutes === "number"
+                        ? t.lostMinutes.toLocaleString()
+                        : "—"}
+                    </td>
                     <td>{t.reason}</td>
                     <td>{t.checkInWith ?? "-"}</td>
                     <td>{t.notes}</td>
