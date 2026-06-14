@@ -8,7 +8,11 @@ import {
   Info,
   Gift,
   ArrowRight,
-  ShieldCheck
+  ShieldCheck,
+  CalendarCheck,
+  Lock,
+  Check,
+  Circle
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -54,7 +58,11 @@ export function WeeklyReviewBonus() {
       grade: "7th Grade",
       initials: "AR",
       points: 451,
-      claimed: true,
+      claimed: false,
+      sectionsViewed: 2,
+      streakDays: 0,
+      weekEarned: 2,
+      weekMax: 5,
     },
     mateo: {
       name: "Mateo Rivera",
@@ -62,11 +70,21 @@ export function WeeklyReviewBonus() {
       grade: "4th Grade",
       initials: "MR",
       points: 210,
-      claimed: false,
+      claimed: true,
+      sectionsViewed: 3,
+      streakDays: 3,
+      weekEarned: 4,
+      weekMax: 5,
     },
   };
 
   const child = children[activeChild];
+
+  const sections = [
+    { label: "Attendance", icon: CalendarCheck },
+    { label: "Behavior & PBIS", icon: Heart },
+    { label: "Recognition & Notes", icon: Award },
+  ];
 
   return (
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 sm:p-8 font-sans">
@@ -127,7 +145,7 @@ export function WeeklyReviewBonus() {
           
           <div className="text-center space-y-1 mt-2 mb-6">
             <h2 className="text-xl font-bold text-slate-900">HeartBEAT Check-In</h2>
-            <p className="text-sm text-slate-500">Check in anytime · Bonus once a week</p>
+            <p className="text-sm text-slate-500">Check in daily · Earn a small bonus</p>
           </div>
 
           {/* Hero Card */}
@@ -142,20 +160,20 @@ export function WeeklyReviewBonus() {
                 </div>
                 
                 <div className="space-y-1.5">
-                  <h3 className="text-xl font-bold text-slate-900">You reviewed {child.firstName}'s HeartBEAT!</h3>
+                  <h3 className="text-xl font-bold text-slate-900">You reviewed {child.firstName}'s HeartBEAT today!</h3>
                   <p className="text-slate-600 text-sm max-w-[280px] mx-auto">
-                    Thanks for staying in the loop. {child.firstName} has been awarded a check-in bonus.
+                    All 3 sections viewed. {child.firstName} earned today's check-in bonus — come back tomorrow for another.
                   </p>
                 </div>
 
                 <div className="bg-gradient-to-r from-violet-50 to-teal-50 w-full rounded-2xl p-4 border border-violet-100 flex flex-col items-center justify-center gap-2 mt-2">
                   <div className="flex items-center gap-2 text-violet-700 font-bold text-lg">
                     <Award className="h-5 w-5" />
-                    +5 Bonus Points
+                    +1 Bonus Point
                   </div>
                   <Badge variant="secondary" className="bg-white/60 text-slate-600 border border-slate-200">
                     <Flame className="h-3 w-3 text-orange-500 mr-1" fill="currentColor" />
-                    3 weeks in a row
+                    {child.streakDays}-day streak
                   </Badge>
                 </div>
               </CardContent>
@@ -170,22 +188,59 @@ export function WeeklyReviewBonus() {
                 </div>
                 
                 <div className="space-y-2">
-                  <h3 className="text-xl font-bold text-slate-900">HeartBEAT is ready</h3>
+                  <h3 className="text-xl font-bold text-slate-900">Today's check-in</h3>
                   <p className="text-slate-600 text-sm max-w-[280px] mx-auto">
-                    Review {child.firstName}'s attendance, behavior, and recognition to unlock this week's bonus.
+                    View all 3 parts of {child.firstName}'s HeartBEAT to earn today's bonus.
                   </p>
                 </div>
 
-                <div className="w-full pt-2">
-                  <Button className="w-full bg-violet-600 hover:bg-violet-700 text-white rounded-xl h-12 text-base font-semibold shadow-sm flex items-center gap-2">
-                    Check in on {child.firstName}'s HeartBEAT
-                    <ArrowRight className="h-4 w-4" />
+                <div className="w-full space-y-2 text-left">
+                  {sections.map((s, i) => {
+                    const done = i < child.sectionsViewed;
+                    const Icon = s.icon;
+                    return (
+                      <div
+                        key={s.label}
+                        className={`flex items-center gap-3 rounded-2xl border p-3 ${done ? "border-green-100 bg-green-50" : "border-slate-100 bg-slate-50"}`}
+                      >
+                        <div className={`h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${done ? "bg-green-100" : "bg-white border border-slate-200"}`}>
+                          <Icon className={`h-4 w-4 ${done ? "text-green-600" : "text-slate-400"}`} />
+                        </div>
+                        <span className={`flex-1 text-sm font-semibold ${done ? "text-slate-800" : "text-slate-500"}`}>
+                          {s.label}
+                        </span>
+                        {done ? (
+                          <Check className="h-5 w-5 text-green-600" />
+                        ) : (
+                          <Circle className="h-5 w-5 text-slate-300" />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="w-full pt-1">
+                  <Button
+                    disabled={child.sectionsViewed < 3}
+                    className="w-full bg-violet-600 hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl h-12 text-base font-semibold shadow-sm flex items-center gap-2"
+                  >
+                    {child.sectionsViewed < 3 ? (
+                      <>
+                        <Lock className="h-4 w-4" />
+                        View all sections to unlock
+                      </>
+                    ) : (
+                      <>
+                        Claim {child.firstName}'s +1 bonus
+                        <ArrowRight className="h-4 w-4" />
+                      </>
+                    )}
                   </Button>
                 </div>
                 
                 <div className="flex items-center gap-1.5 text-xs font-medium text-slate-500 bg-slate-50 px-3 py-1.5 rounded-full">
                   <Gift className="h-3.5 w-3.5 text-violet-500" />
-                  Earn +5 points for {child.firstName}
+                  {child.sectionsViewed} of 3 sections viewed
                 </div>
               </CardContent>
             </Card>
@@ -194,17 +249,17 @@ export function WeeklyReviewBonus() {
           {/* Status indicators */}
           <div className="grid grid-cols-2 gap-3 mt-4">
             <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex flex-col items-center justify-center text-center gap-1">
-              <span className="text-2xl font-bold text-slate-800">{child.claimed ? "1 of 1" : "0 of 1"}</span>
-              <span className="text-xs font-medium text-slate-500">Bonus claimed this week</span>
+              <span className="text-2xl font-bold text-slate-800">+{child.weekEarned} <span className="text-base text-slate-400">/ +{child.weekMax}</span></span>
+              <span className="text-xs font-medium text-slate-500">Earned this week (max +{child.weekMax})</span>
             </div>
             <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex flex-col items-center justify-center text-center gap-1">
-              <span className="text-lg font-bold text-slate-800">Monday</span>
-              <span className="text-xs font-medium text-slate-500">Bonus limit resets</span>
+              <span className="text-lg font-bold text-slate-800">1 / day</span>
+              <span className="text-xs font-medium text-slate-500">Bonus opportunities</span>
             </div>
           </div>
 
           <p className="text-[11px] text-center text-slate-400 font-medium px-4">
-            The HeartBEAT Check-In bonus (+5 pts) is set by your school administration.
+            One small bonus per day (max +{child.weekMax} per week), set by your school. Viewing all sections keeps each check-in meaningful.
           </p>
 
           <EkgDivider />
@@ -220,7 +275,7 @@ export function WeeklyReviewBonus() {
               <div className="space-y-1.5 text-sm">
                 <h4 className="font-bold text-slate-900">About this bonus</h4>
                 <p className="text-slate-600 leading-relaxed">
-                  This is an optional family bonus! It never affects {child.firstName}'s standing or the support our staff provides. It's just a little extra something to celebrate staying connected.
+                  Optional and capped — one small bonus a day, up to +{child.weekMax} a week, so no family can get ahead by spending more time. It never affects {child.firstName}'s standing or the support our staff provides.
                 </p>
               </div>
             </CardContent>
