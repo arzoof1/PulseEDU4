@@ -12,6 +12,15 @@
 //     every adult letter ("1001 — A Mom · B Dad · C Grandma") for the front
 //     desk. The strip shows the local SIS id only — NEVER the FLEID.
 //
+// Tag stock (plain paper, cheap): one big tag per LANDSCAPE Letter sheet.
+// The sheet is meant to be draped over a child's clothes hanger, folded on the
+// top edge (the crease sits over the hanger's top bar like a shirt collar) and
+// taped in place. To make the number readable from BOTH sides of the car line,
+// the SAME content is printed on both halves of the sheet: the bottom half
+// upright, the top half rotated 180° so that — once the top edge is folded down
+// behind the hanger — it also reads right-side-up from the back. A dashed fold
+// line + keep-out band keeps content off the crease that wraps the bar.
+//
 // Restricted authorizations get a RED border + "RESTRICTED" badge so
 // no one accidentally prints + hands out a no-contact tag.
 
@@ -46,28 +55,20 @@ const PAGE_MARGIN = 36; // used by the office-reference strip only
 const PAGE_WIDTH = 612; // Letter, 8.5in x 72dpi
 const PAGE_HEIGHT = 792;
 
-// --- TG-0194 die-cut hang-tag stock geometry --------------------------------
-// 6 tags per Letter sheet: 3 columns x 2 rows, each cell 204 x 396 pt
-// (2.83in x 5.5in), edge-to-edge (no outer page margin). Each tag has a
-// punched hanging hole centered near the top and a diagonal "shoulder" cut on
-// the top-right corner. The numbers below were measured directly from the
-// supplied TG-0194 template (Y measured DOWN from each cell's top edge).
-const COLS = 3;
-const ROWS = 2;
-const CELL_W = PAGE_WIDTH / COLS; // 204
-const CELL_H = PAGE_HEIGHT / ROWS; // 396
-const TAGS_PER_PAGE = COLS * ROWS; // 6
-
-const HOLE_CX = CELL_W / 2; // 102 — hole is horizontally centered
-const HOLE_CY = 71.6; // hole center, from cell top
-const HOLE_R = 34.9;
-const SHOULDER_FROM = { x: 133.9, y: 88.16 }; // diagonal start (by the hole)
-const SHOULDER_TO = { x: CELL_W, y: 128.6 }; // diagonal end (right cut edge)
-// Reserve the whole top band (hole + diagonal shoulder) so nothing important
-// is punched through or trimmed away.
-const TOP_KEEPOUT = SHOULDER_TO.y + 10; // ~139
-const SIDE_PAD = 16;
-const BOTTOM_PAD = 16;
+// --- Landscape fold-over-the-hanger tag geometry ----------------------------
+// One tag per LANDSCAPE Letter sheet (792 x 612 pt). The page is split in half
+// at the horizontal center (the FOLD). The bottom half holds the tag content
+// upright; the top half holds the SAME content rotated 180° so that, once the
+// top edge is folded down behind the hanger's top bar, both faces read upright
+// (one on the front of the car line, one on the back). A keep-out band on each
+// side of the fold keeps content off the crease that wraps the bar.
+const LAND_W = 792; // landscape Letter width
+const LAND_H = 612; // landscape Letter height
+const PANEL_H = LAND_H / 2; // 306 — height of each (front/back) half
+const FOLD_Y = PANEL_H; // 306 — the crease, vertically centered
+const FOLD_KEEPOUT = 40; // clear band between the crease and content
+const EDGE_PAD = 30; // padding at the outer (top/bottom) page edges
+const SIDE_PAD = 46; // left/right padding inside a panel
 
 const COLORS = {
   border: "#0f172a",
@@ -89,24 +90,24 @@ export async function renderPickupTagsPdf(
         type: "png",
         errorCorrectionLevel: "M",
         margin: 0,
-        width: 220,
+        width: 240,
       });
       qrPngByCode.set(t.pickupNumber, png);
     }
   }
 
   return new Promise<Buffer>((resolve, reject) => {
-    // margin 0 — the die-cut cells run edge-to-edge, so a new page must not
-    // inherit pdfkit's default 72pt margin (it would shift the whole grid).
-    const doc = new PDFDocument({
+    const docOpts: PDFKit.PDFDocumentOptions = {
       size: "LETTER",
+      layout: "landscape",
       margin: 0,
       info: {
         Title: "PulseEDU Pickup Tags",
         Author: "PulseEDU",
-        Subject: "Car-rider pickup tags (TG-0194 hang-tag stock)",
+        Subject: "Car-rider pickup tags (fold-over hanger sheet)",
       },
-    });
+    };
+    const doc = new PDFDocument(docOpts);
     const chunks: Buffer[] = [];
     doc.on("data", (b: Buffer) => chunks.push(b));
     doc.on("end", () => resolve(Buffer.concat(chunks)));
@@ -114,16 +115,9 @@ export async function renderPickupTagsPdf(
 
     try {
       tags.forEach((tag, idx) => {
-        const slot = idx % TAGS_PER_PAGE;
-        if (idx > 0 && slot === 0) doc.addPage();
-        const col = slot % COLS;
-        const row = Math.floor(slot / COLS);
-        const cellX = col * CELL_W;
-        const cellY = row * CELL_H;
-        drawTag(
+        if (idx > 0) doc.addPage(docOpts);
+        drawTagSheet(
           doc,
-          cellX,
-          cellY,
           tag,
           qrPngByCode.get(tag.pickupNumber)!,
           !!opts.drawGuides,
@@ -136,136 +130,178 @@ export async function renderPickupTagsPdf(
   });
 }
 
-function drawTag(
+// One full landscape sheet = bottom panel (upright) + top panel (rotated 180°)
+// + the fold line. Both panels render identical content via drawPanel; the top
+// one is rotated about its own center so it reads upright once folded behind
+// the hanger.
+function drawTagSheet(
   doc: PDFKit.PDFDocument,
-  cellX: number,
-  cellY: number,
   tag: PickupTagInput,
   qrPng: Buffer,
   drawGuides: boolean,
 ) {
-  // Optional die-cut guides (cut border, hole, diagonal shoulder). OFF for
-  // pre-die-cut TG-0194 blanks; ON for proofing or for offices that print on
-  // plain stock and trim by hand.
   if (drawGuides) {
+    // Optional outer trim border (plain-paper proof aid only).
     doc
       .save()
       .lineWidth(0.5)
-      .strokeColor("#94a3b8")
-      .dash(2, { space: 1 });
-    doc.rect(cellX, cellY, CELL_W, CELL_H).stroke();
-    doc.circle(cellX + HOLE_CX, cellY + HOLE_CY, HOLE_R).stroke();
-    doc
-      .moveTo(cellX + SHOULDER_FROM.x, cellY + SHOULDER_FROM.y)
-      .lineTo(cellX + SHOULDER_TO.x, cellY + SHOULDER_TO.y)
-      .stroke();
-    doc.undash().restore();
+      .strokeColor("#cbd5e1")
+      .dash(3, { space: 2 })
+      .rect(8, 8, LAND_W - 16, LAND_H - 16)
+      .stroke()
+      .undash()
+      .restore();
   }
 
-  const bodyX = cellX + SIDE_PAD;
-  const bodyW = CELL_W - SIDE_PAD * 2; // 172
-  const bodyTop = cellY + TOP_KEEPOUT;
-  const bodyBottom = cellY + CELL_H - BOTTOM_PAD;
+  // Bottom panel — upright (front face).
+  drawPanel(doc, 0, FOLD_Y, tag, qrPng);
 
-  // School name (small)
+  // Top panel — same content rotated 180° about the top panel's center so it
+  // reads upright after the top edge folds down behind the hanger (back face).
+  doc.save();
+  doc.rotate(180, { origin: [LAND_W / 2, PANEL_H / 2] });
+  drawPanel(doc, 0, 0, tag, qrPng);
+  doc.restore();
+
+  drawFoldLine(doc);
+}
+
+// Dashed crease + instruction, drawn upright across the page center.
+function drawFoldLine(doc: PDFKit.PDFDocument) {
+  doc
+    .save()
+    .lineWidth(0.75)
+    .strokeColor(COLORS.muted)
+    .dash(4, { space: 3 })
+    .moveTo(0, FOLD_Y)
+    .lineTo(LAND_W, FOLD_Y)
+    .stroke()
+    .undash()
+    .restore();
+  const label = "FOLD HERE  —  drape over the hanger's top bar and tape";
+  doc.font("Helvetica").fontSize(8);
+  const lw = doc.widthOfString(label);
+  // Mask a gap in the dashes behind the centered label, then print it.
+  doc
+    .save()
+    .fillColor("#ffffff")
+    .rect(LAND_W / 2 - lw / 2 - 6, FOLD_Y - 6, lw + 12, 12)
+    .fill()
+    .restore();
   doc
     .font("Helvetica")
     .fontSize(8)
     .fillColor(COLORS.muted)
-    .text(tag.schoolName, bodyX, bodyTop, {
-      width: bodyW,
-      align: "center",
-      ellipsis: true,
-    });
+    .text(label, LAND_W / 2 - lw / 2, FOLD_Y - 4, { lineBreak: false });
+}
 
-  // Student name
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(15)
-    .fillColor(COLORS.text)
-    .text(tag.studentName, bodyX, bodyTop + 12, {
-      width: bodyW,
-      align: "center",
-      ellipsis: true,
-    });
+// Draw the tag content upright inside a half-panel whose top-left corner is
+// (ox, oy) and whose size is LAND_W x PANEL_H. The fold-keep-out band is always
+// at the panel's TOP edge: for the bottom panel that is the crease; for the
+// rotated top panel the 180° turn maps that same band back onto the crease too.
+function drawPanel(
+  doc: PDFKit.PDFDocument,
+  ox: number,
+  oy: number,
+  tag: PickupTagInput,
+  qrPng: Buffer,
+) {
+  const contentTop = oy + FOLD_KEEPOUT;
+  const contentBottom = oy + PANEL_H - EDGE_PAD;
+  const contentH = contentBottom - contentTop;
 
-  // Guardian label
+  // Right column: school + name + guardian + QR. Left region: the big number.
+  const rightW = 256;
+  const rightX = ox + LAND_W - SIDE_PAD - rightW;
+  const numLeft = ox + SIDE_PAD;
+  const numRegionRight = rightX - 28;
+  const numRegionW = numRegionRight - numLeft;
+
+  // --- Right info column ---
   doc
     .font("Helvetica")
-    .fontSize(11)
+    .fontSize(12)
     .fillColor(COLORS.muted)
-    .text(`Pickup: ${tag.guardianLabel}`, bodyX, bodyTop + 32, {
-      width: bodyW,
+    .text(tag.schoolName, rightX, contentTop, {
+      width: rightW,
       align: "center",
       ellipsis: true,
     });
-
-  let labelsBottom = bodyTop + 50;
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(22)
+    .fillColor(COLORS.text)
+    .text(tag.studentName, rightX, contentTop + 16, {
+      width: rightW,
+      align: "center",
+      ellipsis: true,
+    });
+  doc
+    .font("Helvetica")
+    .fontSize(14)
+    .fillColor(COLORS.muted)
+    .text(`Pickup: ${tag.guardianLabel}`, rightX, contentTop + 44, {
+      width: rightW,
+      align: "center",
+      ellipsis: true,
+    });
   if (tag.restricted) {
     doc
       .font("Helvetica-Bold")
-      .fontSize(10)
+      .fontSize(12)
       .fillColor(COLORS.restricted)
-      .text("RESTRICTED — NO-CONTACT", bodyX, labelsBottom, {
-        width: bodyW,
+      .text("RESTRICTED — NO-CONTACT", rightX, contentTop + 64, {
+        width: rightW,
         align: "center",
       });
-    labelsBottom += 16;
   }
 
-  // QR — bottom center (encodes the FULL code).
-  const qrSize = 92;
-  const captionH = 10;
-  const qrX = cellX + (CELL_W - qrSize) / 2;
-  const qrY = bodyBottom - captionH - qrSize;
+  // QR + caption pinned to the bottom of the right column.
+  const qrSize = 116;
+  const qrX = rightX + (rightW - qrSize) / 2;
+  const qrY = contentBottom - 12 - qrSize;
   doc.image(qrPng, qrX, qrY, { width: qrSize, height: qrSize });
   doc
     .font("Helvetica")
-    .fontSize(7)
+    .fontSize(8)
     .fillColor(COLORS.muted)
-    .text("Scan or type at the curb", bodyX, qrY + qrSize + 2, {
-      width: bodyW,
+    .text("Scan or type this code at the curb", rightX, qrY + qrSize + 2, {
+      width: rightW,
       align: "center",
     });
 
-  // Big base number + software-ringed letter, auto-fit to the tag width and
-  // centered in the space between the labels and the QR.
+  // --- Big base number + software-ringed letter (auto-fit) ---
   const baseStr = tag.baseNumber ?? tag.pickupNumber;
   const letter = tag.letter ?? "";
-  const ringRatio = 0.82;
-  const gapRatio = 0.18;
+  const ringRatio = 0.84;
+  const gapRatio = 0.16;
   doc.font("Helvetica-Bold");
-  let numSize = 58;
-  for (; numSize >= 18; numSize -= 1) {
+  let numSize = 200;
+  for (; numSize >= 28; numSize -= 2) {
     doc.fontSize(numSize);
     const bw = doc.widthOfString(baseStr);
     const ringD = letter ? numSize * ringRatio : 0;
     const gap = letter ? numSize * gapRatio : 0;
-    if (bw + gap + ringD <= bodyW) break;
+    if (bw + gap + ringD <= numRegionW && numSize <= contentH) break;
   }
   doc.fontSize(numSize);
   const baseW = doc.widthOfString(baseStr);
   const ringD = letter ? numSize * ringRatio : 0;
   const gap = letter ? numSize * gapRatio : 0;
   const totalW = baseW + gap + ringD;
-  const numRegionTop = labelsBottom;
-  const numRegionBottom = qrY - 6;
-  const numY =
-    numRegionTop + Math.max(0, (numRegionBottom - numRegionTop - numSize) / 2);
-  const startX = cellX + (CELL_W - totalW) / 2;
+  const numY = contentTop + Math.max(0, (contentH - numSize) / 2);
+  const startX = numLeft + Math.max(0, (numRegionW - totalW) / 2);
   doc
     .font("Helvetica-Bold")
     .fontSize(numSize)
     .fillColor(COLORS.number)
     .text(baseStr, startX, numY, { lineBreak: false });
   if (letter) {
-    // Ring the letter beside the base, centered on the digits' optical middle
-    // (~0.36em below the text top for Helvetica caps).
     const ringCY = numY + numSize * 0.36;
     const ringCX = startX + baseW + gap + ringD / 2;
     doc
       .save()
-      .lineWidth(2.5)
+      .lineWidth(Math.max(3, numSize * 0.04))
       .strokeColor(COLORS.number)
       .circle(ringCX, ringCY, ringD / 2)
       .stroke()
@@ -282,18 +318,18 @@ function drawTag(
       });
   }
 
-  // Restricted: red inner frame inside the safe area (never on the cut line).
+  // Restricted: red frame around the whole panel's safe area.
   if (tag.restricted) {
     doc
       .save()
-      .lineWidth(2)
+      .lineWidth(2.5)
       .strokeColor(COLORS.restricted)
       .roundedRect(
-        cellX + 8,
-        cellY + TOP_KEEPOUT - 6,
-        CELL_W - 16,
-        CELL_H - TOP_KEEPOUT - 2,
-        6,
+        ox + 16,
+        contentTop - 10,
+        LAND_W - 32,
+        contentBottom - contentTop + 20,
+        8,
       )
       .stroke()
       .restore();

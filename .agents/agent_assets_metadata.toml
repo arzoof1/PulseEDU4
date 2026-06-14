@@ -317,10 +317,10 @@ title = "Intervention Lessons — CSV template"
 id = "Rbf4H6KSbqAnX3CrUL6Tx"
 uri = "file://attached_assets/tag-proof-guides.pdf"
 type = "pdf"
-title = "Tag proof WITH die guides (registration check)"
+title = "Same tag with trim guide"
 
 [[outputs]]
 id = "wf09xdLWBbNqwfVNouKZV"
 uri = "file://attached_assets/tag-proof-clean.pdf"
 type = "pdf"
-title = "Tag proof — production output (no guides)"
+title = "Fold-over hanger tag — production output"
