@@ -126,8 +126,8 @@ export function WeeklyReviewBonus() {
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           
           <div className="text-center space-y-1 mt-2 mb-6">
-            <h2 className="text-xl font-bold text-slate-900">Weekly HeartBEAT</h2>
-            <p className="text-sm text-slate-500">Week of April 22 - April 26</p>
+            <h2 className="text-xl font-bold text-slate-900">HeartBEAT Check-In</h2>
+            <p className="text-sm text-slate-500">Check in anytime · Bonus once a week</p>
           </div>
 
           {/* Hero Card */}
@@ -144,7 +144,7 @@ export function WeeklyReviewBonus() {
                 <div className="space-y-1.5">
                   <h3 className="text-xl font-bold text-slate-900">You reviewed {child.firstName}'s HeartBEAT!</h3>
                   <p className="text-slate-600 text-sm max-w-[280px] mx-auto">
-                    Thanks for staying in the loop. {child.firstName} has been awarded a weekly review bonus.
+                    Thanks for staying in the loop. {child.firstName} has been awarded a check-in bonus.
                   </p>
                 </div>
 
@@ -172,13 +172,13 @@ export function WeeklyReviewBonus() {
                 <div className="space-y-2">
                   <h3 className="text-xl font-bold text-slate-900">HeartBEAT is ready</h3>
                   <p className="text-slate-600 text-sm max-w-[280px] mx-auto">
-                    Review {child.firstName}'s attendance, behavior, and recognition for this week to unlock their bonus.
+                    Review {child.firstName}'s attendance, behavior, and recognition to unlock this week's bonus.
                   </p>
                 </div>
 
                 <div className="w-full pt-2">
                   <Button className="w-full bg-violet-600 hover:bg-violet-700 text-white rounded-xl h-12 text-base font-semibold shadow-sm flex items-center gap-2">
-                    Review this week's HeartBEAT
+                    Check in on {child.firstName}'s HeartBEAT
                     <ArrowRight className="h-4 w-4" />
                   </Button>
                 </div>
@@ -195,7 +195,7 @@ export function WeeklyReviewBonus() {
           <div className="grid grid-cols-2 gap-3 mt-4">
             <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex flex-col items-center justify-center text-center gap-1">
               <span className="text-2xl font-bold text-slate-800">{child.claimed ? "1 of 1" : "0 of 1"}</span>
-              <span className="text-xs font-medium text-slate-500">Weekly bonus claimed</span>
+              <span className="text-xs font-medium text-slate-500">Bonus claimed this week</span>
             </div>
             <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex flex-col items-center justify-center text-center gap-1">
               <span className="text-lg font-bold text-slate-800">Monday</span>
@@ -204,7 +204,7 @@ export function WeeklyReviewBonus() {
           </div>
 
           <p className="text-[11px] text-center text-slate-400 font-medium px-4">
-            The weekly review bonus amount (+5 pts) is set by your school administration.
+            The HeartBEAT Check-In bonus (+5 pts) is set by your school administration.
           </p>
 
           <EkgDivider />
