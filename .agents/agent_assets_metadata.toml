@@ -300,3 +300,15 @@ id = "0767g4Kr8xlePWgq1JKjR"
 uri = "file://docs/brochure/PulseEDU-Brochure.pdf"
 type = "pdf"
 title = "PulseEDU — District Evaluation Brochure"
+
+[[outputs]]
+id = "gIHf9NKaqUecy0RGLZi8d"
+uri = "file://docs/templates/benchmark_glossary_template.csv"
+type = "table"
+title = "Benchmark Glossary — CSV template"
+
+[[outputs]]
+id = "7_c8XGRub8fLFR8KdN33R"
+uri = "file://docs/templates/intervention_lessons_template.csv"
+type = "table"
+title = "Intervention Lessons — CSV template"
