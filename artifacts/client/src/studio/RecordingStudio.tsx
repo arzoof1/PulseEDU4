@@ -113,7 +113,10 @@ export default function RecordingStudio({
 
   const [scrolling, setScrolling] = useState(false);
   const [speed, setSpeed] = useState(40); // px/sec
-  const [fontSize, setFontSize] = useState(44); // px
+  const [fontSize, setFontSize] = useState(36); // px
+  const [lineHeight, setLineHeight] = useState(1.3);
+  const [promptWidth, setPromptWidth] = useState(55); // % of screen width
+  const [condenseBlanks, setCondenseBlanks] = useState(true);
   const [mirrorCam, setMirrorCam] = useState(true);
   const [mirrorText, setMirrorText] = useState(false);
 
@@ -404,6 +407,12 @@ export default function RecordingStudio({
       : "#f87171"
     : "#9ca3af";
   const hasScript = script.trim().length > 0;
+  // The AI draft often separates paragraphs with blank lines, which leave big
+  // gaps on the teleprompter. Collapse runs of blank lines for the prompter
+  // display only — the editable script keeps its original formatting.
+  const displayScript = condenseBlanks
+    ? script.replace(/\n{2,}/g, "\n")
+    : script;
 
   return (
     <div style={page}>
@@ -459,7 +468,7 @@ export default function RecordingStudio({
               top: 0,
               left: 0,
               right: 0,
-              maxHeight: "48%",
+              maxHeight: "62%",
               overflow: "hidden",
               padding: "1.5rem 8% 2rem",
               background: "linear-gradient(180deg, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0.55) 70%, rgba(0,0,0,0) 100%)",
@@ -470,15 +479,18 @@ export default function RecordingStudio({
             <div
               style={{
                 fontSize: `${fontSize}px`,
-                lineHeight: 1.45,
+                lineHeight,
                 fontWeight: 600,
                 textAlign: "center",
                 whiteSpace: "pre-wrap",
                 color: "#f9fafb",
                 textShadow: "0 2px 8px rgba(0,0,0,0.8)",
+                maxWidth: `${promptWidth}%`,
+                marginLeft: "auto",
+                marginRight: "auto",
               }}
             >
-              {hasScript ? script : "No script yet — use “Edit script” to add one, or record freely."}
+              {hasScript ? displayScript : "No script yet — use “Edit script” to add one, or record freely."}
             </div>
           </div>
         )}
@@ -608,6 +620,28 @@ export default function RecordingStudio({
               onChange={(e) => setFontSize(Number(e.target.value))}
             />
           </label>
+          <label style={sliderLabel}>
+            <span>Line spacing: {lineHeight.toFixed(1)}</span>
+            <input
+              type="range"
+              min={1}
+              max={2.2}
+              step={0.1}
+              value={lineHeight}
+              onChange={(e) => setLineHeight(Number(e.target.value))}
+            />
+          </label>
+          <label style={sliderLabel}>
+            <span>Reading width: {promptWidth}%</span>
+            <input
+              type="range"
+              min={25}
+              max={100}
+              step={5}
+              value={promptWidth}
+              onChange={(e) => setPromptWidth(Number(e.target.value))}
+            />
+          </label>
 
           <label style={checkLabel}>
             <input type="checkbox" checked={mirrorCam} onChange={(e) => setMirrorCam(e.target.checked)} />
@@ -616,6 +650,10 @@ export default function RecordingStudio({
           <label style={checkLabel}>
             <input type="checkbox" checked={mirrorText} onChange={(e) => setMirrorText(e.target.checked)} />
             Mirror text
+          </label>
+          <label style={checkLabel}>
+            <input type="checkbox" checked={condenseBlanks} onChange={(e) => setCondenseBlanks(e.target.checked)} />
+            Condense blank lines
           </label>
 
           <span style={{ marginLeft: "auto", color: "#6b7280", fontSize: "0.75rem" }}>
