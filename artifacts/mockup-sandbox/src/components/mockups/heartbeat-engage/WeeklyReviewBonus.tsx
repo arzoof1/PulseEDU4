@@ -12,7 +12,8 @@ import {
   CalendarCheck,
   Lock,
   Check,
-  Circle
+  Circle,
+  Clock
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -59,10 +60,11 @@ export function WeeklyReviewBonus() {
       initials: "AR",
       points: 451,
       claimed: false,
-      sectionsViewed: 2,
       streakDays: 0,
-      weekEarned: 2,
-      weekMax: 5,
+      dailyEarned: 3,
+      dailyMax: 5,
+      weeklyReviewEarned: 0,
+      weeklyReviewMax: 5,
     },
     mateo: {
       name: "Mateo Rivera",
@@ -71,20 +73,25 @@ export function WeeklyReviewBonus() {
       initials: "MR",
       points: 210,
       claimed: true,
-      sectionsViewed: 3,
       streakDays: 3,
-      weekEarned: 4,
-      weekMax: 5,
+      dailyEarned: 5,
+      dailyMax: 5,
+      weeklyReviewEarned: 5,
+      weeklyReviewMax: 5,
     },
   };
 
   const child = children[activeChild];
 
   const sections = [
-    { label: "Attendance", icon: CalendarCheck },
-    { label: "Behavior & PBIS", icon: Heart },
-    { label: "Recognition & Notes", icon: Award },
+    { label: "Attendance", icon: CalendarCheck, status: "done", dwell: 100 },
+    { label: "Behavior & PBIS", icon: Heart, status: "viewing", dwell: 60 },
+    { label: "Recognition & Notes", icon: Award, status: "todo", dwell: 0 },
   ];
+
+  const doneCount = sections.filter((s) => s.status === "done").length;
+  const weekTotal = child.dailyEarned + child.weeklyReviewEarned;
+  const weekCeiling = child.dailyMax + child.weeklyReviewMax;
 
   return (
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 sm:p-8 font-sans">
@@ -195,36 +202,67 @@ export function WeeklyReviewBonus() {
                 </div>
 
                 <div className="w-full space-y-2 text-left">
-                  {sections.map((s, i) => {
-                    const done = i < child.sectionsViewed;
+                  {sections.map((s) => {
                     const Icon = s.icon;
+                    const done = s.status === "done";
+                    const viewing = s.status === "viewing";
                     return (
                       <div
                         key={s.label}
-                        className={`flex items-center gap-3 rounded-2xl border p-3 ${done ? "border-green-100 bg-green-50" : "border-slate-100 bg-slate-50"}`}
+                        className={`relative overflow-hidden flex items-center gap-3 rounded-2xl border p-3 ${
+                          done
+                            ? "border-green-100 bg-green-50"
+                            : viewing
+                            ? "border-violet-200 bg-violet-50"
+                            : "border-slate-100 bg-slate-50"
+                        }`}
                       >
-                        <div className={`h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${done ? "bg-green-100" : "bg-white border border-slate-200"}`}>
-                          <Icon className={`h-4 w-4 ${done ? "text-green-600" : "text-slate-400"}`} />
+                        <div
+                          className={`h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${
+                            done ? "bg-green-100" : viewing ? "bg-violet-100" : "bg-white border border-slate-200"
+                          }`}
+                        >
+                          <Icon className={`h-4 w-4 ${done ? "text-green-600" : viewing ? "text-violet-600" : "text-slate-400"}`} />
                         </div>
-                        <span className={`flex-1 text-sm font-semibold ${done ? "text-slate-800" : "text-slate-500"}`}>
+                        <span
+                          className={`flex-1 text-sm font-semibold ${
+                            done ? "text-slate-800" : viewing ? "text-violet-700" : "text-slate-500"
+                          }`}
+                        >
                           {s.label}
                         </span>
                         {done ? (
                           <Check className="h-5 w-5 text-green-600" />
+                        ) : viewing ? (
+                          <span className="flex items-center gap-1 text-[11px] font-semibold text-violet-600">
+                            <Clock className="h-3.5 w-3.5" />
+                            Viewing 2s
+                          </span>
                         ) : (
                           <Circle className="h-5 w-5 text-slate-300" />
+                        )}
+                        {viewing && (
+                          <div
+                            className="absolute bottom-0 left-0 h-1 bg-violet-400"
+                            style={{ width: `${s.dwell}%` }}
+                          />
                         )}
                       </div>
                     );
                   })}
                 </div>
 
+                <p className="text-[11px] font-medium text-slate-400 flex items-center gap-1.5">
+                  <Clock className="h-3 w-3" />
+                  Each section logs after a few seconds of viewing.
+                </p>
+
                 <div className="w-full pt-1">
                   <Button
-                    disabled={child.sectionsViewed < 3}
+                    disabled={doneCount < 3}
                     className="w-full bg-violet-600 hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl h-12 text-base font-semibold shadow-sm flex items-center gap-2"
                   >
-                    {child.sectionsViewed < 3 ? (
+                    {doneCount < 3 ? (
                       <>
                         <Lock className="h-4 w-4" />
                         View all sections to unlock
@@ -240,26 +278,67 @@ export function WeeklyReviewBonus() {
                 
                 <div className="flex items-center gap-1.5 text-xs font-medium text-slate-500 bg-slate-50 px-3 py-1.5 rounded-full">
                   <Gift className="h-3.5 w-3.5 text-violet-500" />
-                  {child.sectionsViewed} of 3 sections viewed
+                  {doneCount} of 3 sections viewed
                 </div>
               </CardContent>
             </Card>
           )}
 
-          {/* Status indicators */}
-          <div className="grid grid-cols-2 gap-3 mt-4">
-            <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex flex-col items-center justify-center text-center gap-1">
-              <span className="text-2xl font-bold text-slate-800">+{child.weekEarned} <span className="text-base text-slate-400">/ +{child.weekMax}</span></span>
-              <span className="text-xs font-medium text-slate-500">Earned this week (max +{child.weekMax})</span>
-            </div>
-            <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex flex-col items-center justify-center text-center gap-1">
-              <span className="text-lg font-bold text-slate-800">1 / day</span>
-              <span className="text-xs font-medium text-slate-500">Bonus opportunities</span>
-            </div>
-          </div>
+          {/* This week's bonus — two earning paths, capped at +10 */}
+          <Card className="border-slate-100 rounded-3xl shadow-sm bg-white mt-4">
+            <CardContent className="p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-bold text-slate-900">This week's bonus</span>
+                <span className="text-lg font-bold text-violet-700">
+                  +{weekTotal} <span className="text-sm text-slate-400 font-semibold">/ +{weekCeiling}</span>
+                </span>
+              </div>
+
+              {/* Track 1 — daily check-ins */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs font-semibold">
+                  <span className="text-slate-600">Daily check-ins</span>
+                  <span className="text-slate-500">+{child.dailyEarned} / +{child.dailyMax}</span>
+                </div>
+                <div className="flex gap-1.5">
+                  {Array.from({ length: child.dailyMax }).map((_, i) => (
+                    <div
+                      key={i}
+                      className={`h-2 flex-1 rounded-full ${i < child.dailyEarned ? "bg-violet-500" : "bg-slate-100"}`}
+                    />
+                  ))}
+                </div>
+                <p className="text-[11px] text-slate-400">+1 a day for a real check-in</p>
+              </div>
+
+              {/* Track 2 — full weekly review (busy-family path) */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs font-semibold">
+                  <span className="text-slate-600">Full weekly review</span>
+                  <span className="text-slate-500">+{child.weeklyReviewEarned} / +{child.weeklyReviewMax}</span>
+                </div>
+                <div
+                  className={`rounded-2xl border p-3 flex items-center gap-3 ${
+                    child.weeklyReviewEarned > 0 ? "border-green-100 bg-green-50" : "border-teal-100 bg-teal-50"
+                  }`}
+                >
+                  {child.weeklyReviewEarned > 0 ? (
+                    <Check className="h-5 w-5 text-green-600 shrink-0" />
+                  ) : (
+                    <Heart className="h-5 w-5 text-teal-600 shrink-0" />
+                  )}
+                  <span className="text-xs font-medium text-slate-600">
+                    {child.weeklyReviewEarned > 0
+                      ? "One thorough review done — +5 earned."
+                      : "Short on time? One thorough weekly review earns +5."}
+                  </span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
           <p className="text-[11px] text-center text-slate-400 font-medium px-4">
-            One small bonus per day (max +{child.weekMax} per week), set by your school. Viewing all sections keeps each check-in meaningful.
+            Two ways to earn, capped at +{weekCeiling} a week — values set by your school. Each section logs after a few seconds of viewing so check-ins stay genuine.
           </p>
 
           <EkgDivider />
@@ -275,7 +354,7 @@ export function WeeklyReviewBonus() {
               <div className="space-y-1.5 text-sm">
                 <h4 className="font-bold text-slate-900">About this bonus</h4>
                 <p className="text-slate-600 leading-relaxed">
-                  Optional and capped — one small bonus a day, up to +{child.weekMax} a week, so no family can get ahead by spending more time. It never affects {child.firstName}'s standing or the support our staff provides.
+                  Optional and capped at +{weekCeiling} a week. A busy family that does one thorough weekly review earns the same +5 as daily check-ins — no one falls behind for having less time. It never affects {child.firstName}'s standing or the support our staff provides.
                 </p>
               </div>
             </CardContent>
