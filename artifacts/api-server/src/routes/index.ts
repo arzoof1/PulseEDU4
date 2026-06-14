@@ -106,6 +106,7 @@ import ticketingRouter from "./ticketing";
 import parentTicketsRouter from "./parentTickets";
 import schoolGradeRouter from "./schoolGrade";
 import parentMessagesRouter from "./parentMessages";
+import pulseDnaRouter from "./pulseDna";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -207,6 +208,9 @@ router.use(
 // school. Mounted ahead of parentMessagesRouter so the gate fires first.
 router.use("/family-messages", requireFeature("familyComm"));
 router.use("/parent/messages", requireFeatureForParent("familyComm"));
+// PulseDNA studio (communication profile + AI drafting) lives under the same
+// Family Communication license. Core-Team gate is enforced inside the router.
+router.use("/pulse-dna", requireFeature("familyComm"));
 
 router.use(parentEmailRouter);
 router.use(pulloutReasonsRouter);
@@ -281,5 +285,6 @@ router.use(toursRouter);
 router.use(ticketingRouter);
 router.use(schoolGradeRouter);
 router.use(parentMessagesRouter);
+router.use(pulseDnaRouter);
 
 export default router;

@@ -19,6 +19,7 @@ import {
 } from "./components/HowToUseHelp";
 import AdminHubPage from "./components/AdminHubPage";
 import FamilyMessagesHub from "./components/FamilyMessagesHub";
+import PulseDnaStudio from "./components/PulseDnaStudio";
 import HelpAssistant from "./components/HelpAssistant";
 import { TileHome, type Tile as TileHomeTile } from "./pages/TileHome";
 import StaffAstPage from "./components/ast/StaffAstPage";
@@ -4145,7 +4146,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "behaviorReview",
   ],
   specialPrograms: ["accommodations", "ese"],
-  family: ["student", "familyMessages", "parentAccess"],
+  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess"],
   people: ["teacherRoster", "staffRoles"],
   // hallPassMgmt is reached via the Hall Passes admin tools; it has no
   // dedicated nav item so we anchor it to School Admin so the sidebar
@@ -4988,6 +4989,7 @@ function App() {
     | "pickupTags"
     | "classComposer"
     | "familyMessages"
+    | "pulseDnaStudio"
     | "tileHome"
   >("hallPasses");
   // Tile Home is a full-screen launcher that takes over the viewport.
@@ -10713,6 +10715,13 @@ function App() {
                   renderNavItem({
                     key: "familyMessages",
                     label: "Family Messages",
+                    icon: IconUser,
+                  })}
+                {effectiveFeatures.FamilyComm &&
+                  isCoreTeamMember &&
+                  renderNavItem({
+                    key: "pulseDnaStudio",
+                    label: "PulseDNA Studio",
                     icon: IconUser,
                   })}
                 {canManageSettings && (
@@ -21757,6 +21766,10 @@ function App() {
             grades={Array.from(new Set(students.map((s) => s.grade)))}
           />
         )}
+
+      {activeSection === "pulseDnaStudio" &&
+        effectiveFeatures.FamilyComm &&
+        isCoreTeamMember && <PulseDnaStudio />}
 
       {activeSection === "insightsWatchlist" && (
         <InsightsWatchlist
