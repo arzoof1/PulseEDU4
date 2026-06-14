@@ -217,7 +217,7 @@ export function CameraScanner({
       <div
         style={{
           position: "relative",
-          width: "min(560px, 92vw)",
+          width: embedded ? "100%" : "min(560px, 92vw)",
           aspectRatio: "4 / 3",
           background: "#000",
           borderRadius: 12,

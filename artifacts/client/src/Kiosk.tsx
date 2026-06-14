@@ -5276,10 +5276,57 @@ function AttendanceMode({
 
   const keypadDigits = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
-  // Welcome/result card — fills whatever column wraps it.
+  // Hero "welcome" card above the list: shows the fresh scan result when one
+  // is up, otherwise the most-recent checked-in student — so a big celebratory
+  // name is always on screen. Keyed by name so it re-animates on each new scan.
+  const newest = state?.recent?.[0];
   const resultCardSlot = (
-    <div style={{ width: "100%", minHeight: result ? undefined : 0 }}>
-      {result && <AttendanceResultCard result={result} />}
+    <div
+      style={{ width: "100%", minHeight: result || newest ? undefined : 0 }}
+    >
+      {result ? (
+        <AttendanceResultCard result={result} />
+      ) : newest ? (
+        <div
+          key={`${newest.firstName}-${newest.lastName}`}
+          style={{
+            background: "rgba(34,197,94,0.15)",
+            border: "1px solid rgba(34,197,94,0.5)",
+            borderRadius: 18,
+            padding: "1.5rem 1.75rem",
+            textAlign: "center",
+            animation: "attRowIn 360ms ease-out",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "0.8rem",
+              textTransform: "uppercase",
+              letterSpacing: "0.16em",
+              opacity: 0.7,
+            }}
+          >
+            🎉 Just scanned in
+          </div>
+          <div
+            style={{
+              fontSize: "clamp(2rem, 4.2vw, 3.4rem)",
+              fontWeight: 800,
+              lineHeight: 1.1,
+              margin: "0.4rem 0 0.35rem",
+            }}
+          >
+            {newest.firstName} {newest.lastName}
+          </div>
+          <div
+            style={{ fontSize: "1.3rem", fontWeight: 700, color: "#86efac" }}
+          >
+            {newest.postBell
+              ? "On time — you made it!"
+              : `+${newest.points} point${newest.points === 1 ? "" : "s"}`}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 
@@ -5436,7 +5483,7 @@ function AttendanceMode({
             flexWrap: "wrap",
             justifyContent: "center",
             alignItems: "flex-start",
-            gap: "1.5rem",
+            gap: "2.75rem",
             width: "100%",
             maxWidth: 1180,
             marginTop: "1.25rem",
