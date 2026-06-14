@@ -143,6 +143,12 @@ export default function RecordingStudio({
   const recordedBlobRef = useRef<Blob | null>(null);
   const recordingRef = useRef(false);
   const elapsedRef = useRef(0);
+  // Refs for the live timer so the per-second tick updates the DOM directly
+  // instead of via setState. A React re-render during recording would reconcile
+  // the whole studio (including the large teleprompter text) once per second and
+  // hitch the scroll; writing text/color imperatively keeps the main thread free.
+  const timerWrapRef = useRef<HTMLDivElement>(null);
+  const elapsedValueRef = useRef<HTMLSpanElement>(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -366,8 +372,13 @@ export default function RecordingStudio({
     const startedAt = Date.now();
     timerRef.current = window.setInterval(() => {
       const e = Math.floor((Date.now() - startedAt) / 1000);
-      setElapsed(e);
       elapsedRef.current = e;
+      // Imperative DOM update — no React re-render, so the teleprompter scroll
+      // never hitches once per second while recording.
+      if (elapsedValueRef.current) elapsedValueRef.current.textContent = fmt(e);
+      if (timerWrapRef.current) {
+        timerWrapRef.current.style.color = MAX_SECONDS - e <= 30 ? "#fbbf24" : "#f87171";
+      }
       if (e >= MAX_SECONDS) stopRecording();
     }, 250);
   }, [stopRecording]);
@@ -513,8 +524,8 @@ export default function RecordingStudio({
           />
           Recording Studio
         </div>
-        <div style={{ fontVariantNumeric: "tabular-nums", fontSize: "1.05rem", color: timerColor, fontWeight: 700 }}>
-          {fmt(elapsed)} <span style={{ color: "#6b7280", fontWeight: 500 }}>/ {fmt(MAX_SECONDS)}</span>
+        <div ref={timerWrapRef} style={{ fontVariantNumeric: "tabular-nums", fontSize: "1.05rem", color: timerColor, fontWeight: 700 }}>
+          <span ref={elapsedValueRef}>{fmt(elapsed)}</span> <span style={{ color: "#6b7280", fontWeight: 500 }}>/ {fmt(MAX_SECONDS)}</span>
         </div>
         <div style={{ display: "flex", gap: "0.5rem" }}>
           <button style={btn} onClick={() => setShowHelp(true)}>
