@@ -348,3 +348,27 @@ id = "WwfUShvAWCTZ2XvO0HkMx"
 uri = "file://docs/demo/README.md"
 type = "text"
 title = "Demo Kit — Index / README"
+
+[[outputs]]
+id = "PDAERqAIhfmIVWXc2f0bk"
+uri = "file://docs/demo/print/district-demo-script.pdf"
+type = "pdf"
+title = "District Demo — Presenter Script (print)"
+
+[[outputs]]
+id = "RP00qIyw81xcFdRF-00ys"
+uri = "file://docs/demo/print/district-demo-shot-list.pdf"
+type = "pdf"
+title = "District Demo — Shot List (print)"
+
+[[outputs]]
+id = "RLIcFAT4-GC-Yh5_UXIgW"
+uri = "file://docs/demo/print/district-demo-readiness-checklist.pdf"
+type = "pdf"
+title = "District Demo — Readiness Checklist (print)"
+
+[[outputs]]
+id = "6c-AcUXBEPPh0IBJkGl00"
+uri = "file://docs/demo/print/README.pdf"
+type = "pdf"
+title = "Demo Kit — README (print)"
