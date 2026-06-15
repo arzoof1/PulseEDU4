@@ -1,0 +1,25 @@
+{
+  "orgs": [
+    {
+      "sourcedId": "org-hernando-district",
+      "status": "active",
+      "dateLastModified": "2026-03-01T06:00:00.000Z",
+      "name": "Hernando County School District",
+      "type": "district",
+      "identifier": "27"
+    },
+    {
+      "sourcedId": "org-parrott-0241",
+      "status": "active",
+      "dateLastModified": "2026-03-01T06:00:00.000Z",
+      "name": "D. S. Parrott Middle School",
+      "type": "school",
+      "identifier": "0241",
+      "parent": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-hernando-district",
+        "sourcedId": "org-hernando-district",
+        "type": "org"
+      }
+    }
+  ]
+}

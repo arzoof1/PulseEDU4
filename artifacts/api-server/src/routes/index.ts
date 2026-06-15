@@ -113,6 +113,7 @@ import pulseBrainLabDeliveryRouter from "./pulseBrainLabDelivery";
 import pulseBrainLabParentRouter from "./pulseBrainLabParent";
 import academicEvidenceRouter from "./academicEvidence";
 import academicEvidenceParentRouter from "./academicEvidenceParent";
+import sisSyncRouter from "./sisSync";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -298,5 +299,6 @@ router.use(pulseBrainLabDeliveryRouter);
 router.use(pulseBrainLabParentRouter);
 router.use(academicEvidenceRouter);
 router.use(academicEvidenceParentRouter);
+router.use(sisSyncRouter);
 
 export default router;

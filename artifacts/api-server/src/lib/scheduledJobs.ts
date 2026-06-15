@@ -13,6 +13,7 @@ import { runPulseDnaVideoPurge } from "../cron/pulseDnaVideoPurge.js";
 import { sendDailyDigestEmail } from "./dailyDigest.js";
 import { runDueLotteryDraws } from "./onTimeLottery.js";
 import { logger } from "./logger.js";
+import { runScheduledSisRosterSyncs } from "./sisRosterSync.js";
 import { startReminderScheduler } from "./scheduler.js";
 import { recoverStuckPulseDnaVideos } from "./videoTranscode.js";
 import { sendWeeklyHeartbeatEmails } from "./weeklyHeartbeatEmail.js";
@@ -20,6 +21,7 @@ import { sendWeeklyHeartbeatEmails } from "./weeklyHeartbeatEmail.js";
 const DAILY_DIGEST_LOCK_KEY = 47001;
 const WEEKLY_HEARTBEAT_LOCK_KEY = 47002;
 const LOTTERY_LOCK_KEY = 47003;
+const SIS_ROSTER_SYNC_LOCK_KEY = 47004;
 
 let started = false;
 
@@ -105,6 +107,58 @@ async function runWeeklyHeartbeatJob(): Promise<void> {
   });
 }
 
+export function sisRosterSyncCronEnabled(): boolean {
+  const raw = process.env.SIS_ROSTER_SYNC_ENABLED?.trim().toLowerCase();
+  if (raw === "false") return false;
+  if (raw === "true") return true;
+  return true;
+}
+
+async function runNightlySisRosterSyncJob(): Promise<void> {
+  if (!sisRosterSyncCronEnabled()) {
+    logger.info(
+      "Nightly SIS roster sync skipped (SIS_ROSTER_SYNC_ENABLED=false)",
+    );
+    return;
+  }
+
+  await withAdvisoryLock(SIS_ROSTER_SYNC_LOCK_KEY, "sis-roster-sync", async () => {
+    const results = await runScheduledSisRosterSyncs();
+    const ok = results.filter((r) => r.ok).length;
+    const failed = results.filter((r) => !r.ok).length;
+    logger.info(
+      { total: results.length, ok, failed },
+      "Nightly SIS roster sync finished",
+    );
+    for (const r of results) {
+      if (!r.ok) {
+        logger.warn(
+          {
+            integrationId: r.integrationId,
+            schoolId: r.schoolId,
+            schoolName: r.schoolName,
+            status: r.status,
+            message: safeCronErrorMsg(r.message),
+            errorCount: r.errorCount,
+          },
+          "Nightly SIS roster sync failed for integration",
+        );
+      } else {
+        logger.info(
+          {
+            integrationId: r.integrationId,
+            schoolId: r.schoolId,
+            schoolName: r.schoolName,
+            status: r.status,
+            counts: r.counts,
+          },
+          "Nightly SIS roster sync succeeded for integration",
+        );
+      }
+    }
+  });
+}
+
 export function startScheduledJobs(source: "api" | "worker"): void {
   if (started) return;
   started = true;
@@ -175,6 +229,26 @@ export function startScheduledJobs(source: "api" | "worker"): void {
     logger.info({ expr: lotteryExpr, tz: lotteryTz, source }, "Tardy Lottery draw scheduled");
   } catch (schedErr) {
     logger.error({ err: schedErr }, "Failed to schedule Tardy Lottery draw");
+  }
+
+  const sisExpr = process.env.SIS_ROSTER_SYNC_CRON ?? "0 2 * * *";
+  const sisTz = process.env.SIS_ROSTER_SYNC_TZ ?? "America/New_York";
+  try {
+    cron.schedule(
+      sisExpr,
+      () => {
+        runNightlySisRosterSyncJob().catch((cronErr: unknown) => {
+          logger.error({ err: cronErr }, "Nightly SIS roster sync failed");
+        });
+      },
+      { timezone: sisTz },
+    );
+    logger.info(
+      { expr: sisExpr, tz: sisTz, enabled: sisRosterSyncCronEnabled(), source },
+      "Nightly SIS roster sync scheduled",
+    );
+  } catch (schedErr) {
+    logger.error({ err: schedErr }, "Failed to schedule nightly SIS roster sync");
   }
 
   try {

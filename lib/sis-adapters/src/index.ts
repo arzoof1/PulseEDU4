@@ -9,7 +9,28 @@ export { SkywardAdapter } from "./skywardAdapter.js";
 export {
   ClasslinkRosterAdapter,
   ClasslinkSsoAdapter,
+  classlinkUsesFixtures,
 } from "./classlinkAdapter.js";
+export type { ClasslinkConfig } from "./classlinkAdapter.js";
+export {
+  loadOneRosterFixtures,
+  oneRosterFixtureDir,
+  ONEROSTER_FIXTURE_BASE_URL,
+} from "./oneroster/fixtures.js";
+export type * from "./oneroster/types.js";
+export {
+  resolveSchoolOrg,
+  schoolCodesMatch,
+  buildSchoolOrgIndex,
+} from "./oneroster/schoolMapping.js";
+export type {
+  ResolvedSchoolOrg,
+  SchoolOrgMappingConfig,
+} from "./oneroster/schoolMapping.js";
+export {
+  mapStudentDemographics,
+  parseOptionalBoolFlag,
+} from "./oneroster/demographicsMap.js";
 
 import type { RosterAdapter, SsoAdapter } from "./types.js";
 import { SkywardAdapter } from "./skywardAdapter.js";

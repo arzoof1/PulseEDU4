@@ -1,0 +1,26 @@
+{
+  "version": "1.1",
+  "scenario": "Hernando County — D. S. Parrott Middle School pilot",
+  "baseUrl": "https://demo.classlink.com/oneroster/v1p1",
+  "schoolOrgSourcedId": "org-parrott-0241",
+  "pulseEduStateSchoolCode": "0241",
+  "counts": {
+    "orgs": 2,
+    "users": 12,
+    "students": 8,
+    "teachers": 3,
+    "administrators": 1,
+    "courses": 4,
+    "classes": 4,
+    "enrollments": 36,
+    "demographics": 8
+  },
+  "files": [
+    "orgs.json",
+    "users.json",
+    "courses.json",
+    "classes.json",
+    "enrollments.json",
+    "demographics.json"
+  ]
+}

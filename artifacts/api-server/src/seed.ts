@@ -6447,6 +6447,27 @@ export async function ensureDataImporterRollbackSchema(): Promise<void> {
 }
 
 // -----------------------------------------------------------------------------
+// ensureDistrictIntegrationsSchema — per-school SIS/SSO provider config +
+// roster sync metadata (ClassLink / OneRoster).
+// -----------------------------------------------------------------------------
+export async function ensureDistrictIntegrationsSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS district_integrations (
+      id SERIAL PRIMARY KEY,
+      school_name TEXT NOT NULL DEFAULT 'default',
+      sis_provider TEXT NOT NULL DEFAULT 'none',
+      sis_config JSONB,
+      sis_last_sync_at TIMESTAMPTZ,
+      sis_last_sync_status TEXT,
+      sso_provider TEXT NOT NULL DEFAULT 'none',
+      sso_config JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
+
+// -----------------------------------------------------------------------------
 // ensureClassComposerSkillClusterSchema
 //
 // Skill-cluster mode add-ons (additive to the existing

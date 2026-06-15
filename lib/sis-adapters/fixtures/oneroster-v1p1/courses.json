@@ -1,0 +1,80 @@
+{
+  "courses": [
+    {
+      "sourcedId": "course-ela-06",
+      "status": "active",
+      "dateLastModified": "2026-02-15T12:00:00.000Z",
+      "title": "English Language Arts 6",
+      "courseCode": "1006010",
+      "grades": ["06"],
+      "subjects": ["English"],
+      "org": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "schoolYear": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/academicSessions/term-2025-2026",
+        "sourcedId": "term-2025-2026",
+        "type": "academicSession"
+      }
+    },
+    {
+      "sourcedId": "course-math-06",
+      "status": "active",
+      "dateLastModified": "2026-02-15T12:00:00.000Z",
+      "title": "Mathematics 6",
+      "courseCode": "1205010",
+      "grades": ["06"],
+      "subjects": ["Mathematics"],
+      "org": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "schoolYear": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/academicSessions/term-2025-2026",
+        "sourcedId": "term-2025-2026",
+        "type": "academicSession"
+      }
+    },
+    {
+      "sourcedId": "course-sci-06",
+      "status": "active",
+      "dateLastModified": "2026-02-15T12:00:00.000Z",
+      "title": "Science 6",
+      "courseCode": "2000010",
+      "grades": ["06"],
+      "subjects": ["Science"],
+      "org": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "schoolYear": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/academicSessions/term-2025-2026",
+        "sourcedId": "term-2025-2026",
+        "type": "academicSession"
+      }
+    },
+    {
+      "sourcedId": "course-ss-06",
+      "status": "active",
+      "dateLastModified": "2026-02-15T12:00:00.000Z",
+      "title": "Social Studies 6",
+      "courseCode": "2100010",
+      "grades": ["06"],
+      "subjects": ["Social Studies"],
+      "org": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "schoolYear": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/academicSessions/term-2025-2026",
+        "sourcedId": "term-2025-2026",
+        "type": "academicSession"
+      }
+    }
+  ]
+}

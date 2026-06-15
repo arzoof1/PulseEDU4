@@ -1,5 +1,8 @@
 import type {
   RosterAdapter,
+  SisClassSection,
+  SisEnrollment,
+  SisSchoolOrg,
   SisStaff,
   SisStudent,
   SisRoomAssignment,
@@ -45,6 +48,26 @@ export class SkywardAdapter implements RosterAdapter {
     throw new AdapterNotImplementedError(this.id);
   }
   listRoomAssignments(): Promise<SisRoomAssignment[]> {
+    throw new AdapterNotImplementedError(this.id);
+  }
+  listClassSections(): Promise<SisClassSection[]> {
+    throw new AdapterNotImplementedError(this.id);
+  }
+  listEnrollments(): Promise<SisEnrollment[]> {
+    throw new AdapterNotImplementedError(this.id);
+  }
+  listSchoolOrgs(): Promise<SisSchoolOrg[]> {
+    throw new AdapterNotImplementedError(this.id);
+  }
+  listOrgs(): Promise<
+    Array<{
+      sourcedId: string;
+      status?: string;
+      name: string;
+      type: string;
+      identifier?: string;
+    }>
+  > {
     throw new AdapterNotImplementedError(this.id);
   }
 }
