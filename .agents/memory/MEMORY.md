@@ -48,3 +48,4 @@
 - [Pickup adult-key model](pickup-adult-key.md) — student owns one base, adult gets letter A–H; adultKey groups across siblings (non-portal MUST include phone or families cross-link); base/letter must stay consistent with pickup_number.
 - [Parent-route school scoping](parent-route-school-scoping.md) — parentId-authed routes must STILL add explicit school_id predicate (resolve from parents.school_id); don't rely on parentId being globally unique.
 - [Family Messages attribution](family-messages-attribution.md) — deliver to many, attribute to one: ack/Power Reader rolls up to ONE primary (portal account); SIS adapter feeds no guardian emails today.
+- [Benchmark descriptions reference table](benchmark-descriptions.md) — `benchmark_descriptions` is global/NOT school-scoped (statewide FLDOE text); `-layout` pdftotext corrupts rubric-table standards (C.2.1) — use plain reading-order extraction + scan for artifacts.

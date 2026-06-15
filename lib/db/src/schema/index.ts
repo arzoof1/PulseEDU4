@@ -109,6 +109,7 @@ export * from "./featureLicensingAuditLog";
 export * from "./studentHouseChanges";
 export * from "./studentHouseSortJobs";
 export * from "./schoolBenchmarks";
+export * from "./benchmarkDescriptions";
 export * from "./benchmarkDeliveries";
 export * from "./benchmarkReteachLog";
 export * from "./classComposerPlans";

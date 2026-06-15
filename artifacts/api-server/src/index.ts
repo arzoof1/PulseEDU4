@@ -60,6 +60,7 @@ import {
   ensureSchoolGradeSchema,
   ensureClassComposerSkillClusterSchema,
   ensureStaffPasswordResetsSchema,
+  seedBenchmarkDescriptions,
 } from "./seed";
 import { seedDistrictDemoExtras } from "./seedDemoExtras";
 import { backfillWitnessSequences } from "./lib/witnessStatementId";
@@ -295,6 +296,9 @@ async function runSeed(): Promise<void> {
   // legacy tenants) so a downstream failure cannot keep this new
   // schema from being created. Also wrapped in try/catch defensively.
   try {
+    // Global FLDOE B.E.S.T. standards text catalog (not school-scoped).
+    // Idempotent upsert from the committed dataset.
+    await seedBenchmarkDescriptions();
     await ensureBenchmarkDeliveriesSchema();
     await ensureSchoolBenchmarksCatalogBackfill();
     // One-shot backfill of the dev-entered deliveries into prod.

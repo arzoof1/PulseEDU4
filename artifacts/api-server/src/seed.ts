@@ -50,6 +50,7 @@ import {
   caseOutcomeTypesTable,
   DEFAULT_CASE_OUTCOMES,
   studentRetentionsTable,
+  benchmarkDescriptionsTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, sql, and, inArray, isNull, asc, desc } from "drizzle-orm";
@@ -64,6 +65,7 @@ import {
   type AcademicDayKey,
 } from "./lib/academicMinutes.js";
 import benchmarkDeliveriesSeedJson from "./seedData/benchmarkDeliveriesSeed.json" with { type: "json" };
+import benchmarkDescriptionsJson from "./data/benchmarkDescriptions.json" with { type: "json" };
 
 // =============================================================================
 // MULTI-SCHOOL SEED
@@ -508,6 +510,80 @@ export async function ensurePulseDnaVideosSchema() {
   await db.execute(
     sql`ALTER TABLE parent_messages ADD COLUMN IF NOT EXISTS video_id INTEGER`,
   );
+}
+
+// -----------------------------------------------------------------------------
+// BENCHMARK DESCRIPTIONS: GLOBAL (not school-scoped) reference catalog of the
+// official FLDOE B.E.S.T. standards text, keyed by (subject, code). This is
+// published state reference data — the wording of "ELA.7.R.1.1" is identical
+// for every tenant — so it lives once and is read by all schools. The dataset
+// is committed at ./data/benchmarkDescriptions.json (parsed from the FLDOE
+// standards PDF) and upserted idempotently here so corrections / new subjects
+// (Math arrives later) flow in on the next boot. Mirrors the houses / MTSS
+// CREATE TABLE IF NOT EXISTS pattern because drizzle-kit push can't apply it
+// non-interactively. Safe to re-run on every boot.
+// -----------------------------------------------------------------------------
+export async function ensureBenchmarkDescriptionsSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS benchmark_descriptions (
+      id SERIAL PRIMARY KEY,
+      subject TEXT NOT NULL,
+      grade TEXT NOT NULL,
+      strand TEXT,
+      code TEXT NOT NULL,
+      description TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS benchmark_descriptions_subject_idx ON benchmark_descriptions (subject)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS benchmark_descriptions_subject_code_unique ON benchmark_descriptions (subject, code)`,
+  );
+}
+
+type BenchmarkDescriptionSeedRow = {
+  subject: string;
+  grade: string;
+  strand: string | null;
+  code: string;
+  description: string;
+};
+
+export async function seedBenchmarkDescriptions() {
+  await ensureBenchmarkDescriptionsSchema();
+  const rows = benchmarkDescriptionsJson as BenchmarkDescriptionSeedRow[];
+  if (!rows.length) return;
+  // Idempotent upsert: insert new codes, refresh text/grade/strand on existing
+  // ones so a committed-dataset correction is picked up on the next boot.
+  // Chunked to keep parameter counts well under the PG limit.
+  const CHUNK = 200;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    await db
+      .insert(benchmarkDescriptionsTable)
+      .values(
+        chunk.map((r) => ({
+          subject: r.subject,
+          grade: r.grade,
+          strand: r.strand ?? null,
+          code: r.code,
+          description: r.description,
+        })),
+      )
+      .onConflictDoUpdate({
+        target: [
+          benchmarkDescriptionsTable.subject,
+          benchmarkDescriptionsTable.code,
+        ],
+        set: {
+          grade: sql`excluded.grade`,
+          strand: sql`excluded.strand`,
+          description: sql`excluded.description`,
+        },
+      });
+  }
 }
 
 export async function seedHousesIfEmpty() {
