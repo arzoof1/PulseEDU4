@@ -1,0 +1,638 @@
+[
+  {
+    "id": "pbl-g912-s01",
+    "gradeBand": "9-12",
+    "week": 1,
+    "session": 1,
+    "title": "Meet Your Brain",
+    "skillArea": "Know Your Brain",
+    "internalCaselCompetency": "Self-Awareness",
+    "brainConcept": "Neuroplasticity continues through adolescence; the prefrontal cortex finishes wiring in the mid-20s while reward circuitry peaks now.",
+    "brainModelTag": "Rewire",
+    "objective": "I can explain how my brain's current wiring shapes my reactions and why deliberate practice changes it.",
+    "materials": "None.",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Welcome to Brain Lab. Opening prompt: name one habit or skill you've genuinely changed in yourself, and what it took.",
+      "teach": "Your brain is still under construction in a useful way: highly plastic, with a fast reward/emotion system and a prefrontal cortex (judgment, planning, impulse control) that keeps maturing into your mid-20s. This isn't an excuse — it's leverage. Skills you deliberately practice now wire in deeply.",
+      "practice": "Frame the program as a self-experiment: each person names one outcome (less stress, better focus, fewer blow-ups) they want to test over six weeks. Brief retrieval demo to preview how we'll make sessions stick.",
+      "close": "Each person states their six-week self-experiment goal in one sentence."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-g912-s01-cq1",
+        "text": "How does your brain's current wiring explain strong reactions or impulsivity?"
+      },
+      {
+        "id": "pbl-g912-s01-cq2",
+        "text": "Why is 'still developing' an advantage, not just a limitation?"
+      },
+      {
+        "id": "pbl-g912-s01-cq3",
+        "text": "What would it look like to treat this as a self-experiment?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-g912-s01-fq1",
+        "text": "Echo: which brain system is still maturing into your mid-20s?"
+      },
+      {
+        "id": "pbl-g912-s01-fq2",
+        "text": "Where this week did your reward system outrun your judgment?"
+      },
+      {
+        "id": "pbl-g912-s01-fq3",
+        "text": "What's the first measurable sign your experiment is working?"
+      }
+    ],
+    "skillTags": [
+      "growth mindset",
+      "self-awareness",
+      "metacognition"
+    ]
+  },
+  {
+    "id": "pbl-g912-s02",
+    "gradeBand": "9-12",
+    "week": 1,
+    "session": 2,
+    "title": "Spot Your Signals",
+    "skillArea": "Know Your Brain",
+    "internalCaselCompetency": "Self-Awareness",
+    "brainConcept": "Chronic stress keeps the threat system activated; recognizing early signals prevents escalation and protects working memory.",
+    "brainModelTag": "Spotlight",
+    "objective": "I can map my personal stress and emotion signals and the thresholds where I usually notice them.",
+    "materials": "None (optional: 0-10 scale).",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: one line on why practice rewires the brain. Then a brief attention check (single-point focus; notice the drift).",
+      "teach": "Under chronic stress, the threat system stays partly switched on, draining attention and working memory you need for school. Self-management starts with detection: body signals, thought patterns (catastrophizing, tunnel vision), and behavior signals (snapping, avoiding, scrolling).",
+      "practice": "Each person maps their top signals across three categories (body / thought / behavior) for stress and for anger, and marks the intensity where they currently catch each.",
+      "close": "Each person names the signal they want to detect earlier and why it matters."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-g912-s02-cq1",
+        "text": "How does ongoing stress affect your attention and memory?"
+      },
+      {
+        "id": "pbl-g912-s02-cq2",
+        "text": "What's a thought-pattern signal you notice when overwhelmed?"
+      },
+      {
+        "id": "pbl-g912-s02-cq3",
+        "text": "Why is detecting a signal at a 3 more useful than at an 8?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-g912-s02-fq1",
+        "text": "Echo: name the three categories of signals."
+      },
+      {
+        "id": "pbl-g912-s02-fq2",
+        "text": "When did you catch a signal early this week?"
+      },
+      {
+        "id": "pbl-g912-s02-fq3",
+        "text": "Which signal still sneaks past you?"
+      }
+    ],
+    "skillTags": [
+      "self-awareness",
+      "stress management",
+      "metacognition"
+    ]
+  },
+  {
+    "id": "pbl-g912-s03",
+    "gradeBand": "9-12",
+    "week": 2,
+    "session": 3,
+    "title": "Catch the Wave",
+    "skillArea": "Focus & Self-Control",
+    "internalCaselCompetency": "Self-Management",
+    "brainConcept": "Affect labeling and controlled breathing down-regulate the amygdala and restore prefrontal control.",
+    "brainModelTag": "Rewire",
+    "objective": "I can apply a regulation strategy to bring myself back to baseline during a real stressor.",
+    "materials": "None.",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: each person names an early signal. Then one round of paced breathing to anchor.",
+      "teach": "When the amygdala spikes, judgment narrows. Two evidence-based resets: name the emotion precisely (affect labeling lowers amygdala activity) and lengthen your exhale (activates the calming branch of the nervous system). Precision matters — 'I'm overwhelmed and behind' beats 'I'm fine.'",
+      "practice": "Teach the physiological sigh; practice two rounds. Then build a personal 90-second reset routine (label + breath + a grounding action). Pair-share where it fits in their day.",
+      "close": "Each person commits to one reset and the specific trigger they'll attach it to."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-g912-s03-cq1",
+        "text": "Why does precise labeling work better than vague labeling?"
+      },
+      {
+        "id": "pbl-g912-s03-cq2",
+        "text": "How does a long exhale physically calm you down?"
+      },
+      {
+        "id": "pbl-g912-s03-cq3",
+        "text": "Where in your week would a 90-second reset matter most?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-g912-s03-fq1",
+        "text": "Echo: name the two evidence-based resets."
+      },
+      {
+        "id": "pbl-g912-s03-fq2",
+        "text": "Describe a stressor you reset this week."
+      },
+      {
+        "id": "pbl-g912-s03-fq3",
+        "text": "What trigger still gets past your reset?"
+      }
+    ],
+    "skillTags": [
+      "self-regulation",
+      "affect labeling",
+      "stress management"
+    ]
+  },
+  {
+    "id": "pbl-g912-s04",
+    "gradeBand": "9-12",
+    "week": 2,
+    "session": 4,
+    "title": "Aim Your Spotlight",
+    "skillArea": "Focus & Self-Control",
+    "internalCaselCompetency": "Self-Management",
+    "brainConcept": "Attention is finite and switching is costly; environment design and retrieval-based study beat passive review.",
+    "brainModelTag": "Spotlight",
+    "objective": "I can design my study setup and use a retrieval strategy to learn more in less time.",
+    "materials": "None.",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: each person shares a reset routine. Then a 45-second focus sprint with a planted distraction.",
+      "teach": "Task-switching taxes working memory; phones exploit dopamine to hijack the spotlight. Two upgrades: design the environment (phone in another room, single task, time-block) and study by retrieval — quiz yourself instead of re-reading. Re-reading feels productive but builds weak memory; recall builds strong memory.",
+      "practice": "Each person redesigns one real study block (environment + a retrieval method like self-quizzing or the blurting technique). Share and refine with a partner.",
+      "close": "Each person commits to one environment change and one retrieval method for this week."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-g912-s04-cq1",
+        "text": "Why does re-reading feel effective but work poorly?"
+      },
+      {
+        "id": "pbl-g912-s04-cq2",
+        "text": "What makes retrieval practice build stronger memory?"
+      },
+      {
+        "id": "pbl-g912-s04-cq3",
+        "text": "Which environment change would most improve your focus?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-g912-s04-fq1",
+        "text": "Echo: retrieval vs. re-reading — which wins, and why?"
+      },
+      {
+        "id": "pbl-g912-s04-fq2",
+        "text": "How did your redesigned study block go?"
+      },
+      {
+        "id": "pbl-g912-s04-fq3",
+        "text": "What's your hardest distraction to design out?"
+      }
+    ],
+    "skillTags": [
+      "attention",
+      "study skills",
+      "retrieval practice"
+    ]
+  },
+  {
+    "id": "pbl-g912-s05",
+    "gradeBand": "9-12",
+    "week": 3,
+    "session": 5,
+    "title": "Read the Room",
+    "skillArea": "Understanding Others",
+    "internalCaselCompetency": "Social Awareness",
+    "brainConcept": "The brain infers others' states from sparse cues and fills gaps with bias; context and checking reduce error.",
+    "brainModelTag": "Spotlight",
+    "objective": "I can read social and contextual cues accurately and resist jumping to conclusions.",
+    "materials": "None.",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: each person shares a study upgrade. Then a quick tone demo (one word, three meanings).",
+      "teach": "Social cognition runs on incomplete data; your brain fills gaps with assumptions shaped by mood and bias — and digital communication strips out tone entirely. Strong social readers separate observation ('they were quiet') from interpretation ('they're mad at me') and verify before reacting.",
+      "practice": "Ambiguous digital scenario (short, cold reply). Generate multiple plausible interpretations, identify what extra info would clarify, and draft a low-key check-in.",
+      "close": "Each person names an interpretation they tend to default to and a way to verify it."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-g912-s05-cq1",
+        "text": "How do mood and bias distort the way you read people?"
+      },
+      {
+        "id": "pbl-g912-s05-cq2",
+        "text": "Why is digital communication especially easy to misread?"
+      },
+      {
+        "id": "pbl-g912-s05-cq3",
+        "text": "What's the difference between an observation and an interpretation?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-g912-s05-fq1",
+        "text": "Echo: observation vs. interpretation — define each."
+      },
+      {
+        "id": "pbl-g912-s05-fq2",
+        "text": "When did you verify before reacting this week?"
+      },
+      {
+        "id": "pbl-g912-s05-fq3",
+        "text": "What's your most common false assumption about others?"
+      }
+    ],
+    "skillTags": [
+      "social awareness",
+      "bias",
+      "communication"
+    ]
+  },
+  {
+    "id": "pbl-g912-s06",
+    "gradeBand": "9-12",
+    "week": 3,
+    "session": 6,
+    "title": "Walk in Their Shoes",
+    "skillArea": "Understanding Others",
+    "internalCaselCompetency": "Social Awareness",
+    "brainConcept": "Cognitive perspective-taking and empathy are distinct skills; both can be strengthened with practice.",
+    "brainModelTag": "Velcro",
+    "objective": "I can take another's perspective on a charged issue without losing my own.",
+    "materials": "None.",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: each person shares an assumption they verified. Then a 'steelman' warm-up (state the other side's best case).",
+      "teach": "There's understanding what someone thinks (cognitive perspective-taking) and feeling with them (empathy) — different circuits, both trainable. You build the model by connecting to your own analogous experiences (Velcro). Steelmanning — stating the other side's strongest version — sharpens it and lowers conflict.",
+      "practice": "Take a relevant, charged disagreement. Each person genuinely steelmans the opposing view and links it to a personal experience, then restates their own view with that understanding intact.",
+      "close": "Each person finishes: 'Their strongest point is ___, and I still think ___.'"
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-g912-s06-cq1",
+        "text": "How is understanding someone different from feeling with them?"
+      },
+      {
+        "id": "pbl-g912-s06-cq2",
+        "text": "Why does steelmanning reduce conflict?"
+      },
+      {
+        "id": "pbl-g912-s06-cq3",
+        "text": "Can you hold your own view and theirs at the same time? How?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-g912-s06-fq1",
+        "text": "Echo: cognitive perspective-taking vs. empathy — the difference?"
+      },
+      {
+        "id": "pbl-g912-s06-fq2",
+        "text": "Describe a time you steelmanned someone this week."
+      },
+      {
+        "id": "pbl-g912-s06-fq3",
+        "text": "Which views are hardest for you to steelman?"
+      }
+    ],
+    "skillTags": [
+      "perspective-taking",
+      "empathy",
+      "conflict"
+    ]
+  },
+  {
+    "id": "pbl-g912-s07",
+    "gradeBand": "9-12",
+    "week": 4,
+    "session": 7,
+    "title": "Say It So They Hear It",
+    "skillArea": "Working With Others",
+    "internalCaselCompetency": "Relationship Skills",
+    "brainConcept": "Defensiveness is a threat response; framing around shared interests keeps the listener's prefrontal cortex engaged (Velcro).",
+    "brainModelTag": "Velcro",
+    "objective": "I can advocate for my needs and set a boundary without escalating.",
+    "materials": "None.",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: each person shares a view they steelmanned. Then 'turn blame into a request' warm-up.",
+      "teach": "Blame and 'always/never' trigger a threat response and end real listening. Assertive communication = clear + respectful: 'I feel ___ when ___ because ___; what I need is ___.' Boundaries are a form of this. Frame around shared interests so their thinking brain stays online.",
+      "practice": "Higher-stakes scenario (a friend pressuring you, or a family curfew conflict). Draft and rehearse an assertive ask or boundary; partner coaches on tone and clarity.",
+      "close": "Each person shares one assertive statement or boundary for a real situation."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-g912-s07-cq1",
+        "text": "Why does defensiveness shut down a conversation?"
+      },
+      {
+        "id": "pbl-g912-s07-cq2",
+        "text": "How is a boundary different from a demand or an ultimatum?"
+      },
+      {
+        "id": "pbl-g912-s07-cq3",
+        "text": "How does framing around shared interests help your message land?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-g912-s07-fq1",
+        "text": "Echo: what's the assertive statement frame?"
+      },
+      {
+        "id": "pbl-g912-s07-fq2",
+        "text": "Did you set a boundary or make an assertive ask this week?"
+      },
+      {
+        "id": "pbl-g912-s07-fq3",
+        "text": "What conversation are you avoiding that this could help?"
+      }
+    ],
+    "skillTags": [
+      "communication",
+      "boundaries",
+      "assertiveness"
+    ]
+  },
+  {
+    "id": "pbl-g912-s08",
+    "gradeBand": "9-12",
+    "week": 4,
+    "session": 8,
+    "title": "Fix-It Talk",
+    "skillArea": "Working With Others",
+    "internalCaselCompetency": "Relationship Skills",
+    "brainConcept": "Rehearsed repair scripts are retrievable under stress; accountability accelerates de-escalation (Echo).",
+    "brainModelTag": "Echo",
+    "objective": "I can repair a significant conflict by taking accountability and co-creating a solution.",
+    "materials": "None.",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: each person recalls the assertive frame. Then a brief cool-down reset.",
+      "teach": "Mature repair prioritizes the relationship over being right. Steps: regulate first, exchange perspectives without interrupting, take genuine accountability for your part, and co-create a concrete fix. Accountability is the fastest de-escalator because it disarms the other person's defenses.",
+      "practice": "Role-play a real-type rupture (a betrayed confidence, a public embarrassment). Run the full sequence; debrief which step felt hardest and why.",
+      "close": "Each person names the step they most need to strengthen."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-g912-s08-cq1",
+        "text": "Why does genuine accountability de-escalate so quickly?"
+      },
+      {
+        "id": "pbl-g912-s08-cq2",
+        "text": "What separates a real fix from a fake 'sorry'?"
+      },
+      {
+        "id": "pbl-g912-s08-cq3",
+        "text": "When is repair worth it even if you were 'right'?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-g912-s08-fq1",
+        "text": "Echo: list the repair steps."
+      },
+      {
+        "id": "pbl-g912-s08-fq2",
+        "text": "Describe a conflict you repaired this week."
+      },
+      {
+        "id": "pbl-g912-s08-fq3",
+        "text": "Which step is hardest for you, and why?"
+      }
+    ],
+    "skillTags": [
+      "conflict resolution",
+      "accountability",
+      "repair"
+    ]
+  },
+  {
+    "id": "pbl-g912-s09",
+    "gradeBand": "9-12",
+    "week": 5,
+    "session": 9,
+    "title": "Stop & Plan",
+    "skillArea": "Smart Choices",
+    "internalCaselCompetency": "Responsible Decision-Making",
+    "brainConcept": "Pre-commitment and a pause counteract in-the-moment reward bias and social influence.",
+    "brainModelTag": "Spotlight",
+    "objective": "I can use pre-commitment and a decision process to make choices aligned with my goals.",
+    "materials": "None.",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: each person names a repair step. Then a 'pre-decide' warm-up: state a rule you set for yourself in advance.",
+      "teach": "In the moment, reward bias and peer presence push fast choices. Two counter-moves: pre-commitment (decide your line before you're in the situation) and a pause to run a decision process — clarify the real goal, generate options, project outcomes, check values, act. Pre-deciding outsources willpower to your calmer past self.",
+      "practice": "Real-stakes scenario (party, academic shortcut, risky group dare). Each person pre-commits a rule and scripts how they'll hold it; group pressure-tests it.",
+      "close": "Each person states one pre-commitment they'll hold this week."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-g912-s09-cq1",
+        "text": "Why is deciding in advance more reliable than in-the-moment willpower?"
+      },
+      {
+        "id": "pbl-g912-s09-cq2",
+        "text": "How do peers and reward bias distort fast decisions?"
+      },
+      {
+        "id": "pbl-g912-s09-cq3",
+        "text": "What makes a pre-commitment realistic to keep?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-g912-s09-fq1",
+        "text": "Echo: what is pre-commitment?"
+      },
+      {
+        "id": "pbl-g912-s09-fq2",
+        "text": "Did a pre-commitment hold up this week?"
+      },
+      {
+        "id": "pbl-g912-s09-fq3",
+        "text": "What upcoming situation needs one?"
+      }
+    ],
+    "skillTags": [
+      "decision-making",
+      "self-control",
+      "goal alignment"
+    ]
+  },
+  {
+    "id": "pbl-g912-s10",
+    "gradeBand": "9-12",
+    "week": 5,
+    "session": 10,
+    "title": "Weigh It Out",
+    "skillArea": "Smart Choices",
+    "internalCaselCompetency": "Responsible Decision-Making",
+    "brainConcept": "Good decisions integrate long-term outcomes, ethics, and impact on others — not just immediate payoff.",
+    "brainModelTag": "Velcro",
+    "objective": "I can evaluate a complex decision across time, ethics, and impact on others.",
+    "materials": "None (optional: decision matrix).",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: each person shares a pre-commitment. Then a 'fast-forward one year' warm-up on a current choice.",
+      "teach": "Hard choices rarely have a clean answer. A solid process weighs outcomes across time (now vs. future self), checks ethics (is it honest, fair, legal), and considers impact on others — then aligns with your values. This deliberate simulation is what the reward system skips.",
+      "practice": "Genuinely ambiguous dilemma (reporting a friend's risky behavior, a costly honesty call). Build a decision matrix; identify the values in tension and defend a choice.",
+      "close": "Each person finishes: 'Weighing it fully, I'd ___ because ___.'"
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-g912-s10-cq1",
+        "text": "How do you weigh your future self against your present self?"
+      },
+      {
+        "id": "pbl-g912-s10-cq2",
+        "text": "What ethical checks belong in a hard decision?"
+      },
+      {
+        "id": "pbl-g912-s10-cq3",
+        "text": "How do you decide when two values are in tension?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-g912-s10-fq1",
+        "text": "Echo: name the three dimensions we weigh decisions across."
+      },
+      {
+        "id": "pbl-g912-s10-fq2",
+        "text": "Describe a complex choice you weighed this week."
+      },
+      {
+        "id": "pbl-g912-s10-fq3",
+        "text": "Which value tension is hardest for you?"
+      }
+    ],
+    "skillTags": [
+      "decision-making",
+      "ethics",
+      "values"
+    ]
+  },
+  {
+    "id": "pbl-g912-s11",
+    "gradeBand": "9-12",
+    "week": 6,
+    "session": 11,
+    "title": "Put It Together",
+    "skillArea": "Integration",
+    "internalCaselCompetency": "Integration",
+    "brainConcept": "Expertise is an integrated schema run with low effort; sequencing skills under load is the real test.",
+    "brainModelTag": "Velcro",
+    "objective": "I can integrate and sequence Brain Lab skills to handle a high-stakes real-world situation.",
+    "materials": "None.",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Rapid Echo: the group lists every tool and its purpose in 60 seconds.",
+      "teach": "Real competence isn't knowing the steps — it's running the connected web under pressure. The reliable order: regulate, then read the situation, then communicate, then decide. Skipping regulation sinks everything downstream.",
+      "practice": "Complex layered scenario (conflict + audience + time pressure, e.g., a heated group project blowup before a deadline). Map and perform the full sequence; critique alternatives.",
+      "close": "Each person names their strongest and weakest link in the chain."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-g912-s11-cq1",
+        "text": "Why does the sequence (regulate first) matter so much under pressure?"
+      },
+      {
+        "id": "pbl-g912-s11-cq2",
+        "text": "Which tools does the layered scenario demand, and in what order?"
+      },
+      {
+        "id": "pbl-g912-s11-cq3",
+        "text": "Where does your chain tend to break?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-g912-s11-fq1",
+        "text": "Echo: name the four-stage order for handling a hard moment."
+      },
+      {
+        "id": "pbl-g912-s11-fq2",
+        "text": "Describe a real situation where you ran the sequence this week."
+      },
+      {
+        "id": "pbl-g912-s11-fq3",
+        "text": "Which link will you strengthen, and how?"
+      }
+    ],
+    "skillTags": [
+      "integration",
+      "problem-solving",
+      "self-regulation"
+    ]
+  },
+  {
+    "id": "pbl-g912-s12",
+    "gradeBand": "9-12",
+    "week": 6,
+    "session": 12,
+    "title": "Rewire & Reflect",
+    "skillArea": "Integration",
+    "internalCaselCompetency": "Integration",
+    "brainConcept": "Durable change comes from spaced retrieval and identity-based habits, not motivation alone.",
+    "brainModelTag": "Rewire",
+    "objective": "I can build a maintenance plan that turns a skill into part of how I see myself.",
+    "materials": "None (optional: certificate).",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo lap: circle naming each tool and a real situation it fits until exhausted.",
+      "teach": "Six weeks of spaced practice and retrieval is exactly how the brain consolidates durable skills. Motivation fades; what lasts is identity ('I'm someone who pauses before reacting') plus cues and repetition. Revisit your week-one self-experiment and judge the results.",
+      "practice": "Each person writes a maintenance plan: target skill, identity statement, trigger cue, and a tracking method — then reviews their six-week experiment outcome with a partner.",
+      "close": "Each person names one concrete way they've changed and one skill they'll carry forward."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-g912-s12-cq1",
+        "text": "Why does identity-based habit-building outlast motivation?"
+      },
+      {
+        "id": "pbl-g912-s12-cq2",
+        "text": "What were the results of your six-week self-experiment?"
+      },
+      {
+        "id": "pbl-g912-s12-cq3",
+        "text": "What cue and tracking method will keep your skill alive?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-g912-s12-fq1",
+        "text": "Echo: what makes a habit durable beyond motivation?"
+      },
+      {
+        "id": "pbl-g912-s12-fq2",
+        "text": "How are you different from session one?"
+      },
+      {
+        "id": "pbl-g912-s12-fq3",
+        "text": "Which skill will you carry into next year?"
+      }
+    ],
+    "skillTags": [
+      "growth mindset",
+      "habit formation",
+      "identity"
+    ]
+  }
+]

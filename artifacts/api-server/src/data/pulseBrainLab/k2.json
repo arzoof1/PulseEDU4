@@ -1,0 +1,638 @@
+[
+  {
+    "id": "pbl-k2-s01",
+    "gradeBand": "K-2",
+    "week": 1,
+    "session": 1,
+    "title": "Meet Your Brain",
+    "skillArea": "Know Your Brain",
+    "internalCaselCompetency": "Self-Awareness",
+    "brainConcept": "Your brain can grow and change when you practice (neuroplasticity).",
+    "brainModelTag": "Rewire",
+    "objective": "I can point to where my brain works and say that my brain gets stronger when I practice.",
+    "materials": "None (optional: make a fist to model the brain).",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Welcome the group. Everyone wiggles fingers and taps the top of their head: 'That's where your amazing brain lives!' Smile and say we are starting Brain Lab, where we learn how our brain helps us.",
+      "teach": "Make a fist: thumb tucked inside = the 'feeling part' (downstairs), fingers over it = the 'thinking part' (upstairs). When we are calm, the upstairs helps us think. Big news: your brain grows new connections every time you try something hard. Mistakes help it grow!",
+      "practice": "Practice a brand-new skill together (snap, wink, or pat-pat-clap pattern). Try it, miss it, laugh, try again. Say together: 'My brain is growing right now!'",
+      "close": "Each child shows the brain fist and says one word for how their brain feels today (sleepy, happy, ready)."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-k2-s01-cq1",
+        "text": "Where in your body is your brain?"
+      },
+      {
+        "id": "pbl-k2-s01-cq2",
+        "text": "What happens to your brain when you practice something new?"
+      },
+      {
+        "id": "pbl-k2-s01-cq3",
+        "text": "How did it feel when you missed the new move and tried again?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-k2-s01-fq1",
+        "text": "Echo: what is our name for the part of the brain that grows when we practice?"
+      },
+      {
+        "id": "pbl-k2-s01-fq2",
+        "text": "What is one thing you practiced this week to make your brain stronger?"
+      },
+      {
+        "id": "pbl-k2-s01-fq3",
+        "text": "Show me the brain fist and tell me which part is thinking and which is feeling."
+      }
+    ],
+    "skillTags": [
+      "growth mindset",
+      "self-awareness",
+      "brain basics"
+    ]
+  },
+  {
+    "id": "pbl-k2-s02",
+    "gradeBand": "K-2",
+    "week": 1,
+    "session": 2,
+    "title": "Spot Your Signals",
+    "skillArea": "Know Your Brain",
+    "internalCaselCompetency": "Self-Awareness",
+    "brainConcept": "Attention is a spotlight you can aim, and your body sends signals about feelings.",
+    "brainModelTag": "Spotlight",
+    "objective": "I can name a feeling and one thing my body does when I feel it.",
+    "materials": "None (optional: simple feelings faces card).",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: 'Last time we learned our brain can ___ (grow)!' Then play 10 seconds of Spotlight: everyone aims their eyes and points at one object you name.",
+      "teach": "Your brain has a spotlight that points at what you care about. It also reads your body: a happy belly, hot cheeks when mad, wobbly tummy when nervous. Those are signals telling you how you feel.",
+      "practice": "Name a feeling (happy, mad, scared, excited). Kids show it with their face and point to where they feel it in their body. Repeat for 3 feelings.",
+      "close": "Each child says: 'Right now I feel ___ and my body feels it in my ___.'"
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-k2-s02-cq1",
+        "text": "What does your body do when you feel happy? When you feel mad?"
+      },
+      {
+        "id": "pbl-k2-s02-cq2",
+        "text": "Where do you feel butterflies when you are nervous?"
+      },
+      {
+        "id": "pbl-k2-s02-cq3",
+        "text": "How can your body help you know how you feel?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-k2-s02-fq1",
+        "text": "Echo: what do we call the part of your brain that points at what you care about?"
+      },
+      {
+        "id": "pbl-k2-s02-fq2",
+        "text": "Tell me about a time your body gave you a feeling signal this week."
+      },
+      {
+        "id": "pbl-k2-s02-fq3",
+        "text": "What feeling is the easiest for you to spot in your body?"
+      }
+    ],
+    "skillTags": [
+      "emotion identification",
+      "attention",
+      "body awareness"
+    ]
+  },
+  {
+    "id": "pbl-k2-s03",
+    "gradeBand": "K-2",
+    "week": 2,
+    "session": 3,
+    "title": "Catch the Wave",
+    "skillArea": "Focus & Self-Control",
+    "internalCaselCompetency": "Self-Management",
+    "brainConcept": "Naming a big feeling helps the calm-down part of the brain take over.",
+    "brainModelTag": "Rewire",
+    "objective": "I can use one calm-down tool when a big feeling starts.",
+    "materials": "None.",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: kids name one feeling and where they feel it. Then everyone makes a slow 'wave' with their hand rising up and coming back down.",
+      "teach": "Big feelings rise like a wave. If we notice early (using yesterday's body signals), we can ride the wave instead of getting knocked over. A great tool: name it. Saying 'I feel mad' helps the thinking brain come back.",
+      "practice": "Teach 'flower and candle' breathing: smell the flower (breathe in), blow the candle (breathe out), 4 times slowly. Then practice: 'When I feel big, I say my feeling and I breathe.'",
+      "close": "Each child picks: flower-candle breathing OR naming the feeling, and says when they will use it."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-k2-s03-cq1",
+        "text": "What does it feel like in your body right before a big feeling?"
+      },
+      {
+        "id": "pbl-k2-s03-cq2",
+        "text": "Why is it easier to calm down when you catch the wave early?"
+      },
+      {
+        "id": "pbl-k2-s03-cq3",
+        "text": "Which calm-down tool feels best to you?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-k2-s03-fq1",
+        "text": "Echo: what is one calm-down tool we practiced?"
+      },
+      {
+        "id": "pbl-k2-s03-fq2",
+        "text": "Tell me about a time you used your tool this week. What happened?"
+      },
+      {
+        "id": "pbl-k2-s03-fq3",
+        "text": "Where is a good spot at school to take your flower-candle breaths?"
+      }
+    ],
+    "skillTags": [
+      "self-regulation",
+      "calming strategies",
+      "impulse control"
+    ]
+  },
+  {
+    "id": "pbl-k2-s04",
+    "gradeBand": "K-2",
+    "week": 2,
+    "session": 4,
+    "title": "Aim Your Spotlight",
+    "skillArea": "Focus & Self-Control",
+    "internalCaselCompetency": "Self-Management",
+    "brainConcept": "You can move your attention spotlight on purpose, even when something is distracting.",
+    "brainModelTag": "Spotlight",
+    "objective": "I can put my attention spotlight on one thing and bring it back when it wanders.",
+    "materials": "None (optional: a small object to focus on).",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: everyone shows a calm-down tool from last time. Then a 10-second 'spotlight on my hands' freeze.",
+      "teach": "Your spotlight wanders — that's normal! The skill is noticing it wandered and bringing it back, like a puppy on a leash. Every time you bring it back, your brain gets stronger at focus.",
+      "practice": "Play 'Spotlight Coach': stare at one object for 20 seconds. When your mind wanders, whisper 'come back' and look again. Do it twice.",
+      "close": "Each child says one place at school they need their spotlight (carpet time, lining up, reading)."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-k2-s04-cq1",
+        "text": "What pulls your spotlight away when you are trying to focus?"
+      },
+      {
+        "id": "pbl-k2-s04-cq2",
+        "text": "What can you say to yourself to bring your spotlight back?"
+      },
+      {
+        "id": "pbl-k2-s04-cq3",
+        "text": "When is focusing hardest for you?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-k2-s04-fq1",
+        "text": "Echo: what do we do when our spotlight wanders?"
+      },
+      {
+        "id": "pbl-k2-s04-fq2",
+        "text": "Tell me about a time you brought your spotlight back this week."
+      },
+      {
+        "id": "pbl-k2-s04-fq3",
+        "text": "What is one trick that helps you focus?"
+      }
+    ],
+    "skillTags": [
+      "attention",
+      "focus",
+      "self-monitoring"
+    ]
+  },
+  {
+    "id": "pbl-k2-s05",
+    "gradeBand": "K-2",
+    "week": 3,
+    "session": 5,
+    "title": "Read the Room",
+    "skillArea": "Understanding Others",
+    "internalCaselCompetency": "Social Awareness",
+    "brainConcept": "Your brain reads faces and bodies to guess how others feel.",
+    "brainModelTag": "Spotlight",
+    "objective": "I can look at a face or body and guess how someone might feel.",
+    "materials": "None (optional: feelings faces).",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: kids show where they aim their spotlight to focus. Then everyone makes a 'happy face' and a 'sad face.'",
+      "teach": "Your brain is a feelings-detective. It reads faces, voices, and bodies to guess how someone feels. Slumped shoulders might mean sad; big smile might mean happy.",
+      "practice": "Leader acts out a feeling with face and body (no words). Kids guess and point to the clue that helped them (mouth, eyes, shoulders). Do 3 rounds.",
+      "close": "Each child names one clue they will look for to read how a friend feels."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-k2-s05-cq1",
+        "text": "What clues tell you someone is sad? Happy? Mad?"
+      },
+      {
+        "id": "pbl-k2-s05-cq2",
+        "text": "Can two people feel different things at the same time?"
+      },
+      {
+        "id": "pbl-k2-s05-cq3",
+        "text": "How does it help to know how a friend feels?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-k2-s05-fq1",
+        "text": "Echo: name one face clue that shows a feeling."
+      },
+      {
+        "id": "pbl-k2-s05-fq2",
+        "text": "Tell me about a time you noticed how a friend felt this week."
+      },
+      {
+        "id": "pbl-k2-s05-fq3",
+        "text": "Who is someone whose feelings you are good at reading?"
+      }
+    ],
+    "skillTags": [
+      "empathy",
+      "social cues",
+      "perspective"
+    ]
+  },
+  {
+    "id": "pbl-k2-s06",
+    "gradeBand": "K-2",
+    "week": 3,
+    "session": 6,
+    "title": "Walk in Their Shoes",
+    "skillArea": "Understanding Others",
+    "internalCaselCompetency": "Social Awareness",
+    "brainConcept": "Your brain can imagine what someone else is thinking or wanting.",
+    "brainModelTag": "Velcro",
+    "objective": "I can guess what someone else might want or feel in a situation.",
+    "materials": "None.",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: kids name a feeling clue from last time. Then everyone imagines: 'Pretend you dropped your ice cream — show your face.'",
+      "teach": "Your brain can pretend to be in someone else's shoes. When we imagine how they feel, we connect it to a time we felt that way (that's the Velcro — sticking new to what we know).",
+      "practice": "Tell a tiny story (a new kid stands alone at recess). Kids answer: How might the new kid feel? What might help? Connect to: 'When did you feel left out?'",
+      "close": "Each child finishes: 'I can help someone feel better by ___.'"
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-k2-s06-cq1",
+        "text": "How might the new kid in the story feel?"
+      },
+      {
+        "id": "pbl-k2-s06-cq2",
+        "text": "When have you felt the same way?"
+      },
+      {
+        "id": "pbl-k2-s06-cq3",
+        "text": "What is one kind thing that would help?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-k2-s06-fq1",
+        "text": "Echo: what does it mean to walk in someone's shoes?"
+      },
+      {
+        "id": "pbl-k2-s06-fq2",
+        "text": "Tell me about a time you helped someone feel included this week."
+      },
+      {
+        "id": "pbl-k2-s06-fq3",
+        "text": "Who could you invite to play tomorrow?"
+      }
+    ],
+    "skillTags": [
+      "perspective-taking",
+      "empathy",
+      "kindness"
+    ]
+  },
+  {
+    "id": "pbl-k2-s07",
+    "gradeBand": "K-2",
+    "week": 4,
+    "session": 7,
+    "title": "Say It So They Hear It",
+    "skillArea": "Working With Others",
+    "internalCaselCompetency": "Relationship Skills",
+    "brainConcept": "Words stick better when they connect to what the listener already knows (Velcro).",
+    "brainModelTag": "Velcro",
+    "objective": "I can use my words to tell someone what I need in a kind way.",
+    "materials": "None.",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: kids share one kind thing they did. Then practice a calm 'inside voice' all together.",
+      "teach": "When we want something, our words work better than grabbing or yelling. A simple shape: 'I feel ___, can you ___?' Calm words help the other person's brain listen.",
+      "practice": "Role-play: someone took your crayon. Practice: 'I feel sad, can I have it back please?' Each child tries with a partner.",
+      "close": "Each child shares one 'I feel ___, can you ___?' they could use."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-k2-s07-cq1",
+        "text": "What happens when we grab or yell instead of using words?"
+      },
+      {
+        "id": "pbl-k2-s07-cq2",
+        "text": "Why do calm words help someone listen?"
+      },
+      {
+        "id": "pbl-k2-s07-cq3",
+        "text": "What is a kind way to ask for something back?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-k2-s07-fq1",
+        "text": "Echo: what are the two parts of our asking shape?"
+      },
+      {
+        "id": "pbl-k2-s07-fq2",
+        "text": "Tell me about a time you used your words this week."
+      },
+      {
+        "id": "pbl-k2-s07-fq3",
+        "text": "What is something you might need to ask for tomorrow?"
+      }
+    ],
+    "skillTags": [
+      "communication",
+      "assertiveness",
+      "I-statements"
+    ]
+  },
+  {
+    "id": "pbl-k2-s08",
+    "gradeBand": "K-2",
+    "week": 4,
+    "session": 8,
+    "title": "Fix-It Talk",
+    "skillArea": "Working With Others",
+    "internalCaselCompetency": "Relationship Skills",
+    "brainConcept": "Practicing how to make up strengthens the memory so it is easier next time (Echo).",
+    "brainModelTag": "Echo",
+    "objective": "I can say sorry and offer a way to fix a problem with a friend.",
+    "materials": "None.",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: kids show the asking shape from last time. Then everyone practices a friendly 'I'm sorry' voice.",
+      "teach": "Everyone bumps into problems with friends. A Fix-It Talk has 3 steps: say what happened, say sorry, offer to make it better ('Want to play together?'). Practicing it makes it easy to remember.",
+      "practice": "Role-play: you knocked over a friend's blocks. Walk through the 3 steps with a partner. Switch roles.",
+      "close": "Each child names the 3 Fix-It steps on their fingers."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-k2-s08-cq1",
+        "text": "What are the three steps of a Fix-It Talk?"
+      },
+      {
+        "id": "pbl-k2-s08-cq2",
+        "text": "Why does saying sorry help a friendship?"
+      },
+      {
+        "id": "pbl-k2-s08-cq3",
+        "text": "What can you offer to make a problem better?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-k2-s08-fq1",
+        "text": "Echo: say the three Fix-It steps."
+      },
+      {
+        "id": "pbl-k2-s08-fq2",
+        "text": "Tell me about a problem you fixed with a friend this week."
+      },
+      {
+        "id": "pbl-k2-s08-fq3",
+        "text": "Who might you need to have a Fix-It Talk with soon?"
+      }
+    ],
+    "skillTags": [
+      "conflict repair",
+      "apology",
+      "friendship"
+    ]
+  },
+  {
+    "id": "pbl-k2-s09",
+    "gradeBand": "K-2",
+    "week": 5,
+    "session": 9,
+    "title": "Stop & Plan",
+    "skillArea": "Smart Choices",
+    "internalCaselCompetency": "Responsible Decision-Making",
+    "brainConcept": "The thinking brain (upstairs) helps you stop and plan before you act.",
+    "brainModelTag": "Spotlight",
+    "objective": "I can stop, think, and pick a good choice before I act.",
+    "materials": "None (optional: red/green objects).",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: kids name the Fix-It steps. Then play red light / green light for 30 seconds (practice stopping).",
+      "teach": "Before we act, our thinking brain can say STOP. Then we plan: 'What could I do? What might happen?' Stopping gives the upstairs brain time to help.",
+      "practice": "Scenario: you want a turn on the swing but a friend is on it. Stop. Name 2 choices. Pick the kind one. Do a second scenario together.",
+      "close": "Each child says their STOP word or signal they will use."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-k2-s09-cq1",
+        "text": "Why is it smart to stop before you act?"
+      },
+      {
+        "id": "pbl-k2-s09-cq2",
+        "text": "What are two choices in the swing problem?"
+      },
+      {
+        "id": "pbl-k2-s09-cq3",
+        "text": "Which choice is kind and safe?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-k2-s09-fq1",
+        "text": "Echo: what do we do first before making a choice?"
+      },
+      {
+        "id": "pbl-k2-s09-fq2",
+        "text": "Tell me about a time you stopped and planned this week."
+      },
+      {
+        "id": "pbl-k2-s09-fq3",
+        "text": "What is a STOP signal you can use in class?"
+      }
+    ],
+    "skillTags": [
+      "impulse control",
+      "decision-making",
+      "planning"
+    ]
+  },
+  {
+    "id": "pbl-k2-s10",
+    "gradeBand": "K-2",
+    "week": 5,
+    "session": 10,
+    "title": "Weigh It Out",
+    "skillArea": "Smart Choices",
+    "internalCaselCompetency": "Responsible Decision-Making",
+    "brainConcept": "Your brain can imagine what might happen next (mental time travel).",
+    "brainModelTag": "Velcro",
+    "objective": "I can think about what might happen after a choice.",
+    "materials": "None.",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo: kids share their STOP signal. Then everyone makes a 'thinking face.'",
+      "teach": "Your brain can peek into the future! Before choosing, ask: 'What might happen if I do this?' A good choice helps you and others. We connect it to times choices went well or not (Velcro).",
+      "practice": "Scenario: a friend dares you to push someone. Imagine what happens after pushing vs. walking away. Compare the two endings together.",
+      "close": "Each child finishes: 'A good choice helps ___.'"
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-k2-s10-cq1",
+        "text": "What might happen if you push someone?"
+      },
+      {
+        "id": "pbl-k2-s10-cq2",
+        "text": "What might happen if you walk away?"
+      },
+      {
+        "id": "pbl-k2-s10-cq3",
+        "text": "Which ending is better and why?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-k2-s10-fq1",
+        "text": "Echo: what question do we ask before choosing?"
+      },
+      {
+        "id": "pbl-k2-s10-fq2",
+        "text": "Tell me about a good choice you made this week."
+      },
+      {
+        "id": "pbl-k2-s10-fq3",
+        "text": "How did you know it was a good choice?"
+      }
+    ],
+    "skillTags": [
+      "consequences",
+      "decision-making",
+      "values"
+    ]
+  },
+  {
+    "id": "pbl-k2-s11",
+    "gradeBand": "K-2",
+    "week": 6,
+    "session": 11,
+    "title": "Put It Together",
+    "skillArea": "Integration",
+    "internalCaselCompetency": "Integration",
+    "brainConcept": "Connecting many small skills builds one strong web in your brain.",
+    "brainModelTag": "Velcro",
+    "objective": "I can use more than one Brain Lab tool in a pretend problem.",
+    "materials": "None.",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo round: each child shouts out one tool we learned (breathe, name it, spotlight, Fix-It, STOP).",
+      "teach": "All our tools connect like Velcro into one strong web. In a real problem you might use a few: notice your feeling, breathe, then make a smart choice.",
+      "practice": "Big scenario: someone cuts in line and you feel mad. Walk through it as a group: spot the feeling, calm down, use words, pick a choice.",
+      "close": "Each child picks the two tools they like best."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-k2-s11-cq1",
+        "text": "Which tools could help when someone cuts in line?"
+      },
+      {
+        "id": "pbl-k2-s11-cq2",
+        "text": "What would you do first?"
+      },
+      {
+        "id": "pbl-k2-s11-cq3",
+        "text": "Which tool is your favorite?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-k2-s11-fq1",
+        "text": "Echo: name three Brain Lab tools."
+      },
+      {
+        "id": "pbl-k2-s11-fq2",
+        "text": "Tell me about a time you used two tools together this week."
+      },
+      {
+        "id": "pbl-k2-s11-fq3",
+        "text": "Which tool do you want to practice more?"
+      }
+    ],
+    "skillTags": [
+      "integration",
+      "problem-solving",
+      "self-regulation"
+    ]
+  },
+  {
+    "id": "pbl-k2-s12",
+    "gradeBand": "K-2",
+    "week": 6,
+    "session": 12,
+    "title": "Rewire & Reflect",
+    "skillArea": "Integration",
+    "internalCaselCompetency": "Integration",
+    "brainConcept": "Practicing again and again over time makes brain connections strong and lasting.",
+    "brainModelTag": "Rewire",
+    "objective": "I can name a tool I will keep practicing to make my brain stronger.",
+    "materials": "None (optional: a small certificate or sticker).",
+    "durationMinutes": 15,
+    "flow": {
+      "connect": "Echo party: go around twice, each child names a tool until we run out.",
+      "teach": "Your brain got stronger in Brain Lab because you practiced! The secret is to keep going — practice over time makes the connection stick (Rewire). Today we pick one tool to keep.",
+      "practice": "Each child sets a 'Rewire goal': one tool to use this week and where. Group cheers each goal.",
+      "close": "Celebrate! Everyone does the brain fist and says: 'My brain is growing!' Hand out certificates if available."
+    },
+    "contentQuestions": [
+      {
+        "id": "pbl-k2-s12-cq1",
+        "text": "What makes a brain connection strong and lasting?"
+      },
+      {
+        "id": "pbl-k2-s12-cq2",
+        "text": "Which tool helped you the most?"
+      },
+      {
+        "id": "pbl-k2-s12-cq3",
+        "text": "Where will you use your tool this week?"
+      }
+    ],
+    "followupQuestions": [
+      {
+        "id": "pbl-k2-s12-fq1",
+        "text": "Echo: what is your Rewire goal?"
+      },
+      {
+        "id": "pbl-k2-s12-fq2",
+        "text": "Tell me about how your brain grew during Brain Lab."
+      },
+      {
+        "id": "pbl-k2-s12-fq3",
+        "text": "Who can you teach one of your tools to?"
+      }
+    ],
+    "skillTags": [
+      "growth mindset",
+      "goal-setting",
+      "reflection"
+    ]
+  }
+]

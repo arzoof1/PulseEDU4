@@ -50,3 +50,4 @@
 - [Family Messages attribution](family-messages-attribution.md) — deliver to many, attribute to one: ack/Power Reader rolls up to ONE primary (portal account); SIS adapter feeds no guardian emails today.
 - [Standards Book reference](standards-book-reference.md) — in-app FLDOE standards book = committed JSON from pdftotext \f-split; GLOBAL non-school-scoped route (statewide reference, no tenant data); Math = same pipeline, subject-gated button.
 - [Benchmark descriptions reference table](benchmark-descriptions.md) — `benchmark_descriptions` is global/NOT school-scoped (statewide FLDOE text); `-layout` pdftotext corrupts rubric-table standards (C.2.1) — use plain reading-order extraction + scan for artifacts.
+- [PulseBrainLab program](pulsebrainlab.md) — brain-based intervention curriculum; NEVER surface "SEL" (FL-sensitive), CASEL is internal-only; original content (no Second Step); every lesson carries a brain-model tag.
