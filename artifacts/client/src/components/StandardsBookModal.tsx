@@ -246,11 +246,22 @@ export default function StandardsBookModal({
       if (e.key === "Escape") {
         if (openPage != null) setOpenPage(null);
         else onClose();
+        return;
+      }
+      // Arrow keys flip pages while the reader pane is open.
+      if (openPage == null) return;
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        setOpenPage((p) => (p != null && p > 1 ? p - 1 : p));
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        const pc = bookCache[subject]?.pageCount;
+        setOpenPage((p) => (p != null && pc && p < pc ? p + 1 : p));
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, openPage, onClose]);
+  }, [open, openPage, onClose, subject]);
 
   const grades = useMemo(() => {
     if (!book) return [];
@@ -533,8 +544,61 @@ export default function StandardsBookModal({
                   </button>
                 )}
               </div>
-              <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
-                Page {openPage} of {book?.pageCount}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginBottom: 8,
+                }}
+              >
+                <button
+                  onClick={() =>
+                    setOpenPage((p) => (p != null && p > 1 ? p - 1 : p))
+                  }
+                  disabled={openPage <= 1}
+                  aria-label="Previous page"
+                  style={{
+                    padding: "4px 10px",
+                    fontSize: 12,
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 6,
+                    background: "white",
+                    color: openPage <= 1 ? "#cbd5e1" : "#334155",
+                    cursor: openPage <= 1 ? "default" : "pointer",
+                  }}
+                >
+                  ← Previous page
+                </button>
+                <div style={{ fontSize: 11, color: "#64748b" }}>
+                  Page {openPage} of {book?.pageCount}
+                </div>
+                <button
+                  onClick={() =>
+                    setOpenPage((p) =>
+                      p != null && book && p < book.pageCount ? p + 1 : p,
+                    )
+                  }
+                  disabled={!book || openPage >= book.pageCount}
+                  aria-label="Next page"
+                  style={{
+                    padding: "4px 10px",
+                    fontSize: 12,
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 6,
+                    background: "white",
+                    color:
+                      !book || openPage >= book.pageCount
+                        ? "#cbd5e1"
+                        : "#334155",
+                    cursor:
+                      !book || openPage >= book.pageCount
+                        ? "default"
+                        : "pointer",
+                  }}
+                >
+                  Next page →
+                </button>
               </div>
               {showOriginal && pdfUrl ? (
                 <div
