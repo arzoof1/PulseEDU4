@@ -326,6 +326,18 @@ export const GetPulseBrainLabSessionResponse = zod.object({
   sessionDate: zod.string(),
   notes: zod.string().nullish(),
   createdAt: zod.string(),
+  gradeMode: zod
+    .union([
+      zod.literal("score"),
+      zod.literal("participation"),
+      zod.literal(null),
+    ])
+    .nullish()
+    .describe("'score' | 'participation' | null (ungraded assignment)."),
+  maxScore: zod.number().nullish(),
+  benchmarkCode: zod.string().nullish(),
+  benchmarkSubject: zod.string().nullish(),
+  benchmarkLabel: zod.string().nullish(),
   attendance: zod.array(
     zod.object({
       studentId: zod.string(),
@@ -368,6 +380,18 @@ export const SetPulseBrainLabAttendanceResponse = zod.object({
   sessionDate: zod.string(),
   notes: zod.string().nullish(),
   createdAt: zod.string(),
+  gradeMode: zod
+    .union([
+      zod.literal("score"),
+      zod.literal("participation"),
+      zod.literal(null),
+    ])
+    .nullish()
+    .describe("'score' | 'participation' | null (ungraded assignment)."),
+  maxScore: zod.number().nullish(),
+  benchmarkCode: zod.string().nullish(),
+  benchmarkSubject: zod.string().nullish(),
+  benchmarkLabel: zod.string().nullish(),
   attendance: zod.array(
     zod.object({
       studentId: zod.string(),
@@ -469,6 +493,11 @@ export const ListPulseBrainLabWorkSamplesResponseItem = zod
     pageIndex: zod.number().nullish(),
     source: zod.string(),
     shared: zod.boolean(),
+    score: zod.number().nullish(),
+    participationMark: zod
+      .union([zod.literal("check"), zod.literal("x"), zod.literal(null)])
+      .nullish(),
+    gradedAt: zod.string().nullish(),
     createdAt: zod.string(),
   })
   .describe(
@@ -484,6 +513,102 @@ export const ListPulseBrainLabWorkSamplesResponse = zod.array(
 export const DeletePulseBrainLabWorkSampleParams = zod.object({
   sampleId: zod.coerce.number(),
 });
+
+/**
+ * @summary Configure grading (mode, max score, benchmark) for an assignment
+ */
+export const SetPulseBrainLabSessionGradingParams = zod.object({
+  sessionId: zod.coerce.number(),
+});
+
+export const SetPulseBrainLabSessionGradingBody = zod
+  .object({
+    gradeMode: zod
+      .union([
+        zod.literal("score"),
+        zod.literal("participation"),
+        zod.literal(null),
+      ])
+      .nullish(),
+    maxScore: zod.number().nullish(),
+    benchmarkCode: zod.string().nullish(),
+    benchmarkSubject: zod.string().nullish(),
+  })
+  .describe(
+    "Configure grading for one assignment (session). gradeMode null clears grading. maxScore is required when gradeMode is 'score'. Benchmark fields are optional; passing benchmarkCode + benchmarkSubject tags the assignment with an official Florida standard.\n",
+  );
+
+export const SetPulseBrainLabSessionGradingResponse = zod.object({
+  id: zod.number(),
+  groupId: zod.number(),
+  lessonKey: zod.string(),
+  lessonTitle: zod.string(),
+  sessionDate: zod.string(),
+  notes: zod.string().nullish(),
+  createdAt: zod.string(),
+  gradeMode: zod
+    .union([
+      zod.literal("score"),
+      zod.literal("participation"),
+      zod.literal(null),
+    ])
+    .nullish()
+    .describe("'score' | 'participation' | null (ungraded assignment)."),
+  maxScore: zod.number().nullish(),
+  benchmarkCode: zod.string().nullish(),
+  benchmarkSubject: zod.string().nullish(),
+  benchmarkLabel: zod.string().nullish(),
+  attendance: zod.array(
+    zod.object({
+      studentId: zod.string(),
+      localSisId: zod.string().nullable(),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      status: zod.enum(["present", "absent", "excused"]),
+    }),
+  ),
+});
+
+/**
+ * @summary Grade a work sample (score or participation mark)
+ */
+export const SetPulseBrainLabWorkSampleGradeParams = zod.object({
+  sampleId: zod.coerce.number(),
+});
+
+export const SetPulseBrainLabWorkSampleGradeBody = zod
+  .object({
+    score: zod.number().nullish(),
+    participationMark: zod
+      .union([zod.literal("check"), zod.literal("x"), zod.literal(null)])
+      .nullish(),
+  })
+  .describe(
+    "Grade one work sample. Provide score (score mode, 0..session.maxScore) OR participationMark (participation mode). Pass both null to clear the grade.\n",
+  );
+
+export const SetPulseBrainLabWorkSampleGradeResponse = zod
+  .object({
+    id: zod.number(),
+    sessionId: zod.number(),
+    studentId: zod.string(),
+    localSisId: zod.string().nullable(),
+    firstName: zod.string().nullish(),
+    lastName: zod.string().nullish(),
+    objectKey: zod.string(),
+    pageIndex: zod.number().nullish(),
+    source: zod.string(),
+    shared: zod.boolean(),
+    score: zod.number().nullish(),
+    participationMark: zod
+      .union([zod.literal("check"), zod.literal("x"), zod.literal(null)])
+      .nullish(),
+    gradedAt: zod.string().nullish(),
+    createdAt: zod.string(),
+  })
+  .describe(
+    "A captured student work sample (the completed worksheet photo\/scan) filed to one (session, student). Staff-only until shared.\n",
+  );
 
 /**
  * @summary Toggle whether a filed work sample is visible to the family
@@ -508,6 +633,11 @@ export const SetPulseBrainLabWorkSampleShareResponse = zod
     pageIndex: zod.number().nullish(),
     source: zod.string(),
     shared: zod.boolean(),
+    score: zod.number().nullish(),
+    participationMark: zod
+      .union([zod.literal("check"), zod.literal("x"), zod.literal(null)])
+      .nullish(),
+    gradedAt: zod.string().nullish(),
     createdAt: zod.string(),
   })
   .describe(
@@ -564,6 +694,11 @@ export const ListPulseBrainLabHomeCardsResponseItem = zod
           pageIndex: zod.number().nullish(),
           source: zod.string(),
           shared: zod.boolean(),
+          score: zod.number().nullish(),
+          participationMark: zod
+            .union([zod.literal("check"), zod.literal("x"), zod.literal(null)])
+            .nullish(),
+          gradedAt: zod.string().nullish(),
           createdAt: zod.string(),
         })
         .describe(

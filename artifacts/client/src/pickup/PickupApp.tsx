@@ -1923,10 +1923,16 @@ function TeacherQueuePage({ me }: { me: Me }) {
   }, [now, undoFor]);
 
   const visibleEntries = useMemo(() => {
-    if (showMineOnly && viewScope === "all_students") {
-      return entries.filter((e) => e.isOnMyRoster);
-    }
-    return entries;
+    const base =
+      showMineOnly && viewScope === "all_students"
+        ? entries.filter((e) => e.isOnMyRoster)
+        : entries;
+    // Newest arrivals first: sort a copy descending by arrival time so the
+    // most-recently-added car sits at the top of the teacher's list.
+    return [...base].sort(
+      (a, b) =>
+        new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime(),
+    );
   }, [entries, showMineOnly, viewScope]);
 
   // Pull a human-readable message out of an error response. The API
@@ -2003,7 +2009,7 @@ function TeacherQueuePage({ me }: { me: Me }) {
         </div>
       </div>
       <p style={{ color: "#6b7280", marginTop: 0, fontSize: 13 }}>
-        Newest arrivals at the bottom. A blue left border means the student
+        Newest arrivals at the top. A blue left border means the student
         is on your class roster. Press Release when the student walks out;
         you have 10 seconds to undo.
       </p>

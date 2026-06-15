@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { PulseBrainLabWorkSampleParticipationMark } from "./pulseBrainLabWorkSampleParticipationMark";
 
 /**
  * A captured student work sample (the completed worksheet photo/scan) filed to one (session, student). Staff-only until shared.
@@ -25,5 +26,11 @@ export interface PulseBrainLabWorkSample {
   pageIndex?: number | null;
   source: string;
   shared: boolean;
+  /** @nullable */
+  score?: number | null;
+  /** @nullable */
+  participationMark?: PulseBrainLabWorkSampleParticipationMark;
+  /** @nullable */
+  gradedAt?: string | null;
   createdAt: string;
 }

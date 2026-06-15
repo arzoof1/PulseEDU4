@@ -20,6 +20,7 @@ import {
   pulseBrainLabWorkSamplesTable,
   pulseBrainLabUnmatchedScansTable,
   pulseBrainLabHomeResponsesTable,
+  benchmarkDescriptionsTable,
   studentsTable,
   staffTable,
 } from "@workspace/db";
@@ -42,6 +43,8 @@ import {
   FilePulseBrainLabUnmatchedScanBody,
   AssignPulseBrainLabUnmatchedScanBody,
   SetPulseBrainLabWorkSampleShareBody,
+  SetPulseBrainLabSessionGradingBody,
+  SetPulseBrainLabWorkSampleGradeBody,
 } from "@workspace/api-zod";
 import { bindObjectToSchool, readStoredObject } from "./storage.js";
 import { buildHomeCards } from "../lib/pulseBrainLabHomeCards.js";
@@ -217,6 +220,11 @@ async function loadSessionDetail(schoolId: number, sessionId: number) {
     sessionDate: session.sessionDate,
     notes: session.notes ?? null,
     createdAt: session.createdAt.toISOString(),
+    gradeMode: session.gradeMode ?? null,
+    maxScore: session.maxScore ?? null,
+    benchmarkCode: session.benchmarkCode ?? null,
+    benchmarkSubject: session.benchmarkSubject ?? null,
+    benchmarkLabel: session.benchmarkLabel ?? null,
     attendance: members.map((m) => ({
       studentId: m.studentId,
       localSisId: m.localSisId ?? null,
@@ -640,6 +648,110 @@ router.get("/pulse-brain-lab/sessions/:sessionId", async (req, res) => {
   res.json(detail);
 });
 
+// PATCH /api/pulse-brain-lab/sessions/:sessionId/grading — configure grading for
+// one assignment: grade mode (score | participation), max score, and an optional
+// official Florida benchmark tag. The benchmark LABEL is snapshotted from the
+// global benchmark_descriptions catalog so parent-facing surfaces render it
+// without a join. gradeMode null clears grading (and benchmark) for the session.
+router.patch(
+  "/pulse-brain-lab/sessions/:sessionId/grading",
+  async (req, res) => {
+    const staff = await loadCoreTeamStaff(req, res);
+    if (!staff) return;
+    const schoolId = requireSchool(req, res);
+    if (schoolId == null) return;
+    const sessionId = Number(req.params.sessionId);
+    if (!Number.isInteger(sessionId)) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    const parsed = SetPulseBrainLabSessionGradingBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid request" });
+      return;
+    }
+    const { gradeMode, maxScore, benchmarkCode, benchmarkSubject } =
+      parsed.data;
+
+    // Cross-field validation the flat schema can't express.
+    if (gradeMode === "score") {
+      if (
+        maxScore == null ||
+        !Number.isInteger(maxScore) ||
+        maxScore < 1 ||
+        maxScore > 1000
+      ) {
+        res
+          .status(400)
+          .json({ error: "Score mode requires a max score of 1–1000" });
+        return;
+      }
+    }
+    // A benchmark code only makes sense paired with its subject.
+    if ((benchmarkCode == null) !== (benchmarkSubject == null)) {
+      res
+        .status(400)
+        .json({ error: "Benchmark code and subject must be set together" });
+      return;
+    }
+
+    // Resolve the snapshot label from the global (non-school-scoped) catalog.
+    // Strip any "STRAND|" prefix the FAST item file sometimes prepends.
+    let benchmarkLabel: string | null = null;
+    let resolvedCode: string | null = null;
+    let resolvedSubject: string | null = null;
+    if (
+      gradeMode != null &&
+      benchmarkCode != null &&
+      benchmarkSubject != null
+    ) {
+      const code = benchmarkCode.includes("|")
+        ? benchmarkCode.slice(benchmarkCode.lastIndexOf("|") + 1)
+        : benchmarkCode;
+      const [row] = await db
+        .select({ description: benchmarkDescriptionsTable.description })
+        .from(benchmarkDescriptionsTable)
+        .where(
+          and(
+            eq(benchmarkDescriptionsTable.subject, benchmarkSubject),
+            eq(benchmarkDescriptionsTable.code, code),
+          ),
+        );
+      if (!row) {
+        res.status(400).json({ error: "Unknown benchmark" });
+        return;
+      }
+      benchmarkLabel = row.description;
+      resolvedCode = code;
+      resolvedSubject = benchmarkSubject;
+    }
+
+    // gradeMode null clears the whole grading config (mode + benchmark).
+    const updated = await db
+      .update(pulseBrainLabSessionsTable)
+      .set({
+        gradeMode: gradeMode ?? null,
+        maxScore: gradeMode === "score" ? maxScore! : null,
+        benchmarkCode: resolvedCode,
+        benchmarkSubject: resolvedSubject,
+        benchmarkLabel,
+      })
+      .where(
+        and(
+          eq(pulseBrainLabSessionsTable.id, sessionId),
+          eq(pulseBrainLabSessionsTable.schoolId, schoolId),
+        ),
+      )
+      .returning({ id: pulseBrainLabSessionsTable.id });
+    if (updated.length === 0) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    const detail = await loadSessionDetail(schoolId, sessionId);
+    res.json(detail);
+  },
+);
+
 // DELETE /api/pulse-brain-lab/sessions/:sessionId — remove a session.
 router.delete("/pulse-brain-lab/sessions/:sessionId", async (req, res) => {
   const staff = await loadCoreTeamStaff(req, res);
@@ -1010,6 +1122,9 @@ type WorkSampleApi = {
   pageIndex: number | null;
   source: string;
   shared: boolean;
+  score: number | null;
+  participationMark: string | null;
+  gradedAt: string | null;
   createdAt: string;
 };
 
@@ -1035,6 +1150,9 @@ async function loadWorkSamplesTx(
       pageIndex: pulseBrainLabWorkSamplesTable.pageIndex,
       source: pulseBrainLabWorkSamplesTable.source,
       shared: pulseBrainLabWorkSamplesTable.shared,
+      score: pulseBrainLabWorkSamplesTable.score,
+      participationMark: pulseBrainLabWorkSamplesTable.participationMark,
+      gradedAt: pulseBrainLabWorkSamplesTable.gradedAt,
       createdAt: pulseBrainLabWorkSamplesTable.createdAt,
       localSisId: studentsTable.localSisId,
       firstName: studentsTable.firstName,
@@ -1062,6 +1180,9 @@ async function loadWorkSamplesTx(
     pageIndex: r.pageIndex ?? null,
     source: r.source,
     shared: r.shared,
+    score: r.score ?? null,
+    participationMark: r.participationMark ?? null,
+    gradedAt: r.gradedAt ? r.gradedAt.toISOString() : null,
     createdAt: r.createdAt.toISOString(),
   }));
 }
@@ -1502,6 +1623,124 @@ router.delete("/pulse-brain-lab/work-samples/:sampleId", async (req, res) => {
   res.status(204).end();
 });
 
+// PATCH /api/pulse-brain-lab/work-samples/:sampleId/grade — grade one sample.
+// The grade is interpreted by the parent session's gradeMode: 'score' expects a
+// numeric `score` in 0..session.maxScore; 'participation' expects a 'check'|'x'
+// mark. Passing both null clears the grade. A session with no grade mode set
+// rejects grading. gradedBy/gradedAt stamp who graded and when.
+router.patch(
+  "/pulse-brain-lab/work-samples/:sampleId/grade",
+  async (req, res) => {
+    const staff = await loadCoreTeamStaff(req, res);
+    if (!staff) return;
+    const schoolId = requireSchool(req, res);
+    if (schoolId == null) return;
+    const sampleId = Number(req.params.sampleId);
+    if (!Number.isInteger(sampleId)) {
+      res.status(400).json({ error: "Invalid sample id" });
+      return;
+    }
+    const parsed = SetPulseBrainLabWorkSampleGradeBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid request" });
+      return;
+    }
+    const { score, participationMark } = parsed.data;
+
+    // Resolve the sample school-scoped, then its session for the grade mode.
+    const [sampleRow] = await db
+      .select({ sessionId: pulseBrainLabWorkSamplesTable.sessionId })
+      .from(pulseBrainLabWorkSamplesTable)
+      .where(
+        and(
+          eq(pulseBrainLabWorkSamplesTable.id, sampleId),
+          eq(pulseBrainLabWorkSamplesTable.schoolId, schoolId),
+        ),
+      );
+    if (!sampleRow) {
+      res.status(404).json({ error: "Work sample not found" });
+      return;
+    }
+    const [session] = await db
+      .select({
+        gradeMode: pulseBrainLabSessionsTable.gradeMode,
+        maxScore: pulseBrainLabSessionsTable.maxScore,
+      })
+      .from(pulseBrainLabSessionsTable)
+      .where(
+        and(
+          eq(pulseBrainLabSessionsTable.id, sampleRow.sessionId),
+          eq(pulseBrainLabSessionsTable.schoolId, schoolId),
+        ),
+      );
+    if (!session || session.gradeMode == null) {
+      res
+        .status(400)
+        .json({ error: "This assignment has no grading configured" });
+      return;
+    }
+
+    const clearing = score == null && participationMark == null;
+    let nextScore: number | null = null;
+    let nextMark: string | null = null;
+    if (!clearing) {
+      if (session.gradeMode === "score") {
+        if (
+          score == null ||
+          participationMark != null ||
+          !Number.isInteger(score) ||
+          score < 0 ||
+          score > (session.maxScore ?? 0)
+        ) {
+          res.status(400).json({
+            error: `Score must be an integer 0–${session.maxScore ?? 0}`,
+          });
+          return;
+        }
+        nextScore = score;
+      } else {
+        // participation
+        if (
+          participationMark == null ||
+          score != null ||
+          (participationMark !== "check" && participationMark !== "x")
+        ) {
+          res
+            .status(400)
+            .json({ error: "Participation mark must be 'check' or 'x'" });
+          return;
+        }
+        nextMark = participationMark;
+      }
+    }
+
+    const updated = await db
+      .update(pulseBrainLabWorkSamplesTable)
+      .set({
+        score: nextScore,
+        participationMark: nextMark,
+        gradedByStaffId: clearing ? null : staff.id,
+        gradedAt: clearing ? null : new Date(),
+      })
+      .where(
+        and(
+          eq(pulseBrainLabWorkSamplesTable.id, sampleId),
+          eq(pulseBrainLabWorkSamplesTable.schoolId, schoolId),
+        ),
+      )
+      .returning({ id: pulseBrainLabWorkSamplesTable.id });
+    if (updated.length === 0) {
+      res.status(404).json({ error: "Work sample not found" });
+      return;
+    }
+    const [sample] = await loadWorkSamples(
+      schoolId,
+      eq(pulseBrainLabWorkSamplesTable.id, sampleId),
+    );
+    res.json(sample);
+  },
+);
+
 // PATCH /api/pulse-brain-lab/work-samples/:sampleId/share — toggle whether a
 // filed work sample is visible to the family on the "Reinforce at Home" card.
 // The share flag is the SINGLE gate that exposes a delivered lesson to the home.
@@ -1625,6 +1864,30 @@ export async function buildPacketPdf(
     ? [first.firstName, first.lastName].filter(Boolean).join(" ").trim()
     : "";
   const localSisId = first?.localSisId ?? null;
+  // Grading is per assignment (session); a card groups every shared sample for
+  // one lesson — possibly across several sessions. Surface ONE grade entry per
+  // graded shared sample (newest first), mirroring sanitizeCard's gate (mode set
+  // AND an actual mark/score or a tagged benchmark).
+  const grades = card.workSamples
+    .filter(
+      (s) =>
+        (s.gradeMode === "score" || s.gradeMode === "participation") &&
+        (s.score != null ||
+          s.participationMark != null ||
+          s.benchmarkCode != null),
+    )
+    .map((s) => ({
+      sessionDate: s.sampleSessionDate,
+      gradeMode: s.gradeMode as "score" | "participation",
+      maxScore: s.maxScore,
+      score: s.score,
+      participationMark: (s.participationMark === "check" ||
+      s.participationMark === "x"
+        ? s.participationMark
+        : null) as "check" | "x" | null,
+      benchmarkCode: s.benchmarkCode,
+      benchmarkLabel: s.benchmarkLabel,
+    }));
   return renderPulseBrainLabPacketPdf({
     language: lang,
     lessonTitle: card.lessonTitle,
@@ -1633,6 +1896,7 @@ export async function buildPacketPdf(
     localSisId,
     sessionDateLabel: card.sessionDate,
     parentReinforcement: card.parentReinforcement,
+    grades,
     workSamples: sampleImages,
     homeResponses: card.homeResponses.map((r) => ({
       promptIndex: r.promptIndex,

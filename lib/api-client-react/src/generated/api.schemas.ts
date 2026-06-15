@@ -189,6 +189,19 @@ export interface PulseBrainLabAttendanceEntry {
   status: PulseBrainLabAttendanceStatus;
 }
 
+/**
+ * 'score' | 'participation' | null (ungraded assignment).
+ * @nullable
+ */
+export type PulseBrainLabSessionDetailGradeMode =
+  | (typeof PulseBrainLabSessionDetailGradeMode)[keyof typeof PulseBrainLabSessionDetailGradeMode]
+  | null;
+
+export const PulseBrainLabSessionDetailGradeMode = {
+  score: "score",
+  participation: "participation",
+} as const;
+
 export interface PulseBrainLabSessionDetail {
   id: number;
   groupId: number;
@@ -198,6 +211,19 @@ export interface PulseBrainLabSessionDetail {
   /** @nullable */
   notes?: string | null;
   createdAt: string;
+  /**
+   * 'score' | 'participation' | null (ungraded assignment).
+   * @nullable
+   */
+  gradeMode?: PulseBrainLabSessionDetailGradeMode;
+  /** @nullable */
+  maxScore?: number | null;
+  /** @nullable */
+  benchmarkCode?: string | null;
+  /** @nullable */
+  benchmarkSubject?: string | null;
+  /** @nullable */
+  benchmarkLabel?: string | null;
   attendance: PulseBrainLabAttendanceEntry[];
 }
 
@@ -240,6 +266,18 @@ export const PulseBrainLabScanSource = {
 } as const;
 
 /**
+ * @nullable
+ */
+export type PulseBrainLabWorkSampleParticipationMark =
+  | (typeof PulseBrainLabWorkSampleParticipationMark)[keyof typeof PulseBrainLabWorkSampleParticipationMark]
+  | null;
+
+export const PulseBrainLabWorkSampleParticipationMark = {
+  check: "check",
+  x: "x",
+} as const;
+
+/**
  * A captured student work sample (the completed worksheet photo/scan) filed to one (session, student). Staff-only until shared.
 
  */
@@ -258,6 +296,12 @@ export interface PulseBrainLabWorkSample {
   pageIndex?: number | null;
   source: string;
   shared: boolean;
+  /** @nullable */
+  score?: number | null;
+  /** @nullable */
+  participationMark?: PulseBrainLabWorkSampleParticipationMark;
+  /** @nullable */
+  gradedAt?: string | null;
   createdAt: string;
 }
 
@@ -311,6 +355,56 @@ export interface PulseBrainLabBatchScanResult {
   unmatchedCount: number;
   matched: PulseBrainLabWorkSample[];
   unmatched: PulseBrainLabUnmatchedScan[];
+}
+
+/**
+ * @nullable
+ */
+export type SetPulseBrainLabSessionGradingInputGradeMode =
+  | (typeof SetPulseBrainLabSessionGradingInputGradeMode)[keyof typeof SetPulseBrainLabSessionGradingInputGradeMode]
+  | null;
+
+export const SetPulseBrainLabSessionGradingInputGradeMode = {
+  score: "score",
+  participation: "participation",
+} as const;
+
+/**
+ * Configure grading for one assignment (session). gradeMode null clears grading. maxScore is required when gradeMode is 'score'. Benchmark fields are optional; passing benchmarkCode + benchmarkSubject tags the assignment with an official Florida standard.
+
+ */
+export interface SetPulseBrainLabSessionGradingInput {
+  /** @nullable */
+  gradeMode?: SetPulseBrainLabSessionGradingInputGradeMode;
+  /** @nullable */
+  maxScore?: number | null;
+  /** @nullable */
+  benchmarkCode?: string | null;
+  /** @nullable */
+  benchmarkSubject?: string | null;
+}
+
+/**
+ * @nullable
+ */
+export type SetPulseBrainLabWorkSampleGradeInputParticipationMark =
+  | (typeof SetPulseBrainLabWorkSampleGradeInputParticipationMark)[keyof typeof SetPulseBrainLabWorkSampleGradeInputParticipationMark]
+  | null;
+
+export const SetPulseBrainLabWorkSampleGradeInputParticipationMark = {
+  check: "check",
+  x: "x",
+} as const;
+
+/**
+ * Grade one work sample. Provide score (score mode, 0..session.maxScore) OR participationMark (participation mode). Pass both null to clear the grade.
+
+ */
+export interface SetPulseBrainLabWorkSampleGradeInput {
+  /** @nullable */
+  score?: number | null;
+  /** @nullable */
+  participationMark?: SetPulseBrainLabWorkSampleGradeInputParticipationMark;
 }
 
 export interface SetPulseBrainLabWorkSampleShareInput {

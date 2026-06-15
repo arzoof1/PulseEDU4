@@ -39,6 +39,8 @@ import type {
   PulseBrainLabWorkSample,
   RoutePulseBrainLabScanInput,
   SetPulseBrainLabAttendanceInput,
+  SetPulseBrainLabSessionGradingInput,
+  SetPulseBrainLabWorkSampleGradeInput,
   SetPulseBrainLabWorkSampleShareInput,
   UpdatePulseBrainLabGroupInput,
 } from "./api.schemas";
@@ -2219,6 +2221,190 @@ export const useDeletePulseBrainLabWorkSample = <
   TContext
 > => {
   return useMutation(getDeletePulseBrainLabWorkSampleMutationOptions(options));
+};
+
+/**
+ * @summary Configure grading (mode, max score, benchmark) for an assignment
+ */
+export const getSetPulseBrainLabSessionGradingUrl = (sessionId: number) => {
+  return `/api/pulse-brain-lab/sessions/${sessionId}/grading`;
+};
+
+export const setPulseBrainLabSessionGrading = async (
+  sessionId: number,
+  setPulseBrainLabSessionGradingInput: SetPulseBrainLabSessionGradingInput,
+  options?: RequestInit,
+): Promise<PulseBrainLabSessionDetail> => {
+  return customFetch<PulseBrainLabSessionDetail>(
+    getSetPulseBrainLabSessionGradingUrl(sessionId),
+    {
+      ...options,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(setPulseBrainLabSessionGradingInput),
+    },
+  );
+};
+
+export const getSetPulseBrainLabSessionGradingMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setPulseBrainLabSessionGrading>>,
+    TError,
+    { sessionId: number; data: BodyType<SetPulseBrainLabSessionGradingInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setPulseBrainLabSessionGrading>>,
+  TError,
+  { sessionId: number; data: BodyType<SetPulseBrainLabSessionGradingInput> },
+  TContext
+> => {
+  const mutationKey = ["setPulseBrainLabSessionGrading"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setPulseBrainLabSessionGrading>>,
+    { sessionId: number; data: BodyType<SetPulseBrainLabSessionGradingInput> }
+  > = (props) => {
+    const { sessionId, data } = props ?? {};
+
+    return setPulseBrainLabSessionGrading(sessionId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SetPulseBrainLabSessionGradingMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setPulseBrainLabSessionGrading>>
+>;
+export type SetPulseBrainLabSessionGradingMutationBody =
+  BodyType<SetPulseBrainLabSessionGradingInput>;
+export type SetPulseBrainLabSessionGradingMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Configure grading (mode, max score, benchmark) for an assignment
+ */
+export const useSetPulseBrainLabSessionGrading = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setPulseBrainLabSessionGrading>>,
+    TError,
+    { sessionId: number; data: BodyType<SetPulseBrainLabSessionGradingInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof setPulseBrainLabSessionGrading>>,
+  TError,
+  { sessionId: number; data: BodyType<SetPulseBrainLabSessionGradingInput> },
+  TContext
+> => {
+  return useMutation(getSetPulseBrainLabSessionGradingMutationOptions(options));
+};
+
+/**
+ * @summary Grade a work sample (score or participation mark)
+ */
+export const getSetPulseBrainLabWorkSampleGradeUrl = (sampleId: number) => {
+  return `/api/pulse-brain-lab/work-samples/${sampleId}/grade`;
+};
+
+export const setPulseBrainLabWorkSampleGrade = async (
+  sampleId: number,
+  setPulseBrainLabWorkSampleGradeInput: SetPulseBrainLabWorkSampleGradeInput,
+  options?: RequestInit,
+): Promise<PulseBrainLabWorkSample> => {
+  return customFetch<PulseBrainLabWorkSample>(
+    getSetPulseBrainLabWorkSampleGradeUrl(sampleId),
+    {
+      ...options,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(setPulseBrainLabWorkSampleGradeInput),
+    },
+  );
+};
+
+export const getSetPulseBrainLabWorkSampleGradeMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setPulseBrainLabWorkSampleGrade>>,
+    TError,
+    { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleGradeInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setPulseBrainLabWorkSampleGrade>>,
+  TError,
+  { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleGradeInput> },
+  TContext
+> => {
+  const mutationKey = ["setPulseBrainLabWorkSampleGrade"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setPulseBrainLabWorkSampleGrade>>,
+    { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleGradeInput> }
+  > = (props) => {
+    const { sampleId, data } = props ?? {};
+
+    return setPulseBrainLabWorkSampleGrade(sampleId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SetPulseBrainLabWorkSampleGradeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setPulseBrainLabWorkSampleGrade>>
+>;
+export type SetPulseBrainLabWorkSampleGradeMutationBody =
+  BodyType<SetPulseBrainLabWorkSampleGradeInput>;
+export type SetPulseBrainLabWorkSampleGradeMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Grade a work sample (score or participation mark)
+ */
+export const useSetPulseBrainLabWorkSampleGrade = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setPulseBrainLabWorkSampleGrade>>,
+    TError,
+    { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleGradeInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof setPulseBrainLabWorkSampleGrade>>,
+  TError,
+  { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleGradeInput> },
+  TContext
+> => {
+  return useMutation(
+    getSetPulseBrainLabWorkSampleGradeMutationOptions(options),
+  );
 };
 
 /**

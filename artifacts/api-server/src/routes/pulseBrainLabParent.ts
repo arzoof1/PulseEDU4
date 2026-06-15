@@ -85,6 +85,30 @@ async function resolveOwnedStudent(
 // Strip the staff card down to a family-safe shape: drop the FLEID studentId and
 // the raw objectKey from every work sample (the family never needs either).
 function sanitizeCard(card: Awaited<ReturnType<typeof buildHomeCards>>[number]) {
+  // Grading is PER ASSIGNMENT (session), but a card groups every SHARED sample
+  // for one lesson — possibly across several sessions, each with its own grade
+  // and benchmark. Surface ONE grade entry per graded shared sample (newest
+  // first, as buildHomeCards orders them) so a multi-session lesson never
+  // collapses to a single misattributed grade. A sample is included only when
+  // the assignment has a grade mode AND there's an actual mark/score or a
+  // tagged benchmark — never an empty "not graded" line to the home.
+  const grades = card.workSamples
+    .filter(
+      (s) =>
+        s.gradeMode != null &&
+        (s.score != null ||
+          s.participationMark != null ||
+          s.benchmarkCode != null),
+    )
+    .map((s) => ({
+      sessionDate: s.sampleSessionDate,
+      gradeMode: s.gradeMode,
+      maxScore: s.maxScore,
+      score: s.score,
+      participationMark: s.participationMark,
+      benchmarkCode: s.benchmarkCode,
+      benchmarkLabel: s.benchmarkLabel,
+    }));
   return {
     lessonKey: card.lessonKey,
     lessonTitle: card.lessonTitle,
@@ -94,6 +118,7 @@ function sanitizeCard(card: Awaited<ReturnType<typeof buildHomeCards>>[number]) 
     sessionDate: card.sessionDate,
     parentReinforcement: card.parentReinforcement,
     workSampleCount: card.workSamples.length,
+    grades,
     homeResponses: card.homeResponses.map((r) => ({
       id: r.id,
       lessonKey: r.lessonKey,

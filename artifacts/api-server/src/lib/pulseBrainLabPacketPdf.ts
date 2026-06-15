@@ -34,6 +34,18 @@ export interface PacketHomeResponse {
   transcript: string;
 }
 
+// Grade/benchmark to render — one entry per SHARED, graded sample (grading is
+// per assignment/session, so a multi-session lesson packet can carry several).
+export interface PacketGrade {
+  sessionDate: string | null;
+  gradeMode: "score" | "participation";
+  maxScore: number | null;
+  score: number | null;
+  participationMark: "check" | "x" | null;
+  benchmarkCode: string | null;
+  benchmarkLabel: string | null;
+}
+
 export interface PacketPdfInput {
   language: PacketLanguage;
   lessonTitle: string;
@@ -44,6 +56,7 @@ export interface PacketPdfInput {
   localSisId: string | null;
   sessionDateLabel: string | null;
   parentReinforcement: PulseBrainLabParentReinforcement;
+  grades: PacketGrade[];
   workSamples: PacketWorkSampleImage[];
   homeResponses: PacketHomeResponse[];
 }
@@ -63,6 +76,10 @@ const STR: Record<
     homeFollowUp: string;
     answerTo: string;
     noWorkSample: string;
+    grade: string;
+    benchmark: string;
+    markMet: string;
+    markNotYet: string;
   }
 > = {
   en: {
@@ -78,6 +95,10 @@ const STR: Record<
     homeFollowUp: "Home Follow-Up",
     answerTo: "Answer to",
     noWorkSample: "No work sample shared yet.",
+    grade: "Grade",
+    benchmark: "Florida benchmark",
+    markMet: "Met",
+    markNotYet: "Not yet",
   },
   es: {
     title: "Refuerza en casa",
@@ -92,6 +113,10 @@ const STR: Record<
     homeFollowUp: "Seguimiento en casa",
     answerTo: "Respuesta a",
     noWorkSample: "Aún no se ha compartido una muestra de trabajo.",
+    grade: "Calificación",
+    benchmark: "Estándar de Florida",
+    markMet: "Logrado",
+    markNotYet: "Aún no",
   },
 };
 
@@ -170,6 +195,48 @@ export async function renderPulseBrainLabPacketPdf(
       .text(`${t.session}: ${input.sessionDateLabel}`, MARGIN, doc.y, {
         width: contentWidth,
       });
+  }
+
+  // Grade / benchmark — one block per shared, graded sample. Grading is per
+  // assignment (session), so a multi-session lesson packet can carry several.
+  const renderableGrades = input.grades.filter((g) => {
+    const hasValue =
+      (g.gradeMode === "score" && g.score != null) ||
+      (g.gradeMode === "participation" && g.participationMark != null);
+    return hasValue || g.benchmarkCode != null;
+  });
+  if (renderableGrades.length > 0) {
+    sectionHeading(doc, t.grade, contentWidth);
+    renderableGrades.forEach((g) => {
+      const valueText =
+        g.gradeMode === "score" && g.score != null
+          ? `${g.score}${g.maxScore != null ? ` / ${g.maxScore}` : ""}`
+          : g.gradeMode === "participation" && g.participationMark != null
+            ? g.participationMark === "check"
+              ? t.markMet
+              : t.markNotYet
+            : null;
+      const dateSuffix = g.sessionDate ? `  (${g.sessionDate})` : "";
+      if (valueText != null) {
+        doc
+          .fillColor(INK)
+          .font("Helvetica-Bold")
+          .fontSize(13)
+          .text(`${valueText}${dateSuffix}`, MARGIN, doc.y, {
+            width: contentWidth,
+          });
+      }
+      if (g.benchmarkCode) {
+        const label = g.benchmarkLabel ? ` — ${g.benchmarkLabel}` : "";
+        doc
+          .fillColor(MUTED)
+          .font("Helvetica")
+          .fontSize(10)
+          .text(`${t.benchmark}: ${g.benchmarkCode}${label}`, MARGIN, doc.y, {
+            width: contentWidth,
+          });
+      }
+    });
   }
 
   // What we practiced.

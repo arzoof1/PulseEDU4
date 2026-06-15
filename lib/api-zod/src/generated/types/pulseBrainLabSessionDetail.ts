@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { PulseBrainLabAttendanceEntry } from "./pulseBrainLabAttendanceEntry";
+import type { PulseBrainLabSessionDetailGradeMode } from "./pulseBrainLabSessionDetailGradeMode";
 
 export interface PulseBrainLabSessionDetail {
   id: number;
@@ -16,5 +17,18 @@ export interface PulseBrainLabSessionDetail {
   /** @nullable */
   notes?: string | null;
   createdAt: string;
+  /**
+   * 'score' | 'participation' | null (ungraded assignment).
+   * @nullable
+   */
+  gradeMode?: PulseBrainLabSessionDetailGradeMode;
+  /** @nullable */
+  maxScore?: number | null;
+  /** @nullable */
+  benchmarkCode?: string | null;
+  /** @nullable */
+  benchmarkSubject?: string | null;
+  /** @nullable */
+  benchmarkLabel?: string | null;
   attendance: PulseBrainLabAttendanceEntry[];
 }

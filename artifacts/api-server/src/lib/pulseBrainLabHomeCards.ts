@@ -33,6 +33,17 @@ export interface HomeCardWorkSample {
   source: string;
   shared: boolean;
   createdAt: string;
+  // The date of the SESSION this sample belongs to (the assignment date) — used
+  // to label per-assignment grades on family surfaces.
+  sampleSessionDate: string | null;
+  // Grading (per-assignment config from the session + per-sample grade). The
+  // mode/benchmark live on the session; the score/mark live on the sample.
+  gradeMode: string | null;
+  maxScore: number | null;
+  score: number | null;
+  participationMark: string | null;
+  benchmarkCode: string | null;
+  benchmarkLabel: string | null;
 }
 
 export interface HomeCardHomeResponse {
@@ -81,6 +92,12 @@ export async function buildHomeCards(
       createdAt: pulseBrainLabWorkSamplesTable.createdAt,
       lessonKey: pulseBrainLabSessionsTable.lessonKey,
       sessionDate: pulseBrainLabSessionsTable.sessionDate,
+      gradeMode: pulseBrainLabSessionsTable.gradeMode,
+      maxScore: pulseBrainLabSessionsTable.maxScore,
+      benchmarkCode: pulseBrainLabSessionsTable.benchmarkCode,
+      benchmarkLabel: pulseBrainLabSessionsTable.benchmarkLabel,
+      score: pulseBrainLabWorkSamplesTable.score,
+      participationMark: pulseBrainLabWorkSamplesTable.participationMark,
       localSisId: studentsTable.localSisId,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
@@ -181,6 +198,13 @@ export async function buildHomeCards(
       source: row.source,
       shared: row.shared,
       createdAt: row.createdAt.toISOString(),
+      sampleSessionDate: row.sessionDate ?? null,
+      gradeMode: row.gradeMode ?? null,
+      maxScore: row.maxScore ?? null,
+      score: row.score ?? null,
+      participationMark: row.participationMark ?? null,
+      benchmarkCode: row.benchmarkCode ?? null,
+      benchmarkLabel: row.benchmarkLabel ?? null,
     });
   }
 

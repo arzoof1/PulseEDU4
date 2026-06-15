@@ -83,6 +83,16 @@ export const pulseBrainLabSessionsTable = pgTable(
     lessonKey: text("lesson_key").notNull(),
     sessionDate: date("session_date").notNull(),
     notes: text("notes"),
+    // Grading config chosen PER ASSIGNMENT (session). null = ungraded.
+    // 'score' = numeric points out of maxScore; 'participation' = check/X.
+    gradeMode: text("grade_mode"),
+    maxScore: integer("max_score"),
+    // Optional official Florida benchmark tag (Standards Book source). The
+    // label is a snapshot of the standard statement so parent-facing surfaces
+    // can render it without joining the global benchmark_descriptions table.
+    benchmarkCode: text("benchmark_code"),
+    benchmarkSubject: text("benchmark_subject"),
+    benchmarkLabel: text("benchmark_label"),
     createdByStaffId: integer("created_by_staff_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -180,6 +190,13 @@ export const pulseBrainLabWorkSamplesTable = pgTable(
     pageIndex: integer("page_index"),
     source: text("source").notNull(),
     shared: boolean("shared").notNull().default(false),
+    // Grade for this sample, interpreted by the parent session's gradeMode.
+    // 'score' mode → `score` holds points (0..session.maxScore).
+    // 'participation' mode → `participationMark` holds 'check' | 'x'.
+    score: integer("score"),
+    participationMark: text("participation_mark"),
+    gradedByStaffId: integer("graded_by_staff_id"),
+    gradedAt: timestamp("graded_at", { withTimezone: true }),
     createdByStaffId: integer("created_by_staff_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

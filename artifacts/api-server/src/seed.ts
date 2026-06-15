@@ -686,6 +686,22 @@ export async function ensurePulseBrainLabGroupsSchema() {
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_sessions_group_idx ON pulse_brain_lab_sessions (group_id)`,
   );
+  // Additive grading config columns (per-assignment). Safe re-run on boot.
+  await db.execute(
+    sql`ALTER TABLE pulse_brain_lab_sessions ADD COLUMN IF NOT EXISTS grade_mode TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE pulse_brain_lab_sessions ADD COLUMN IF NOT EXISTS max_score INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE pulse_brain_lab_sessions ADD COLUMN IF NOT EXISTS benchmark_code TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE pulse_brain_lab_sessions ADD COLUMN IF NOT EXISTS benchmark_subject TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE pulse_brain_lab_sessions ADD COLUMN IF NOT EXISTS benchmark_label TEXT`,
+  );
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS pulse_brain_lab_session_attendance (
@@ -750,6 +766,19 @@ export async function ensurePulseBrainLabGroupsSchema() {
   );
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_work_samples_student_idx ON pulse_brain_lab_work_samples (school_id, student_id)`,
+  );
+  // Additive grading columns (per-sample). Safe re-run on boot.
+  await db.execute(
+    sql`ALTER TABLE pulse_brain_lab_work_samples ADD COLUMN IF NOT EXISTS score INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE pulse_brain_lab_work_samples ADD COLUMN IF NOT EXISTS participation_mark TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE pulse_brain_lab_work_samples ADD COLUMN IF NOT EXISTS graded_by_staff_id INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE pulse_brain_lab_work_samples ADD COLUMN IF NOT EXISTS graded_at TIMESTAMPTZ`,
   );
 
   await db.execute(sql`

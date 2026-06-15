@@ -656,6 +656,78 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/sessions/{sessionId}/grading:
+    patch:
+      operationId: setPulseBrainLabSessionGrading
+      tags: [pulseBrainLabDelivery]
+      summary: Configure grading (mode, max score, benchmark) for an assignment
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetPulseBrainLabSessionGradingInput"
+      responses:
+        "200":
+          description: Updated session detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabSessionDetail"
+        "400":
+          description: Invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/work-samples/{sampleId}/grade:
+    patch:
+      operationId: setPulseBrainLabWorkSampleGrade
+      tags: [pulseBrainLabDelivery]
+      summary: Grade a work sample (score or participation mark)
+      parameters:
+        - name: sampleId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetPulseBrainLabWorkSampleGradeInput"
+      responses:
+        "200":
+          description: Updated work sample
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabWorkSample"
+        "400":
+          description: Invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /pulse-brain-lab/work-samples/{sampleId}/share:
     patch:
       operationId: setPulseBrainLabWorkSampleShare
@@ -1033,6 +1105,18 @@ components:
           type: ["string", "null"]
         createdAt:
           type: string
+        gradeMode:
+          type: ["string", "null"]
+          description: "'score' | 'participation' | null (ungraded assignment)."
+          enum: ["score", "participation", null]
+        maxScore:
+          type: ["integer", "null"]
+        benchmarkCode:
+          type: ["string", "null"]
+        benchmarkSubject:
+          type: ["string", "null"]
+        benchmarkLabel:
+          type: ["string", "null"]
         attendance:
           type: array
           items:
@@ -1120,6 +1204,13 @@ components:
           type: string
         shared:
           type: boolean
+        score:
+          type: ["integer", "null"]
+        participationMark:
+          type: ["string", "null"]
+          enum: ["check", "x", null]
+        gradedAt:
+          type: ["string", "null"]
         createdAt:
           type: string
       required: [id, sessionId, studentId, localSisId, objectKey, source, shared, createdAt]
@@ -1206,6 +1297,34 @@ components:
           items:
             $ref: "#/components/schemas/PulseBrainLabUnmatchedScan"
       required: [pageCount, matchedCount, unmatchedCount, matched, unmatched]
+    SetPulseBrainLabSessionGradingInput:
+      type: object
+      description: >
+        Configure grading for one assignment (session). gradeMode null clears
+        grading. maxScore is required when gradeMode is 'score'. Benchmark fields
+        are optional; passing benchmarkCode + benchmarkSubject tags the assignment
+        with an official Florida standard.
+      properties:
+        gradeMode:
+          type: ["string", "null"]
+          enum: ["score", "participation", null]
+        maxScore:
+          type: ["integer", "null"]
+        benchmarkCode:
+          type: ["string", "null"]
+        benchmarkSubject:
+          type: ["string", "null"]
+    SetPulseBrainLabWorkSampleGradeInput:
+      type: object
+      description: >
+        Grade one work sample. Provide score (score mode, 0..session.maxScore) OR
+        participationMark (participation mode). Pass both null to clear the grade.
+      properties:
+        score:
+          type: ["integer", "null"]
+        participationMark:
+          type: ["string", "null"]
+          enum: ["check", "x", null]
     SetPulseBrainLabWorkSampleShareInput:
       type: object
       properties:

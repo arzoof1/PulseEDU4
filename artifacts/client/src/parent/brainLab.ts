@@ -27,6 +27,19 @@ export interface ParentReinforcement {
   tryTogether: LocalizedText;
 }
 
+// Grade/benchmark shown to the family — one entry per SHARED, graded sample
+// (the server gates this in sanitizeCard). Grading is per assignment (session),
+// so a multi-session lesson card can carry several entries.
+export interface ParentHomeGrade {
+  sessionDate: string | null;
+  gradeMode: "score" | "participation";
+  maxScore: number | null;
+  score: number | null;
+  participationMark: "check" | "x" | null;
+  benchmarkCode: string | null;
+  benchmarkLabel: string | null;
+}
+
 export interface ParentHomeCard {
   lessonKey: string;
   lessonTitle: string;
@@ -36,6 +49,7 @@ export interface ParentHomeCard {
   sessionDate: string | null;
   parentReinforcement: ParentReinforcement;
   workSampleCount: number;
+  grades: ParentHomeGrade[];
   homeResponses: ParentHomeResponse[];
 }
 

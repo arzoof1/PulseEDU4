@@ -155,6 +155,47 @@ function HomeCard({
         </button>
       </div>
 
+      {card.grades.length > 0 && (
+        <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+            {t("Grade", "Calificación")}
+          </div>
+          <div className="mt-1 space-y-2">
+            {card.grades.map((g, i) => (
+              <div key={i}>
+                {g.gradeMode === "score" && g.score != null && (
+                  <span className="text-sm font-semibold text-slate-900">
+                    {g.score}
+                    {g.maxScore != null ? ` / ${g.maxScore}` : ""}
+                  </span>
+                )}
+                {g.gradeMode === "participation" &&
+                  g.participationMark != null && (
+                    <span className="text-sm font-semibold text-slate-900">
+                      {g.participationMark === "check"
+                        ? t("✓ Met", "✓ Logrado")
+                        : t("✗ Not yet", "✗ Aún no")}
+                    </span>
+                  )}
+                {g.sessionDate && (
+                  <span className="ml-2 text-xs text-slate-500">
+                    {g.sessionDate}
+                  </span>
+                )}
+                {g.benchmarkCode && (
+                  <div className="mt-0.5 text-xs text-slate-600">
+                    <span className="font-semibold text-emerald-700">
+                      {g.benchmarkCode}
+                    </span>
+                    {g.benchmarkLabel ? ` — ${g.benchmarkLabel}` : ""}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <p className="mt-2 text-sm text-slate-700">{pr.summary[lang]}</p>
 
       <div className="mt-3 rounded-lg bg-slate-50 p-3">

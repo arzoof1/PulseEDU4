@@ -9,6 +9,8 @@ import type {
   CreatePulseBrainLabGroupInput,
   CreatePulseBrainLabSessionInput,
   SetPulseBrainLabAttendanceItem,
+  SetPulseBrainLabSessionGradingInput,
+  SetPulseBrainLabWorkSampleGradeInput,
   PulseBrainLabWorkSample,
   PulseBrainLabUnmatchedScan,
   PulseBrainLabBatchScanResult,
@@ -357,4 +359,63 @@ export async function setWorkSampleShare(
       body: JSON.stringify({ shared }),
     }),
   );
+}
+
+// ---- Grading ----
+
+// Configure grading for one assignment (session): mode, max score, and an
+// optional official Florida benchmark tag (resolved + snapshotted server-side).
+export async function setSessionGrading(
+  sessionId: number,
+  input: SetPulseBrainLabSessionGradingInput,
+): Promise<PulseBrainLabSessionDetail> {
+  return asJson(
+    await authFetch(`${BASE}/sessions/${sessionId}/grading`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+// Grade one work sample (score OR participation mark, per the session's mode).
+// Pass both null to clear the grade.
+export async function setWorkSampleGrade(
+  sampleId: number,
+  input: SetPulseBrainLabWorkSampleGradeInput,
+): Promise<PulseBrainLabWorkSample> {
+  return asJson(
+    await authFetch(`${BASE}/work-samples/${sampleId}/grade`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+// A single benchmark from the global Standards Book (read-only reference).
+export interface BenchmarkHit {
+  code: string;
+  grade: string;
+  strand: string | null;
+  statement: string;
+}
+
+// Fetch the benchmark index for one subject from the global Standards Book.
+// The full book body is large but static reference data; we keep only the
+// benchmark index here for the picker.
+export async function fetchBenchmarks(
+  subject: "ela" | "math",
+): Promise<BenchmarkHit[]> {
+  const res = await authFetch(`/api/standards-book?subject=${subject}`);
+  if (!res.ok) return [];
+  const body = (await res.json()) as {
+    benchmarks?: Array<{
+      code: string;
+      grade: string;
+      strand: string | null;
+      statement: string;
+    }>;
+  };
+  return body.benchmarks ?? [];
 }
