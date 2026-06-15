@@ -771,6 +771,87 @@ function HomeTab({ snapshot }: { snapshot: Snapshot }) {
           )}
         </Section>
       )}
+
+      {/* Hall passes — moved here from the Behavior tab so families see the
+          detail list right under Lost Instructional Time. The Behavior-tab
+          slot it vacated is reserved for the intervention-lesson cards. */}
+      {sec.hallPasses && (
+        <Section
+          title="Hall Passes"
+          icon={<Footprints className="h-4 w-4 text-teal-600" />}
+        >
+          {snapshot.hallPasses.recent.length === 0 ? (
+            <Empty text="No hall passes used." />
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {snapshot.hallPasses.recent.map((r) => {
+                // One-way lifecycle states (restroom passes stay round-trip
+                // and leave arrivedAt/endedBy null, so they fall through to
+                // the existing departure-only display):
+                //   • arrived  → checked in at the destination
+                //   • in route → active, non-restroom, not yet checked in
+                const arrived = Boolean(r.arrivedAt);
+                // Only one-way (non-restroom) passes have an "in route" state.
+                // Active restroom passes are round-trip and must fall through
+                // to the plain departure-only display.
+                const inRoute =
+                  r.oneWay !== false && !arrived && r.status === "active";
+                // Hide the "(origin)"/"(system)" sentinels — only surface a
+                // real staff name as the receiver to families.
+                const receivedBy =
+                  r.endedBy && !r.endedBy.startsWith("(") ? r.endedBy : null;
+                return (
+                  <li
+                    key={r.id}
+                    className="flex items-center justify-between py-3 gap-4"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-medium text-slate-800">
+                          {r.destination}
+                        </span>
+                        {arrived && (
+                          <Badge
+                            variant="secondary"
+                            className="bg-green-100 text-green-700 hover:bg-green-100 text-[10px] px-2 py-0"
+                          >
+                            Arrived
+                          </Badge>
+                        )}
+                        {inRoute && (
+                          <Badge
+                            variant="secondary"
+                            className="bg-amber-100 text-amber-700 hover:bg-amber-100 text-[10px] px-2 py-0"
+                          >
+                            In route
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {r.originRoom} · {r.teacherName}
+                      </div>
+                      {arrived && receivedBy && (
+                        <div className="text-xs text-slate-400 mt-0.5">
+                          Received by {receivedBy}
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-xs text-slate-500 text-right shrink-0">
+                      <div>{fmtDate(r.createdAt)}</div>
+                      <div>Left {fmtTime(r.createdAt)}</div>
+                      {arrived && r.arrivedAt && (
+                        <div className="text-green-600">
+                          Arrived {fmtTime(r.arrivedAt)}
+                        </div>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Section>
+      )}
     </div>
   );
 }
@@ -786,7 +867,6 @@ function BehaviorTab({ snapshot }: { snapshot: Snapshot }) {
   const hasAny =
     sec.recognition ||
     sec.attendance ||
-    sec.hallPasses ||
     (sec.staffNotes && snapshot.staffNotes.length > 0) ||
     sec.oss;
   if (!hasAny) {
@@ -945,85 +1025,6 @@ function BehaviorTab({ snapshot }: { snapshot: Snapshot }) {
                   </div>
                 </li>
               ))}
-            </ul>
-          )}
-        </Section>
-      )}
-
-      {/* Hall passes */}
-      {sec.hallPasses && (
-        <Section
-          title="Hall Passes"
-          icon={<Footprints className="h-4 w-4 text-teal-600" />}
-        >
-          {snapshot.hallPasses.recent.length === 0 ? (
-            <Empty text="No hall passes used." />
-          ) : (
-            <ul className="divide-y divide-slate-100">
-              {snapshot.hallPasses.recent.map((r) => {
-                // One-way lifecycle states (restroom passes stay round-trip
-                // and leave arrivedAt/endedBy null, so they fall through to
-                // the existing departure-only display):
-                //   • arrived  → checked in at the destination
-                //   • in route → active, non-restroom, not yet checked in
-                const arrived = Boolean(r.arrivedAt);
-                // Only one-way (non-restroom) passes have an "in route" state.
-                // Active restroom passes are round-trip and must fall through
-                // to the plain departure-only display.
-                const inRoute =
-                  r.oneWay !== false && !arrived && r.status === "active";
-                // Hide the "(origin)"/"(system)" sentinels — only surface a
-                // real staff name as the receiver to families.
-                const receivedBy =
-                  r.endedBy && !r.endedBy.startsWith("(") ? r.endedBy : null;
-                return (
-                  <li
-                    key={r.id}
-                    className="flex items-center justify-between py-3 gap-4"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-medium text-slate-800">
-                          {r.destination}
-                        </span>
-                        {arrived && (
-                          <Badge
-                            variant="secondary"
-                            className="bg-green-100 text-green-700 hover:bg-green-100 text-[10px] px-2 py-0"
-                          >
-                            Arrived
-                          </Badge>
-                        )}
-                        {inRoute && (
-                          <Badge
-                            variant="secondary"
-                            className="bg-amber-100 text-amber-700 hover:bg-amber-100 text-[10px] px-2 py-0"
-                          >
-                            In route
-                          </Badge>
-                        )}
-                      </div>
-                      <div className="text-xs text-slate-500">
-                        {r.originRoom} · {r.teacherName}
-                      </div>
-                      {arrived && receivedBy && (
-                        <div className="text-xs text-slate-400 mt-0.5">
-                          Received by {receivedBy}
-                        </div>
-                      )}
-                    </div>
-                    <div className="text-xs text-slate-500 text-right shrink-0">
-                      <div>{fmtDate(r.createdAt)}</div>
-                      <div>Left {fmtTime(r.createdAt)}</div>
-                      {arrived && r.arrivedAt && (
-                        <div className="text-green-600">
-                          Arrived {fmtTime(r.arrivedAt)}
-                        </div>
-                      )}
-                    </div>
-                  </li>
-                );
-              })}
             </ul>
           )}
         </Section>
