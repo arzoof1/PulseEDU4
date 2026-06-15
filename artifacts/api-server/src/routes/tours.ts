@@ -26,7 +26,7 @@ import {
   type TourOutcome,
 } from "@workspace/db";
 import { and, eq, desc, asc, sql } from "drizzle-orm";
-import { randomUUID } from "crypto";
+import { randomUUID, createHash } from "crypto";
 import { requireSchool, getDistrictIdForSchool } from "../lib/scope.js";
 import { canManageTours } from "../lib/coreTeam.js";
 import {
@@ -117,6 +117,17 @@ async function pipeStorageResponse(
 // /storage/objects, which the public has no token for). Legacy external URLs
 // are passed through via redirect. `allowed` constrains which content-types may
 // render inline (see PUBLIC_*_TYPES).
+// Short content-version token derived from the object-storage key. Public
+// photo/flyer URLs are index-based (`/photo/0`, `/flyer/0`), so when a school
+// deletes an asset and uploads a replacement the new file lands at the SAME
+// index and the URL never changes — the browser then serves the previously
+// cached image (Cache-Control max-age) and the old "seed" picture appears to
+// persist. Appending `?v=<hash-of-key>` makes the URL change whenever the
+// underlying object changes (each upload mints a fresh key), busting the cache.
+function assetVersion(key: string): string {
+  return createHash("sha1").update(key).digest("hex").slice(0, 10);
+}
+
 async function streamTourAsset(
   key: string,
   req: Request,
@@ -631,13 +642,14 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
     // unauthenticated families never touch the school-ACL object path. Keys
     // are never exposed to the client.
     photos: page.photos.map(
-      (_, i) => `/api/tours/public/${schoolId}/photo/${i}`,
+      (key, i) =>
+        `/api/tours/public/${schoolId}/photo/${i}?v=${assetVersion(key)}`,
     ),
     textPlacement: page.textPlacement === "bottom" ? "bottom" : "top",
     flyers: (page.flyers ?? []).map((f, i) => ({
       label: f.label,
       kind: f.kind,
-      url: `/api/tours/public/${schoolId}/flyer/${i}`,
+      url: `/api/tours/public/${schoolId}/flyer/${i}?v=${assetVersion(f.key)}`,
     })),
     ctaText: tr?.ctaText ?? page.ctaText,
     accentColor: page.accentColor,
@@ -652,7 +664,7 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
           tagline: branding.tagline,
           hasLogo: !!branding.logoObjectKey,
           logoUrl: branding.logoObjectKey
-            ? `/api/tours/public/${schoolId}/district-logo`
+            ? `/api/tours/public/${schoolId}/district-logo?v=${assetVersion(branding.logoObjectKey)}`
             : null,
           placements: {
             heroTop: branding.brandHeroTop,
