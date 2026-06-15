@@ -20,11 +20,13 @@ import type {
   AddPulseBrainLabMembersInput,
   ApiError,
   AssignPulseBrainLabUnmatchedScanInput,
+  BatchPulseBrainLabScanInput,
   CreatePulseBrainLabGroupInput,
   CreatePulseBrainLabSessionInput,
   FilePulseBrainLabUnmatchedScanInput,
   HealthStatus,
   ListPulseBrainLabLessonsParams,
+  PulseBrainLabBatchScanResult,
   PulseBrainLabGroup,
   PulseBrainLabGroupDetail,
   PulseBrainLabLesson,
@@ -1593,6 +1595,98 @@ export const useRoutePulseBrainLabScan = <
   TContext
 > => {
   return useMutation(getRoutePulseBrainLabScanMutationOptions(options));
+};
+
+/**
+ * The copier-batch intake path. The whole completed stack is scanned at the office MFP into ONE multi-page PDF and uploaded; the server rasterizes each page, decodes its QR server-side, resolves each token school-scoped to a (session, student), and files a work sample per matched page. Pages whose QR cannot be read are parked in the Unmatched tray for manual assignment.
+
+ * @summary Decode a multi-page scanned PDF server-side and fan pages out
+ */
+export const getBatchPulseBrainLabScanUrl = () => {
+  return `/api/pulse-brain-lab/scan/batch`;
+};
+
+export const batchPulseBrainLabScan = async (
+  batchPulseBrainLabScanInput: BatchPulseBrainLabScanInput,
+  options?: RequestInit,
+): Promise<PulseBrainLabBatchScanResult> => {
+  return customFetch<PulseBrainLabBatchScanResult>(
+    getBatchPulseBrainLabScanUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(batchPulseBrainLabScanInput),
+    },
+  );
+};
+
+export const getBatchPulseBrainLabScanMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof batchPulseBrainLabScan>>,
+    TError,
+    { data: BodyType<BatchPulseBrainLabScanInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof batchPulseBrainLabScan>>,
+  TError,
+  { data: BodyType<BatchPulseBrainLabScanInput> },
+  TContext
+> => {
+  const mutationKey = ["batchPulseBrainLabScan"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof batchPulseBrainLabScan>>,
+    { data: BodyType<BatchPulseBrainLabScanInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return batchPulseBrainLabScan(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type BatchPulseBrainLabScanMutationResult = NonNullable<
+  Awaited<ReturnType<typeof batchPulseBrainLabScan>>
+>;
+export type BatchPulseBrainLabScanMutationBody =
+  BodyType<BatchPulseBrainLabScanInput>;
+export type BatchPulseBrainLabScanMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Decode a multi-page scanned PDF server-side and fan pages out
+ */
+export const useBatchPulseBrainLabScan = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof batchPulseBrainLabScan>>,
+    TError,
+    { data: BodyType<BatchPulseBrainLabScanInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof batchPulseBrainLabScan>>,
+  TError,
+  { data: BodyType<BatchPulseBrainLabScanInput> },
+  TContext
+> => {
+  return useMutation(getBatchPulseBrainLabScanMutationOptions(options));
 };
 
 /**

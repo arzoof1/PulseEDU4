@@ -175,6 +175,9 @@ importers:
       '@google-cloud/storage':
         specifier: ^7.19.0
         version: 7.19.0
+      '@hyzyla/pdfium':
+        specifier: ^2.1.13
+        version: 2.1.13
       '@swc/helpers':
         specifier: ^0.5.21
         version: 0.5.21
@@ -190,6 +193,9 @@ importers:
       '@workspace/sis-adapters':
         specifier: workspace:*
         version: link:../../lib/sis-adapters
+      '@zxing/library':
+        specifier: ^0.23.0
+        version: 0.23.0
       bcryptjs:
         specifier: ^3.0.3
         version: 3.0.3
@@ -220,6 +226,9 @@ importers:
       google-auth-library:
         specifier: ^10.6.2
         version: 10.6.2
+      jsqr:
+        specifier: ^1.4.0
+        version: 1.4.0
       node-cron:
         specifier: ^4.2.1
         version: 4.2.1
@@ -1101,6 +1110,9 @@ packages:
     resolution: {integrity: sha512-79Dv+3mDF7i+2ajj7SkypSKHhl1cbln1OGavqrsF7p6mbUv11xpqpacPsGDCTRvCSjEEIez2ef1NveSVL3b0Ag==}
     peerDependencies:
       react-hook-form: ^7.0.0
+
+  '@hyzyla/pdfium@2.1.13':
+    resolution: {integrity: sha512-4J+xMFJW6V+jktxor6Lsk/2YdPCpeY+Ga69J98uyNQwYESkAsUDxz8BeFU0ZbZJIJ+fK3J6bm61gmwWnUzVU1g==}
 
   '@isaacs/cliui@8.0.2':
     resolution: {integrity: sha512-O8jcjabXaleOG9DQ0+ARXWZBTfnP4WNAqzuiJK7ll44AmxGKv/J2M4TPjxjY3znBCfvBXFzucm1twdyFybFqEA==}
@@ -3569,6 +3581,9 @@ packages:
     resolution: {integrity: sha512-p/nXbhSEcu3pZRdkW1OfJhpsVtW1gd4Wa1fnQc9YLiTfAjn0312eMKimbdIQzuZl9aa9xUGaRlP9T/CJE/ditQ==}
     engines: {node: '>=0.10.0'}
 
+  jsqr@1.4.0:
+    resolution: {integrity: sha512-dxLob7q65Xg2DvstYkRpkYtmKm2sPJ9oFhrhmudT1dZvNFFTlroai3AWSpLey/w5vMcLBXRgOJsbXpdN9HzU/A==}
+
   jszip@3.10.1:
     resolution: {integrity: sha512-xXDvecyTpGLrqFrvkrUSoxxfJI5AH7U8zxxtVclpsUtMCq4JQ290LY8AW5c7Ggnr/Y/oK+bQMbqK2qmtk3pN4g==}
 
@@ -5212,6 +5227,8 @@ snapshots:
   '@hookform/resolvers@3.10.0(react-hook-form@7.71.2(react@19.1.0))':
     dependencies:
       react-hook-form: 7.71.2(react@19.1.0)
+
+  '@hyzyla/pdfium@2.1.13': {}
 
   '@isaacs/cliui@8.0.2':
     dependencies:
@@ -7794,6 +7811,8 @@ snapshots:
       graceful-fs: 4.2.11
 
   jsonpointer@5.0.1: {}
+
+  jsqr@1.4.0: {}
 
   jszip@3.10.1:
     dependencies:

@@ -105,15 +105,21 @@ async function renderStudentPage(
   const s = STR[input.language];
   const lesson = input.lesson;
   const contentRight = doc.page.width - MARGIN;
-  const qrSize = 96;
+  const qrSize = 120;
   const qrX = contentRight - qrSize;
   const qrTop = MARGIN;
 
   // ----- QR (opaque token only) + manual-routing fallback -----
+  // The QR is auto-read both by the office-copier batch decoder (server-side
+  // rasterize + decode) and a phone camera, so it MUST keep a real quiet zone:
+  // `margin: 2` bakes a white border into the image and NO caption is allowed to
+  // touch the QR (both notes sit BELOW it with a gap). Worksheets printed with a
+  // caption overlapping the QR edge or margin:0 could not be located by any
+  // decoder — the finder patterns need the surrounding whitespace.
   const qrDataUrl = await QRCode.toDataURL(student.token, {
     errorCorrectionLevel: "M",
-    margin: 0,
-    width: 256,
+    margin: 2,
+    width: 320,
   });
   const qrBuf = Buffer.from(qrDataUrl.split(",")[1], "base64");
   doc.image(qrBuf, qrX, qrTop, { width: qrSize, height: qrSize });
@@ -122,8 +128,11 @@ async function renderStudentPage(
     .font("Helvetica")
     .fontSize(6.5)
     .fillColor(MUTED)
-    .text(s.scanBack, qrX - 150, qrTop + 2, { width: 150 + qrSize, align: "right" })
-    .text(`${s.ifNoScan} ${fallback}`, qrX - 200, qrTop + qrSize + 2, {
+    .text(s.scanBack, qrX - 150, qrTop + qrSize + 4, {
+      width: 150 + qrSize,
+      align: "right",
+    })
+    .text(`${s.ifNoScan} ${fallback}`, qrX - 200, qrTop + qrSize + 13, {
       width: 200 + qrSize,
       align: "right",
     });
@@ -149,8 +158,8 @@ async function renderStudentPage(
       { width: qrX - MARGIN - 16 },
     );
 
-  // Name line — y is below the taller of header/QR block.
-  doc.y = Math.max(doc.y, qrTop + qrSize + 18) + 6;
+  // Name line — y is below the taller of header/QR block (QR + its two captions).
+  doc.y = Math.max(doc.y, qrTop + qrSize + 24) + 6;
   const nameY = doc.y;
   doc.font("Helvetica-Bold").fontSize(11).fillColor(INK).text(`${s.name}: `, MARGIN, nameY, {
     continued: true,

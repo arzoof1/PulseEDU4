@@ -9,6 +9,7 @@
 export * from "./addPulseBrainLabMembersInput";
 export * from "./apiError";
 export * from "./assignPulseBrainLabUnmatchedScanInput";
+export * from "./batchPulseBrainLabScanInput";
 export * from "./createPulseBrainLabGroupInput";
 export * from "./createPulseBrainLabSessionInput";
 export * from "./filePulseBrainLabUnmatchedScanInput";
@@ -17,6 +18,7 @@ export * from "./listPulseBrainLabLessonsParams";
 export * from "./localizedText";
 export * from "./pulseBrainLabAttendanceEntry";
 export * from "./pulseBrainLabAttendanceStatus";
+export * from "./pulseBrainLabBatchScanResult";
 export * from "./pulseBrainLabBrainModelTag";
 export * from "./pulseBrainLabGradeBand";
 export * from "./pulseBrainLabGroup";

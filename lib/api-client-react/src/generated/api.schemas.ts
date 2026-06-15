@@ -296,6 +296,23 @@ export interface AssignPulseBrainLabUnmatchedScanInput {
   studentId: string;
 }
 
+export interface BatchPulseBrainLabScanInput {
+  objectPath: string;
+  batchLabel?: string;
+}
+
+/**
+ * Outcome of server-side decoding a multi-page scanned PDF: pages whose QR resolved are filed as work samples (matched); the rest are parked in the Unmatched tray.
+
+ */
+export interface PulseBrainLabBatchScanResult {
+  pageCount: number;
+  matchedCount: number;
+  unmatchedCount: number;
+  matched: PulseBrainLabWorkSample[];
+  unmatched: PulseBrainLabUnmatchedScan[];
+}
+
 export type ListPulseBrainLabLessonsParams = {
   gradeBand?: PulseBrainLabGradeBand;
 };

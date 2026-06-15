@@ -468,6 +468,55 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/scan/batch:
+    post:
+      operationId: batchPulseBrainLabScan
+      tags: [pulseBrainLabDelivery]
+      summary: Decode a multi-page scanned PDF server-side and fan pages out
+      description: >
+        The copier-batch intake path. The whole completed stack is scanned at
+        the office MFP into ONE multi-page PDF and uploaded; the server
+        rasterizes each page, decodes its QR server-side, resolves each token
+        school-scoped to a (session, student), and files a work sample per
+        matched page. Pages whose QR cannot be read are parked in the Unmatched
+        tray for manual assignment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchPulseBrainLabScanInput"
+      responses:
+        "201":
+          description: Batch decode result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabBatchScanResult"
+        "400":
+          description: Invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Upload not authorized for this school
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Uploaded file not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "422":
+          description: PDF could not be read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /pulse-brain-lab/scan/unmatched:
     get:
       operationId: listPulseBrainLabUnmatchedScans
@@ -1062,3 +1111,33 @@ components:
         studentId:
           type: string
       required: [sessionId, studentId]
+    BatchPulseBrainLabScanInput:
+      type: object
+      properties:
+        objectPath:
+          type: string
+        batchLabel:
+          type: string
+      required: [objectPath]
+    PulseBrainLabBatchScanResult:
+      type: object
+      description: >
+        Outcome of server-side decoding a multi-page scanned PDF: pages whose QR
+        resolved are filed as work samples (matched); the rest are parked in the
+        Unmatched tray.
+      properties:
+        pageCount:
+          type: integer
+        matchedCount:
+          type: integer
+        unmatchedCount:
+          type: integer
+        matched:
+          type: array
+          items:
+            $ref: "#/components/schemas/PulseBrainLabWorkSample"
+        unmatched:
+          type: array
+          items:
+            $ref: "#/components/schemas/PulseBrainLabUnmatchedScan"
+      required: [pageCount, matchedCount, unmatchedCount, matched, unmatched]

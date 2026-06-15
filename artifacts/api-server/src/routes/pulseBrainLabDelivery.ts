@@ -37,10 +37,12 @@ import {
   CreatePulseBrainLabSessionBody,
   SetPulseBrainLabAttendanceBody,
   RoutePulseBrainLabScanBody,
+  BatchPulseBrainLabScanBody,
   FilePulseBrainLabUnmatchedScanBody,
   AssignPulseBrainLabUnmatchedScanBody,
 } from "@workspace/api-zod";
-import { bindObjectToSchool } from "./storage.js";
+import { bindObjectToSchool, readStoredObject } from "./storage.js";
+import { decodeWorksheetPdf } from "../lib/scanDecode.js";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
@@ -978,14 +980,16 @@ router.get(
 // ---------------------------------------------------------------------------
 // T005 — Evidence capture (work-sample scans)
 //
-// One ROUTING BRAIN, two intake paths. Both decode the opaque base62 QR token
-// in the BROWSER (phone = live camera; copier batch = pdfjs rasterize each page
-// → @zxing decode) and POST the token + the uploaded object path here. The
-// server is the source of truth for token → (school, session, student): it
-// resolves the token SCHOOL-SCOPED, binds the object to the school, and files
-// the work sample. Pages whose QR won't decode are parked in the per-school
-// "Unmatched" tray for one-tap manual assignment. Nothing here is family-
-// visible — `shared` defaults false until a BS flips it in T006.
+// One ROUTING BRAIN, two intake paths that DECODE IN DIFFERENT PLACES:
+//   - PHONE path → /scan/route: the browser decodes the opaque base62 QR token
+//     with a live camera and POSTs the token + uploaded object path here.
+//   - COPIER path → /scan/batch: the BS uploads ONE multi-page scanned PDF and
+//     the SERVER decodes each page (see lib/scanDecode.ts).
+// Either way the server is the source of truth for token → (school, session,
+// student): it resolves the token SCHOOL-SCOPED, binds the object to the school,
+// and files the work sample. Pages whose QR won't decode are parked in the
+// per-school "Unmatched" tray for one-tap manual assignment. Nothing here is
+// family-visible — `shared` defaults false until a BS flips it in T006.
 // ---------------------------------------------------------------------------
 
 type WorkSampleApi = {
@@ -1155,6 +1159,118 @@ router.post("/pulse-brain-lab/scan/route", async (req, res) => {
     staffId: staff.id,
   });
   res.status(201).json(sample);
+});
+
+// POST /api/pulse-brain-lab/scan/batch — the COPIER-BATCH routing brain. The BS
+// scans the whole completed stack at the office MFP into ONE multi-page PDF and
+// uploads it; the server rasterizes each page, decodes its QR SERVER-SIDE, and
+// fans each page out to the right (session, student). Pages whose QR won't read
+// fall to the Unmatched tray for one-tap manual assignment.
+//
+// The single uploaded PDF object is shared by every filed page; each work sample
+// records its own `pageIndex` so the evidence packet can extract the right page.
+router.post("/pulse-brain-lab/scan/batch", async (req, res) => {
+  const staff = await loadCoreTeamStaff(req, res);
+  if (!staff) return;
+  const schoolId = requireSchool(req, res);
+  if (schoolId == null) return;
+  const parsed = BatchPulseBrainLabScanBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid batch payload" });
+    return;
+  }
+  const { objectPath } = parsed.data;
+  const batchLabel =
+    typeof parsed.data.batchLabel === "string" ? parsed.data.batchLabel : null;
+
+  // Bind the upload to THIS school before reading a single byte — refuses an
+  // object that belongs to another tenant or was never issued to us (403).
+  const bound = await bindObjectToSchool(objectPath, schoolId);
+  if (!bound) {
+    res.status(403).json({ error: "Upload not authorized for this school" });
+    return;
+  }
+
+  const pdfBytes = await readStoredObject(objectPath);
+  if (!pdfBytes) {
+    res.status(404).json({ error: "Uploaded file not found" });
+    return;
+  }
+
+  let pages: Awaited<ReturnType<typeof decodeWorksheetPdf>>;
+  try {
+    pages = await decodeWorksheetPdf(pdfBytes);
+  } catch (err) {
+    req.log.error({ err }, "pulse-brain-lab batch decode failed");
+    res.status(422).json({ error: "Could not read the uploaded PDF" });
+    return;
+  }
+  if (pages.length === 0) {
+    res.status(422).json({ error: "The uploaded PDF has no pages" });
+    return;
+  }
+
+  // Resolve every decoded token school-scoped in one query, then file matched
+  // pages and park the rest. A token from another tenant simply won't resolve
+  // here, so it lands in Unmatched rather than crossing the school boundary.
+  const tokens = pages
+    .map((p) => p.token)
+    .filter((t): t is string => typeof t === "string" && t.length > 0);
+  const tokenRows = tokens.length
+    ? await db
+        .select({
+          token: pulseBrainLabWorksheetTokensTable.token,
+          sessionId: pulseBrainLabWorksheetTokensTable.sessionId,
+          studentId: pulseBrainLabWorksheetTokensTable.studentId,
+        })
+        .from(pulseBrainLabWorksheetTokensTable)
+        .where(
+          and(
+            eq(pulseBrainLabWorksheetTokensTable.schoolId, schoolId),
+            inArray(pulseBrainLabWorksheetTokensTable.token, tokens),
+          ),
+        )
+    : [];
+  const tokenMap = new Map(tokenRows.map((r) => [r.token, r]));
+
+  const matched: WorkSampleApi[] = [];
+  const unmatched: ReturnType<typeof unmatchedScanApi>[] = [];
+  for (const page of pages) {
+    const tok = page.token ? tokenMap.get(page.token) : undefined;
+    if (tok) {
+      const sample = await fileWorkSample({
+        schoolId,
+        sessionId: tok.sessionId,
+        studentId: tok.studentId,
+        objectKey: objectPath,
+        pageIndex: page.pageIndex,
+        source: "batch",
+        staffId: staff.id,
+      });
+      matched.push(sample);
+    } else {
+      const [inserted] = await db
+        .insert(pulseBrainLabUnmatchedScansTable)
+        .values({
+          schoolId,
+          objectKey: objectPath,
+          source: "batch",
+          batchLabel,
+          pageIndex: page.pageIndex,
+          createdByStaffId: staff.id,
+        })
+        .returning();
+      unmatched.push(unmatchedScanApi(inserted));
+    }
+  }
+
+  res.status(201).json({
+    pageCount: pages.length,
+    matchedCount: matched.length,
+    unmatchedCount: unmatched.length,
+    matched,
+    unmatched,
+  });
 });
 
 // POST /api/pulse-brain-lab/scan/unmatched — park a page whose QR won't decode.

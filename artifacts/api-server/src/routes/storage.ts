@@ -150,6 +150,24 @@ export async function streamObjectToResponse(
   return true;
 }
 
+// Read a stored object fully into memory as a Buffer. The CALLER is responsible
+// for authorizing access first (e.g. binding the object to the school). Returns
+// null if the object does not exist. Use only for small/bounded payloads
+// (e.g. a scanned worksheet PDF) — it buffers the whole object.
+export async function readStoredObject(
+  objectPath: string,
+): Promise<Buffer | null> {
+  let file;
+  try {
+    file = await objectStorageService.getObjectEntityFile(objectPath);
+  } catch (err) {
+    if (err instanceof ObjectNotFoundError) return null;
+    throw err;
+  }
+  const [buf] = await file.download();
+  return buf;
+}
+
 // Delete a stored object by its /objects/... path. Best-effort: a missing
 // object is treated as success (idempotent purge). The CALLER is responsible
 // for authorizing the delete (e.g. the retention cron owns the rows it purges).

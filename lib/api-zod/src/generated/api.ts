@@ -392,6 +392,16 @@ export const RoutePulseBrainLabScanBody = zod.object({
 });
 
 /**
+ * The copier-batch intake path. The whole completed stack is scanned at the office MFP into ONE multi-page PDF and uploaded; the server rasterizes each page, decodes its QR server-side, resolves each token school-scoped to a (session, student), and files a work sample per matched page. Pages whose QR cannot be read are parked in the Unmatched tray for manual assignment.
+
+ * @summary Decode a multi-page scanned PDF server-side and fan pages out
+ */
+export const BatchPulseBrainLabScanBody = zod.object({
+  objectPath: zod.string(),
+  batchLabel: zod.string().optional(),
+});
+
+/**
  * @summary List pending unmatched scans (the tray) for the active school
  */
 export const ListPulseBrainLabUnmatchedScansResponseItem = zod
