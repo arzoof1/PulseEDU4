@@ -464,12 +464,12 @@ export default function StandardsBookModal({
         )}
 
         {/* Body */}
-        <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: "0 16px 16px" }}>
           {loading && (
-            <div style={{ color: "#6b7280", fontSize: 13 }}>Loading the book…</div>
+            <div style={{ color: "#6b7280", fontSize: 13, paddingTop: 16 }}>Loading the book…</div>
           )}
           {err && (
-            <div style={{ color: "#b91c1c", fontSize: 13 }}>
+            <div style={{ color: "#b91c1c", fontSize: 13, paddingTop: 16 }}>
               {err}{" "}
               <button onClick={() => void load()} style={{ marginLeft: 8 }}>
                 Retry
@@ -487,7 +487,7 @@ export default function StandardsBookModal({
                   zIndex: 5,
                   background: "white",
                   borderBottom: "1px solid #e5e7eb",
-                  margin: "-16px -16px 12px",
+                  margin: "0 -16px 12px",
                   padding: "16px 16px 8px",
                   display: "flex",
                   alignItems: "center",
@@ -578,7 +578,7 @@ export default function StandardsBookModal({
 
           {/* Browse list */}
           {!loading && !err && openPage == null && mode === "browse" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 16 }}>
               <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>
                 {browseResults.length} standard
                 {browseResults.length === 1 ? "" : "s"}
@@ -628,7 +628,7 @@ export default function StandardsBookModal({
 
           {/* Search list */}
           {!loading && !err && openPage == null && mode === "search" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 16 }}>
               {query.trim().length < 2 ? (
                 <div style={{ fontSize: 13, color: "#6b7280" }}>
                   Type at least 2 characters to search the full book.
