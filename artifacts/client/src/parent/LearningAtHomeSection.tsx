@@ -114,6 +114,11 @@ export default function LearningAtHomeSection({
 function subjectLabel(s: AcademicSubject, lang: "en" | "es"): string {
   if (s === "ela") return lang === "en" ? "Reading / ELA" : "Lectura / ELA";
   if (s === "math") return lang === "en" ? "Math" : "Matemáticas";
+  if (s === "social_studies")
+    return lang === "en" ? "Social Studies" : "Estudios Sociales";
+  if (s === "science") return lang === "en" ? "Science" : "Ciencias";
+  if (s === "leader_in_me")
+    return lang === "en" ? "Leader in Me" : "Líder en Mí";
   return lang === "en" ? "Behavior Intervention" : "Intervención de Conducta";
 }
 

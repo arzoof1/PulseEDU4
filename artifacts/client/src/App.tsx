@@ -5139,6 +5139,8 @@ function App() {
     superFeatureDataImports: boolean;
     superFeatureHouses: boolean;
     superFeatureParentPortal: boolean;
+    featureAcademicEvidence: boolean;
+    superFeatureAcademicEvidence: boolean;
   }>({
     schoolName: "",
     fromName: "",
@@ -5200,6 +5202,8 @@ function App() {
     superFeatureDataImports: true,
     superFeatureHouses: true,
     superFeatureParentPortal: true,
+    featureAcademicEvidence: true,
+    superFeatureAcademicEvidence: true,
   });
   const [settingsStatus, setSettingsStatus] = useState<
     "idle" | "saving" | "saved" | "error"
@@ -7008,6 +7012,10 @@ function App() {
           superFeatureDataImports: boolOrTrue(data.superFeatureDataImports),
           superFeatureHouses: boolOrTrue(data.superFeatureHouses),
           superFeatureParentPortal: boolOrTrue(data.superFeatureParentPortal),
+          featureAcademicEvidence: boolOrTrue(data.featureAcademicEvidence),
+          superFeatureAcademicEvidence: boolOrTrue(
+            data.superFeatureAcademicEvidence,
+          ),
         }),
       )
       .catch((err) => console.error("Failed to load school settings:", err));
@@ -7150,6 +7158,10 @@ function App() {
         superFeatureDataImports: boolOrTrue(data.superFeatureDataImports),
         superFeatureHouses: boolOrTrue(data.superFeatureHouses),
         superFeatureParentPortal: boolOrTrue(data.superFeatureParentPortal),
+        featureAcademicEvidence: boolOrTrue(data.featureAcademicEvidence),
+        superFeatureAcademicEvidence: boolOrTrue(
+          data.superFeatureAcademicEvidence,
+        ),
       });
       setSettingsStatus("saved");
       setTimeout(() => setSettingsStatus("idle"), 2000);
@@ -9198,6 +9210,9 @@ function App() {
   // sidebar entries and hub tiles. Built off `schoolSettings` so it
   // updates instantly when an admin toggles something.
   const effectiveFeatures = {
+    AcademicEvidence:
+      schoolSettings.featureAcademicEvidence &&
+      schoolSettings.superFeatureAcademicEvidence,
     FamilyComm:
       schoolSettings.featureFamilyComm && schoolSettings.superFeatureFamilyComm,
     Pbis: schoolSettings.featurePbis && schoolSettings.superFeaturePbis,
@@ -9581,7 +9596,7 @@ function App() {
       emoji: "👥",
       group: "quick",
     });
-    add(!isNonExemptOnly, {
+    add(effectiveFeatures.AcademicEvidence && !isNonExemptOnly, {
       key: "partneringWithParents",
       label: "Partnering with Parents",
       description: "Capture classwork samples and share them with families.",
@@ -10369,7 +10384,8 @@ function App() {
             {/* Partnering with Parents — academic work-sample sharing,
                 available to any active teaching staff (cross-teacher reach
                 gated server-side). */}
-            {!isNonExemptOnly &&
+            {effectiveFeatures.AcademicEvidence &&
+              !isNonExemptOnly &&
               partneringWithParentsNavSections.map(renderNavItem)}
             {effectiveFeatures.RequestPullout &&
               renderNavItem({
@@ -16323,9 +16339,9 @@ function App() {
 
       {activeSection === "pbis" && <PbisPointsHub />}
       {activeSection === "pulseBrainLab" && isBehaviorSpec && <PulseBrainLabHub />}
-      {activeSection === "partneringWithParents" && !isNonExemptOnly && (
-        <PartneringWithParentsHub />
-      )}
+      {activeSection === "partneringWithParents" &&
+        !isNonExemptOnly &&
+        effectiveFeatures.AcademicEvidence && <PartneringWithParentsHub />}
 
       {activeSection === "houseRankings" && (
         // House Rankings is part of the PBIS surface and its nav entry is
@@ -22971,10 +22987,16 @@ function App() {
             | "SchoolStore"
             | "Accommodations"
             | "LogIntervention"
-            | "RequestPullout";
+            | "RequestPullout"
+            | "AcademicEvidence";
           label: string;
           help: string;
         }> = [
+          {
+            key: "AcademicEvidence",
+            label: "Partnering with Parents / Learning at Home",
+            help: "Staff capture classwork samples to share with families; parents see them under the Academics tab. Turn off if your school won't use it.",
+          },
           {
             key: "FamilyComm",
             label: "Family Communication",

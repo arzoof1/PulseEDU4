@@ -7,7 +7,13 @@
 // reaches the client; the only visible id is localSisId.
 import { parentFetch } from "./api";
 
-export type AcademicSubject = "ela" | "math" | "behavior";
+export type AcademicSubject =
+  | "ela"
+  | "math"
+  | "social_studies"
+  | "science"
+  | "leader_in_me"
+  | "behavior";
 
 export interface LearningAtHomeSample {
   id: number;

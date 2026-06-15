@@ -1794,6 +1794,8 @@ export async function ensureSchoolSettingsFeatureFlagsSchema() {
     "super_feature_data_imports",
     "super_feature_houses",
     "super_feature_parent_portal",
+    "feature_academic_evidence",
+    "super_feature_academic_evidence",
   ];
   for (const col of cols) {
     await db.execute(

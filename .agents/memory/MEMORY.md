@@ -55,3 +55,4 @@
 - [orval *Params collision](orval-params-collision.md) — an OpenAPI op with BOTH a path AND a query param emits two clashing `<OpId>Params` exports (TS2308); make the query a path segment or rename.
 - [PulseBrainLab scan routing](pulsebrainlab-scan-routing.md) — copier-batch QR decode is SERVER-side (pdfium+jsQR+ZXing); a scannable QR needs a quiet zone + no caption touching it (margin:0 was the bug, not the decoder); unmatched-assign must be atomic.
 - [Academic evidence mirror](academic-evidence-mirror.md) — Partnering with Parents (staff) + Learning at Home (parent): publish-gate parity on cards AND image routes, read-only roster, local_sis_id boundary, self-gating empty state.
+- [Academic Evidence feature gate](academic-evidence-feature-gate.md) — per-school admin toggle must be enforced server-side on every staff+parent route (UI gating is bypassable); parentSnapshot reads heartbeat-settings table but flags live on school_settings — query both.

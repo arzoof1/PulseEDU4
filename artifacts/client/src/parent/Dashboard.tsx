@@ -1164,10 +1164,12 @@ function AcademicsTab({ snapshot }: { snapshot: Snapshot }) {
           class. Self-gating: renders nothing until at least one teacher shares,
           so it stays invisible otherwise even when no other academic sections
           are on. */}
-      <LearningAtHomeSection
-        studentId={snapshot.student.id}
-        onLoaded={setLearningAtHomeCount}
-      />
+      {sec.academicEvidence && (
+        <LearningAtHomeSection
+          studentId={snapshot.student.id}
+          onLoaded={setLearningAtHomeCount}
+        />
+      )}
       {!hasAny && learningAtHomeCount === 0 && (
         <TabEmpty text="Nothing to show here yet. FAST scores, support plans, and accommodations will appear on this tab." />
       )}

@@ -29,10 +29,32 @@ import {
 import { bindObjectToSchool, readStoredObject } from "./storage.js";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
+import { academicEvidenceEnabled } from "../lib/academicEvidenceGate.js";
 
 const router: IRouter = Router();
 
-const SUBJECTS = ["ela", "math", "behavior"] as const;
+// Enforce the per-school admin toggle on EVERY staff Academic Evidence
+// endpoint. Client nav/render is also gated, but this stops direct API
+// access while the feature is disabled. requireSchool already writes the
+// 401/400 when no school context is present.
+router.use(async (req, res, next) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId == null) return;
+  if (!(await academicEvidenceEnabled(schoolId))) {
+    res.status(403).json({ error: "Academic Evidence is disabled for this school" });
+    return;
+  }
+  next();
+});
+
+const SUBJECTS = [
+  "ela",
+  "math",
+  "social_studies",
+  "science",
+  "leader_in_me",
+  "behavior",
+] as const;
 
 // Any signed-in active staff member. Returns the staff row (so callers can test
 // isCoreTeam) or null after writing the appropriate 401.

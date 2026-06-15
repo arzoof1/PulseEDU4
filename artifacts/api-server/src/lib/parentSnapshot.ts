@@ -18,6 +18,7 @@ import {
   studentAccommodationsTable,
   schoolAccommodationsTable,
   schoolHeartbeatSettingsTable,
+  schoolSettingsTable,
   parentHeartbeatPrefsTable,
   studentFastScoresTable,
   interventionEntriesTable,
@@ -84,6 +85,9 @@ export interface ParentSnapshot {
     iss: boolean;
     mtss: boolean;
     oss: boolean;
+    // Learning at Home — academic work-sample cards. Gated solely by the
+    // per-school admin feature toggle (super && admin), no parent pref.
+    academicEvidence: boolean;
     // Reteach activity rollup. Gated by BOTH the school-wide
     // `showReteach` flag AND per-student
     // `students.reteach_logs_parent_visible`. Teacher notes /
@@ -327,7 +331,7 @@ export async function buildParentSnapshot(
 
   // School + parent visibility prefs in parallel; gate() enforces the
   // contract: schoolEnabled AND parentPref !== false.
-  const [settingsRow, prefsRow] = await Promise.all([
+  const [settingsRow, prefsRow, featureRow] = await Promise.all([
     db
       .select()
       .from(schoolHeartbeatSettingsTable)
@@ -342,6 +346,14 @@ export async function buildParentSnapshot(
           eq(parentHeartbeatPrefsTable.studentId, studentId),
         ),
       )
+      .then((rows) => rows[0]),
+    db
+      .select({
+        admin: schoolSettingsTable.featureAcademicEvidence,
+        sup: schoolSettingsTable.superFeatureAcademicEvidence,
+      })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, student.schoolId))
       .then((rows) => rows[0]),
   ]);
   const gate = (
@@ -367,6 +379,9 @@ export async function buildParentSnapshot(
     iss: gate(settingsRow?.showIss, false, prefsRow?.showIss),
     mtss: gate(settingsRow?.showMtss, false, prefsRow?.showMtss),
     oss: gate(settingsRow?.showOss, false, prefsRow?.showOss),
+    // Admin feature toggle only (super && admin); defaults ON when no row.
+    academicEvidence:
+      (featureRow?.admin ?? true) && (featureRow?.sup ?? true),
     // Reteach requires school flag AND parent pref AND per-student
     // opt-in. Per-student flag defaults FALSE so a school flipping
     // showReteach on doesn't accidentally expose students whose

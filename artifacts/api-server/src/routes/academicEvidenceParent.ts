@@ -25,6 +25,7 @@ import {
 } from "@workspace/db";
 import { verifyParentAuthToken } from "../lib/authToken.js";
 import { streamObjectToResponse } from "./storage.js";
+import { academicEvidenceEnabled } from "../lib/academicEvidenceGate.js";
 
 const router: IRouter = Router();
 
@@ -96,6 +97,11 @@ router.get("/parent/learning-at-home/cards", async (req, res) => {
   const owned = await resolveOwnedStudent(pid, studentIdInt);
   if (!owned) {
     res.status(403).json({ error: "Not your student" });
+    return;
+  }
+  // Feature disabled for this school → behave as if there's nothing to show.
+  if (!(await academicEvidenceEnabled(owned.schoolId))) {
+    res.json({ localSisId: owned.localSisId, cards: [] });
     return;
   }
 
@@ -200,6 +206,10 @@ router.get(
     const owned = await resolveOwnedStudent(pid, studentIdInt);
     if (!owned) {
       res.status(403).json({ error: "Not your student" });
+      return;
+    }
+    if (!(await academicEvidenceEnabled(owned.schoolId))) {
+      res.status(404).json({ error: "Sample not found" });
       return;
     }
     const [sample] = await db

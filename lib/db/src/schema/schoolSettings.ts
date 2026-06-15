@@ -141,6 +141,11 @@ export const schoolSettingsTable = pgTable(
   featureDataImports: boolean("feature_data_imports").notNull().default(true),
   featureHouses: boolean("feature_houses").notNull().default(true),
   featureParentPortal: boolean("feature_parent_portal").notNull().default(true),
+  // Partnering with Parents (staff) / Learning at Home (parents) — the
+  // academic work-sample sharing feature. Some schools won't use it.
+  featureAcademicEvidence: boolean("feature_academic_evidence")
+    .notNull()
+    .default(true),
   superFeatureFamilyComm: boolean("super_feature_family_comm").notNull().default(true),
   superFeaturePbis: boolean("super_feature_pbis").notNull().default(true),
   superFeatureSchoolStore: boolean("super_feature_school_store").notNull().default(true),
@@ -159,6 +164,9 @@ export const schoolSettingsTable = pgTable(
   superFeatureDataImports: boolean("super_feature_data_imports").notNull().default(true),
   superFeatureHouses: boolean("super_feature_houses").notNull().default(true),
   superFeatureParentPortal: boolean("super_feature_parent_portal").notNull().default(true),
+  superFeatureAcademicEvidence: boolean("super_feature_academic_evidence")
+    .notNull()
+    .default(true),
   // AST shipped after the original superFeature catalog; added here so
   // the licensing layer can gate it like every other feature.
   superFeatureAst: boolean("super_feature_ast").notNull().default(true),

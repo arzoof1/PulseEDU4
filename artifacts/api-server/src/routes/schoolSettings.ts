@@ -35,6 +35,7 @@ export const FEATURE_KEYS = [
   "DataImports",
   "Houses",
   "ParentPortal",
+  "AcademicEvidence",
 ] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 type SettingsRow = typeof schoolSettingsTable.$inferSelect;
