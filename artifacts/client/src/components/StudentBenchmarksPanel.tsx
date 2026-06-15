@@ -75,23 +75,26 @@ function Sparkline({
   height?: number;
 }): ReactElement | null {
   if (points.length < 2) return null;
-  const padX = 2;
-  const padY = 2;
-  const innerW = width - padX * 2;
-  const innerH = height - padY * 2;
+  // Dot radii: the latest window (PM3) is emphasized; earlier windows
+  // (PM1/PM2 + any history) get a smaller-but-clearly-visible dot. The
+  // plot padding is reserved to the LARGEST dot radius so no dot ever
+  // clips on any edge of the fixed-size cell (cell height stays put).
+  const endR = 6;
+  const midR = 4;
+  const pad = endR;
+  const innerW = width - pad * 2;
+  const innerH = height - pad * 2;
   const xs = points.map((_, i) =>
     points.length === 1
-      ? padX + innerW / 2
-      : padX + (i / (points.length - 1)) * innerW,
+      ? pad + innerW / 2
+      : pad + (i / (points.length - 1)) * innerW,
   );
   const ys = points.map(
-    (p) => padY + innerH * (1 - Math.max(0, Math.min(100, p.pct)) / 100),
+    (p) => pad + innerH * (1 - Math.max(0, Math.min(100, p.pct)) / 100),
   );
   const path = xs.map((x, i) => `${i === 0 ? "M" : "L"}${x},${ys[i]}`).join(" ");
   const lastIdx = points.length - 1;
-  const lastPct = points[lastIdx].pct;
-  const endColor = cellColor(lastPct, thresholdPct).fg;
-  const thresholdY = padY + innerH * (1 - thresholdPct / 100);
+  const thresholdY = pad + innerH * (1 - thresholdPct / 100);
   const label = points
     .map((p) => `${p.schoolYear} ${p.window.toUpperCase()}: ${p.pct}%`)
     .join(" → ");
@@ -99,8 +102,8 @@ function Sparkline({
     <svg width={width} height={height} role="img" aria-label={label}>
       <title>{label}</title>
       <line
-        x1={padX}
-        x2={padX + innerW}
+        x1={pad}
+        x2={pad + innerW}
         y1={thresholdY}
         y2={thresholdY}
         stroke="#d1d5db"
@@ -108,7 +111,17 @@ function Sparkline({
         strokeWidth={0.5}
       />
       <path d={path} stroke="#475569" strokeWidth={1} fill="none" />
-      <circle cx={xs[lastIdx]} cy={ys[lastIdx]} r={1.8} fill={endColor} />
+      {points.map((p, i) => (
+        <circle
+          key={`${p.schoolYear}-${p.window}-${i}`}
+          cx={xs[i]}
+          cy={ys[i]}
+          r={i === lastIdx ? endR : midR}
+          fill={cellColor(p.pct, thresholdPct).fg}
+          stroke="#ffffff"
+          strokeWidth={1}
+        />
+      ))}
     </svg>
   );
 }
