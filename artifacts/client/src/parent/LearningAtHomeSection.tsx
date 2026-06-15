@@ -3,6 +3,8 @@ import { GraduationCap, ChevronDown, FileText } from "lucide-react";
 import {
   fetchLearningAtHomeCards,
   fetchLearningAtHomeImage,
+  isLearningAtHomeCardNew,
+  markLearningAtHomeCardSeen,
   type LearningAtHomeCard,
   type LearningAtHomeSample,
   type AcademicSubject,
@@ -136,29 +138,24 @@ function ClassCard({
   const [open, setOpen] = useState(false);
 
   // "New" badge + collapse: the card stays closed until the family taps it open.
-  // A per-card signature of the latest activity (newest published timestamp +
-  // count) is stored in localStorage on open; if the live signature differs the
-  // card shows "New" again.
-  const latest = card.samples[0]?.publishedAt ?? "";
-  const signature = `${latest}|${card.samples.length}`;
-  const seenKey = `pulseed.lah.seen.${studentId}.${card.sectionId}`;
-  const [isNew, setIsNew] = useState(() => {
-    try {
-      return localStorage.getItem(seenKey) !== signature;
-    } catch {
-      return true;
-    }
-  });
+  // The shared helpers (signature/seen logic) also back the Academics bottom-tab
+  // counter, so the badge and the tab count can never disagree.
+  const [isNew, setIsNew] = useState(() =>
+    isLearningAtHomeCardNew(studentId, card),
+  );
 
   function handleToggle() {
     setOpen((v) => {
       const next = !v;
       if (next && isNew) {
         setIsNew(false);
+        markLearningAtHomeCardSeen(studentId, card);
+        // Let the bottom-tab counter recompute immediately rather than waiting
+        // for its next poll.
         try {
-          localStorage.setItem(seenKey, signature);
+          window.dispatchEvent(new Event("pulseed:lah-seen"));
         } catch {
-          // best-effort; private mode may block storage
+          // best-effort
         }
       }
       return next;

@@ -37,6 +37,10 @@ import { Ticket } from "lucide-react";
 import { parentFetch, setParentToken, navigate, type ParentMe } from "./api";
 import FamilyMessages from "./FamilyMessages";
 import ParentTabBar, { type ParentTab } from "./ParentTabBar";
+import {
+  fetchLearningAtHomeCards,
+  countNewLearningAtHomeCards,
+} from "./learningAtHome";
 import ReinforceAtHomeSection from "./ReinforceAtHomeSection";
 import LearningAtHomeSection from "./LearningAtHomeSection";
 
@@ -309,6 +313,44 @@ export default function Dashboard({ me }: { me: ParentMe }) {
       window.clearInterval(timer);
     };
   }, []);
+
+  // New "Learning at Home" classes for the bottom-tab "Academics" badge. Mirrors
+  // the per-card "New" badge so a family that wasn't planning to open the tab
+  // still sees there's fresh classwork waiting. Per active student (re-fetches on
+  // sibling switch); the count derives from the SAME localStorage signature the
+  // cards use, so opening a card clears the tab count too. Best-effort; returns 0
+  // when the feature is disabled (the cards route returns empty).
+  const [newAcademics, setNewAcademics] = useState(0);
+  useEffect(() => {
+    if (activeStudentId === null) {
+      setNewAcademics(0);
+      return;
+    }
+    let cancelled = false;
+    let cards: import("./learningAtHome").LearningAtHomeCard[] = [];
+    const recount = () => {
+      if (!cancelled) setNewAcademics(countNewLearningAtHomeCards(activeStudentId, cards));
+    };
+    async function loadCards() {
+      try {
+        const r = await fetchLearningAtHomeCards(activeStudentId as number);
+        if (cancelled) return;
+        cards = r.cards;
+        recount();
+      } catch {
+        /* swallow — badge is best-effort */
+      }
+    }
+    void loadCards();
+    const timer = window.setInterval(loadCards, 60_000);
+    // When a card is opened in the section, recompute immediately.
+    window.addEventListener("pulseed:lah-seen", recount);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("pulseed:lah-seen", recount);
+    };
+  }, [activeStudentId, snapshotNonce]);
 
   useEffect(() => {
     if (activeStudentId === null) {
@@ -588,6 +630,7 @@ export default function Dashboard({ me }: { me: ParentMe }) {
         active={activeTab}
         onChange={setActiveTab}
         unreadMessages={unreadMessages}
+        newAcademics={newAcademics}
       />
     </div>
   );

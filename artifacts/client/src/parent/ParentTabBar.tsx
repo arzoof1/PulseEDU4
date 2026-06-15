@@ -20,10 +20,12 @@ export default function ParentTabBar({
   active,
   onChange,
   unreadMessages = 0,
+  newAcademics = 0,
 }: {
   active: ParentTab;
   onChange: (tab: ParentTab) => void;
   unreadMessages?: number;
+  newAcademics?: number;
 }) {
   return (
     <nav
@@ -61,6 +63,14 @@ export default function ParentTabBar({
                     aria-label={`${unreadMessages} unread messages`}
                   >
                     {unreadMessages > 9 ? "9+" : unreadMessages}
+                  </span>
+                )}
+                {t.id === "academics" && newAcademics > 0 && (
+                  <span
+                    className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-full bg-rose-600 text-white text-[10px] font-bold leading-none ring-2 ring-white"
+                    aria-label={`${newAcademics} new Learning at Home classes`}
+                  >
+                    {newAcademics > 9 ? "9+" : newAcademics}
                   </span>
                 )}
               </span>
