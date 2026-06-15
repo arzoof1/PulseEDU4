@@ -108,6 +108,8 @@ import schoolGradeRouter from "./schoolGrade";
 import parentMessagesRouter from "./parentMessages";
 import pulseDnaRouter from "./pulseDna";
 import standardsBookRouter from "./standardsBook";
+import pulseBrainLabRouter from "./pulseBrainLab";
+import pulseBrainLabDeliveryRouter from "./pulseBrainLabDelivery";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -288,5 +290,7 @@ router.use(schoolGradeRouter);
 router.use(parentMessagesRouter);
 router.use(pulseDnaRouter);
 router.use(standardsBookRouter);
+router.use(pulseBrainLabRouter);
+router.use(pulseBrainLabDeliveryRouter);
 
 export default router;

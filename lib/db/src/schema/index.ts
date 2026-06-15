@@ -110,6 +110,8 @@ export * from "./studentHouseChanges";
 export * from "./studentHouseSortJobs";
 export * from "./schoolBenchmarks";
 export * from "./benchmarkDescriptions";
+export * from "./pulseBrainLabLessons";
+export * from "./pulseBrainLabGroups";
 export * from "./benchmarkDeliveries";
 export * from "./benchmarkReteachLog";
 export * from "./classComposerPlans";

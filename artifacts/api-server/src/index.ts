@@ -61,6 +61,8 @@ import {
   ensureClassComposerSkillClusterSchema,
   ensureStaffPasswordResetsSchema,
   seedBenchmarkDescriptions,
+  seedPulseBrainLabLessons,
+  ensurePulseBrainLabGroupsSchema,
 } from "./seed";
 import { seedDistrictDemoExtras } from "./seedDemoExtras";
 import { backfillWitnessSequences } from "./lib/witnessStatementId";
@@ -299,6 +301,11 @@ async function runSeed(): Promise<void> {
     // Global FLDOE B.E.S.T. standards text catalog (not school-scoped).
     // Idempotent upsert from the committed dataset.
     await seedBenchmarkDescriptions();
+    // Global PulseBrainLab curated 48-lesson catalog (not school-scoped).
+    // Idempotent upsert from the committed dataset.
+    await seedPulseBrainLabLessons();
+    // School-scoped PulseBrainLab delivery tables (groups/members/sessions/attendance).
+    await ensurePulseBrainLabGroupsSchema();
     await ensureBenchmarkDeliveriesSchema();
     await ensureSchoolBenchmarksCatalogBackfill();
     // One-shot backfill of the dev-entered deliveries into prod.

@@ -50,7 +50,38 @@
       "growth mindset",
       "self-awareness",
       "metacognition"
-    ]
+    ],
+    "parentReinforcement": {
+      "summary": {
+        "en": "In Brain Lab this week your teen explored how the brain keeps rewiring through the teen years — it's highly changeable right now, with a fast reward-and-emotion system and a 'judgment center' (the prefrontal cortex) that's still maturing into the mid-20s. They learned that skills practiced on purpose now wire in deeply.",
+        "es": "En el Laboratorio del Cerebro esta semana, su hijo/a adolescente exploró cómo el cerebro sigue reconectándose durante la adolescencia: ahora es muy moldeable, con un sistema rápido de recompensa y emociones, y un 'centro de juicio' (la corteza prefrontal) que aún madura hasta mediados de los 20 años. Aprendió que las habilidades que practica a propósito ahora se graban profundamente."
+      },
+      "brainIdea": "Rewire",
+      "askYourChild": [
+        { "en": "How does the way your brain is wired right now explain strong reactions or impulsive moments?", "es": "¿Cómo explica la forma en que tu cerebro está conectado ahora mismo las reacciones fuertes o los momentos impulsivos?" },
+        { "en": "Why is having a brain that's 'still developing' actually an advantage?", "es": "¿Por qué tener un cerebro que 'todavía se está desarrollando' es en realidad una ventaja?" },
+        { "en": "What's the six-week goal you'd like to test on yourself?", "es": "¿Cuál es la meta de seis semanas que te gustaría probar en ti mismo/a?" }
+      ],
+      "whyThisWorks": {
+        "en": "Every time your teen practices a hard skill, the brain physically strengthens those connections — scientists call this neuroplasticity, and the teen brain does it especially fast.",
+        "es": "Cada vez que su hijo/a practica una habilidad difícil, el cerebro fortalece físicamente esas conexiones — los científicos lo llaman neuroplasticidad, y el cerebro adolescente lo hace especialmente rápido."
+      },
+      "tryTogether": {
+        "en": "Pick one skill you each want to build over the next six weeks and check in on it together every Sunday — naming the goal out loud helps it wire in.",
+        "es": "Elijan una habilidad que cada uno quiera desarrollar durante las próximas seis semanas y revísenla juntos cada domingo — decir la meta en voz alta ayuda a que se grabe."
+      }
+    },
+    "studentWorksheet": {
+      "intro": {
+        "en": "Brain Lab — Meet Your Brain. Fill this in to capture what you figured out, and bring it to your next session.",
+        "es": "Laboratorio del Cerebro — Conoce tu Cerebro. Completa esto para registrar lo que descubriste y tráelo a tu próxima sesión."
+      },
+      "prompts": [
+        { "id": "pbl-g912-s01-cq1", "text": { "en": "Write how your brain's current wiring explains a strong reaction or impulsive moment you've had.", "es": "Escribe cómo la conexión actual de tu cerebro explica una reacción fuerte o un momento impulsivo que hayas tenido." }, "responseType": "write" },
+        { "id": "pbl-g912-s01-cq2", "text": { "en": "Explain in a sentence or two why 'still developing' is an advantage, not just a limit.", "es": "Explica en una o dos oraciones por qué 'todavía en desarrollo' es una ventaja, no solo un límite." }, "responseType": "write" },
+        { "id": "pbl-g912-s01-fq3", "text": { "en": "Name the six-week goal you're testing and the first measurable sign it's working.", "es": "Nombra la meta de seis semanas que estás probando y la primera señal medible de que está funcionando." }, "responseType": "write" }
+      ]
+    }
   },
   {
     "id": "pbl-g912-s02",
@@ -103,7 +134,38 @@
       "self-awareness",
       "stress management",
       "metacognition"
-    ]
+    ],
+    "parentReinforcement": {
+      "summary": {
+        "en": "In Brain Lab this week your teen practiced aiming their attention — the brain's Spotlight — at their own early stress and emotion signals. They learned that ongoing stress quietly drains the focus and memory they need for school, and that catching a signal early (at a 3, not an 8) makes it far easier to handle.",
+        "es": "En el Laboratorio del Cerebro esta semana, su hijo/a practicó dirigir su atención — el Reflector del cerebro — hacia sus propias señales tempranas de estrés y emociones. Aprendió que el estrés constante agota en silencio la concentración y la memoria que necesita para la escuela, y que detectar una señal temprano (en un 3, no en un 8) la hace mucho más fácil de manejar."
+      },
+      "brainIdea": "Spotlight",
+      "askYourChild": [
+        { "en": "How does ongoing stress mess with your focus and memory?", "es": "¿Cómo afecta el estrés constante tu concentración y tu memoria?" },
+        { "en": "What are the three kinds of signals — body, thoughts, and behavior — that tell you you're stressed?", "es": "¿Cuáles son los tres tipos de señales — del cuerpo, los pensamientos y la conducta — que te avisan que estás estresado/a?" },
+        { "en": "Why is it easier to handle a feeling when you catch it at a 3 instead of an 8?", "es": "¿Por qué es más fácil manejar una emoción cuando la detectas en un 3 en lugar de un 8?" }
+      ],
+      "whyThisWorks": {
+        "en": "The brain can only focus its attention on so much at once, so when your teen learns to point that 'spotlight' at their own early warning signs, they spot trouble while it's still small and manageable.",
+        "es": "El cerebro solo puede enfocar su atención en pocas cosas a la vez, así que cuando su hijo/a aprende a apuntar ese 'reflector' hacia sus propias señales tempranas, detecta los problemas mientras todavía son pequeños y manejables."
+      },
+      "tryTogether": {
+        "en": "At dinner, each name one stress signal you noticed in yourself today and rate it 0-10 — practicing the noticing is what makes it automatic.",
+        "es": "En la cena, que cada uno nombre una señal de estrés que notó en sí mismo hoy y le ponga un número del 0 al 10 — practicar el notar es lo que lo vuelve automático."
+      }
+    },
+    "studentWorksheet": {
+      "intro": {
+        "en": "Brain Lab — Spot Your Signals. Map your own warning signs here and bring it back next session.",
+        "es": "Laboratorio del Cerebro — Detecta tus Señales. Mapea aquí tus propias señales de alerta y tráelo a la próxima sesión."
+      },
+      "prompts": [
+        { "id": "pbl-g912-s02-cq2", "text": { "en": "Write a thought-pattern signal you notice when you're overwhelmed.", "es": "Escribe una señal de pensamiento que notas cuando te sientes abrumado/a." }, "responseType": "write" },
+        { "id": "pbl-g912-s02-cq3", "text": { "en": "Explain why catching a signal at a 3 is more useful than at an 8.", "es": "Explica por qué detectar una señal en un 3 es más útil que en un 8." }, "responseType": "write" },
+        { "id": "pbl-g912-s02-fq2", "text": { "en": "Describe a moment this week when you caught a signal early.", "es": "Describe un momento de esta semana en que detectaste una señal temprano." }, "responseType": "write" }
+      ]
+    }
   },
   {
     "id": "pbl-g912-s03",
@@ -156,7 +218,38 @@
       "self-regulation",
       "affect labeling",
       "stress management"
-    ]
+    ],
+    "parentReinforcement": {
+      "summary": {
+        "en": "In Brain Lab this week your teen built a personal 90-second reset to bring themselves back to calm during real stress. They learned two science-backed tools — naming the feeling precisely and slowing the exhale — and that repeating the reset actually rewires the brain to recover faster.",
+        "es": "En el Laboratorio del Cerebro esta semana, su hijo/a creó un reinicio personal de 90 segundos para volver a la calma durante el estrés real. Aprendió dos herramientas respaldadas por la ciencia — nombrar la emoción con precisión y alargar la exhalación — y que repetir el reinicio en realidad reconecta el cerebro para recuperarse más rápido."
+      },
+      "brainIdea": "Rewire",
+      "askYourChild": [
+        { "en": "Why does naming a feeling precisely calm you down more than just saying 'I'm fine'?", "es": "¿Por qué nombrar una emoción con precisión te calma más que solo decir 'estoy bien'?" },
+        { "en": "How does a long, slow exhale actually settle your body?", "es": "¿Cómo es que una exhalación larga y lenta en realidad calma tu cuerpo?" },
+        { "en": "Where in your week would a 90-second reset help the most?", "es": "¿En qué momento de tu semana te ayudaría más un reinicio de 90 segundos?" }
+      ],
+      "whyThisWorks": {
+        "en": "Each time your teen runs the reset, they strengthen the brain pathway that calms the alarm system — repetition literally rewires the brain to bounce back faster next time.",
+        "es": "Cada vez que su hijo/a usa el reinicio, fortalece la vía cerebral que calma el sistema de alarma — la repetición literalmente reconecta el cerebro para recuperarse más rápido la próxima vez."
+      },
+      "tryTogether": {
+        "en": "Try the long-exhale breathing together once this week when something gets tense — practicing it calm makes it available when it's hard.",
+        "es": "Practiquen juntos la respiración de exhalación larga una vez esta semana cuando algo se ponga tenso — practicarla en calma hace que esté disponible cuando es difícil."
+      }
+    },
+    "studentWorksheet": {
+      "intro": {
+        "en": "Brain Lab — Catch the Wave. Build your own reset here and bring it back next session.",
+        "es": "Laboratorio del Cerebro — Atrapa la Ola. Crea aquí tu propio reinicio y tráelo a la próxima sesión."
+      },
+      "prompts": [
+        { "id": "pbl-g912-s03-cq1", "text": { "en": "Explain why precise labeling works better than a vague label.", "es": "Explica por qué nombrar con precisión funciona mejor que una etiqueta vaga." }, "responseType": "write" },
+        { "id": "pbl-g912-s03-cq3", "text": { "en": "Write where in your week a 90-second reset would matter most.", "es": "Escribe en qué momento de tu semana un reinicio de 90 segundos importaría más." }, "responseType": "write" },
+        { "id": "pbl-g912-s03-fq2", "text": { "en": "Describe a stressor you reset this week and how it went.", "es": "Describe un factor de estrés que reiniciaste esta semana y cómo te fue." }, "responseType": "write" }
+      ]
+    }
   },
   {
     "id": "pbl-g912-s04",
@@ -209,7 +302,38 @@
       "attention",
       "study skills",
       "retrieval practice"
-    ]
+    ],
+    "parentReinforcement": {
+      "summary": {
+        "en": "In Brain Lab this week your teen learned to protect their attention — the brain's Spotlight — while studying. They saw that re-reading feels productive but builds weak memory, while quizzing yourself (retrieval) builds strong memory, and they redesigned a real study block to cut distractions.",
+        "es": "En el Laboratorio del Cerebro esta semana, su hijo/a aprendió a proteger su atención — el Reflector del cerebro — al estudiar. Vio que releer se siente productivo pero crea memoria débil, mientras que ponerse a prueba uno mismo (recuperación) crea memoria fuerte, y rediseñó un bloque de estudio real para reducir distracciones."
+      },
+      "brainIdea": "Spotlight",
+      "askYourChild": [
+        { "en": "Why does re-reading your notes feel like it works but actually doesn't help much?", "es": "¿Por qué releer tus apuntes parece funcionar pero en realidad no ayuda mucho?" },
+        { "en": "What makes quizzing yourself build stronger memory than re-reading?", "es": "¿Qué hace que ponerte a prueba cree una memoria más fuerte que releer?" },
+        { "en": "Which change to your study space would boost your focus the most?", "es": "¿Qué cambio en tu lugar de estudio aumentaría más tu concentración?" }
+      ],
+      "whyThisWorks": {
+        "en": "The brain pays a real cost every time it switches tasks, so helping your teen guard their 'spotlight' — one task, phone away — lets them learn more in less time.",
+        "es": "El cerebro paga un costo real cada vez que cambia de tarea, así que ayudar a su hijo/a a proteger su 'reflector' — una sola tarea, el teléfono lejos — le permite aprender más en menos tiempo."
+      },
+      "tryTogether": {
+        "en": "Agree on one phone-free, single-task study block this week and notice together how it feels — protecting attention is a skill that grows with practice.",
+        "es": "Acuerden un bloque de estudio esta semana sin teléfono y con una sola tarea, y noten juntos cómo se siente — proteger la atención es una habilidad que crece con la práctica."
+      }
+    },
+    "studentWorksheet": {
+      "intro": {
+        "en": "Brain Lab — Aim Your Spotlight. Redesign a study block here and bring it back next session.",
+        "es": "Laboratorio del Cerebro — Apunta tu Reflector. Rediseña aquí un bloque de estudio y tráelo a la próxima sesión."
+      },
+      "prompts": [
+        { "id": "pbl-g912-s04-cq2", "text": { "en": "Explain what makes retrieval practice build stronger memory.", "es": "Explica qué hace que la práctica de recuperación cree una memoria más fuerte." }, "responseType": "write" },
+        { "id": "pbl-g912-s04-cq3", "text": { "en": "Write the one environment change that would most improve your focus.", "es": "Escribe el único cambio de entorno que más mejoraría tu concentración." }, "responseType": "write" },
+        { "id": "pbl-g912-s04-fq2", "text": { "en": "Describe how your redesigned study block went this week.", "es": "Describe cómo te fue esta semana con tu bloque de estudio rediseñado." }, "responseType": "write" }
+      ]
+    }
   },
   {
     "id": "pbl-g912-s05",
@@ -262,7 +386,38 @@
       "social awareness",
       "bias",
       "communication"
-    ]
+    ],
+    "parentReinforcement": {
+      "summary": {
+        "en": "In Brain Lab this week your teen worked on reading social and contextual cues accurately and pointing their attention — the brain's Spotlight — at the facts before jumping to conclusions. They learned the brain fills gaps with assumptions shaped by mood and bias, and that texting strips out tone, so checking before reacting prevents misreads.",
+        "es": "En el Laboratorio del Cerebro esta semana, su hijo/a trabajó en leer con precisión las señales sociales y del contexto, y en apuntar su atención — el Reflector del cerebro — a los hechos antes de sacar conclusiones. Aprendió que el cerebro llena los vacíos con suposiciones moldeadas por el ánimo y los prejuicios, y que los mensajes eliminan el tono, así que verificar antes de reaccionar evita malentendidos."
+      },
+      "brainIdea": "Spotlight",
+      "askYourChild": [
+        { "en": "How can your mood or your assumptions change the way you read someone?", "es": "¿Cómo pueden tu ánimo o tus suposiciones cambiar la forma en que interpretas a alguien?" },
+        { "en": "Why is a text or DM so easy to misread?", "es": "¿Por qué es tan fácil malinterpretar un mensaje de texto o un DM?" },
+        { "en": "What's the difference between what you observe and how you interpret it?", "es": "¿Cuál es la diferencia entre lo que observas y cómo lo interpretas?" }
+      ],
+      "whyThisWorks": {
+        "en": "Your teen's brain builds a story from just a few cues, so coaching them to aim their attention at what they actually observed — before interpreting — keeps that story accurate.",
+        "es": "El cerebro de su hijo/a construye una historia a partir de muy pocas señales, así que guiarlo a enfocar su atención en lo que realmente observó — antes de interpretar — mantiene esa historia precisa."
+      },
+      "tryTogether": {
+        "en": "Next time a text seems 'off,' pause together and brainstorm three possible meanings before deciding what it means.",
+        "es": "La próxima vez que un mensaje parezca 'raro', hagan una pausa juntos y piensen tres posibles significados antes de decidir qué quiso decir."
+      }
+    },
+    "studentWorksheet": {
+      "intro": {
+        "en": "Brain Lab — Read the Room. Sort observation from interpretation here and bring it back next session.",
+        "es": "Laboratorio del Cerebro — Lee el Ambiente. Separa aquí la observación de la interpretación y tráelo a la próxima sesión."
+      },
+      "prompts": [
+        { "id": "pbl-g912-s05-cq3", "text": { "en": "Write the difference between an observation and an interpretation, with an example.", "es": "Escribe la diferencia entre una observación y una interpretación, con un ejemplo." }, "responseType": "write" },
+        { "id": "pbl-g912-s05-fq2", "text": { "en": "Describe a time this week you verified something before reacting.", "es": "Describe un momento de esta semana en que verificaste algo antes de reaccionar." }, "responseType": "write" },
+        { "id": "pbl-g912-s05-fq3", "text": { "en": "Name your most common false assumption about others.", "es": "Nombra tu suposición falsa más común sobre los demás." }, "responseType": "write" }
+      ]
+    }
   },
   {
     "id": "pbl-g912-s06",
@@ -315,7 +470,38 @@
       "perspective-taking",
       "empathy",
       "conflict"
-    ]
+    ],
+    "parentReinforcement": {
+      "summary": {
+        "en": "In Brain Lab this week your teen practiced taking someone else's perspective on a charged issue without losing their own. They connected the other side's view to their own past experiences — the brain's Velcro — and learned that stating the other side's strongest case ('steelmanning') lowers conflict.",
+        "es": "En el Laboratorio del Cerebro esta semana, su hijo/a practicó ponerse en el lugar de otra persona en un tema tenso sin perder su propio punto de vista. Conectó la opinión del otro lado con sus propias experiencias pasadas — el Velcro del cerebro — y aprendió que exponer la versión más fuerte del otro lado ('steelmanning') reduce el conflicto."
+      },
+      "brainIdea": "Velcro",
+      "askYourChild": [
+        { "en": "What's the difference between understanding what someone thinks and feeling what they feel?", "es": "¿Cuál es la diferencia entre entender lo que alguien piensa y sentir lo que esa persona siente?" },
+        { "en": "Why does stating the other side's strongest point actually lower conflict?", "es": "¿Por qué exponer el punto más fuerte del otro lado en realidad reduce el conflicto?" },
+        { "en": "Can you hold your own opinion and theirs at the same time? How?", "es": "¿Puedes sostener tu propia opinión y la de la otra persona al mismo tiempo? ¿Cómo?" }
+      ],
+      "whyThisWorks": {
+        "en": "New understanding sticks best when it 'velcros' onto something your teen already knows, so linking another person's view to their own experience makes empathy easier to access.",
+        "es": "El nuevo entendimiento se fija mejor cuando se 'pega con velcro' a algo que su hijo/a ya conoce, así que conectar la opinión de otra persona con su propia experiencia hace que la empatía sea más fácil de alcanzar."
+      },
+      "tryTogether": {
+        "en": "Pick a topic you disagree on and take turns stating each other's strongest point before arguing your own — it makes the conversation calmer.",
+        "es": "Elijan un tema en el que no estén de acuerdo y túrnense para exponer el punto más fuerte del otro antes de defender el propio — hace que la conversación sea más tranquila."
+      }
+    },
+    "studentWorksheet": {
+      "intro": {
+        "en": "Brain Lab — Walk in Their Shoes. Practice steelmanning here and bring it back next session.",
+        "es": "Laboratorio del Cerebro — Ponte en sus Zapatos. Practica aquí el steelmanning y tráelo a la próxima sesión."
+      },
+      "prompts": [
+        { "id": "pbl-g912-s06-cq1", "text": { "en": "Explain how understanding someone is different from feeling with them.", "es": "Explica en qué se diferencia entender a alguien de sentir lo que esa persona siente." }, "responseType": "write" },
+        { "id": "pbl-g912-s06-cq2", "text": { "en": "Write why steelmanning reduces conflict.", "es": "Escribe por qué el steelmanning reduce el conflicto." }, "responseType": "write" },
+        { "id": "pbl-g912-s06-fq2", "text": { "en": "Describe a time this week you steelmanned someone.", "es": "Describe un momento de esta semana en que hiciste steelmanning con alguien." }, "responseType": "write" }
+      ]
+    }
   },
   {
     "id": "pbl-g912-s07",
@@ -368,7 +554,38 @@
       "communication",
       "boundaries",
       "assertiveness"
-    ]
+    ],
+    "parentReinforcement": {
+      "summary": {
+        "en": "In Brain Lab this week your teen practiced speaking up for their needs and setting a boundary without escalating. They learned that blame and 'always/never' trigger a threat response that ends real listening, and that framing a clear, respectful ask around shared interests — the brain's Velcro — keeps the other person's thinking brain online.",
+        "es": "En el Laboratorio del Cerebro esta semana, su hijo/a practicó expresar sus necesidades y poner un límite sin que la situación se intensifique. Aprendió que culpar y decir 'siempre/nunca' activa una respuesta de amenaza que termina con la escucha real, y que plantear una petición clara y respetuosa en torno a intereses comunes — el Velcro del cerebro — mantiene activo el cerebro pensante de la otra persona."
+      },
+      "brainIdea": "Velcro",
+      "askYourChild": [
+        { "en": "Why does blaming someone shut a conversation down?", "es": "¿Por qué culpar a alguien hace que una conversación se cierre?" },
+        { "en": "How is a boundary different from a demand or an ultimatum?", "es": "¿En qué se diferencia un límite de una exigencia o un ultimátum?" },
+        { "en": "How does framing your message around what you both want help it land?", "es": "¿Cómo ayuda a que tu mensaje llegue el plantearlo en torno a lo que ambos quieren?" }
+      ],
+      "whyThisWorks": {
+        "en": "When your teen ties a request to something the listener already cares about, the message 'velcros' onto common ground and the other person stays open instead of defensive.",
+        "es": "Cuando su hijo/a conecta una petición con algo que a la otra persona ya le importa, el mensaje se 'pega con velcro' a un terreno común y el otro se mantiene abierto en lugar de ponerse a la defensiva."
+      },
+      "tryTogether": {
+        "en": "Help your teen turn one current complaint into a clear request using 'I feel ___ when ___ because ___; what I need is ___,' and try it out loud together.",
+        "es": "Ayude a su hijo/a a convertir una queja actual en una petición clara usando 'Me siento ___ cuando ___ porque ___; lo que necesito es ___', y practíquenla en voz alta juntos."
+      }
+    },
+    "studentWorksheet": {
+      "intro": {
+        "en": "Brain Lab — Say It So They Hear It. Draft an assertive ask here and bring it back next session.",
+        "es": "Laboratorio del Cerebro — Dilo para que te Escuchen. Redacta aquí una petición asertiva y tráelo a la próxima sesión."
+      },
+      "prompts": [
+        { "id": "pbl-g912-s07-cq2", "text": { "en": "Write how a boundary is different from a demand or ultimatum.", "es": "Escribe en qué se diferencia un límite de una exigencia o un ultimátum." }, "responseType": "write" },
+        { "id": "pbl-g912-s07-cq3", "text": { "en": "Explain how framing around shared interests helps your message land.", "es": "Explica cómo plantear el mensaje en torno a intereses comunes ayuda a que llegue." }, "responseType": "write" },
+        { "id": "pbl-g912-s07-fq3", "text": { "en": "Name a conversation you've been avoiding that an assertive ask could help.", "es": "Nombra una conversación que has estado evitando y en la que una petición asertiva podría ayudar." }, "responseType": "write" }
+      ]
+    }
   },
   {
     "id": "pbl-g912-s08",
@@ -421,7 +638,38 @@
       "conflict resolution",
       "accountability",
       "repair"
-    ]
+    ],
+    "parentReinforcement": {
+      "summary": {
+        "en": "In Brain Lab this week your teen practiced repairing a real conflict by calming down first, hearing the other side, taking honest accountability for their part, and building a concrete fix together. They rehearsed the steps so they can recall them — the brain's Echo — even under stress.",
+        "es": "En el Laboratorio del Cerebro esta semana, su hijo/a practicó reparar un conflicto real calmándose primero, escuchando al otro lado, asumiendo con honestidad su parte y creando juntos una solución concreta. Ensayó los pasos para poder recordarlos — el Eco del cerebro — incluso bajo estrés."
+      },
+      "brainIdea": "Echo",
+      "askYourChild": [
+        { "en": "Why does owning your part of a conflict calm the other person down so fast?", "es": "¿Por qué asumir tu parte en un conflicto calma tan rápido a la otra persona?" },
+        { "en": "What's the difference between a real fix and a fake 'sorry'?", "es": "¿Cuál es la diferencia entre una solución real y un 'perdón' falso?" },
+        { "en": "When is repairing a relationship worth it even if you were right?", "es": "¿Cuándo vale la pena reparar una relación aunque tú tuvieras razón?" }
+      ],
+      "whyThisWorks": {
+        "en": "Rehearsing the repair steps out loud means your teen can actually recall them in a heated moment — practiced recall, what scientists call retrieval, is what makes a skill available under pressure.",
+        "es": "Ensayar los pasos de reparación en voz alta hace que su hijo/a pueda recordarlos en un momento tenso — el recuerdo practicado, lo que los científicos llaman recuperación, es lo que hace que una habilidad esté disponible bajo presión."
+      },
+      "tryTogether": {
+        "en": "Ask your teen to walk you through the repair steps from memory — recalling them out loud locks them in.",
+        "es": "Pídale a su hijo/a que le explique los pasos de reparación de memoria — recordarlos en voz alta los fija."
+      }
+    },
+    "studentWorksheet": {
+      "intro": {
+        "en": "Brain Lab — Fix-It Talk. Capture the repair steps here and bring it back next session.",
+        "es": "Laboratorio del Cerebro — Conversación para Reparar. Anota aquí los pasos de reparación y tráelo a la próxima sesión."
+      },
+      "prompts": [
+        { "id": "pbl-g912-s08-fq1", "text": { "en": "List the repair steps from memory.", "es": "Enumera de memoria los pasos de reparación." }, "responseType": "write" },
+        { "id": "pbl-g912-s08-cq2", "text": { "en": "Write what separates a real fix from a fake 'sorry'.", "es": "Escribe qué distingue una solución real de un 'perdón' falso." }, "responseType": "write" },
+        { "id": "pbl-g912-s08-fq2", "text": { "en": "Describe a conflict you repaired this week.", "es": "Describe un conflicto que reparaste esta semana." }, "responseType": "write" }
+      ]
+    }
   },
   {
     "id": "pbl-g912-s09",
@@ -474,7 +722,38 @@
       "decision-making",
       "self-control",
       "goal alignment"
-    ]
+    ],
+    "parentReinforcement": {
+      "summary": {
+        "en": "In Brain Lab this week your teen learned to make choices that match their goals by deciding their limit in advance (pre-commitment) and pausing to run a quick decision process. They saw how reward and peer pressure push fast choices, and how aiming attention — the brain's Spotlight — at the real goal keeps them on track.",
+        "es": "En el Laboratorio del Cerebro esta semana, su hijo/a aprendió a tomar decisiones acordes con sus metas decidiendo su límite por adelantado (compromiso previo) y haciendo una pausa para seguir un proceso rápido de decisión. Vio cómo la recompensa y la presión de los amigos empujan a decidir rápido, y cómo enfocar la atención — el Reflector del cerebro — en la meta real lo mantiene en el camino."
+      },
+      "brainIdea": "Spotlight",
+      "askYourChild": [
+        { "en": "Why is deciding your limit in advance more reliable than willpower in the moment?", "es": "¿Por qué decidir tu límite por adelantado es más confiable que la fuerza de voluntad en el momento?" },
+        { "en": "How do friends and the pull of a reward bend a fast decision?", "es": "¿Cómo tuercen una decisión rápida los amigos y la atracción de una recompensa?" },
+        { "en": "What makes a pre-decided rule realistic enough that you'd actually keep it?", "es": "¿Qué hace que una regla decidida de antemano sea lo bastante realista como para que de verdad la cumplas?" }
+      ],
+      "whyThisWorks": {
+        "en": "Deciding in advance lets your teen point their full attention at the goal before the pressure hits, so the 'spotlight' isn't hijacked by a reward in the heat of the moment.",
+        "es": "Decidir por adelantado le permite a su hijo/a apuntar toda su atención a la meta antes de que llegue la presión, para que el 'reflector' no sea secuestrado por una recompensa en el calor del momento."
+      },
+      "tryTogether": {
+        "en": "Before an event this week, help your teen pre-decide one rule out loud — naming it in advance hands the decision to their calmer self.",
+        "es": "Antes de un evento esta semana, ayude a su hijo/a a decidir una regla en voz alta por adelantado — nombrarla con anticipación le entrega la decisión a su yo más tranquilo."
+      }
+    },
+    "studentWorksheet": {
+      "intro": {
+        "en": "Brain Lab — Stop & Plan. Write a pre-commitment here and bring it back next session.",
+        "es": "Laboratorio del Cerebro — Detente y Planifica. Escribe aquí un compromiso previo y tráelo a la próxima sesión."
+      },
+      "prompts": [
+        { "id": "pbl-g912-s09-cq1", "text": { "en": "Explain why deciding in advance beats in-the-moment willpower.", "es": "Explica por qué decidir por adelantado le gana a la fuerza de voluntad del momento." }, "responseType": "write" },
+        { "id": "pbl-g912-s09-cq3", "text": { "en": "Write what makes a pre-commitment realistic enough to keep.", "es": "Escribe qué hace que un compromiso previo sea lo bastante realista como para cumplirlo." }, "responseType": "write" },
+        { "id": "pbl-g912-s09-fq3", "text": { "en": "Name an upcoming situation that needs a pre-commitment.", "es": "Nombra una situación próxima que necesita un compromiso previo." }, "responseType": "write" }
+      ]
+    }
   },
   {
     "id": "pbl-g912-s10",
@@ -527,7 +806,38 @@
       "decision-making",
       "ethics",
       "values"
-    ]
+    ],
+    "parentReinforcement": {
+      "summary": {
+        "en": "In Brain Lab this week your teen practiced weighing a complex decision across time (now vs. future self), ethics, and how it affects other people. They connected the choice to their own values — the brain's Velcro — so the decision held up instead of chasing the quick payoff.",
+        "es": "En el Laboratorio del Cerebro esta semana, su hijo/a practicó sopesar una decisión compleja a lo largo del tiempo (el ahora frente a su yo futuro), la ética y cómo afecta a otras personas. Conectó la decisión con sus propios valores — el Velcro del cerebro — para que la decisión se sostuviera en lugar de perseguir la recompensa rápida."
+      },
+      "brainIdea": "Velcro",
+      "askYourChild": [
+        { "en": "How do you weigh your future self against what you want right now?", "es": "¿Cómo sopesas a tu yo futuro frente a lo que quieres ahora mismo?" },
+        { "en": "What ethics questions belong in a hard decision?", "es": "¿Qué preguntas de ética deben formar parte de una decisión difícil?" },
+        { "en": "How do you decide when two of your values pull in opposite directions?", "es": "¿Cómo decides cuando dos de tus valores tiran en direcciones opuestas?" }
+      ],
+      "whyThisWorks": {
+        "en": "A decision sticks when your teen 'velcros' it to their own values and past experiences, which is the slow, deliberate thinking the reward system tends to skip.",
+        "es": "Una decisión se afianza cuando su hijo/a la 'pega con velcro' a sus propios valores y experiencias pasadas, que es el pensamiento lento y deliberado que el sistema de recompensa suele saltarse."
+      },
+      "tryTogether": {
+        "en": "Pick a real choice your teen is facing and 'fast-forward one year' together — picturing the future self makes the values clearer.",
+        "es": "Elijan una decisión real que su hijo/a esté enfrentando y 'adelántense un año' juntos — imaginar el yo futuro hace más claros los valores."
+      }
+    },
+    "studentWorksheet": {
+      "intro": {
+        "en": "Brain Lab — Weigh It Out. Map a hard decision here and bring it back next session.",
+        "es": "Laboratorio del Cerebro — Sopésalo Bien. Mapea aquí una decisión difícil y tráelo a la próxima sesión."
+      },
+      "prompts": [
+        { "id": "pbl-g912-s10-cq2", "text": { "en": "Write the ethics checks that belong in a hard decision.", "es": "Escribe las comprobaciones de ética que deben formar parte de una decisión difícil." }, "responseType": "write" },
+        { "id": "pbl-g912-s10-cq3", "text": { "en": "Explain how you decide when two values are in tension.", "es": "Explica cómo decides cuando dos valores están en tensión." }, "responseType": "write" },
+        { "id": "pbl-g912-s10-fq2", "text": { "en": "Describe a complex choice you weighed this week.", "es": "Describe una decisión compleja que sopesaste esta semana." }, "responseType": "write" }
+      ]
+    }
   },
   {
     "id": "pbl-g912-s11",
@@ -580,7 +890,38 @@
       "integration",
       "problem-solving",
       "self-regulation"
-    ]
+    ],
+    "parentReinforcement": {
+      "summary": {
+        "en": "In Brain Lab this week your teen practiced combining and sequencing the program's skills to handle a high-pressure situation — regulate, then read the situation, then communicate, then decide. They connected the steps into one linked routine — the brain's Velcro — so the whole chain runs under stress.",
+        "es": "En el Laboratorio del Cerebro esta semana, su hijo/a practicó combinar y ordenar las habilidades del programa para manejar una situación de mucha presión — calmarse, luego leer la situación, luego comunicarse y luego decidir. Conectó los pasos en una sola rutina enlazada — el Velcro del cerebro — para que toda la cadena funcione bajo estrés."
+      },
+      "brainIdea": "Velcro",
+      "askYourChild": [
+        { "en": "Why does the order — calming down first — matter so much under pressure?", "es": "¿Por qué importa tanto el orden — calmarse primero — bajo presión?" },
+        { "en": "In a tense moment, which tools do you reach for, and in what order?", "es": "En un momento tenso, ¿qué herramientas usas y en qué orden?" },
+        { "en": "Where does your chain of steps tend to break?", "es": "¿En qué punto tiende a romperse tu cadena de pasos?" }
+      ],
+      "whyThisWorks": {
+        "en": "Skills become reliable when your teen links them into one connected web rather than separate facts — that 'velcroed' sequence is what real competence looks like under load.",
+        "es": "Las habilidades se vuelven confiables cuando su hijo/a las enlaza en una sola red conectada en lugar de datos sueltos — esa secuencia 'pegada con velcro' es como se ve la verdadera competencia bajo presión."
+      },
+      "tryTogether": {
+        "en": "Ask your teen to talk you through their four-step order — regulate, read, communicate, decide — using a real situation from this week.",
+        "es": "Pídale a su hijo/a que le explique su orden de cuatro pasos — calmarse, leer, comunicar, decidir — usando una situación real de esta semana."
+      }
+    },
+    "studentWorksheet": {
+      "intro": {
+        "en": "Brain Lab — Put It Together. Map your full sequence here and bring it back next session.",
+        "es": "Laboratorio del Cerebro — Únelo Todo. Mapea aquí tu secuencia completa y tráelo a la próxima sesión."
+      },
+      "prompts": [
+        { "id": "pbl-g912-s11-cq1", "text": { "en": "Explain why regulating first matters so much under pressure.", "es": "Explica por qué calmarse primero importa tanto bajo presión." }, "responseType": "write" },
+        { "id": "pbl-g912-s11-fq1", "text": { "en": "Write the four-stage order for handling a hard moment.", "es": "Escribe el orden de cuatro etapas para manejar un momento difícil." }, "responseType": "write" },
+        { "id": "pbl-g912-s11-fq2", "text": { "en": "Describe a real situation where you ran the sequence this week.", "es": "Describe una situación real en la que aplicaste la secuencia esta semana." }, "responseType": "write" }
+      ]
+    }
   },
   {
     "id": "pbl-g912-s12",
@@ -633,6 +974,37 @@
       "growth mindset",
       "habit formation",
       "identity"
-    ]
+    ],
+    "parentReinforcement": {
+      "summary": {
+        "en": "In Brain Lab this week your teen built a plan to keep a skill going by turning it into part of who they are ('I'm someone who pauses before reacting'), with a cue and a way to track it. They learned that six weeks of spaced practice is exactly how the brain locks in lasting change — that's rewiring.",
+        "es": "En el Laboratorio del Cerebro esta semana, su hijo/a creó un plan para mantener una habilidad convirtiéndola en parte de quién es ('Soy alguien que hace una pausa antes de reaccionar'), con una señal y una forma de darle seguimiento. Aprendió que seis semanas de práctica espaciada es justo cómo el cerebro fija el cambio duradero — eso es reconexión."
+      },
+      "brainIdea": "Rewire",
+      "askYourChild": [
+        { "en": "Why does building a habit around your identity last longer than relying on motivation?", "es": "¿Por qué construir un hábito en torno a tu identidad dura más que depender de la motivación?" },
+        { "en": "What did your six-week self-experiment actually show you?", "es": "¿Qué te mostró en realidad tu experimento de seis semanas?" },
+        { "en": "How are you different now from session one?", "es": "¿En qué eres diferente ahora comparado con la primera sesión?" }
+      ],
+      "whyThisWorks": {
+        "en": "Spaced practice over six weeks is how the brain consolidates a skill into a durable wiring change, so a small cue your teen repeats matters more than a burst of motivation.",
+        "es": "La práctica espaciada durante seis semanas es como el cerebro consolida una habilidad en un cambio de conexión duradero, así que una pequeña señal que su hijo/a repita importa más que un arranque de motivación."
+      },
+      "tryTogether": {
+        "en": "Help your teen pick one cue (like a phone reminder) for the skill they want to keep, and check in on it weekly — repetition is what makes it permanent.",
+        "es": "Ayude a su hijo/a a elegir una señal (como un recordatorio en el teléfono) para la habilidad que quiere conservar, y revísenla cada semana — la repetición es lo que la hace permanente."
+      }
+    },
+    "studentWorksheet": {
+      "intro": {
+        "en": "Brain Lab — Rewire & Reflect. Write your maintenance plan here and bring it back next session.",
+        "es": "Laboratorio del Cerebro — Reconecta y Reflexiona. Escribe aquí tu plan de mantenimiento y tráelo a la próxima sesión."
+      },
+      "prompts": [
+        { "id": "pbl-g912-s12-cq1", "text": { "en": "Explain why identity-based habits outlast motivation.", "es": "Explica por qué los hábitos basados en la identidad duran más que la motivación." }, "responseType": "write" },
+        { "id": "pbl-g912-s12-cq3", "text": { "en": "Write the cue and tracking method that will keep your skill alive.", "es": "Escribe la señal y el método de seguimiento que mantendrán viva tu habilidad." }, "responseType": "write" },
+        { "id": "pbl-g912-s12-fq2", "text": { "en": "Describe one way you're different from session one.", "es": "Describe una forma en que eres diferente desde la primera sesión." }, "responseType": "write" }
+      ]
+    }
   }
 ]

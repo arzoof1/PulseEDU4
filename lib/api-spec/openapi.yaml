@@ -10,6 +10,10 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: pulseBrainLab
+    description: PulseBrainLab curriculum catalog (global read-only reference)
+  - name: pulseBrainLabDelivery
+    description: PulseBrainLab delivery — groups, sessions, attendance (school-scoped)
 paths:
   /healthz:
     get:
@@ -24,6 +28,585 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /pulse-brain-lab/lessons:
+    get:
+      operationId: listPulseBrainLabLessons
+      tags: [pulseBrainLab]
+      summary: List PulseBrainLab lessons
+      description: >
+        Lightweight catalog of the curated PulseBrainLab lessons (global
+        reference, identical for every school). Optionally filter by grade band.
+      parameters:
+        - name: gradeBand
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/PulseBrainLabGradeBand"
+      responses:
+        "200":
+          description: Lesson summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PulseBrainLabLessonSummary"
+  /pulse-brain-lab/lessons/{lessonKey}:
+    get:
+      operationId: getPulseBrainLabLesson
+      tags: [pulseBrainLab]
+      summary: Get a single PulseBrainLab lesson
+      description: Full lesson object including bilingual parent card and student worksheet.
+      parameters:
+        - name: lessonKey
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Full lesson
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabLesson"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/lessons/{lessonKey}/parent-card/{lang}:
+    get:
+      operationId: getPulseBrainLabParentCard
+      tags: [pulseBrainLab]
+      summary: Parent "Reinforce at Home" recall card (single language)
+      description: >
+        The four-part parent recall card resolved to one language. Strictly
+        learning / brain-science framing — never "SEL". Core Team gated.
+        `lang` is a path segment (not a query param) to keep the generated
+        client free of the orval path+query `*Params` name collision.
+      parameters:
+        - name: lessonKey
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: lang
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [en, es]
+      responses:
+        "200":
+          description: Resolved parent recall card
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabParentCard"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/groups:
+    get:
+      operationId: listPulseBrainLabGroups
+      tags: [pulseBrainLabDelivery]
+      summary: List PulseBrainLab groups for the active school
+      responses:
+        "200":
+          description: Groups
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PulseBrainLabGroup"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    post:
+      operationId: createPulseBrainLabGroup
+      tags: [pulseBrainLabDelivery]
+      summary: Create a PulseBrainLab group
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePulseBrainLabGroupInput"
+      responses:
+        "201":
+          description: Created group
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabGroupDetail"
+        "400":
+          description: Invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/groups/{groupId}:
+    get:
+      operationId: getPulseBrainLabGroup
+      tags: [pulseBrainLabDelivery]
+      summary: Get a group with members
+      parameters:
+        - name: groupId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Group detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabGroupDetail"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    patch:
+      operationId: updatePulseBrainLabGroup
+      tags: [pulseBrainLabDelivery]
+      summary: Update a group
+      parameters:
+        - name: groupId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePulseBrainLabGroupInput"
+      responses:
+        "200":
+          description: Updated group
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabGroupDetail"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      operationId: deletePulseBrainLabGroup
+      tags: [pulseBrainLabDelivery]
+      summary: Delete a group
+      parameters:
+        - name: groupId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/groups/{groupId}/members:
+    post:
+      operationId: addPulseBrainLabGroupMembers
+      tags: [pulseBrainLabDelivery]
+      summary: Add members to a group
+      parameters:
+        - name: groupId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddPulseBrainLabMembersInput"
+      responses:
+        "200":
+          description: Updated group detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabGroupDetail"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/groups/{groupId}/members/{studentId}:
+    delete:
+      operationId: removePulseBrainLabGroupMember
+      tags: [pulseBrainLabDelivery]
+      summary: Remove a member from a group
+      parameters:
+        - name: groupId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: studentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated group detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabGroupDetail"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/groups/{groupId}/sessions:
+    get:
+      operationId: listPulseBrainLabSessions
+      tags: [pulseBrainLabDelivery]
+      summary: List sessions delivered to a group
+      parameters:
+        - name: groupId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PulseBrainLabSession"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    post:
+      operationId: createPulseBrainLabSession
+      tags: [pulseBrainLabDelivery]
+      summary: Deliver a lesson to a group (create a session)
+      parameters:
+        - name: groupId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePulseBrainLabSessionInput"
+      responses:
+        "201":
+          description: Created session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabSessionDetail"
+        "400":
+          description: Invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/sessions/{sessionId}:
+    get:
+      operationId: getPulseBrainLabSession
+      tags: [pulseBrainLabDelivery]
+      summary: Get a session with attendance
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Session detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabSessionDetail"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      operationId: deletePulseBrainLabSession
+      tags: [pulseBrainLabDelivery]
+      summary: Delete a session
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/sessions/{sessionId}/attendance:
+    put:
+      operationId: setPulseBrainLabAttendance
+      tags: [pulseBrainLabDelivery]
+      summary: Set per-member attendance for a session
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetPulseBrainLabAttendanceInput"
+      responses:
+        "200":
+          description: Updated session detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabSessionDetail"
+        "400":
+          description: Invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/scan/route:
+    post:
+      operationId: routePulseBrainLabScan
+      tags: [pulseBrainLabDelivery]
+      summary: File a scanned work sample to its (session, student) by QR token
+      description: >
+        The "routing brain" shared by both intake paths. The phone path decodes
+        the QR live in the browser; the copier-batch path rasterizes each PDF
+        page in the browser and decodes its QR. Either way the opaque base62
+        token is POSTed here, resolved server-side to exactly one (school,
+        session, student), and the uploaded object is bound to the school and
+        filed as a work sample.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RoutePulseBrainLabScanInput"
+      responses:
+        "201":
+          description: Filed work sample
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabWorkSample"
+        "400":
+          description: Invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Token not found for this school
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/scan/unmatched:
+    get:
+      operationId: listPulseBrainLabUnmatchedScans
+      tags: [pulseBrainLabDelivery]
+      summary: List pending unmatched scans (the tray) for the active school
+      responses:
+        "200":
+          description: Pending unmatched scans
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PulseBrainLabUnmatchedScan"
+    post:
+      operationId: filePulseBrainLabUnmatchedScan
+      tags: [pulseBrainLabDelivery]
+      summary: Park a scanned page whose QR could not be decoded in the tray
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FilePulseBrainLabUnmatchedScanInput"
+      responses:
+        "201":
+          description: Parked unmatched scan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabUnmatchedScan"
+        "400":
+          description: Invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/scan/unmatched/{scanId}/assign:
+    post:
+      operationId: assignPulseBrainLabUnmatchedScan
+      tags: [pulseBrainLabDelivery]
+      summary: Manually assign an unmatched scan to a (session, student)
+      parameters:
+        - name: scanId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignPulseBrainLabUnmatchedScanInput"
+      responses:
+        "201":
+          description: Filed work sample
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabWorkSample"
+        "400":
+          description: Invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/scan/unmatched/{scanId}/discard:
+    post:
+      operationId: discardPulseBrainLabUnmatchedScan
+      tags: [pulseBrainLabDelivery]
+      summary: Discard an unmatched scan from the tray
+      parameters:
+        - name: scanId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Discarded
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/sessions/{sessionId}/work-samples:
+    get:
+      operationId: listPulseBrainLabWorkSamples
+      tags: [pulseBrainLabDelivery]
+      summary: List filed work samples for a session
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Work samples
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PulseBrainLabWorkSample"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/work-samples/{sampleId}:
+    delete:
+      operationId: deletePulseBrainLabWorkSample
+      tags: [pulseBrainLabDelivery]
+      summary: Delete a filed work sample
+      parameters:
+        - name: sampleId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +616,449 @@ components:
           type: string
       required:
         - status
-
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+    PulseBrainLabGradeBand:
+      type: string
+      enum: ["K-2", "3-5", "6-8", "9-12"]
+    PulseBrainLabBrainModelTag:
+      type: string
+      enum: ["Spotlight", "Velcro", "Echo", "Rewire"]
+    PulseBrainLabWorksheetResponseType:
+      type: string
+      enum: ["write", "draw", "checklist"]
+    LocalizedText:
+      type: object
+      properties:
+        en:
+          type: string
+        es:
+          type: string
+      required: [en, es]
+    PulseBrainLabPrompt:
+      type: object
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+      required: [id, text]
+    PulseBrainLabLessonFlow:
+      type: object
+      properties:
+        connect:
+          type: string
+        teach:
+          type: string
+        practice:
+          type: string
+        close:
+          type: string
+      required: [connect, teach, practice, close]
+    PulseBrainLabParentReinforcement:
+      type: object
+      properties:
+        summary:
+          $ref: "#/components/schemas/LocalizedText"
+        brainIdea:
+          $ref: "#/components/schemas/PulseBrainLabBrainModelTag"
+        askYourChild:
+          type: array
+          items:
+            $ref: "#/components/schemas/LocalizedText"
+        whyThisWorks:
+          $ref: "#/components/schemas/LocalizedText"
+        tryTogether:
+          $ref: "#/components/schemas/LocalizedText"
+      required: [summary, brainIdea, askYourChild, whyThisWorks, tryTogether]
+    PulseBrainLabWorksheetPrompt:
+      type: object
+      properties:
+        id:
+          type: string
+        text:
+          $ref: "#/components/schemas/LocalizedText"
+        responseType:
+          $ref: "#/components/schemas/PulseBrainLabWorksheetResponseType"
+      required: [id, text, responseType]
+    PulseBrainLabStudentWorksheet:
+      type: object
+      properties:
+        intro:
+          $ref: "#/components/schemas/LocalizedText"
+        prompts:
+          type: array
+          items:
+            $ref: "#/components/schemas/PulseBrainLabWorksheetPrompt"
+      required: [intro, prompts]
+    PulseBrainLabLessonSummary:
+      type: object
+      properties:
+        lessonKey:
+          type: string
+        gradeBand:
+          $ref: "#/components/schemas/PulseBrainLabGradeBand"
+        week:
+          type: integer
+        session:
+          type: integer
+        title:
+          type: string
+        skillArea:
+          type: string
+        brainModelTag:
+          $ref: "#/components/schemas/PulseBrainLabBrainModelTag"
+      required:
+        - lessonKey
+        - gradeBand
+        - week
+        - session
+        - title
+        - skillArea
+        - brainModelTag
+    PulseBrainLabLesson:
+      type: object
+      properties:
+        id:
+          type: string
+        gradeBand:
+          $ref: "#/components/schemas/PulseBrainLabGradeBand"
+        week:
+          type: integer
+        session:
+          type: integer
+        title:
+          type: string
+        skillArea:
+          type: string
+        brainConcept:
+          type: string
+        brainModelTag:
+          $ref: "#/components/schemas/PulseBrainLabBrainModelTag"
+        objective:
+          type: string
+        materials:
+          type: string
+        durationMinutes:
+          type: integer
+        flow:
+          $ref: "#/components/schemas/PulseBrainLabLessonFlow"
+        contentQuestions:
+          type: array
+          items:
+            $ref: "#/components/schemas/PulseBrainLabPrompt"
+        followupQuestions:
+          type: array
+          items:
+            $ref: "#/components/schemas/PulseBrainLabPrompt"
+        skillTags:
+          type: array
+          items:
+            type: string
+        parentReinforcement:
+          $ref: "#/components/schemas/PulseBrainLabParentReinforcement"
+        studentWorksheet:
+          $ref: "#/components/schemas/PulseBrainLabStudentWorksheet"
+      required:
+        - id
+        - gradeBand
+        - week
+        - session
+        - title
+        - skillArea
+        - brainConcept
+        - brainModelTag
+        - objective
+        - materials
+        - durationMinutes
+        - flow
+        - contentQuestions
+        - followupQuestions
+        - skillTags
+        - parentReinforcement
+        - studentWorksheet
+    PulseBrainLabParentCard:
+      type: object
+      description: >
+        The four-part "Reinforce at Home" recall card, resolved to a single
+        language. Strictly learning / brain-science framing — never "SEL".
+      properties:
+        lessonKey:
+          type: string
+        lessonTitle:
+          type: string
+        skillArea:
+          type: string
+        brainIdea:
+          $ref: "#/components/schemas/PulseBrainLabBrainModelTag"
+        language:
+          type: string
+          enum: [en, es]
+        summary:
+          type: string
+        askYourChild:
+          type: array
+          items:
+            type: string
+        whyThisWorks:
+          type: string
+        tryTogether:
+          type: string
+      required:
+        - lessonKey
+        - lessonTitle
+        - skillArea
+        - brainIdea
+        - language
+        - summary
+        - askYourChild
+        - whyThisWorks
+        - tryTogether
+    PulseBrainLabAttendanceStatus:
+      type: string
+      enum: ["present", "absent", "excused"]
+    PulseBrainLabGroupMember:
+      type: object
+      properties:
+        studentId:
+          type: string
+        localSisId:
+          type: ["string", "null"]
+        firstName:
+          type: string
+        lastName:
+          type: string
+        gradeLevel:
+          type: ["string", "null"]
+      required: [studentId, localSisId, firstName, lastName]
+    PulseBrainLabGroup:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        gradeBand:
+          $ref: "#/components/schemas/PulseBrainLabGradeBand"
+        schoolYear:
+          type: string
+        memberCount:
+          type: integer
+        createdAt:
+          type: string
+      required: [id, name, gradeBand, schoolYear, memberCount, createdAt]
+    PulseBrainLabGroupDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        gradeBand:
+          $ref: "#/components/schemas/PulseBrainLabGradeBand"
+        schoolYear:
+          type: string
+        members:
+          type: array
+          items:
+            $ref: "#/components/schemas/PulseBrainLabGroupMember"
+        createdAt:
+          type: string
+      required: [id, name, gradeBand, schoolYear, members, createdAt]
+    PulseBrainLabSession:
+      type: object
+      properties:
+        id:
+          type: integer
+        groupId:
+          type: integer
+        lessonKey:
+          type: string
+        lessonTitle:
+          type: string
+        sessionDate:
+          type: string
+        notes:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+      required: [id, groupId, lessonKey, lessonTitle, sessionDate, createdAt]
+    PulseBrainLabAttendanceEntry:
+      type: object
+      properties:
+        studentId:
+          type: string
+        localSisId:
+          type: ["string", "null"]
+        firstName:
+          type: string
+        lastName:
+          type: string
+        status:
+          $ref: "#/components/schemas/PulseBrainLabAttendanceStatus"
+      required: [studentId, localSisId, firstName, lastName, status]
+    PulseBrainLabSessionDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+        groupId:
+          type: integer
+        lessonKey:
+          type: string
+        lessonTitle:
+          type: string
+        sessionDate:
+          type: string
+        notes:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        attendance:
+          type: array
+          items:
+            $ref: "#/components/schemas/PulseBrainLabAttendanceEntry"
+      required: [id, groupId, lessonKey, lessonTitle, sessionDate, createdAt, attendance]
+    CreatePulseBrainLabGroupInput:
+      type: object
+      properties:
+        name:
+          type: string
+        gradeBand:
+          $ref: "#/components/schemas/PulseBrainLabGradeBand"
+        studentIds:
+          type: array
+          items:
+            type: string
+      required: [name, gradeBand]
+    UpdatePulseBrainLabGroupInput:
+      type: object
+      properties:
+        name:
+          type: string
+        schoolYear:
+          type: string
+    AddPulseBrainLabMembersInput:
+      type: object
+      properties:
+        studentIds:
+          type: array
+          items:
+            type: string
+      required: [studentIds]
+    CreatePulseBrainLabSessionInput:
+      type: object
+      properties:
+        lessonKey:
+          type: string
+        sessionDate:
+          type: string
+        notes:
+          type: string
+      required: [lessonKey, sessionDate]
+    SetPulseBrainLabAttendanceItem:
+      type: object
+      properties:
+        studentId:
+          type: string
+        status:
+          $ref: "#/components/schemas/PulseBrainLabAttendanceStatus"
+      required: [studentId, status]
+    SetPulseBrainLabAttendanceInput:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/SetPulseBrainLabAttendanceItem"
+      required: [entries]
+    PulseBrainLabScanSource:
+      type: string
+      enum: ["phone", "batch"]
+    PulseBrainLabWorkSample:
+      type: object
+      description: >
+        A captured student work sample (the completed worksheet photo/scan)
+        filed to one (session, student). Staff-only until shared.
+      properties:
+        id:
+          type: integer
+        sessionId:
+          type: integer
+        studentId:
+          type: string
+        localSisId:
+          type: ["string", "null"]
+        firstName:
+          type: ["string", "null"]
+        lastName:
+          type: ["string", "null"]
+        objectKey:
+          type: string
+        pageIndex:
+          type: ["integer", "null"]
+        source:
+          type: string
+        shared:
+          type: boolean
+        createdAt:
+          type: string
+      required: [id, sessionId, studentId, localSisId, objectKey, source, shared, createdAt]
+    PulseBrainLabUnmatchedScan:
+      type: object
+      description: >
+        A scanned page whose QR could not be decoded; awaiting one-tap manual
+        assignment in the per-school tray.
+      properties:
+        id:
+          type: integer
+        objectKey:
+          type: string
+        source:
+          type: string
+        batchLabel:
+          type: ["string", "null"]
+        pageIndex:
+          type: ["integer", "null"]
+        status:
+          type: string
+        createdAt:
+          type: string
+      required: [id, objectKey, source, status, createdAt]
+    RoutePulseBrainLabScanInput:
+      type: object
+      properties:
+        token:
+          type: string
+        objectPath:
+          type: string
+        source:
+          $ref: "#/components/schemas/PulseBrainLabScanSource"
+        pageIndex:
+          type: integer
+      required: [token, objectPath, source]
+    FilePulseBrainLabUnmatchedScanInput:
+      type: object
+      properties:
+        objectPath:
+          type: string
+        source:
+          $ref: "#/components/schemas/PulseBrainLabScanSource"
+        batchLabel:
+          type: string
+        pageIndex:
+          type: integer
+      required: [objectPath, source]
+    AssignPulseBrainLabUnmatchedScanInput:
+      type: object
+      properties:
+        sessionId:
+          type: integer
+        studentId:
+          type: string
+      required: [sessionId, studentId]

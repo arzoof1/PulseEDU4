@@ -51,6 +51,7 @@ import {
   DEFAULT_CASE_OUTCOMES,
   studentRetentionsTable,
   benchmarkDescriptionsTable,
+  pulseBrainLabLessonsTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, sql, and, inArray, isNull, asc, desc } from "drizzle-orm";
@@ -66,6 +67,10 @@ import {
 } from "./lib/academicMinutes.js";
 import benchmarkDeliveriesSeedJson from "./seedData/benchmarkDeliveriesSeed.json" with { type: "json" };
 import benchmarkDescriptionsJson from "./data/benchmarkDescriptions.json" with { type: "json" };
+import {
+  PULSE_BRAIN_LAB_LESSONS,
+  PULSE_BRAIN_LAB_PROGRAM,
+} from "./data/pulseBrainLab/index.js";
 
 // =============================================================================
 // MULTI-SCHOOL SEED
@@ -581,6 +586,229 @@ export async function seedBenchmarkDescriptions() {
           grade: sql`excluded.grade`,
           strand: sql`excluded.strand`,
           description: sql`excluded.description`,
+        },
+      });
+  }
+}
+
+// -----------------------------------------------------------------------------
+// PULSEBRAINLAB LESSON CATALOG: GLOBAL (not school-scoped) catalog of the curated
+// 48-lesson curriculum (4 grade bands x 12 sessions). Like benchmark_descriptions,
+// the curated content is identical for every tenant, so it lives once and is read
+// by all schools. Source of truth is the committed JSON under ./data/pulseBrainLab/;
+// upserted idempotently here keyed by lessonKey and version-stamped via
+// PULSE_BRAIN_LAB_PROGRAM.contentVersion so corrections flow in on the next boot.
+// Mirrors the benchmark_descriptions CREATE TABLE IF NOT EXISTS pattern because
+// drizzle-kit push can't apply it non-interactively. Safe to re-run every boot.
+// -----------------------------------------------------------------------------
+export async function ensurePulseBrainLabLessonsSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pulse_brain_lab_lessons (
+      id SERIAL PRIMARY KEY,
+      lesson_key TEXT NOT NULL,
+      grade_band TEXT NOT NULL,
+      week INTEGER NOT NULL,
+      session INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      skill_area TEXT NOT NULL,
+      brain_model_tag TEXT NOT NULL,
+      content_version INTEGER NOT NULL,
+      lesson JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_lessons_grade_band_idx ON pulse_brain_lab_lessons (grade_band)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS pulse_brain_lab_lessons_lesson_key_unique ON pulse_brain_lab_lessons (lesson_key)`,
+  );
+}
+
+// School-scoped DELIVERY tables (groups, members, sessions, attendance). Additive
+// CREATE TABLE IF NOT EXISTS so it runs idempotently at boot without drizzle-kit.
+export async function ensurePulseBrainLabGroupsSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pulse_brain_lab_groups (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      grade_band TEXT NOT NULL,
+      school_year TEXT NOT NULL,
+      created_by_staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_groups_school_idx ON pulse_brain_lab_groups (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_groups_school_year_idx ON pulse_brain_lab_groups (school_id, school_year)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pulse_brain_lab_group_members (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_group_members_school_idx ON pulse_brain_lab_group_members (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_group_members_group_idx ON pulse_brain_lab_group_members (group_id)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS pulse_brain_lab_group_members_unique ON pulse_brain_lab_group_members (group_id, student_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pulse_brain_lab_sessions (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL,
+      lesson_key TEXT NOT NULL,
+      session_date DATE NOT NULL,
+      notes TEXT,
+      created_by_staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_sessions_school_idx ON pulse_brain_lab_sessions (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_sessions_group_idx ON pulse_brain_lab_sessions (group_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pulse_brain_lab_session_attendance (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      session_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_session_attendance_school_idx ON pulse_brain_lab_session_attendance (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_session_attendance_session_idx ON pulse_brain_lab_session_attendance (session_id)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS pulse_brain_lab_session_attendance_unique ON pulse_brain_lab_session_attendance (session_id, student_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pulse_brain_lab_worksheet_tokens (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      session_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      token TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_worksheet_tokens_school_idx ON pulse_brain_lab_worksheet_tokens (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS pulse_brain_lab_worksheet_tokens_token_unique ON pulse_brain_lab_worksheet_tokens (token)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS pulse_brain_lab_worksheet_tokens_session_student_unique ON pulse_brain_lab_worksheet_tokens (session_id, student_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pulse_brain_lab_work_samples (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      session_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      object_key TEXT NOT NULL,
+      page_index INTEGER,
+      source TEXT NOT NULL,
+      shared BOOLEAN NOT NULL DEFAULT FALSE,
+      created_by_staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_work_samples_school_idx ON pulse_brain_lab_work_samples (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_work_samples_session_idx ON pulse_brain_lab_work_samples (session_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_work_samples_student_idx ON pulse_brain_lab_work_samples (school_id, student_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pulse_brain_lab_unmatched_scans (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      object_key TEXT NOT NULL,
+      source TEXT NOT NULL,
+      batch_label TEXT,
+      page_index INTEGER,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_by_staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      resolved_at TIMESTAMPTZ
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_unmatched_scans_school_status_idx ON pulse_brain_lab_unmatched_scans (school_id, status)`,
+  );
+}
+
+export async function seedPulseBrainLabLessons() {
+  await ensurePulseBrainLabLessonsSchema();
+  const lessons = PULSE_BRAIN_LAB_LESSONS;
+  if (!lessons.length) return;
+  const version = PULSE_BRAIN_LAB_PROGRAM.contentVersion;
+  // Idempotent upsert keyed by lessonKey: insert new lessons, refresh the full
+  // JSONB + denormalized columns on existing ones so a committed-content
+  // correction (and the bumped contentVersion) is picked up on the next boot.
+  const CHUNK = 50;
+  for (let i = 0; i < lessons.length; i += CHUNK) {
+    const chunk = lessons.slice(i, i + CHUNK);
+    await db
+      .insert(pulseBrainLabLessonsTable)
+      .values(
+        chunk.map((l) => ({
+          lessonKey: l.id,
+          gradeBand: l.gradeBand,
+          week: l.week,
+          session: l.session,
+          title: l.title,
+          skillArea: l.skillArea,
+          brainModelTag: l.brainModelTag,
+          contentVersion: version,
+          lesson: l as unknown as Record<string, unknown>,
+        })),
+      )
+      .onConflictDoUpdate({
+        target: [pulseBrainLabLessonsTable.lessonKey],
+        set: {
+          gradeBand: sql`excluded.grade_band`,
+          week: sql`excluded.week`,
+          session: sql`excluded.session`,
+          title: sql`excluded.title`,
+          skillArea: sql`excluded.skill_area`,
+          brainModelTag: sql`excluded.brain_model_tag`,
+          contentVersion: sql`excluded.content_version`,
+          lesson: sql`excluded.lesson`,
+          updatedAt: sql`NOW()`,
         },
       });
   }

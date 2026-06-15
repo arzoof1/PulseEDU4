@@ -55,6 +55,58 @@ export interface PulseBrainLabPrompt {
   text: string;
 }
 
+/**
+ * Bilingual string. EN + ES are authored for every family-facing and
+ * student-facing surface (the parent recall card and the student worksheet)
+ * because these artifacts leave the building. Staff-facing facilitation content
+ * (flow, contentQuestions, followupQuestions) stays English-only by design.
+ */
+export interface LocalizedText {
+  en: string;
+  es: string;
+}
+
+/**
+ * The parent-facing "Reinforce at Home" recall card. Designed around the Echo
+ * (retrieval) idea: the parent becomes a retrieval partner by asking the child
+ * to recall the learning, and absorbs the brain-science "why" in the process.
+ * NEVER uses "SEL"/"social-emotional" language — strictly learning/brain framing.
+ */
+export interface PulseBrainLabParentReinforcement {
+  /** "What we practiced" — 1-2 plain sentences, names the brain idea in play. */
+  summary: LocalizedText;
+  /** Which brain idea this lesson featured (drives the cumulative vocab key). */
+  brainIdea: BrainModelTag;
+  /** 2-3 recall prompts the PARENT asks the child (the retrieval practice). */
+  askYourChild: LocalizedText[];
+  /** One line of brain science aimed at the parent (trains the family by stealth). */
+  whyThisWorks: LocalizedText;
+  /** A tiny home action — the Rewire step. */
+  tryTogether: LocalizedText;
+}
+
+export type WorksheetResponseType = "write" | "draw" | "checklist";
+
+/**
+ * A completable worksheet prompt. `id` reuses the lesson's stable prompt IDs
+ * where the worksheet mirrors a discussion/retrieval question, so future
+ * per-question capture aligns to the same anchors.
+ */
+export interface PulseBrainLabWorksheetPrompt {
+  id: string;
+  text: LocalizedText;
+  responseType: WorksheetResponseType;
+}
+
+/**
+ * The student worksheet: a completable handout. The completed sheet IS the
+ * participation record and the artifact the BS scans back in as the work sample.
+ */
+export interface PulseBrainLabStudentWorksheet {
+  intro: LocalizedText;
+  prompts: PulseBrainLabWorksheetPrompt[];
+}
+
 export interface PulseBrainLabLesson {
   /** Stable slug, e.g. "pbl-g35-s03". */
   id: string;
@@ -81,6 +133,10 @@ export interface PulseBrainLabLesson {
   /** Retrieval / take-home prompts for understanding checks. */
   followupQuestions: PulseBrainLabPrompt[];
   skillTags: string[];
+  /** Parent-facing "Reinforce at Home" recall card (bilingual EN/ES). */
+  parentReinforcement: PulseBrainLabParentReinforcement;
+  /** Completable student worksheet = participation evidence (bilingual EN/ES). */
+  studentWorksheet: PulseBrainLabStudentWorksheet;
 }
 
 export interface PulseBrainLabBand {

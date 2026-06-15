@@ -8,3 +8,294 @@
 export interface HealthStatus {
   status: string;
 }
+
+export interface ApiError {
+  error: string;
+}
+
+export type PulseBrainLabGradeBand =
+  (typeof PulseBrainLabGradeBand)[keyof typeof PulseBrainLabGradeBand];
+
+export const PulseBrainLabGradeBand = {
+  "K-2": "K-2",
+  "3-5": "3-5",
+  "6-8": "6-8",
+  "9-12": "9-12",
+} as const;
+
+export type PulseBrainLabBrainModelTag =
+  (typeof PulseBrainLabBrainModelTag)[keyof typeof PulseBrainLabBrainModelTag];
+
+export const PulseBrainLabBrainModelTag = {
+  Spotlight: "Spotlight",
+  Velcro: "Velcro",
+  Echo: "Echo",
+  Rewire: "Rewire",
+} as const;
+
+export type PulseBrainLabWorksheetResponseType =
+  (typeof PulseBrainLabWorksheetResponseType)[keyof typeof PulseBrainLabWorksheetResponseType];
+
+export const PulseBrainLabWorksheetResponseType = {
+  write: "write",
+  draw: "draw",
+  checklist: "checklist",
+} as const;
+
+export interface LocalizedText {
+  en: string;
+  es: string;
+}
+
+export interface PulseBrainLabPrompt {
+  id: string;
+  text: string;
+}
+
+export interface PulseBrainLabLessonFlow {
+  connect: string;
+  teach: string;
+  practice: string;
+  close: string;
+}
+
+export interface PulseBrainLabParentReinforcement {
+  summary: LocalizedText;
+  brainIdea: PulseBrainLabBrainModelTag;
+  askYourChild: LocalizedText[];
+  whyThisWorks: LocalizedText;
+  tryTogether: LocalizedText;
+}
+
+export interface PulseBrainLabWorksheetPrompt {
+  id: string;
+  text: LocalizedText;
+  responseType: PulseBrainLabWorksheetResponseType;
+}
+
+export interface PulseBrainLabStudentWorksheet {
+  intro: LocalizedText;
+  prompts: PulseBrainLabWorksheetPrompt[];
+}
+
+export interface PulseBrainLabLessonSummary {
+  lessonKey: string;
+  gradeBand: PulseBrainLabGradeBand;
+  week: number;
+  session: number;
+  title: string;
+  skillArea: string;
+  brainModelTag: PulseBrainLabBrainModelTag;
+}
+
+export interface PulseBrainLabLesson {
+  id: string;
+  gradeBand: PulseBrainLabGradeBand;
+  week: number;
+  session: number;
+  title: string;
+  skillArea: string;
+  brainConcept: string;
+  brainModelTag: PulseBrainLabBrainModelTag;
+  objective: string;
+  materials: string;
+  durationMinutes: number;
+  flow: PulseBrainLabLessonFlow;
+  contentQuestions: PulseBrainLabPrompt[];
+  followupQuestions: PulseBrainLabPrompt[];
+  skillTags: string[];
+  parentReinforcement: PulseBrainLabParentReinforcement;
+  studentWorksheet: PulseBrainLabStudentWorksheet;
+}
+
+export type PulseBrainLabParentCardLanguage =
+  (typeof PulseBrainLabParentCardLanguage)[keyof typeof PulseBrainLabParentCardLanguage];
+
+export const PulseBrainLabParentCardLanguage = {
+  en: "en",
+  es: "es",
+} as const;
+
+/**
+ * The four-part "Reinforce at Home" recall card, resolved to a single language. Strictly learning / brain-science framing — never "SEL".
+
+ */
+export interface PulseBrainLabParentCard {
+  lessonKey: string;
+  lessonTitle: string;
+  skillArea: string;
+  brainIdea: PulseBrainLabBrainModelTag;
+  language: PulseBrainLabParentCardLanguage;
+  summary: string;
+  askYourChild: string[];
+  whyThisWorks: string;
+  tryTogether: string;
+}
+
+export type PulseBrainLabAttendanceStatus =
+  (typeof PulseBrainLabAttendanceStatus)[keyof typeof PulseBrainLabAttendanceStatus];
+
+export const PulseBrainLabAttendanceStatus = {
+  present: "present",
+  absent: "absent",
+  excused: "excused",
+} as const;
+
+export interface PulseBrainLabGroupMember {
+  studentId: string;
+  /** @nullable */
+  localSisId: string | null;
+  firstName: string;
+  lastName: string;
+  /** @nullable */
+  gradeLevel?: string | null;
+}
+
+export interface PulseBrainLabGroup {
+  id: number;
+  name: string;
+  gradeBand: PulseBrainLabGradeBand;
+  schoolYear: string;
+  memberCount: number;
+  createdAt: string;
+}
+
+export interface PulseBrainLabGroupDetail {
+  id: number;
+  name: string;
+  gradeBand: PulseBrainLabGradeBand;
+  schoolYear: string;
+  members: PulseBrainLabGroupMember[];
+  createdAt: string;
+}
+
+export interface PulseBrainLabSession {
+  id: number;
+  groupId: number;
+  lessonKey: string;
+  lessonTitle: string;
+  sessionDate: string;
+  /** @nullable */
+  notes?: string | null;
+  createdAt: string;
+}
+
+export interface PulseBrainLabAttendanceEntry {
+  studentId: string;
+  /** @nullable */
+  localSisId: string | null;
+  firstName: string;
+  lastName: string;
+  status: PulseBrainLabAttendanceStatus;
+}
+
+export interface PulseBrainLabSessionDetail {
+  id: number;
+  groupId: number;
+  lessonKey: string;
+  lessonTitle: string;
+  sessionDate: string;
+  /** @nullable */
+  notes?: string | null;
+  createdAt: string;
+  attendance: PulseBrainLabAttendanceEntry[];
+}
+
+export interface CreatePulseBrainLabGroupInput {
+  name: string;
+  gradeBand: PulseBrainLabGradeBand;
+  studentIds?: string[];
+}
+
+export interface UpdatePulseBrainLabGroupInput {
+  name?: string;
+  schoolYear?: string;
+}
+
+export interface AddPulseBrainLabMembersInput {
+  studentIds: string[];
+}
+
+export interface CreatePulseBrainLabSessionInput {
+  lessonKey: string;
+  sessionDate: string;
+  notes?: string;
+}
+
+export interface SetPulseBrainLabAttendanceItem {
+  studentId: string;
+  status: PulseBrainLabAttendanceStatus;
+}
+
+export interface SetPulseBrainLabAttendanceInput {
+  entries: SetPulseBrainLabAttendanceItem[];
+}
+
+export type PulseBrainLabScanSource =
+  (typeof PulseBrainLabScanSource)[keyof typeof PulseBrainLabScanSource];
+
+export const PulseBrainLabScanSource = {
+  phone: "phone",
+  batch: "batch",
+} as const;
+
+/**
+ * A captured student work sample (the completed worksheet photo/scan) filed to one (session, student). Staff-only until shared.
+
+ */
+export interface PulseBrainLabWorkSample {
+  id: number;
+  sessionId: number;
+  studentId: string;
+  /** @nullable */
+  localSisId: string | null;
+  /** @nullable */
+  firstName?: string | null;
+  /** @nullable */
+  lastName?: string | null;
+  objectKey: string;
+  /** @nullable */
+  pageIndex?: number | null;
+  source: string;
+  shared: boolean;
+  createdAt: string;
+}
+
+/**
+ * A scanned page whose QR could not be decoded; awaiting one-tap manual assignment in the per-school tray.
+
+ */
+export interface PulseBrainLabUnmatchedScan {
+  id: number;
+  objectKey: string;
+  source: string;
+  /** @nullable */
+  batchLabel?: string | null;
+  /** @nullable */
+  pageIndex?: number | null;
+  status: string;
+  createdAt: string;
+}
+
+export interface RoutePulseBrainLabScanInput {
+  token: string;
+  objectPath: string;
+  source: PulseBrainLabScanSource;
+  pageIndex?: number;
+}
+
+export interface FilePulseBrainLabUnmatchedScanInput {
+  objectPath: string;
+  source: PulseBrainLabScanSource;
+  batchLabel?: string;
+  pageIndex?: number;
+}
+
+export interface AssignPulseBrainLabUnmatchedScanInput {
+  sessionId: number;
+  studentId: string;
+}
+
+export type ListPulseBrainLabLessonsParams = {
+  gradeBand?: PulseBrainLabGradeBand;
+};

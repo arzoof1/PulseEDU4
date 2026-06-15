@@ -51,3 +51,4 @@
 - [Standards Book reference](standards-book-reference.md) — in-app FLDOE standards book = committed JSON from pdftotext \f-split; GLOBAL non-school-scoped route (statewide reference, no tenant data); Math = same pipeline, subject-gated button.
 - [Benchmark descriptions reference table](benchmark-descriptions.md) — `benchmark_descriptions` is global/NOT school-scoped (statewide FLDOE text); `-layout` pdftotext corrupts rubric-table standards (C.2.1) — use plain reading-order extraction + scan for artifacts.
 - [PulseBrainLab program](pulsebrainlab.md) — brain-based intervention curriculum; NEVER surface "SEL" (FL-sensitive), CASEL is internal-only; original content (no Second Step); every lesson carries a brain-model tag.
+- [orval *Params collision](orval-params-collision.md) — an OpenAPI op with BOTH a path AND a query param emits two clashing `<OpId>Params` exports (TS2308); make the query a path segment or rename.
