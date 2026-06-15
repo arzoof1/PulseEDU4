@@ -15,6 +15,7 @@ import { authFetch } from "../lib/authToken";
 interface BenchmarkRow {
   code: string;
   category: string | null;
+  description?: string | null;
   attempts: number;
   earned: number;
   possible: number;
@@ -426,7 +427,7 @@ function SubjectColumn({
                               overflow: "hidden",
                               textOverflow: "ellipsis",
                             }}
-                            title={`${r.code}${r.category ? ` — ${r.category}` : ""}`}
+                            title={`${r.code}${r.category ? ` — ${r.category}` : ""}${r.description ? `\n\n${r.description}` : ""}`}
                           >
                             {r.code}
                             {r.mtssTagged && (

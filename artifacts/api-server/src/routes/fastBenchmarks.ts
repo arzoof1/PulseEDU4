@@ -51,6 +51,7 @@ import {
 import { and, eq, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import PDFDocument from "pdfkit";
 import { requireSchool } from "../lib/scope.js";
+import { loadBenchmarkDescriptions } from "../lib/benchmarkText.js";
 import {
   placeOnChart,
   bucketTarget,
@@ -585,9 +586,12 @@ router.get(
     const schoolYear = rawSY;
     const benchmarkCode = rawCode;
 
+    const descMap = await loadBenchmarkDescriptions([benchmarkCode]);
+    const description = descMap.get(benchmarkCode) ?? null;
+
     if (ctx.studentIds.length === 0) {
       res.json({
-        benchmark: { code: benchmarkCode, category: null },
+        benchmark: { code: benchmarkCode, category: null, description },
         thresholdPct: ctx.thresholdPct,
         students: [],
       });
@@ -702,7 +706,7 @@ router.get(
       });
 
     res.json({
-      benchmark: { code: benchmarkCode, category },
+      benchmark: { code: benchmarkCode, category, description },
       thresholdPct: ctx.thresholdPct,
       students: out,
     });
@@ -1916,6 +1920,14 @@ router.get(
       mtssRows.map((r) => r.code).filter((c): c is string => c != null),
     );
 
+    // Full benchmark description text (official FLDOE wording) for every
+    // code in this student's slice — one read, attached to each row below.
+    const allCodes = new Set<string>();
+    for (const [, map] of byWindow) {
+      for (const code of map.keys()) allCodes.add(code);
+    }
+    const descMap = await loadBenchmarkDescriptions(allCodes);
+
     const WINDOW_RANK: Record<string, number> = { pm1: 0, pm2: 1, pm3: 2 };
     const windows: WindowBlock[] = Array.from(byWindow.entries())
       .sort((a, b) => (WINDOW_RANK[a[0]] ?? 9) - (WINDOW_RANK[b[0]] ?? 9))
@@ -1926,6 +1938,7 @@ router.get(
             return {
               code,
               category: agg.category,
+              description: descMap.get(code) ?? null,
               attempts: agg.attempts,
               earned: agg.earned,
               possible: agg.possible,

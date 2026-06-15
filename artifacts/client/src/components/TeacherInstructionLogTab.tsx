@@ -14,6 +14,7 @@ interface CatalogRow {
   code: string;
   category: string | null;
   label: string | null;
+  description?: string | null;
   source: string;
 }
 
@@ -521,6 +522,11 @@ export default function TeacherInstructionLogTab({
                       return (
                         <label
                           key={c.code}
+                          title={
+                            c.description
+                              ? `${c.code}${c.label ? ` — ${c.label}` : ""}\n\n${c.description}`
+                              : undefined
+                          }
                           style={{
                             display: "flex",
                             alignItems: "center",

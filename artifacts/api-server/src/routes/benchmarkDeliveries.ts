@@ -47,6 +47,7 @@ import {
 } from "@workspace/db";
 import { and, eq, inArray, sql, desc, asc } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+import { loadBenchmarkDescriptions } from "../lib/benchmarkText.js";
 import { isCoreTeam as isCoreTeamShared } from "../lib/coreTeam.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 
@@ -229,7 +230,12 @@ router.get(
         if (matches.length > 0) filtered = matches;
       }
     }
-    res.json({ subject, teacherId, grades, benchmarks: filtered });
+    const descMap = await loadBenchmarkDescriptions(filtered.map((r) => r.code));
+    const benchmarks = filtered.map((r) => ({
+      ...r,
+      description: descMap.get(r.code) ?? null,
+    }));
+    res.json({ subject, teacherId, grades, benchmarks });
   },
 );
 

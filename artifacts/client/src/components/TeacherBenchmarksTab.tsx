@@ -201,7 +201,7 @@ interface DrillStudent {
 }
 
 interface DrillResponse {
-  benchmark: { code: string; category: string | null };
+  benchmark: { code: string; category: string | null; description?: string | null };
   thresholdPct: number;
   students: DrillStudent[];
 }
@@ -2429,6 +2429,22 @@ export default function TeacherBenchmarksTab({
               </h3>
               <button onClick={() => setDrillCode(null)}>Close</button>
             </div>
+            {drill?.benchmark.description && (
+              <div
+                style={{
+                  fontSize: 13,
+                  lineHeight: 1.45,
+                  color: "#374151",
+                  background: "#f9fafb",
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 6,
+                  padding: "8px 10px",
+                  marginBottom: 10,
+                }}
+              >
+                {drill.benchmark.description}
+              </div>
+            )}
             <div style={{ color: "#6b7280", fontSize: 12, marginBottom: 10 }}>
               Students below the {data?.thresholdPct ?? 80}% mastery threshold for
               {" "}{data?.schoolYear} {data?.window.toUpperCase()}.
