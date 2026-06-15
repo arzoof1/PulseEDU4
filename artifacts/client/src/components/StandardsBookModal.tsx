@@ -482,10 +482,16 @@ export default function StandardsBookModal({
             <div>
               <div
                 style={{
+                  position: "sticky",
+                  top: 0,
+                  zIndex: 5,
+                  background: "white",
+                  borderBottom: "1px solid #e5e7eb",
+                  margin: "-16px -16px 12px",
+                  padding: "16px 16px 8px",
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
-                  marginBottom: 12,
                   flexWrap: "wrap",
                 }}
               >
