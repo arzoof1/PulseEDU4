@@ -543,15 +543,6 @@ export default function StandardsBookModal({
                     {showOriginal ? "View as text" : "View original page"}
                   </button>
                 )}
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  marginBottom: 8,
-                }}
-              >
                 <button
                   onClick={() =>
                     setOpenPage((p) => (p != null && p > 1 ? p - 1 : p))
@@ -559,6 +550,7 @@ export default function StandardsBookModal({
                   disabled={openPage <= 1}
                   aria-label="Previous page"
                   style={{
+                    marginLeft: "auto",
                     padding: "4px 10px",
                     fontSize: 12,
                     border: "1px solid #cbd5e1",
