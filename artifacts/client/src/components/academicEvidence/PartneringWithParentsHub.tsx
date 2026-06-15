@@ -48,7 +48,10 @@ const C = {
 
 function subjectLabel(s: AcademicSubject, lang: Lang): string {
   if (s === "ela") return lang === "en" ? "Reading / ELA" : "Lectura / ELA";
-  return lang === "en" ? "Math" : "Matemáticas";
+  if (s === "math") return lang === "en" ? "Math" : "Matemáticas";
+  return lang === "en"
+    ? "Behavior Intervention"
+    : "Intervención de Conducta";
 }
 
 export default function PartneringWithParentsHub() {
@@ -1007,7 +1010,7 @@ function AddSampleModal({
         <div>
           <FieldLabel text={t("Subject", "Materia")} />
           <div style={{ display: "flex", gap: 6 }}>
-            {(["ela", "math"] as const).map((s) => (
+            {(["ela", "math", "behavior"] as const).map((s) => (
               <button
                 key={s}
                 type="button"

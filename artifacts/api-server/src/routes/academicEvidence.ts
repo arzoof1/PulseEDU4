@@ -32,7 +32,7 @@ import { isCoreTeam } from "../lib/coreTeam.js";
 
 const router: IRouter = Router();
 
-const SUBJECTS = ["ela", "math"] as const;
+const SUBJECTS = ["ela", "math", "behavior"] as const;
 
 // Any signed-in active staff member. Returns the staff row (so callers can test
 // isCoreTeam) or null after writing the appropriate 401.

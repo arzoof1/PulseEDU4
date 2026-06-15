@@ -8,7 +8,7 @@ import { authFetch } from "../../lib/authToken";
 
 const BASE = "/api/academic-evidence";
 
-export type AcademicSubject = "ela" | "math";
+export type AcademicSubject = "ela" | "math" | "behavior";
 export type AcademicSource = "phone" | "upload";
 
 export interface SectionStudent {
