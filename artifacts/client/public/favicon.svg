@@ -1,3 +1,5 @@
 <svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect width="180" height="180" rx="36" fill="#FF3C00"/>
+  <rect width="180" height="180" rx="40" fill="#0F172A"/>
+  <text x="86" y="98" text-anchor="middle" dominant-baseline="central" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="132" fill="#FFFFFF">P</text>
+  <polyline points="18,138 60,138 73,138 84,116 95,162 106,104 117,138 162,138" fill="none" stroke="#FF3C00" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
