@@ -1,1 +1,130 @@
-[]
+[
+  {
+    "id": "cover",
+    "position": 1,
+    "filepath": "src/pages/slides/Cover.tsx",
+    "title": "The operating system for your schools",
+    "description": "Title slide. Frames PulseEDU as one connected platform for students, teachers, families, and administrators, demonstrated at D.S. Parrott Middle School.",
+    "speakerNotes": "Open with the promise: today is not a feature tour, it is one school day shown end to end across every audience. Everything you see runs on real data from D.S. Parrott Middle."
+  },
+  {
+    "id": "agenda",
+    "position": 2,
+    "filepath": "src/pages/slides/Agenda.tsx",
+    "title": "The demonstration flow",
+    "description": "Agenda. The eight connected experiences in order: Student, Teacher, Student Support, MTSS, AST & Comp Time, Family Communication, Leadership Intelligence, School Operations.",
+    "speakerNotes": "Walk the eight stops quickly. Emphasize that they connect — the same scan that opens a hall pass also takes attendance and feeds recognition."
+  },
+  {
+    "id": "student-hall-pass",
+    "position": 3,
+    "filepath": "src/pages/slides/StudentHallPass.tsx",
+    "title": "Student Experience — Hall Pass",
+    "description": "Hall pass and door kiosk. ID scan, destination, period-aware waiting line at capacity, teacher Companion Queue with Go Now, live timer and return check-in.",
+    "speakerNotes": "Demo live in Amy Brown's room: scan a badge, pick a destination, show the waiting line at capacity, then push a student through with Go Now and show the return check-in."
+  },
+  {
+    "id": "student-attendance-tour",
+    "position": 4,
+    "filepath": "src/pages/slides/StudentAttendanceTour.tsx",
+    "title": "Student Experience — Attendance, PBIS & Tour",
+    "description": "The same scan marks attendance and posts PBIS points automatically; the public bilingual school tour page is how families first meet the school.",
+    "speakerNotes": "Stress automation: one scan, three outcomes — pass, attendance, recognition. Then open the public tour page to show the front door for prospective families."
+  },
+  {
+    "id": "teacher-roster",
+    "position": 5,
+    "filepath": "src/pages/slides/TeacherRoster.tsx",
+    "title": "Teacher Experience — Roster",
+    "description": "The Teacher Roster: FAST benchmark data, ESE/504/ELL and safety flags, learning-gain green-checks, one shared source of truth for teacher and Core Team.",
+    "speakerNotes": "Open Amy Brown's Grade 7 Math roster. Point at the benchmark color-coding and the flags — this replaces a hand-kept spreadsheet."
+  },
+  {
+    "id": "teacher-small-group",
+    "position": 6,
+    "filepath": "src/pages/slides/TeacherSmallGroup.tsx",
+    "title": "Teacher Experience — Small Groups & Accommodations",
+    "description": "Form small groups from shared skill gaps and log support over time; required accommodations surface at the point of instruction.",
+    "speakerNotes": "Show grouping students by a shared weak standard and logging a session. Then open Pamela Martin's accommodations for about five students in ELA."
+  },
+  {
+    "id": "student-support-heartbeat",
+    "position": 7,
+    "filepath": "src/pages/slides/StudentSupportHeartbeat.tsx",
+    "title": "Student Support — HeartBEAT",
+    "description": "The Invisible Student. Key message: every student should be known by someone. HeartBEAT finds students with no meaningful adult connection before the year slips by.",
+    "speakerNotes": "Slow down — this is the emotional center. Say the line out loud. Then open Noah Xu to show the invisible-student flag and the connection history that explains why."
+  },
+  {
+    "id": "mtss-tiers",
+    "position": 8,
+    "filepath": "src/pages/slides/MtssTiers.tsx",
+    "title": "MTSS — Tiered Interventions",
+    "description": "Tier 2 and Tier 3 intervention plans with about two months of authentic data: goals, weekly monitoring, multiple staff, and a visible progression of supports.",
+    "speakerNotes": "Show the timeline, not a single entry — multiple weeks, multiple staff. Open the Tier 3 academic plans for Alina Maddox, Amelia Abbott, and Sienna Osborne."
+  },
+  {
+    "id": "ast-comp-time",
+    "position": 9,
+    "filepath": "src/pages/slides/AstCompTime.tsx",
+    "title": "AST & Comp Time",
+    "description": "Additional Service Time and Comp Time on one auditable five-step path: submit, approve, complete, verify, bank — for both AST and EST Comp Time.",
+    "speakerNotes": "Walk the five steps as Demo Admin approving time, and show EST Comp Time banking for Teresa Holloway. This is the payroll-defensible audit trail."
+  },
+  {
+    "id": "family-pulse-dna",
+    "position": 10,
+    "filepath": "src/pages/slides/FamilyPulseDna.tsx",
+    "title": "Family Communication — PulseDNA AI",
+    "description": "The wow moment. From a rough idea, PulseDNA generates a family message, a social post, and a teleprompter script in the school's saved voice.",
+    "speakerNotes": "Type the rough idea live: 'Volleyball team won tonight. Great crowd. Proud of our kids.' Generate all three outputs. Say the line: AI should learn the school's voice, not replace it."
+  },
+  {
+    "id": "family-parent-heartbeat",
+    "position": 11,
+    "filepath": "src/pages/slides/FamilyParentHeartbeat.tsx",
+    "title": "Family Communication — Family HeartBEAT",
+    "description": "The Parent Portal as the family's direct window into daily campus life: hall passes and attendance, tardies and lost instructional time, FAST scores with next steps, interventions and accommodations, and acknowledged school messages.",
+    "speakerNotes": "If PulseDNA is the school's voice going out, this is the family's window coming in. Open the Parent Portal as a parent and walk one child's HeartBEAT — daily activity, lost-time honesty, FAST and next steps, the supports in place — then show a message acknowledged in one tap. Note sibling switching and PDF export."
+  },
+  {
+    "id": "leadership-insights",
+    "position": 12,
+    "filepath": "src/pages/slides/LeadershipInsights.tsx",
+    "title": "Leadership Intelligence — Insights",
+    "description": "The Insights Hub: Algebra performance, learning trajectories, school-wide trends, and actionable insights that drill down to individual students.",
+    "speakerNotes": "Say the line: data should guide what we do next. Open Algebra readiness, then drill from a chart into a single student profile."
+  },
+  {
+    "id": "fast-coverage",
+    "position": 13,
+    "filepath": "src/pages/slides/FastCoverage.tsx",
+    "title": "Leadership Intelligence — FAST Coverage",
+    "description": "The FAST Coverage Report: standards analyzed, percent of curriculum taught, and instructional gaps surfaced early enough to act on.",
+    "speakerNotes": "Frame the difference between scores and coverage. Show the gaps by standard for Grade 7 — this tells leaders what was actually taught."
+  },
+  {
+    "id": "ops-ticketing",
+    "position": 14,
+    "filepath": "src/pages/slides/OpsTicketing.tsx",
+    "title": "School Operations — Event Ticketing",
+    "description": "Free-ticket events end to end: create with quotas, email QR tickets per student, no-login volunteer scanning, and atomic first-scan-wins duplicate blocking.",
+    "speakerNotes": "Create an event live, then scan the same ticket twice to show the duplicate block. No cash box, no clipboard."
+  },
+  {
+    "id": "ops-signage",
+    "position": 15,
+    "filepath": "src/pages/slides/OpsSignage.tsx",
+    "title": "School Operations — Digital Signage",
+    "description": "Per-school digital signage for announcements, celebrations, and events, with live PBIS House Cup standings and one remote driving every TV.",
+    "speakerNotes": "Show the live House Cup signage and the remote control driving multiple displays. This is school culture made visible."
+  },
+  {
+    "id": "closing",
+    "position": 16,
+    "filepath": "src/pages/slides/Closing.tsx",
+    "title": "The operating system thesis",
+    "description": "Closing. PulseEDU is the operating system that connects students, teachers, families, and administrators into a single, actionable platform.",
+    "speakerNotes": "Land the thesis verbatim. Tie back to the eight stops: one platform, every audience, one school day."
+  }
+]

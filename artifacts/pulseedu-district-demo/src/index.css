@@ -38,14 +38,14 @@
 }
 
 :root {
-  /* Replace these with brand colors */
-  --slide-primary: #4f46e5;
-  --slide-accent: #06b6d4;
-  --slide-bg: #f8fafc;
-  --slide-text: #0f172a;
-  --slide-muted: #64748b;
-  --font-display-family: "Inter", system-ui, sans-serif;
-  --font-body-family: "Inter", system-ui, sans-serif;
+  /* District Demo — "Operating System / Pulse" identity */
+  --slide-primary: #0b1f33; /* ink navy */
+  --slide-accent: #15b8a6; /* pulse teal */
+  --slide-bg: #f3efe6; /* warm paper */
+  --slide-text: #0b1f33;
+  --slide-muted: #5b6b79;
+  --font-display-family: "Space Grotesk", system-ui, sans-serif;
+  --font-body-family: "IBM Plex Sans", system-ui, sans-serif;
   color-scheme: light;
 }
 
