@@ -988,7 +988,7 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
   const hallPassExcess =
     hallPassSchoolAvg > 0 ? Math.max(0, hallPassCount - hallPassSchoolAvg * 2) : 0;
   flowScore -= Math.min(hallPassExcess * 5, 25);
-  flowScore = Math.max(0, Math.min(100, flowScore));
+  flowScore = Math.max(0, Math.min(100, Math.round(flowScore)));
   const flowRationale =
     tardyRows.length === 0 && issRows.length === 0
       ? `No tardies or ISS days (${window.label.toLowerCase()})`
