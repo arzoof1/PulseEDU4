@@ -1164,7 +1164,7 @@ export default function IntensiveGroupComposerPage({
         "Cohesion %",
         "Avg Skill %",
         "Student",
-        "Student ID",
+        "Local SIS ID",
         "Grade",
         "FAST Level",
         "Overall %",
@@ -1649,7 +1649,7 @@ export default function IntensiveGroupComposerPage({
                                 gap: 4,
                               }}
                             >
-                              <code>{studentLookup[sid]?.localSisId ?? sid}</code>
+                              <code>{studentLookup[sid]?.localSisId ?? "—"}</code>
                               <select
                                 value=""
                                 disabled={planBusy}
@@ -2846,7 +2846,8 @@ export default function IntensiveGroupComposerPage({
                   );
                   return (
                     <li key={i} style={{ marginBottom: 4 }}>
-                      Consider moving <code>{m.studentId}</code> →{" "}
+                      Consider moving{" "}
+                      <code>{studentLookup[m.studentId]?.localSisId ?? "—"}</code> →{" "}
                       <strong>{toGroup?.name ?? `Group ${m.toGroupId}`}</strong>{" "}
                       <span style={{ color: "#059669" }}>
                         (+{m.improvementPct}% better fit)

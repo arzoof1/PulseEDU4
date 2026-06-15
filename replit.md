@@ -49,8 +49,8 @@ Concise feature list. Full implementation detail (most-recent first) lives in `d
 - **Display Management**: Per-school digital-signage playlists (image/video/audio/PDF) with scheduling, PBIS house standings, active hall passes, and Heartbeat signage. Includes **Live Remote Control** — drive every TV on a playlist PowerPoint-style (auto / manual / presentation modes) without re-entering URLs.
 - **Hall Pass / Kiosk**: Door kiosk (`/kiosk`) for student self-serve passes with destinations, a period-aware waiting queue (cap 5, resets on the default bell schedule), keep-apart + daily-limit blocking, a teacher Companion Queue panel, and printable activation cards + student badges. Demo guide: `docs/hall-pass-demo-runbook.md`.
 - **Safety Plans**: Per-student behavioral/physical safety checklists with library items, audit logs, and role-based access (Guidance Counselor/Core Team edit, all staff view).
-- **PBIS Hub & Store**: PBIS point tracking, student recognition, and two reward catalogs (Classroom Store + School Store). School Store is school-wide, read-only for teachers, full edit for admins/PBIS coordinators.
-- **MTSS Intervention Plans**: Tier 2/3 plan tracking — goal setting, weekly progress monitoring, strategy categories, completion reports, tier-aware launcher, bell notifications.
+- **PBIS Hub & Store**: PBIS point tracking, student recognition, and two reward catalogs (Classroom Store + School Store). School Store is school-wide, read-only for teachers, full edit for admins/PBIS coordinators. **Invisible Student alert is TIER-AWARE**: a student is "invisible" (0 non-voided recognitions) within the window for their highest active MTSS tier — Tier 1 (no active plan)/2/3 default to 8/5/3 school days, all school-configurable (`schoolSettings.pbisInvisibleDaysTier1/2/3`; legacy flat `pbisInvisibleStudentDays` retained but unused). **Invariant: the two surfaces that flag invisibility — `/pbis/needs-attention` and the Teacher Roster — must use identical logic so they always agree on who is invisible.**
+- **MTSS Intervention Plans**: Behavior + Academic Tier 2/3 plan tracking — goal setting, weekly progress monitoring, strategy categories, completion reports, tier-aware launcher, bell notifications. Academic plans are keyed by `fastSubject` (ela|math): Tier 2 academic is LIGHT (intensive class is the monitoring — no bell/check-ins); Tier 3 academic is closely monitored on configurable `meetingDays` (bell + per-meeting-day check-ins, week incomplete until each scheduled day logged). "Generate suggestions" runs a **Tier 3 Academic** dual-gate engine: a student surfaces only when FAST **PM1 = Level 1** AND iReady **AP1** is below a per-grade per-subject cut (coordinator fills a cut-score grid; `schoolSettings.ireadyAp1Cuts`). One row per student+subject (expandable weak standards) for one-click Tier 3 academic plan creation. (The earlier light-Tier-2 list was removed from this panel.)
 - **Parent Portal**: Secure portal for a student's HeartBEAT data (PBIS, hall passes, tardies, accommodations, staff notes) with admin invites, sibling switching, configurable section visibility, and PDF export.
 - **Insights Dashboards**: Engagement, Behavior, Academics, SEB/SEL, Equity, Early Warning — aggregates, trends, top-N, grade/window filters, demographic disaggregation, and drill-down to student profiles.
 - **Teacher Roster**: Per-teacher student view with FAST scores, ESE/504/ELL flags, safety-plan indicators, and the FAST learning-gain green-check. Core Team can view any teacher's roster.
@@ -83,6 +83,52 @@ remaining action). When you ship something new, add a bullet to the top
 of `docs/shipped.md`.
 
 ### Open work
+
+- **Family Messages — multi-contact email (Phase 2).** Phase 1
+  SHIPPED: Core Team broadcast → Parent Portal inbox + Resend email
+  nudge; audience whole-school/grade/house/CSV(local_sis_id);
+  Sent→Reached→Got it counters; derived **Power Reader** badge
+  (non-points). Core design decision to preserve: **deliver to many,
+  attribute to one** — delivery may fan out to every authorized
+  contact, but acknowledgment/Power Reader rolls up to ONE primary
+  per family (today = the portal account, since `parents` is already
+  an email-keyed adult identity grouped across siblings via
+  `parent_students`). Phase 2 = true multi-contact email, deferred
+  because **ClassLink/the SIS adapter does not feed guardian emails
+  today** (the `RosterAdapter` only pulls staff/students/rooms;
+  `student_emergency_contacts` holds phone only, no email). To build:
+  (a) extend the SIS adapter to pull guardian contacts WITH email +
+  a primary/authorized flag; (b) add `email` + `is_primary` /
+  `portal_authorized` columns to `student_emergency_contacts` (or a
+  new `student_contacts`); (c) fan delivery out to all authorized
+  contact emails; (d) keep attribution rolling up to the one primary
+  so the badge stays a single family-level signal. Interim option if
+  needed sooner: let staff add extra contact emails manually / via
+  the Data Importer and mark one primary (no ClassLink dependency,
+  but manual upkeep).
+
+- **E-sign signing campaigns (bulk send → per-student return).**
+  Idea only (no build yet). Today e-sign is 1 doc = 1 link = 1
+  signer with NO student tie by design. For field-trip-style
+  workflows, wrap the existing per-document signing flow in a
+  "campaign": upload the slip once (template), fan out one signing
+  COPY per student (each copy carries `student_id`, grouped under a
+  campaign id), and aggregate returns onto one "field trip list"
+  dashboard (Not sent → Sent → Signed, reminders, bulk signed-PDF
+  download). Recipient selection two ways: (A) pick a teacher
+  class/period — expand `section_roster`/`class_sections`
+  (read-only; Skyward is source of truth) — lead with this, zero
+  effort; (B) CSV via the Data Importer pattern for cross-class
+  lists. Delivery: Resend email (parent addresses from
+  `parents`/`parent_email`) + printable per-student QR fallback
+  (reuse kiosk/badge QR) because recipient email is often blank.
+  Key decisions/caveats: the per-copy `student_id` link is the one
+  real schema change (intentionally absent today); siblings/shared
+  parents need distinct links per child; list + CSV/PDF exports
+  show `local_sis_id` ONLY (never FLEID); base62 token +
+  `publicAppOrigin` URL resolution carry over from the existing
+  sign flow. Cleanest first slice: Option A + email + status
+  dashboard; CSV + QR as fast follow.
 
 - **LG subject-band promotions (Algebra I etc.).** Phase 1 +
   Phase 2 of the LG green-check are SHIPPED. Phase 2 extended
@@ -210,6 +256,7 @@ of `docs/shipped.md`.
 - **API route shadowing**: When adding new API routes, especially with dynamic segments, ensure more specific routes are defined before broader ones to prevent shadowing.
 - **Cron jobs and environment variables**: Cron jobs are often conditional on `NODE_ENV` and other environment flags. Verify `EMAIL_REMINDERS_ENABLED` and `RESEND_FROM_ADDRESS` for email functionality.
 - **Drizzle-kit `db push`**: It can be blocked by interactive prompts on rename detection. For additive schema changes, direct `ALTER TABLE` SQL is often used as a workaround. Ensure `lib/db/src/schema/*.ts` files are updated to reflect the true schema.
+- **NO FLEID forward-facing — EVER (use `local_sis_id`).** The canonical `students.student_id` (the FLEID, e.g. `FL000000539119`) is an INTERNAL identifier — a foreign key only. It must NEVER be rendered as visible text to any user (staff, parent, student) anywhere: table cells, labels, badges, tooltips, headings, search results, @mention tokens, graph nodes, kiosk/signage, AND CSV/PDF exports. The ONLY display ID is `students.local_sis_id` (the local SIS ID). When a surface needs a student ID label, the server response must carry `localSisId` and the UI renders `localSisId ?? "—"` — never fall back to `studentId`. Keep using `student_id` for FKs, API path params, React keys, and lookups (it is the join key; remember it is NOT globally unique — always pair with `school_id`). When adding ANY student-facing surface or export, audit it for raw `studentId` rendering before shipping. See `lib/fleid` boundary precedent in `routes/kiosk.ts` (kiosk/badges) and `routes/safetyPlans.ts` (`/safety-plans/list` returns `localSisId`).
 - **Public-facing URLs / QR codes (`publicAppOrigin`)**: Links families open OUTSIDE the workspace (post-tour survey QR, brag-page link, lead-notify email) must NOT be built from `$REPLIT_DEV_DOMAIN` — it is the *development* host and is often unset in production, so QR codes ended up pointing at the dev URL or `http://localhost:5000` (a dead page). Resolve origin as: `PUBLIC_APP_URL` → first `$REPLIT_DOMAINS` host (published prod domain in prod, dev/preview host in dev) → inbound request forwarded host → localhost. See `publicAppOrigin(req)` in `routes/tours.ts` and `kioskBaseUrl` in `routes/kiosk.ts`.
 - **PDFs / blobs in the preview iframe**: The session cookie is blocked inside the Replit preview iframe (the app falls back to a Bearer token in sessionStorage, `pulseed.authToken`). A blob URL opened in a new tab renders blank, and `window.open(...).print()` can deadlock and freeze the app. For authed PDFs, trigger a blob **download** (`a.download`) from the current document instead of opening/printing in a tab — this is why the Tours lead-drawer PDFs download to disk.
 

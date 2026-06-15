@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CameraScanner } from "./components/CameraScanner";
 import { useSchoolBranding } from "./lib/branding";
 
@@ -13,7 +13,17 @@ interface LocationRow {
   isDestination: boolean;
   studentVisible: boolean;
   active: boolean;
+  // Location kind discriminator (e.g. "restroom"). Used to keep restrooms out
+  // of the "Go now" line-bypass picker.
+  kind?: string | null;
 }
+
+// A destination as shown in the kiosk picker. Extends a location row with the
+// teacher of record for that room (e.g. "Mr. Hayes"), resolved server-side
+// from the /kiosk/destinations endpoint. Null when the room has no single
+// unambiguous teacher (the picker then shows just the room name).
+type DestinationOption = Pick<LocationRow, "id" | "name"> &
+  Partial<LocationRow> & { teacherName: string | null };
 
 interface AllowedRow {
   id: number;
@@ -91,6 +101,9 @@ type Phase =
       staffId: number;
       staffName: string;
       previewRoom: string | null;
+      // Valid origin rooms for this school, so the confirm screen can
+      // render the same searchable RoomPicker as the password path.
+      locations: string[];
       ttlDays: number;
       // Set when we tried to auto-confirm with the previewRoom and it
       // failed (e.g., the default room is no longer a valid origin).
@@ -123,6 +136,10 @@ interface ActivePass {
   destination: string;
   createdAt: string; // ISO
   maxDurationMinutes: number;
+  // Consent-gated photo key, when the kiosk payload carries one. Usually null
+  // for the pass-create response (a pass row has no photo field) — the avatar
+  // then falls back to initials.
+  photoObjectKey?: string | null;
 }
 
 type Status =
@@ -134,17 +151,40 @@ type Status =
       studentId: string;
       studentFirstName: string | null;
       destination: string;
+      photoObjectKey?: string | null;
     }
   | { kind: "error"; message: string };
 
 interface QueueEntry {
   id: number;
   studentId: string;
+  // Human-facing Local SIS id — the value students scan/type. The internal
+  // studentId stays for queue ops (skip) but is never shown or matched against.
+  localSisId: string | null;
   firstName: string | null;
   lastName: string | null;
   destination: string;
   position: number;
   addedAt: string;
+  // Consent-gated photo object key for the kiosk avatar. Null when the student
+  // withholds consent / has no photo. Streamed via /api/kiosk/photo/:token.
+  photoObjectKey?: string | null;
+}
+
+// A one-way hall pass surfaced on the kiosk queue poll. `inRouteFromHere` are
+// students who LEFT this kiosk's room and haven't checked in yet; `arrivalsToHere`
+// are students HEADED to this room (tap to check them in). Restroom (round-trip)
+// passes are excluded server-side.
+interface OneWayPass {
+  id: number;
+  studentId: string;
+  localSisId: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  destination: string;
+  originRoom: string;
+  createdAt: string;
+  photoObjectKey: string | null;
 }
 
 // How long the "Welcome [Name] — enter your ID" handoff prompt sits on the
@@ -153,6 +193,27 @@ interface QueueEntry {
 // the kiosk to idle (the next student in line, if any, is NOT auto-shown
 // — they have to either be re-queued or walk up cold).
 const NEXT_UP_TIMEOUT_MS = 60_000;
+
+// Extract a student id from a scanned barcode. Two forms supported:
+//   1. raw id (hardware scanner or QR encoded as just "12345")
+//   2. signin URL (badge QR points at /kiosk?signin=12345)
+// Anything else is passed through verbatim — server-side validation
+// will reject if it's bogus. Module-scoped so both the main kiosk form
+// and the next-up handoff screen share identical decode logic.
+function extractStudentIdFromScan(text: string): string {
+  const trimmed = text.trim();
+  const match = trimmed.match(/[?&]signin=([^&\s]+)/);
+  if (match) return decodeURIComponent(match[1]);
+  return trimmed;
+}
+
+// Grace window before the queue poll is allowed to clear this device's
+// TimerScreen on the basis of "the pass id is no longer active server-side".
+// Set comfortably above the 10s poll interval so a legitimately-active pass
+// always gets at least one confirming poll before the grace can fire — the
+// grace only matters when a pass is created AND ended remotely before any poll
+// ever observed it active (otherwise the confirmation ref clears it promptly).
+const ACTIVE_PASS_CLEAR_GRACE_MS = 12_000;
 
 export default function Kiosk() {
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
@@ -308,10 +369,17 @@ export default function Kiosk() {
             staffId: data.staffId,
             staffName: data.staffName,
             previewRoom: data.previewRoom ?? null,
+            locations: Array.isArray(data.locations) ? data.locations : [],
             ttlDays: data.ttlDays ?? 14,
+            // For a room-taken failure, don't pre-fill the scary "already
+            // has an active kiosk" banner — the confirm screen will pop a
+            // clean "take over this room?" modal when the user clicks
+            // activate. Surface other errors (e.g. bad room) as before.
             autoConfirmError:
-              confirmData.error ??
-              `Auto-activation failed (${confirmRes.status}). Pick a room and try again.`,
+              confirmRes.status === 409 && confirmData.roomTaken
+                ? null
+                : (confirmData.error ??
+                  `Auto-activation failed (${confirmRes.status}). Pick a room and try again.`),
           });
           return { ok: true };
         }
@@ -322,6 +390,7 @@ export default function Kiosk() {
           staffId: data.staffId,
           staffName: data.staffName,
           previewRoom: data.previewRoom ?? null,
+          locations: Array.isArray(data.locations) ? data.locations : [],
           ttlDays: data.ttlDays ?? 14,
         });
         return { ok: true };
@@ -387,16 +456,18 @@ export default function Kiosk() {
         <EnrollConfirmScreen
           staffName={phase.staffName}
           previewRoom={phase.previewRoom}
+          locations={phase.locations}
           ttlDays={phase.ttlDays}
           initialError={phase.autoConfirmError ?? null}
           onCancel={() => setPhase({ kind: "activate" })}
-          onConfirm={async (room) => {
+          onConfirm={async (room, replaceExisting) => {
             const body: Record<string, unknown> = {
               deviceFingerprint: getOrCreateDeviceFingerprint(),
               deviceLabel: getDeviceLabel(),
               confirm: true,
               room,
             };
+            if (replaceExisting) body.replaceExisting = true;
             if (phase.method === "enroll")
               body.enrollToken = phase.credential;
             else body.pin = phase.credential;
@@ -418,6 +489,18 @@ export default function Kiosk() {
                 data.expiresAt ?? null,
               );
               return { ok: true };
+            }
+            // Room already hosts another active kiosk. Surface the
+            // take-over prompt (replaceExisting) instead of looping on
+            // the same "already has an active kiosk" error forever.
+            if (res.status === 409 && data.roomTaken) {
+              return {
+                ok: false,
+                roomTaken: true,
+                room: data.room ?? room,
+                existing: data.existing ?? null,
+                error: data.error ?? "Room already has an active kiosk",
+              };
             }
             return {
               ok: false,
@@ -798,6 +881,7 @@ function PinEntry({
 function EnrollConfirmScreen({
   staffName,
   previewRoom,
+  locations,
   ttlDays,
   initialError,
   onCancel,
@@ -805,14 +889,38 @@ function EnrollConfirmScreen({
 }: {
   staffName: string;
   previewRoom: string | null;
+  locations: string[];
   ttlDays: number;
   initialError?: string | null;
   onCancel: () => void;
-  onConfirm: (room: string) => Promise<{ ok: boolean; error?: string }>;
+  onConfirm: (
+    room: string,
+    replaceExisting?: boolean,
+  ) => Promise<{
+    ok: boolean;
+    error?: string;
+    roomTaken?: boolean;
+    room?: string;
+    existing?: {
+      activatedByName: string | null;
+      deviceLabel: string | null;
+      activatedAt: string | null;
+    } | null;
+  }>;
 }) {
   const [room, setRoom] = useState(previewRoom ?? "");
+  const sortedRooms = useMemo(
+    () => [...locations].sort((a, b) => a.localeCompare(b)),
+    [locations],
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(initialError ?? "");
+  const [takeover, setTakeover] = useState<{
+    room: string;
+    activatedByName: string | null;
+    deviceLabel: string | null;
+    activatedAt: string | null;
+  } | null>(null);
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!room.trim()) {
@@ -823,11 +931,35 @@ function EnrollConfirmScreen({
     setError("");
     const result = await onConfirm(room.trim());
     if (!result.ok) {
+      if (result.roomTaken) {
+        // Don't show the raw error + reactivate button (the loop the
+        // user hit) — switch to an explicit "take over this room?" modal.
+        setTakeover({
+          room: result.room ?? room.trim(),
+          activatedByName: result.existing?.activatedByName ?? null,
+          deviceLabel: result.existing?.deviceLabel ?? null,
+          activatedAt: result.existing?.activatedAt ?? null,
+        });
+        setBusy(false);
+        return;
+      }
       setError(result.error ?? "Activation failed");
       setBusy(false);
     }
     // On success the parent moves us to phase:'ready' — no need to
     // unset busy.
+  }
+  async function confirmTakeover() {
+    if (!takeover) return;
+    setBusy(true);
+    setError("");
+    const result = await onConfirm(takeover.room, true);
+    if (!result.ok) {
+      setError(result.error ?? "Activation failed");
+      setTakeover(null);
+      setBusy(false);
+    }
+    // On success the parent moves us to phase:'ready'.
   }
   return (
     <form
@@ -855,14 +987,15 @@ function EnrollConfirmScreen({
         </div>
       </div>
       <Field label="Room this kiosk is in">
-        <input
-          type="text"
-          autoFocus
+        <RoomPicker
           value={room}
-          onChange={(e) => setRoom(e.target.value)}
+          options={sortedRooms}
+          defaultRoom={previewRoom}
+          onSelect={(r) => {
+            setRoom(r);
+            setError("");
+          }}
           disabled={busy}
-          placeholder={previewRoom ? `${previewRoom} (your room)` : "Room name…"}
-          style={inputStyle}
         />
       </Field>
       {error && <ErrorBox>{error}</ErrorBox>}
@@ -889,11 +1022,208 @@ function EnrollConfirmScreen({
       >
         Cancel
       </button>
+      {takeover && (
+        <TakeoverConfirm
+          info={takeover}
+          busy={busy}
+          onCancel={() => {
+            setTakeover(null);
+            setBusy(false);
+          }}
+          onConfirm={confirmTakeover}
+        />
+      )}
     </form>
   );
 }
 
 /* ----------------------------- Activation screen ----------------------------- */
+
+// Searchable, click-to-select room picker for the kiosk activation screen.
+// Replaces the old free-text <input list=datalist>, which let staff type a
+// room name that didn't exactly match a real room (silent activation failure)
+// and rendered an awkward native dropdown. A room is only ever set by picking
+// it from the list — there is no free-text fallback — so typos can't slip
+// through. Works with mouse, trackpad, and keyboard (arrow keys + Enter) for
+// laptop kiosks.
+function RoomPicker({
+  value,
+  options,
+  defaultRoom,
+  onSelect,
+  disabled,
+}: {
+  value: string;
+  options: string[];
+  defaultRoom: string | null;
+  onSelect: (room: string) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [activeIdx, setActiveIdx] = useState(0);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? options.filter((o) => o.toLowerCase().includes(q))
+    : options;
+
+  useEffect(() => {
+    setActiveIdx(0);
+  }, [query]);
+
+  function labelFor(r: string) {
+    return r === defaultRoom ? `${r} (your room)` : r;
+  }
+
+  function choose(r: string) {
+    onSelect(r);
+    setOpen(false);
+    setQuery("");
+    inputRef.current?.blur();
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!open && (e.key === "ArrowDown" || e.key === "Enter")) {
+      e.preventDefault();
+      setOpen(true);
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.min(i + 1, Math.max(filtered.length - 1, 0)));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const pick = filtered[activeIdx];
+      if (pick) choose(pick);
+    } else if (e.key === "Escape") {
+      setOpen(false);
+      setQuery("");
+    }
+  }
+
+  const displayValue = open ? query : value ? labelFor(value) : "";
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <input
+        ref={inputRef}
+        type="text"
+        role="combobox"
+        aria-expanded={open}
+        autoComplete="off"
+        disabled={disabled}
+        value={displayValue}
+        placeholder={
+          defaultRoom ? `${defaultRoom} (your room)` : "Tap to pick a room…"
+        }
+        onFocus={() => {
+          setOpen(true);
+          setQuery("");
+          setActiveIdx(0);
+        }}
+        onChange={(e) => {
+          // Editing the query un-commits any current selection so the user
+          // can never type a different room, skip clicking it, and still
+          // activate the previously-picked (e.g. default) room by mistake.
+          // The submit button stays disabled until a real option is chosen.
+          if (value) onSelect("");
+          setQuery(e.target.value);
+          setOpen(true);
+        }}
+        onKeyDown={onKeyDown}
+        style={inputStyle}
+      />
+      {open && (
+        <ul
+          role="listbox"
+          style={{
+            position: "absolute",
+            zIndex: 60,
+            top: "calc(100% + 4px)",
+            left: 0,
+            right: 0,
+            maxHeight: 260,
+            overflowY: "auto",
+            margin: 0,
+            padding: "0.25rem 0",
+            listStyle: "none",
+            background: "#0f172a",
+            border: "1px solid rgba(255,255,255,0.2)",
+            borderRadius: 8,
+            boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
+          }}
+        >
+          {filtered.length === 0 ? (
+            <li
+              style={{
+                padding: "0.65rem 0.9rem",
+                color: "rgba(255,255,255,0.6)",
+                fontSize: "0.95rem",
+              }}
+            >
+              No matching rooms
+            </li>
+          ) : (
+            filtered.map((r, idx) => {
+              const active = idx === activeIdx;
+              const isDefault = r === defaultRoom;
+              return (
+                <li
+                  key={r}
+                  role="option"
+                  aria-selected={r === value}
+                  onMouseEnter={() => setActiveIdx(idx)}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    choose(r);
+                  }}
+                  style={{
+                    padding: "0.65rem 0.9rem",
+                    cursor: "pointer",
+                    fontSize: "1.05rem",
+                    color: "#fff",
+                    background: active
+                      ? "rgba(59,130,246,0.35)"
+                      : "transparent",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  <span>{r}</span>
+                  {isDefault && (
+                    <span style={{ opacity: 0.6, fontSize: "0.8rem" }}>
+                      your room
+                    </span>
+                  )}
+                </li>
+              );
+            })
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 // The activation screen has three "modes" baked into one form:
 //
@@ -1133,26 +1463,16 @@ function ActivationScreen({
                 : "Pick the room this kiosk is in"
             }
           >
-            <input
-              type="text"
-              list="kiosk-room-list"
+            <RoomPicker
               value={room}
-              onChange={(e) => setRoom(e.target.value)}
+              options={sortedRooms}
+              defaultRoom={defaultRoom}
+              onSelect={(r) => {
+                setRoom(r);
+                setError("");
+              }}
               disabled={busy}
-              placeholder={
-                defaultRoom
-                  ? `${defaultRoom} (your room)`
-                  : "Type or pick a room…"
-              }
-              style={inputStyle}
             />
-            <datalist id="kiosk-room-list">
-              {sortedRooms.map((r) => (
-                <option key={r} value={r}>
-                  {r === defaultRoom ? `${r} (your room)` : r}
-                </option>
-              ))}
-            </datalist>
           </Field>
           {defaultRoom && (
             <button
@@ -1363,7 +1683,12 @@ function KioskBody({
   // the activating teacher's per-staff allowlist. Preferred over the old
   // locations × allowed intersection so per-teacher admin edits show up.
   const [tokenDestinations, setTokenDestinations] = useState<
-    { id: number; name: string }[] | null
+    {
+      id: number;
+      name: string;
+      kind?: string | null;
+      teacherName?: string | null;
+    }[] | null
   >(null);
   const [now, setNow] = useState(new Date());
   const [studentId, setStudentId] = useState("");
@@ -1390,7 +1715,25 @@ function KioskBody({
   // list; "Get in line" opens an overlay to add yourself.
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [queueCap, setQueueCap] = useState(5);
+  // One-way lifecycle surfaces (P4). `inRoute` = students who left THIS room
+  // and haven't checked in; `arrivals` = students headed HERE (tap to receive).
+  const [inRoute, setInRoute] = useState<OneWayPass[]>([]);
+  const [arrivals, setArrivals] = useState<OneWayPass[]>([]);
+  // Transient banner for arrival check-ins (kiosk has no toast system).
+  const [arriveMessage, setArriveMessage] = useState<string | null>(null);
+  // Self-check-in confirm: when a student taps their chip on the "Heading
+  // here" rail, we don't check them in on the tap — they must confirm
+  // identity by scanning/typing their badge first (mirrors "I'm back").
+  // `arriveConfirm` holds the pass awaiting that scan; `arriveScannerOpen`
+  // drives a dedicated camera modal so it never clobbers the main form scan.
+  const [arriveConfirm, setArriveConfirm] = useState<OneWayPass | null>(null);
+  const [arriveScannerOpen, setArriveScannerOpen] = useState(false);
+  const [arriveError, setArriveError] = useState<string | null>(null);
+  const [arriveBusy, setArriveBusy] = useState(false);
   const [getInLineOpen, setGetInLineOpen] = useState(false);
+  // "Go now" line bypass — opens an overlay that creates an immediate pass for
+  // a student summoned to the office/guidance/clinic (any non-restroom dest).
+  const [goNowOpen, setGoNowOpen] = useState(false);
   // When the previous student taps "I'm back" and the server reports a
   // next-up entry, we render a dedicated handoff overlay until they enter
   // their ID (or NEXT_UP_TIMEOUT_MS elapses).
@@ -1398,6 +1741,35 @@ function KioskBody({
     entry: QueueEntry;
     expiresAt: number;
   } | null>(null);
+
+  // The queue poll runs inside a stable (token-keyed) closure, so it can't
+  // read live `activePass` / `nextUp` / `getInLineOpen` state directly without
+  // capturing stale values. Mirror them into refs the poll can consult.
+  const activePassRef = useRef<ActivePass | null>(activePass);
+  const nextUpRef = useRef(nextUp);
+  const getInLineOpenRef = useRef(getInLineOpen);
+  // Flips true once a poll has SEEN the device's current pass listed as still
+  // active. Only then will a later poll that finds it absent clear the timer —
+  // this prevents a poll that races a fresh sign-out (its row not yet visible)
+  // from wiping a pass we just created.
+  const activePassConfirmedRef = useRef(false);
+  // When the current pass was set locally — used to grace-window the
+  // poll-driven clear so it can never deadlock waiting for a confirmation
+  // that will never come (pass created AND ended before any poll saw it).
+  const activePassSetAtRef = useRef(0);
+  useEffect(() => {
+    activePassRef.current = activePass;
+  }, [activePass]);
+  useEffect(() => {
+    nextUpRef.current = nextUp;
+  }, [nextUp]);
+  useEffect(() => {
+    getInLineOpenRef.current = getInLineOpen;
+  }, [getInLineOpen]);
+  useEffect(() => {
+    activePassConfirmedRef.current = false;
+    activePassSetAtRef.current = activePass ? Date.now() : 0;
+  }, [activePass?.id]);
 
   const refetchQueue = useMemo(
     () => async () => {
@@ -1409,9 +1781,86 @@ function KioskBody({
         const data = (await res.json()) as {
           capacity?: number;
           entries?: QueueEntry[];
+          nextUp?: {
+            studentId: string;
+            localSisId: string | null;
+            firstName: string | null;
+            lastName: string | null;
+            destination: string;
+            photoObjectKey?: string | null;
+          } | null;
+          activePassIds?: number[];
+          inRouteFromHere?: OneWayPass[];
+          arrivalsToHere?: OneWayPass[];
         };
         setQueue(data.entries ?? []);
         if (typeof data.capacity === "number") setQueueCap(data.capacity);
+        // One-way lifecycle cards/strip. Setting from the poll means they
+        // clear automatically the moment the server stops returning them
+        // (i.e. the student arrived / the pass ended).
+        setInRoute(
+          Array.isArray(data.inRouteFromHere) ? data.inRouteFromHere : [],
+        );
+        setArrivals(
+          Array.isArray(data.arrivalsToHere) ? data.arrivalsToHere : [],
+        );
+
+        // Remote-end detection. The TimerScreen on THIS device is driven by
+        // local state and normally only clears when the student taps "I'm
+        // back". If a teacher ends the pass from the staff app (or the system
+        // ends it), drop the now-stale countdown so the freed slot can
+        // advance. Guarded by activePassConfirmedRef against a sign-out race.
+        const ap = activePassRef.current;
+        let deviceBusy = !!ap;
+        if (ap && Array.isArray(data.activePassIds)) {
+          if (data.activePassIds.includes(ap.id)) {
+            activePassConfirmedRef.current = true;
+            deviceBusy = true;
+          } else {
+            // The pass id is absent from the room's active set. Clear the
+            // stale timer if we previously saw it active (fast path) OR the
+            // grace window since it was set has elapsed (deadlock guard for a
+            // pass ended remotely before any poll ever observed it active).
+            const graceExpired =
+              Date.now() - activePassSetAtRef.current >
+              ACTIVE_PASS_CLEAR_GRACE_MS;
+            if (activePassConfirmedRef.current || graceExpired) {
+              setActivePass(null);
+              deviceBusy = false;
+            } else {
+              deviceBusy = true; // within grace, unconfirmed — assume still out
+            }
+          }
+        }
+
+        // Auto-promote. When the kiosk is idle (no out-timer on this device,
+        // no handoff prompt already up, get-in-line sheet closed) and the
+        // server reports an eligible front-of-line student, raise the
+        // "Welcome [Name] — enter your ID" prompt automatically. This makes a
+        // slot opening from ANY source advance the line with no re-scan. The
+        // existing NEXT_UP_TIMEOUT_MS auto-skip still forfeits the slot if the
+        // student isn't there, and the next poll promotes whoever is next.
+        if (
+          data.nextUp &&
+          !deviceBusy &&
+          !nextUpRef.current &&
+          !getInLineOpenRef.current
+        ) {
+          setNextUp({
+            entry: {
+              id: -1,
+              studentId: data.nextUp.studentId,
+              localSisId: data.nextUp.localSisId,
+              firstName: data.nextUp.firstName,
+              lastName: data.nextUp.lastName,
+              destination: data.nextUp.destination,
+              position: 1,
+              addedAt: new Date().toISOString(),
+              photoObjectKey: data.nextUp.photoObjectKey ?? null,
+            },
+            expiresAt: Date.now() + NEXT_UP_TIMEOUT_MS,
+          });
+        }
       } catch {
         // ignore — next poll will retry
       }
@@ -1466,13 +1915,19 @@ function KioskBody({
       .then((r) => r.json())
       .then((d: SchoolSettings) => setSchool(d))
       .catch(() => setSchool(null));
+    // These two are staff-session endpoints and 401 on a kiosk device (no
+    // staff login). They're only a legacy fallback for destinationOptions —
+    // the token-authed /api/kiosk/destinations below is the real source. We
+    // MUST check r.ok and guard Array.isArray: without it, a 401 JSON error
+    // body parses fine and gets stored as `locations`, then `locations.find`
+    // throws and white-screens the kiosk. (Reproduced after a room take-over.)
     fetch("/api/locations")
-      .then((r) => r.json())
-      .then((d: LocationRow[]) => setLocations(d))
+      .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+      .then((d: LocationRow[]) => setLocations(Array.isArray(d) ? d : []))
       .catch(() => setLocations([]));
     fetch("/api/location-allowed-destinations")
-      .then((r) => r.json())
-      .then((d: AllowedRow[]) => setAllowed(d))
+      .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+      .then((d: AllowedRow[]) => setAllowed(Array.isArray(d) ? d : []))
       .catch(() => setAllowed([]));
     // Token-authed source of truth for "what destinations can students
     // pick at THIS kiosk". Unions the school-wide room-pair matrix with
@@ -1481,8 +1936,14 @@ function KioskBody({
     fetch(`/api/kiosk/destinations/${encodeURIComponent(token)}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(r)))
       .then(
-        (d: { destinations: { id: number; name: string }[] }) =>
-          setTokenDestinations(d.destinations ?? []),
+        (d: {
+          destinations: {
+            id: number;
+            name: string;
+            kind?: string | null;
+            teacherName?: string | null;
+          }[];
+        }) => setTokenDestinations(d.destinations ?? []),
       )
       .catch(() => setTokenDestinations(null));
   }, [token]);
@@ -1491,6 +1952,13 @@ function KioskBody({
     const id = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(id);
   }, []);
+
+  // Auto-dismiss the arrival check-in banner so it doesn't linger.
+  useEffect(() => {
+    if (!arriveMessage) return;
+    const id = setTimeout(() => setArriveMessage(null), 4000);
+    return () => clearTimeout(id);
+  }, [arriveMessage]);
 
   const originLocation = useMemo(
     () => locations.find((l) => l.name === room) ?? null,
@@ -1506,7 +1974,17 @@ function KioskBody({
     if (tokenDestinations !== null) {
       const byId = new Map(locations.map((l) => [l.id, l]));
       return tokenDestinations
-        .map((d) => byId.get(d.id) ?? { id: d.id, name: d.name } as LocationRow)
+        .map((d): DestinationOption => {
+          const base = byId.get(d.id) ?? ({ id: d.id, name: d.name } as LocationRow);
+          return {
+            ...base,
+            // The token endpoint is the authoritative source for `kind` on a
+            // kiosk device (the staff-only /api/locations 401s here, so the
+            // `byId` fallback is usually empty).
+            kind: d.kind ?? base.kind,
+            teacherName: d.teacherName ?? null,
+          };
+        })
         .sort((a, b) => a.name.localeCompare(b.name));
     }
     if (!originLocation) return [];
@@ -1523,6 +2001,7 @@ function KioskBody({
           l.isDestination &&
           allowedDestIds.has(l.id),
       )
+      .map((l): DestinationOption => ({ ...l, teacherName: null }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [locations, allowed, originLocation, tokenDestinations]);
 
@@ -1547,18 +2026,6 @@ function KioskBody({
     const id = setTimeout(() => setWelcome(null), 5000);
     return () => clearTimeout(id);
   }, [welcome]);
-
-  // Extract a student id from a scanned barcode. Two forms supported:
-  //   1. raw id (hardware scanner or QR encoded as just "12345")
-  //   2. signin URL (badge QR points at /kiosk?signin=12345)
-  // Anything else is passed through verbatim — server-side validation
-  // will reject if it's bogus.
-  function extractStudentIdFromScan(text: string): string {
-    const trimmed = text.trim();
-    const match = trimmed.match(/[?&]signin=([^&\s]+)/);
-    if (match) return decodeURIComponent(match[1]);
-    return trimmed;
-  }
 
   async function handleSignin(rawStudentId: string) {
     const id = rawStudentId.trim();
@@ -1657,6 +2124,7 @@ function KioskBody({
         createdAt?: string;
         maxDurationMinutes?: number;
         studentFirstName?: string | null;
+        photoObjectKey?: string | null;
         queued?: boolean;
         position?: number | null;
         message?: string;
@@ -1695,6 +2163,7 @@ function KioskBody({
             destination,
             createdAt: data.createdAt,
             maxDurationMinutes: data.maxDurationMinutes,
+            photoObjectKey: data.photoObjectKey ?? null,
           });
           setStudentId("");
           setDestination("");
@@ -1706,6 +2175,7 @@ function KioskBody({
             studentId: studentId.trim(),
             studentFirstName: data.studentFirstName ?? null,
             destination,
+            photoObjectKey: data.photoObjectKey ?? null,
           });
         }
       } else {
@@ -1715,6 +2185,7 @@ function KioskBody({
           studentId: studentId.trim(),
           studentFirstName: data.studentFirstName ?? null,
           destination: data.destination ?? "(unknown)",
+          photoObjectKey: data.photoObjectKey ?? null,
         });
       }
     } catch (err) {
@@ -1725,8 +2196,66 @@ function KioskBody({
     }
   }
 
+  // Destination check-in. A staff member at the destination kiosk taps an
+  // inbound student to RECEIVE them — this ends the pass + stamps arrival.
+  // Idempotent: a friendly banner on alreadyReceived, then refetch so the
+  // strip clears.
+  // Self-check-in: `scannedId` is the Local SIS id the student just scanned /
+  // typed to confirm identity. The server enforces it belongs to `pass`, so a
+  // mis-tap on the wrong chip can never check in another student.
+  async function handleArrive(pass: OneWayPass, scannedId: string) {
+    const name = pass.firstName ?? pass.localSisId ?? "Student";
+    setArriveBusy(true);
+    setArriveError(null);
+    try {
+      const res = await fetch("/api/kiosk/hall-passes/arrive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, passId: pass.id, studentId: scannedId }),
+      });
+      if (res.status === 401) {
+        const b = await res.json().catch(() => ({}));
+        if (b.revoked) {
+          onRevoked();
+          return;
+        }
+      }
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        // Keep the confirm panel open so a wrong-badge scan can be retried.
+        setArriveError(b.error ?? `Check-in failed (${res.status})`);
+        return;
+      }
+      const b = (await res.json().catch(() => ({}))) as {
+        alreadyReceived?: boolean;
+      };
+      // Success: drop the row and close the confirm panel.
+      setArrivals((prev) => prev.filter((p) => p.id !== pass.id));
+      setArriveConfirm(null);
+      setArriveMessage(
+        b.alreadyReceived
+          ? `${name} was already checked in.`
+          : `Checked in ${name}.`,
+      );
+    } catch (err) {
+      setArriveError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setArriveBusy(false);
+      await refetchQueue();
+    }
+  }
+
   return (
     <>
+      {/* On-Time Attendance overlay. Self-polling; renders null (and the
+          hall-pass UI below shows through) until the kiosk's class enters its
+          passing window, then takes over the screen. */}
+      <AttendanceMode
+        token={token}
+        schoolName={school?.schoolName ?? ""}
+        room={room}
+        onRevoked={onRevoked}
+      />
       {welcome && (
         <WelcomeOverlay
           welcome={welcome}
@@ -1791,10 +2320,11 @@ function KioskBody({
       {activePass ? (
         <TimerScreen
           activePass={activePass}
+          token={token}
           now={now}
           returning={returning}
           returnError={returnError}
-          onReturn={async () => {
+          onReturn={async (scannedId: string) => {
             setReturning(true);
             setReturnError(null);
             try {
@@ -1802,7 +2332,11 @@ function KioskBody({
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  studentId: activePass.studentId,
+                  // Identity comes from the badge the student just scanned /
+                  // typed — NOT activePass — so tapping "I'm back" alone can
+                  // never end another student's pass. The server only ends a
+                  // pass that belongs to this student from this room.
+                  studentId: scannedId,
                   token,
                 }),
               });
@@ -1813,23 +2347,33 @@ function KioskBody({
                   return;
                 }
               }
-              if (!res.ok && res.status !== 404) {
+              if (res.status === 404) {
+                // Wrong badge: the scanned student has no active pass from
+                // this room. A remotely-ended pass clears on its own via the
+                // queue poll, so a 404 on an explicit scan means a mismatch —
+                // surface it instead of silently dismissing the timer.
+                setReturnError(
+                  "That badge has no active pass from this room. Scan the badge of the student who is out.",
+                );
+                return;
+              }
+              if (!res.ok) {
                 const b = await res.json().catch(() => ({}));
                 setReturnError(
                   b.error ?? `Request failed (${res.status})`,
                 );
                 return;
               }
-              // 404 means the pass was already ended elsewhere; treat as
-              // success and clear the screen.
               const body = (await res
                 .json()
                 .catch(() => ({}))) as {
                 nextInQueue?: {
                   studentId: string;
+                  localSisId: string | null;
                   firstName: string | null;
                   lastName: string | null;
                   destination: string;
+                  photoObjectKey?: string | null;
                 } | null;
               };
               setActivePass(null);
@@ -1842,11 +2386,13 @@ function KioskBody({
                   entry: {
                     id: -1,
                     studentId: body.nextInQueue.studentId,
+                    localSisId: body.nextInQueue.localSisId,
                     firstName: body.nextInQueue.firstName,
                     lastName: body.nextInQueue.lastName,
                     destination: body.nextInQueue.destination,
                     position: 1,
                     addedAt: new Date().toISOString(),
+                    photoObjectKey: body.nextInQueue.photoObjectKey ?? null,
                   },
                   expiresAt: Date.now() + NEXT_UP_TIMEOUT_MS,
                 });
@@ -1866,6 +2412,8 @@ function KioskBody({
           studentId={status.studentId}
           studentFirstName={status.studentFirstName}
           destination={status.destination}
+          token={token}
+          photoObjectKey={status.photoObjectKey}
           onReset={resetForm}
         />
       ) : (
@@ -1968,7 +2516,7 @@ function KioskBody({
                 <option value="">Select a destination…</option>
                 {destinationOptions.map((d) => (
                   <option key={d.id} value={d.name}>
-                    {d.name}
+                    {d.teacherName ? `${d.teacherName} — ${d.name}` : d.name}
                   </option>
                 ))}
               </select>
@@ -2018,13 +2566,152 @@ function KioskBody({
         </form>
       )}
 
+      {/* One-way IN ROUTE cards — students who left THIS room and haven't
+          checked in at their destination yet. Clears automatically when the
+          poll stops returning them (arrived / ended). */}
+      {inRoute.length > 0 && (
+        <div
+          style={{
+            width: "min(680px, 88vw)",
+            marginTop: "1.5rem",
+            marginRight: 96,
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.75rem",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "0.875rem",
+              letterSpacing: "0.15em",
+              textTransform: "uppercase",
+              opacity: 0.6,
+              textAlign: "left",
+            }}
+          >
+            In route from here
+          </div>
+          {inRoute.map((p) => (
+            <InRouteCard key={p.id} pass={p} token={token} now={now} />
+          ))}
+        </div>
+      )}
+
+      {/* Destination arrivals rail — students HEADED here. Fixed to the LEFT
+          edge (mirrors the "Next up" rail on the right) with a z-index above
+          the TimerScreen overlay, so a returning student can self-check-in
+          even while a countdown is running. Tapping a chip opens a badge-scan
+          confirm — it does NOT check in on the tap. */}
+      {arrivals.length > 0 && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            bottom: 0,
+            width: 240,
+            background: "rgba(15,23,42,0.92)",
+            color: "#fff",
+            zIndex: 11,
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.75rem",
+            padding: "0.9rem 0.75rem",
+            overflowY: "auto",
+            boxShadow: "4px 0 16px rgba(0,0,0,0.25)",
+            borderRight: "1px solid rgba(255,255,255,0.08)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "0.7rem",
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              opacity: 0.7,
+              textAlign: "center",
+            }}
+          >
+            Heading here
+          </div>
+          <div
+            style={{
+              fontSize: "0.7rem",
+              opacity: 0.55,
+              textAlign: "center",
+              marginTop: "-0.4rem",
+            }}
+          >
+            Tap your name, then scan your badge
+          </div>
+          {arrivals.map((p) => (
+            <ArrivalChip
+              key={p.id}
+              pass={p}
+              token={token}
+              onArrive={() => {
+                setArriveError(null);
+                setArriveConfirm(p);
+              }}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Badge-scan confirm for a tapped arrival chip. Rendered above the
+          timer (z-index) so it works mid-countdown. */}
+      {arriveConfirm && (
+        <ArriveConfirmOverlay
+          pass={arriveConfirm}
+          token={token}
+          busy={arriveBusy}
+          error={arriveError}
+          scannerOpen={arriveScannerOpen}
+          onOpenScanner={() => setArriveScannerOpen(true)}
+          onCloseScanner={() => setArriveScannerOpen(false)}
+          onSubmit={(scannedId) => {
+            setArriveScannerOpen(false);
+            void handleArrive(arriveConfirm, scannedId);
+          }}
+          onCancel={() => {
+            setArriveScannerOpen(false);
+            setArriveError(null);
+            setArriveConfirm(null);
+          }}
+        />
+      )}
+
+      {arriveMessage && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: "fixed",
+            bottom: 16,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "rgba(34,197,94,0.18)",
+            border: "1px solid rgba(34,197,94,0.55)",
+            color: "#bbf7d0",
+            padding: "0.6rem 1.1rem",
+            borderRadius: 999,
+            fontSize: "0.95rem",
+            fontWeight: 600,
+            zIndex: 40,
+          }}
+        >
+          {arriveMessage}
+        </div>
+      )}
+
       {/* Persistent queue strip — sibling to TimerScreen so the timer's
           render path is never coupled to queue updates. Sits on the right
           edge with a higher z-index than the timer overlay. */}
       <QueueStrip
         entries={queue}
+        token={token}
         cap={queueCap}
         onAdd={() => setGetInLineOpen(true)}
+        onGoNow={() => setGoNowOpen(true)}
         disabled={!!nextUp}
       />
 
@@ -2035,6 +2722,18 @@ function KioskBody({
           onClose={() => setGetInLineOpen(false)}
           onAdded={() => {
             setGetInLineOpen(false);
+            void refetchQueue();
+          }}
+        />
+      )}
+
+      {goNowOpen && (
+        <GoNowOverlay
+          token={token}
+          destinationOptions={destinationOptions}
+          onClose={() => setGoNowOpen(false)}
+          onCreated={() => {
+            setGoNowOpen(false);
             void refetchQueue();
           }}
         />
@@ -2071,17 +2770,414 @@ function KioskBody({
   );
 }
 
+/* ----------------------------- Student photo ----------------------------- */
+
+// Token-scoped student avatar for kiosk surfaces. When `photoObjectKey` is set
+// (and the student consented, which the server already gates), we render a plain
+// <img> against /api/kiosk/photo/:token — the kiosk has no staff session, so
+// this token-authed route is the only way to fetch the bytes. On any load
+// error (404 / no consent / network) we fall back to the initials disc, so a
+// missing photo never blocks the surface. Circular by default; pass `square`
+// for a rounded-rect.
+function KioskPhoto({
+  token,
+  photoObjectKey,
+  firstName,
+  lastName,
+  size,
+  square,
+}: {
+  token: string;
+  photoObjectKey?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  size: number;
+  square?: boolean;
+}) {
+  const [errored, setErrored] = useState(false);
+  // Reset the error flag if the key changes (a recycled component instance).
+  useEffect(() => {
+    setErrored(false);
+  }, [photoObjectKey]);
+  const initials =
+    ((firstName?.[0] ?? "") + (lastName?.[0] ?? "")).toUpperCase() || "?";
+  const base: React.CSSProperties = {
+    width: size,
+    height: size,
+    borderRadius: square ? Math.round(size * 0.18) : "50%",
+    flexShrink: 0,
+    background: "rgba(255,255,255,0.12)",
+    border: "1px solid rgba(255,255,255,0.2)",
+  };
+  if (photoObjectKey && !errored) {
+    return (
+      <img
+        src={`/api/kiosk/photo/${encodeURIComponent(token)}?key=${encodeURIComponent(photoObjectKey)}`}
+        alt=""
+        aria-hidden="true"
+        onError={() => setErrored(true)}
+        style={{ ...base, objectFit: "cover" }}
+      />
+    );
+  }
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        ...base,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: "#fff",
+        fontWeight: 700,
+        fontSize: Math.round(size * 0.4),
+      }}
+    >
+      {initials}
+    </div>
+  );
+}
+
+/* ------------------------ One-way lifecycle surfaces ------------------------ */
+
+// Big across-room card for a student who left THIS room on a one-way pass and
+// hasn't checked in yet. Shows their photo, name, destination, and elapsed
+// time since departure. Rendered by KioskBody from the queue poll's
+// `inRouteFromHere`; it disappears on the poll after the student arrives.
+function InRouteCard({
+  pass,
+  token,
+  now,
+}: {
+  pass: OneWayPass;
+  token: string;
+  now: Date;
+}) {
+  const elapsedMs = now.getTime() - new Date(pass.createdAt).getTime();
+  const totalSec = Math.max(0, Math.floor(elapsedMs / 1000));
+  const mm = Math.floor(totalSec / 60);
+  const ss = totalSec % 60;
+  const elapsed = `${mm}:${String(ss).padStart(2, "0")}`;
+  const name =
+    `${pass.firstName ?? pass.localSisId ?? "Student"}${pass.lastName ? ` ${pass.lastName}` : ""}`;
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "1rem",
+        background: "rgba(59,130,246,0.14)",
+        border: "1px solid rgba(59,130,246,0.5)",
+        borderRadius: 14,
+        padding: "1rem 1.25rem",
+        textAlign: "left",
+      }}
+    >
+      <KioskPhoto
+        token={token}
+        photoObjectKey={pass.photoObjectKey}
+        firstName={pass.firstName}
+        lastName={pass.lastName}
+        size={72}
+      />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: "clamp(1.4rem, 3vw, 2rem)",
+            fontWeight: 800,
+            lineHeight: 1.1,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {name}
+        </div>
+        <div
+          style={{
+            fontSize: "clamp(1rem, 2vw, 1.25rem)",
+            opacity: 0.85,
+            marginTop: 2,
+          }}
+        >
+          → {pass.destination}
+        </div>
+      </div>
+      <div style={{ textAlign: "right", flexShrink: 0 }}>
+        <div
+          style={{
+            fontSize: "0.7rem",
+            letterSpacing: "0.12em",
+            textTransform: "uppercase",
+            opacity: 0.6,
+          }}
+        >
+          In route
+        </div>
+        <div
+          style={{
+            fontSize: "clamp(1.4rem, 3vw, 2rem)",
+            fontWeight: 800,
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {elapsed}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Tappable chip for a student headed to THIS room. Tapping it receives /
+// checks them in via KioskBody's handleArrive.
+function ArrivalChip({
+  pass,
+  token,
+  onArrive,
+}: {
+  pass: OneWayPass;
+  token: string;
+  onArrive: () => void;
+}) {
+  const name =
+    `${pass.firstName ?? pass.localSisId ?? "Student"}${pass.lastName ? ` ${pass.lastName.charAt(0)}.` : ""}`;
+  return (
+    <button
+      type="button"
+      onClick={onArrive}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "0.75rem",
+        background: "rgba(34,197,94,0.14)",
+        border: "1px solid rgba(34,197,94,0.5)",
+        borderRadius: 12,
+        padding: "0.6rem 0.9rem",
+        color: "#fff",
+        cursor: "pointer",
+        textAlign: "left",
+      }}
+    >
+      <KioskPhoto
+        token={token}
+        photoObjectKey={pass.photoObjectKey}
+        firstName={pass.firstName}
+        lastName={pass.lastName}
+        size={48}
+      />
+      <div>
+        <div style={{ fontSize: "1.1rem", fontWeight: 700, lineHeight: 1.1 }}>
+          {name}
+        </div>
+        <div style={{ fontSize: "0.8rem", opacity: 0.75, marginTop: 2 }}>
+          from {pass.originRoom}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+// Badge-scan confirm for a student self-checking-in from the "Heading here"
+// rail. Identity must be confirmed by scanning/typing the Local SIS id before
+// the pass is ended — tapping the chip alone is not enough. Rendered as a
+// full-screen overlay above the TimerScreen so it works mid-countdown.
+function ArriveConfirmOverlay({
+  pass,
+  token,
+  busy,
+  error,
+  scannerOpen,
+  onOpenScanner,
+  onCloseScanner,
+  onSubmit,
+  onCancel,
+}: {
+  pass: OneWayPass;
+  token: string;
+  busy: boolean;
+  error: string | null;
+  scannerOpen: boolean;
+  onOpenScanner: () => void;
+  onCloseScanner: () => void;
+  onSubmit: (scannedId: string) => void;
+  onCancel: () => void;
+}) {
+  const [enteredId, setEnteredId] = useState("");
+  const name = `${pass.firstName ?? pass.localSisId ?? "Student"}${
+    pass.lastName ? ` ${pass.lastName.charAt(0)}.` : ""
+  }`;
+  const submit = (raw: string) => {
+    const id = raw.trim();
+    if (!id || busy) return;
+    onSubmit(id);
+  };
+  if (scannerOpen) {
+    return (
+      <CameraScanner
+        onScan={(text) => {
+          onCloseScanner();
+          const id = extractStudentIdFromScan(text);
+          if (id) submit(id);
+        }}
+        onCancel={onCloseScanner}
+      />
+    );
+  }
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(2,6,23,0.82)",
+        zIndex: 60,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "1.5rem",
+      }}
+    >
+      <div
+        style={{
+          width: "min(440px, 92vw)",
+          background: "#0f172a",
+          color: "#fff",
+          border: "1px solid rgba(255,255,255,0.12)",
+          borderRadius: 18,
+          padding: "1.5rem",
+          boxShadow: "0 24px 64px rgba(0,0,0,0.45)",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: "1rem",
+          textAlign: "center",
+        }}
+      >
+        <KioskPhoto
+          token={token}
+          photoObjectKey={pass.photoObjectKey}
+          firstName={pass.firstName}
+          lastName={pass.lastName}
+          size={72}
+        />
+        <div>
+          <div style={{ fontSize: "1.35rem", fontWeight: 800 }}>{name}</div>
+          <div style={{ fontSize: "0.9rem", opacity: 0.7, marginTop: 2 }}>
+            Scan your badge to check in
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onOpenScanner}
+          disabled={busy}
+          style={{
+            width: "100%",
+            background: "#2563eb",
+            border: "none",
+            borderRadius: 12,
+            color: "#fff",
+            fontSize: "1.05rem",
+            fontWeight: 700,
+            padding: "0.85rem 1rem",
+            cursor: busy ? "default" : "pointer",
+          }}
+        >
+          📷 Scan badge
+        </button>
+        <div style={{ fontSize: "0.8rem", opacity: 0.5 }}>
+          or type your Student ID
+        </div>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit(enteredId);
+          }}
+          style={{ width: "100%", display: "flex", gap: "0.5rem" }}
+        >
+          <input
+            value={enteredId}
+            onChange={(e) => setEnteredId(e.target.value)}
+            inputMode="numeric"
+            autoComplete="off"
+            placeholder="e.g. 12345"
+            style={{
+              flex: 1,
+              background: "rgba(255,255,255,0.08)",
+              border: "1px solid rgba(255,255,255,0.18)",
+              borderRadius: 10,
+              color: "#fff",
+              fontSize: "1.05rem",
+              padding: "0.7rem 0.8rem",
+            }}
+          />
+          <button
+            type="submit"
+            disabled={busy || !enteredId.trim()}
+            style={{
+              background: "#16a34a",
+              border: "none",
+              borderRadius: 10,
+              color: "#fff",
+              fontSize: "1rem",
+              fontWeight: 700,
+              padding: "0.7rem 1.1rem",
+              cursor: busy || !enteredId.trim() ? "default" : "pointer",
+              opacity: busy || !enteredId.trim() ? 0.6 : 1,
+            }}
+          >
+            {busy ? "…" : "Check in"}
+          </button>
+        </form>
+        {error && (
+          <div
+            role="alert"
+            style={{
+              width: "100%",
+              background: "rgba(220,38,38,0.18)",
+              border: "1px solid rgba(248,113,113,0.55)",
+              color: "#fecaca",
+              borderRadius: 10,
+              padding: "0.6rem 0.8rem",
+              fontSize: "0.9rem",
+            }}
+          >
+            {error}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          style={{
+            background: "transparent",
+            border: "none",
+            color: "rgba(255,255,255,0.6)",
+            fontSize: "0.9rem",
+            cursor: busy ? "default" : "pointer",
+            textDecoration: "underline",
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ----------------------------- Queue UI ----------------------------- */
 
 function QueueStrip({
   entries,
+  token,
   cap,
   onAdd,
+  onGoNow,
   disabled,
 }: {
   entries: QueueEntry[];
+  token: string;
   cap: number;
   onAdd: () => void;
+  onGoNow: () => void;
   disabled: boolean;
 }) {
   const isFull = entries.length >= cap;
@@ -2092,13 +3188,15 @@ function QueueStrip({
         top: 0,
         right: 0,
         bottom: 0,
-        width: 96,
+        width: 240,
         background: "rgba(15,23,42,0.92)",
         color: "#fff",
         zIndex: 10,
         display: "flex",
         flexDirection: "column",
-        padding: "0.75rem 0.5rem",
+        gap: "0.75rem",
+        padding: "0.9rem 0.75rem",
+        overflowY: "auto",
         boxShadow: "-4px 0 16px rgba(0,0,0,0.25)",
         borderLeft: "1px solid rgba(255,255,255,0.08)",
       }}
@@ -2109,7 +3207,6 @@ function QueueStrip({
           letterSpacing: "0.12em",
           textTransform: "uppercase",
           opacity: 0.7,
-          marginBottom: "0.5rem",
           textAlign: "center",
         }}
       >
@@ -2117,17 +3214,14 @@ function QueueStrip({
       </div>
       <div
         style={{
-          fontSize: "1.6rem",
-          fontWeight: 800,
-          lineHeight: 1,
+          fontSize: "0.7rem",
+          opacity: 0.55,
           textAlign: "center",
-          marginBottom: "0.75rem",
+          marginTop: "-0.4rem",
         }}
       >
         {entries.length}
-        <span style={{ opacity: 0.5, fontSize: "0.85rem", fontWeight: 600 }}>
-          /{cap}
-        </span>
+        <span style={{ opacity: 0.8 }}>/{cap}</span> waiting
       </div>
       <div
         style={{
@@ -2135,13 +3229,13 @@ function QueueStrip({
           overflowY: "auto",
           display: "flex",
           flexDirection: "column",
-          gap: "0.4rem",
+          gap: "0.75rem",
         }}
       >
         {entries.length === 0 ? (
           <div
             style={{
-              fontSize: "0.75rem",
+              fontSize: "0.8rem",
               opacity: 0.55,
               textAlign: "center",
               padding: "0.5rem 0.25rem",
@@ -2155,28 +3249,44 @@ function QueueStrip({
             <div
               key={e.id}
               style={{
-                background: "rgba(255,255,255,0.08)",
-                borderRadius: 8,
-                padding: "0.4rem 0.35rem",
-                fontSize: "0.8rem",
-                lineHeight: 1.15,
-                textAlign: "center",
-                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                gap: "0.75rem",
+                background: "rgba(255,255,255,0.06)",
+                border: "1px solid rgba(255,255,255,0.14)",
+                borderRadius: 12,
+                padding: "0.6rem 0.9rem",
+                color: "#fff",
+                textAlign: "left",
               }}
             >
-              <div>
-                {e.firstName ?? e.studentId}
-                {e.lastName ? ` ${e.lastName.charAt(0)}.` : ""}
-              </div>
-              <div
-                style={{
-                  fontSize: "0.65rem",
-                  opacity: 0.6,
-                  fontWeight: 400,
-                  marginTop: 2,
-                }}
-              >
-                {e.destination}
+              <KioskPhoto
+                token={token}
+                photoObjectKey={e.photoObjectKey}
+                firstName={e.firstName}
+                lastName={e.lastName}
+                size={48}
+              />
+              <div style={{ minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: "1.1rem",
+                    fontWeight: 700,
+                    lineHeight: 1.1,
+                  }}
+                >
+                  {e.firstName ?? e.localSisId ?? ""}
+                  {e.lastName ? ` ${e.lastName.charAt(0)}.` : ""}
+                </div>
+                <div
+                  style={{
+                    fontSize: "0.8rem",
+                    opacity: 0.75,
+                    marginTop: 2,
+                  }}
+                >
+                  to {e.destination}
+                </div>
               </div>
             </div>
           ))
@@ -2191,16 +3301,45 @@ function QueueStrip({
           background: isFull || disabled ? "rgba(255,255,255,0.1)" : "#22c55e",
           color: isFull || disabled ? "rgba(255,255,255,0.5)" : "#0b1220",
           border: "none",
-          borderRadius: 8,
-          padding: "0.6rem 0.3rem",
+          borderRadius: 10,
+          padding: "0.7rem 0.5rem",
           fontWeight: 700,
-          fontSize: "0.75rem",
+          fontSize: "0.95rem",
           lineHeight: 1.15,
           cursor: isFull || disabled ? "not-allowed" : "pointer",
         }}
       >
         {isFull ? "Line is full" : "Get in line"}
       </button>
+      <button
+        type="button"
+        onClick={onGoNow}
+        style={{
+          marginTop: "0.4rem",
+          background: "transparent",
+          color: "#fbbf24",
+          border: "1px solid rgba(251,191,36,0.55)",
+          borderRadius: 10,
+          padding: "0.65rem 0.5rem",
+          fontWeight: 700,
+          fontSize: "0.9rem",
+          lineHeight: 1.15,
+          cursor: "pointer",
+        }}
+      >
+        Go now
+      </button>
+      <div
+        style={{
+          marginTop: 4,
+          fontSize: "0.7rem",
+          opacity: 0.55,
+          textAlign: "center",
+          lineHeight: 1.2,
+        }}
+      >
+        Called to the office?
+      </div>
     </div>
   );
 }
@@ -2212,7 +3351,7 @@ function GetInLineOverlay({
   onAdded,
 }: {
   token: string;
-  destinationOptions: LocationRow[];
+  destinationOptions: DestinationOption[];
   onClose: () => void;
   onAdded: () => void;
 }) {
@@ -2386,7 +3525,7 @@ function GetInLineOverlay({
                 <option value="">Select a destination…</option>
                 {destinationOptions.map((d) => (
                   <option key={d.id} value={d.name}>
-                    {d.name}
+                    {d.teacherName ? `${d.teacherName} — ${d.name}` : d.name}
                   </option>
                 ))}
               </select>
@@ -2431,6 +3570,309 @@ function GetInLineOverlay({
   );
 }
 
+// "Go now" line-bypass overlay. Lets a student who was summoned to the
+// office/guidance/clinic create a pass immediately instead of waiting in the
+// queue. Restroom-kind destinations are excluded (the line meters bathroom
+// traffic). A confirmation step ("Were you called down or teacher directed?")
+// guards against students bypassing the line casually. On success the pass is
+// created server-side (priorityBypass=true) but does NOT take over the device
+// timer — the line/bathroom student keeps the big countdown.
+function GoNowOverlay({
+  token,
+  destinationOptions,
+  onClose,
+  onCreated,
+}: {
+  token: string;
+  destinationOptions: DestinationOption[];
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [studentId, setStudentId] = useState("");
+  const [destination, setDestination] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [done, setDone] = useState(false);
+  const [scannerOpen, setScannerOpen] = useState(false);
+
+  // Restrooms can never bypass the line; hide them from the picker. (The
+  // server enforces this too, in case `kind` isn't available client-side.)
+  const bypassDestinations = useMemo(
+    () => destinationOptions.filter((d) => d.kind !== "restroom"),
+    [destinationOptions],
+  );
+
+  // Auto-close after a brief confirmation so the kiosk returns to its normal
+  // screen for the next student.
+  useEffect(() => {
+    if (!done) return;
+    const id = setTimeout(onCreated, 2500);
+    return () => clearTimeout(id);
+  }, [done, onCreated]);
+
+  async function confirmGoNow() {
+    if (!studentId.trim() || !destination) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/kiosk/hall-passes`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            token,
+            studentId: studentId.trim(),
+            destination,
+            bypassQueue: true,
+          }),
+        },
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(body.error ?? `Request failed (${res.status})`);
+        setConfirming(false);
+        return;
+      }
+      setDone(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+      setConfirming(false);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <>
+      {scannerOpen && (
+        <CameraScanner
+          onScan={(text) => {
+            const trimmed = text.trim();
+            const m = trimmed.match(/[?&]signin=([^&\s]+)/);
+            const id = m ? decodeURIComponent(m[1]) : trimmed;
+            setScannerOpen(false);
+            if (id) setStudentId(id);
+          }}
+          onCancel={() => setScannerOpen(false)}
+        />
+      )}
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(0,0,0,0.7)",
+          zIndex: 20,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "2rem",
+        }}
+        onClick={onClose}
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            background: "#0f172a",
+            color: "#fff",
+            borderRadius: 16,
+            padding: "1.5rem",
+            width: "min(440px, 92vw)",
+            border: "1px solid rgba(251,191,36,0.4)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "0.75rem",
+              letterSpacing: "0.15em",
+              textTransform: "uppercase",
+              color: "#fbbf24",
+              marginBottom: "0.25rem",
+            }}
+          >
+            Go now — skip the line
+          </div>
+          <h2 style={{ margin: "0 0 1rem", fontSize: "1.5rem" }}>
+            Called down or teacher directed
+          </h2>
+          {done ? (
+            <div
+              style={{
+                padding: "1rem",
+                background: "rgba(34,197,94,0.15)",
+                border: "1px solid #22c55e",
+                borderRadius: 8,
+                textAlign: "center",
+              }}
+            >
+              <div style={{ fontSize: "2rem", marginBottom: "0.25rem" }}>
+                ✓
+              </div>
+              <div style={{ fontSize: "1.1rem", fontWeight: 700 }}>
+                You're all set — head to {destination}.
+              </div>
+              <div style={{ opacity: 0.85, marginTop: "0.5rem" }}>
+                Come back and tap “I'm back” when you return.
+              </div>
+            </div>
+          ) : confirming ? (
+            <div
+              style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+            >
+              <div
+                style={{
+                  padding: "1rem",
+                  background: "rgba(251,191,36,0.12)",
+                  border: "1px solid rgba(251,191,36,0.5)",
+                  borderRadius: 8,
+                  fontSize: "1.15rem",
+                  fontWeight: 600,
+                  textAlign: "center",
+                  lineHeight: 1.4,
+                }}
+              >
+                Were you called down or teacher directed?
+              </div>
+              {error && <ErrorBox>{error}</ErrorBox>}
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirming(false);
+                    setError(null);
+                  }}
+                  disabled={submitting}
+                  style={{
+                    flex: 1,
+                    background: "transparent",
+                    color: "#fff",
+                    border: "1px solid rgba(255,255,255,0.25)",
+                    borderRadius: 8,
+                    padding: "0.85rem",
+                    fontWeight: 600,
+                    cursor: submitting ? "not-allowed" : "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmGoNow}
+                  disabled={submitting}
+                  style={{
+                    flex: 1,
+                    background: submitting ? "rgba(251,191,36,0.4)" : "#fbbf24",
+                    color: "#0b1220",
+                    border: "none",
+                    borderRadius: 8,
+                    padding: "0.85rem",
+                    fontWeight: 800,
+                    cursor: submitting ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {submitting ? "Creating…" : "YES, I'm leaving now"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (studentId.trim() && destination) setConfirming(true);
+              }}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.85rem",
+              }}
+            >
+              <Field label="Scan or enter your ID">
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    autoFocus
+                    value={studentId}
+                    onChange={(e) => setStudentId(e.target.value)}
+                    placeholder="e.g. 12345"
+                    style={{ ...inputStyle, flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setScannerOpen(true)}
+                    aria-label="Scan badge with camera"
+                    title="Scan badge with camera"
+                    style={{
+                      background: "rgba(255,255,255,0.1)",
+                      border: "1px solid rgba(255,255,255,0.2)",
+                      borderRadius: 8,
+                      color: "#fff",
+                      width: 56,
+                      fontSize: "1.5rem",
+                      cursor: "pointer",
+                      flexShrink: 0,
+                    }}
+                  >
+                    📷
+                  </button>
+                </div>
+              </Field>
+              <Field label="Where are you going?">
+                <select
+                  value={destination}
+                  onChange={(e) => setDestination(e.target.value)}
+                  style={inputStyle}
+                >
+                  <option value="">Select a destination…</option>
+                  {bypassDestinations.map((d) => (
+                    <option key={d.id} value={d.name}>
+                      {d.teacherName ? `${d.teacherName} — ${d.name}` : d.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <div style={{ fontSize: "0.8rem", opacity: 0.65 }}>
+                Restrooms can't skip the line — use “Get in line” for those.
+              </div>
+              {error && <ErrorBox>{error}</ErrorBox>}
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  style={{
+                    flex: 1,
+                    background: "transparent",
+                    color: "#fff",
+                    border: "1px solid rgba(255,255,255,0.25)",
+                    borderRadius: 8,
+                    padding: "0.85rem",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!studentId.trim() || !destination}
+                  style={primaryBtn(!studentId.trim() || !destination, {
+                    padding: "0.85rem",
+                    flex: 1,
+                  })}
+                >
+                  Continue
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
 function NextUpScreen({
   entry,
   expiresAt,
@@ -2450,17 +3892,22 @@ function NextUpScreen({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(Date.now());
+  // Camera-scanner modal — lets the queued student scan their badge instead
+  // of typing. Lazy-loaded so kiosks without a camera never pay the cost.
+  const [scannerOpen, setScannerOpen] = useState(false);
   useEffect(() => {
     const id = setInterval(() => setTick(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
   const secondsLeft = Math.max(0, Math.ceil((expiresAt - tick) / 1000));
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = studentId.trim();
+  // `idOverride` lets a successful scan submit immediately without waiting for
+  // the `studentId` state to flush (avoids a stale-state auto-submit race).
+  async function submit(e?: React.FormEvent, idOverride?: string) {
+    e?.preventDefault();
+    const trimmed = (idOverride ?? studentId).trim();
     if (!trimmed) return;
-    if (trimmed.toUpperCase() !== entry.studentId.toUpperCase()) {
+    if (trimmed !== (entry.localSisId ?? "")) {
       setError(
         `That ID doesn't match ${entry.firstName ?? "the student"}. Try again or tap Skip.`,
       );
@@ -2496,6 +3943,7 @@ function NextUpScreen({
         createdAt?: string;
         maxDurationMinutes?: number;
         studentFirstName?: string | null;
+        photoObjectKey?: string | null;
       };
       if (
         typeof data.id === "number" &&
@@ -2509,6 +3957,9 @@ function NextUpScreen({
           destination: data.destination ?? entry.destination,
           createdAt: data.createdAt,
           maxDurationMinutes: data.maxDurationMinutes,
+          // Pass-create has no photo field; fall back to the queue entry's key
+          // so the timer avatar still resolves when consent allows.
+          photoObjectKey: data.photoObjectKey ?? entry.photoObjectKey ?? null,
         });
       }
     } catch (err) {
@@ -2545,6 +3996,15 @@ function NextUpScreen({
       >
         Your turn
       </div>
+      <div style={{ marginBottom: "1rem" }}>
+        <KioskPhoto
+          token={token}
+          photoObjectKey={entry.photoObjectKey}
+          firstName={entry.firstName}
+          lastName={entry.lastName}
+          size={120}
+        />
+      </div>
       <div
         style={{
           fontSize: "clamp(2.5rem, 7vw, 5rem)",
@@ -2553,7 +4013,7 @@ function NextUpScreen({
           marginBottom: "0.25rem",
         }}
       >
-        Welcome, {entry.firstName ?? entry.studentId}!
+        Welcome, {entry.firstName ?? entry.localSisId ?? ""}!
       </div>
       <div
         style={{
@@ -2587,17 +4047,43 @@ function NextUpScreen({
         >
           Enter your Student ID to start your pass
         </div>
-        <input
-          type="text"
-          inputMode="numeric"
-          autoComplete="off"
-          autoFocus
-          value={studentId}
-          onChange={(e) => setStudentId(e.target.value)}
-          placeholder="e.g. 12345"
-          style={{ ...inputStyle, fontSize: "1.4rem", textAlign: "center" }}
-          disabled={submitting}
-        />
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          <input
+            type="text"
+            inputMode="numeric"
+            autoComplete="off"
+            autoFocus
+            value={studentId}
+            onChange={(e) => setStudentId(e.target.value)}
+            placeholder="e.g. 12345"
+            style={{
+              ...inputStyle,
+              flex: 1,
+              fontSize: "1.4rem",
+              textAlign: "center",
+            }}
+            disabled={submitting}
+          />
+          <button
+            type="button"
+            onClick={() => setScannerOpen(true)}
+            disabled={submitting}
+            aria-label="Scan badge with camera"
+            title="Scan badge with camera"
+            style={{
+              background: "rgba(255,255,255,0.1)",
+              border: "1px solid rgba(255,255,255,0.2)",
+              borderRadius: 8,
+              color: "#fff",
+              width: 56,
+              fontSize: "1.5rem",
+              cursor: submitting ? "not-allowed" : "pointer",
+              flexShrink: 0,
+            }}
+          >
+            📷
+          </button>
+        </div>
         {error && <ErrorBox>{error}</ErrorBox>}
         <button
           type="submit"
@@ -2626,6 +4112,21 @@ function NextUpScreen({
           Skip / not here ({secondsLeft}s)
         </button>
       </form>
+      {scannerOpen && (
+        <CameraScanner
+          onScan={(text) => {
+            const id = extractStudentIdFromScan(text);
+            setScannerOpen(false);
+            if (!id) return;
+            setStudentId(id);
+            // The whole point of this screen is to walk up and tap your
+            // badge — auto-start the pass on a successful scan. The identity
+            // check inside submit() still guards against a mismatched badge.
+            void submit(undefined, id);
+          }}
+          onCancel={() => setScannerOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -2739,6 +4240,7 @@ function DeactivateModal({
             type="email"
             autoComplete="username"
             autoFocus
+            placeholder="you@school.org"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             disabled={busy}
@@ -2750,6 +4252,7 @@ function DeactivateModal({
           <input
             type="password"
             autoComplete="current-password"
+            placeholder="Your password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             disabled={busy}
@@ -2765,7 +4268,9 @@ function DeactivateModal({
             alignItems: "flex-start",
             gap: "0.5rem",
             fontSize: "0.85rem",
-            opacity: 0.85,
+            // Explicit light color — overrides the global `label` rule that
+            // would otherwise render this dark-on-dark in the kiosk modal.
+            color: "rgba(255,255,255,0.85)",
             cursor: "pointer",
             lineHeight: 1.4,
           }}
@@ -2863,7 +4368,8 @@ function StepOutButton() {
       style={{
         position: "fixed",
         top: 12,
-        right: 64,
+        // Left of the gear, which itself sits left of the 240px queue sidebar.
+        right: 304,
         background: "rgba(255,255,255,0.06)",
         border: "1px solid rgba(255,255,255,0.15)",
         color: "rgba(255,255,255,0.7)",
@@ -2874,7 +4380,7 @@ function StepOutButton() {
         alignItems: "center",
         gap: 6,
         cursor: "pointer",
-        zIndex: 10,
+        zIndex: 20,
         fontSize: "0.85rem",
         textDecoration: "none",
       }}
@@ -2909,7 +4415,9 @@ function GearButton({ onClick }: { onClick: () => void }) {
       style={{
         position: "fixed",
         top: 12,
-        right: 12,
+        // Sit to the LEFT of the 240px "Next up" queue sidebar (an opaque panel
+        // at the same stacking level) so the gear never overlaps it / its text.
+        right: 252,
         background: "rgba(255,255,255,0.06)",
         border: "1px solid rgba(255,255,255,0.15)",
         color: "rgba(255,255,255,0.55)",
@@ -2920,7 +4428,7 @@ function GearButton({ onClick }: { onClick: () => void }) {
         alignItems: "center",
         justifyContent: "center",
         cursor: "pointer",
-        zIndex: 10,
+        zIndex: 20,
       }}
     >
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -2969,7 +4477,16 @@ function Field({
         textAlign: "left",
       }}
     >
-      <span style={{ fontSize: "0.85rem", opacity: 0.8, fontWeight: 500 }}>
+      <span
+        style={{
+          fontSize: "0.85rem",
+          // Explicit light color: the global `label { color: var(--text) }`
+          // rule (light theme = dark text) would otherwise paint these
+          // dark-on-dark and invisible inside the dark kiosk modal.
+          color: "rgba(255,255,255,0.85)",
+          fontWeight: 500,
+        }}
+      >
         {label}
       </span>
       {children}
@@ -3026,17 +4543,32 @@ function primaryBtn(
 
 function TimerScreen({
   activePass,
+  token,
   now,
   returning,
   returnError,
   onReturn,
 }: {
   activePass: ActivePass;
+  token: string;
   now: Date;
   returning: boolean;
   returnError: string | null;
-  onReturn: () => void;
+  onReturn: (studentId: string) => void;
 }) {
+  // Signing back in requires the student to confirm identity by scanning
+  // (or typing) their badge first — tapping "I'm back" alone must never end
+  // the pass. The entered id is what gets sent to the return endpoint, which
+  // only ends a pass that actually belongs to that student from this room.
+  const [confirming, setConfirming] = useState(false);
+  const [enteredId, setEnteredId] = useState("");
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const idInputRef = useRef<HTMLInputElement | null>(null);
+  const submitReturn = (raw: string) => {
+    const id = raw.trim();
+    if (!id) return;
+    onReturn(id);
+  };
   const elapsedMs = now.getTime() - new Date(activePass.createdAt).getTime();
   const totalMs = activePass.maxDurationMinutes * 60 * 1000;
   const remainingMs = totalMs - elapsedMs;
@@ -3057,7 +4589,12 @@ function TimerScreen({
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "center",
+        // `safe center` keeps everything centered when it fits but falls
+        // back to top-aligned (scrollable) instead of clipping the bottom
+        // when the photo + giant timer overflow a short kiosk screen — so
+        // the "I'm back" button can never be pushed out of reach.
+        justifyContent: "safe center",
+        overflowY: "auto",
         padding: "2rem",
         zIndex: 5,
         textAlign: "center",
@@ -3069,32 +4606,40 @@ function TimerScreen({
           letterSpacing: "0.15em",
           textTransform: "uppercase",
           opacity: 0.85,
-          marginBottom: "0.75rem",
+          marginBottom: "0.5rem",
         }}
       >
         {overdue ? "Overdue" : "Out on pass"}
       </div>
+      <div style={{ marginBottom: "0.5rem" }}>
+        <KioskPhoto
+          token={token}
+          photoObjectKey={activePass.photoObjectKey}
+          firstName={activePass.studentFirstName}
+          size={88}
+        />
+      </div>
       <div
         style={{
-          fontSize: "clamp(2.5rem, 7vw, 5rem)",
+          fontSize: "clamp(1.75rem, min(7vw, 7vh), 4.5rem)",
           fontWeight: 700,
           lineHeight: 1.1,
           marginBottom: "0.5rem",
         }}
       >
-        {activePass.studentFirstName ?? activePass.studentId}
+        {activePass.studentFirstName ?? "Student"}
         <span style={{ opacity: 0.85, fontWeight: 500 }}> → </span>
         {activePass.destination}
       </div>
       <div
         aria-label={overdue ? "overdue countdown" : "time remaining"}
         style={{
-          fontSize: "clamp(8rem, 28vw, 22rem)",
+          fontSize: "clamp(4rem, min(28vw, 30vh), 22rem)",
           fontWeight: 900,
           lineHeight: 1,
           fontVariantNumeric: "tabular-nums",
           letterSpacing: "0.02em",
-          margin: "1rem 0 1.5rem",
+          margin: "0.5rem 0 0.75rem",
           textShadow: "0 4px 24px rgba(0,0,0,0.25)",
         }}
       >
@@ -3104,7 +4649,7 @@ function TimerScreen({
         style={{
           fontSize: "clamp(1rem, 2vw, 1.25rem)",
           opacity: 0.85,
-          marginBottom: "2rem",
+          marginBottom: "1.25rem",
         }}
       >
         {overdue
@@ -3129,25 +4674,157 @@ function TimerScreen({
         </div>
       )}
 
-      <button
-        type="button"
-        onClick={onReturn}
-        disabled={returning}
-        style={{
-          background: "#fff",
-          color: overdue ? "#dc2626" : "#15803d",
-          border: "none",
-          borderRadius: 12,
-          padding: "1.1rem 2.5rem",
-          fontSize: "clamp(1.25rem, 2.5vw, 1.6rem)",
-          fontWeight: 700,
-          cursor: returning ? "not-allowed" : "pointer",
-          opacity: returning ? 0.7 : 1,
-          boxShadow: "0 6px 18px rgba(0,0,0,0.25)",
-        }}
-      >
-        {returning ? "Signing in…" : "I'm back"}
-      </button>
+      {!confirming ? (
+        <button
+          type="button"
+          onClick={() => {
+            setConfirming(true);
+            // Focus on the next tick so a hardware scanner / typed id lands
+            // in the field immediately after the panel mounts.
+            setTimeout(() => idInputRef.current?.focus(), 0);
+          }}
+          style={{
+            background: "#fff",
+            color: overdue ? "#dc2626" : "#15803d",
+            border: "none",
+            borderRadius: 12,
+            padding: "1.1rem 2.5rem",
+            fontSize: "clamp(1.25rem, 2.5vw, 1.6rem)",
+            fontWeight: 700,
+            cursor: "pointer",
+            boxShadow: "0 6px 18px rgba(0,0,0,0.25)",
+          }}
+        >
+          I'm back
+        </button>
+      ) : (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "0.85rem",
+            width: "min(420px, 92vw)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "clamp(1rem, 2.2vw, 1.35rem)",
+              fontWeight: 600,
+            }}
+          >
+            Scan or enter your badge to sign back in
+          </div>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitReturn(enteredId);
+            }}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.75rem",
+              width: "100%",
+            }}
+          >
+            <input
+              ref={idInputRef}
+              value={enteredId}
+              onChange={(e) => setEnteredId(e.target.value)}
+              inputMode="numeric"
+              autoComplete="off"
+              placeholder="Student ID"
+              disabled={returning}
+              style={{
+                padding: "0.9rem 1rem",
+                fontSize: "1.25rem",
+                textAlign: "center",
+                borderRadius: 10,
+                border: "none",
+                width: "100%",
+                boxSizing: "border-box",
+              }}
+            />
+            <div style={{ display: "flex", gap: "0.6rem" }}>
+              <button
+                type="button"
+                onClick={() => setScannerOpen(true)}
+                disabled={returning}
+                style={{
+                  flex: 1,
+                  background: "rgba(255,255,255,0.16)",
+                  color: "#fff",
+                  border: "1px solid rgba(255,255,255,0.5)",
+                  borderRadius: 10,
+                  padding: "0.9rem",
+                  fontSize: "1.05rem",
+                  fontWeight: 600,
+                  cursor: returning ? "not-allowed" : "pointer",
+                }}
+              >
+                Scan badge
+              </button>
+              <button
+                type="submit"
+                disabled={returning || !enteredId.trim()}
+                style={{
+                  flex: 1,
+                  background: "#fff",
+                  color: overdue ? "#dc2626" : "#15803d",
+                  border: "none",
+                  borderRadius: 10,
+                  padding: "0.9rem",
+                  fontSize: "1.05rem",
+                  fontWeight: 700,
+                  cursor:
+                    returning || !enteredId.trim()
+                      ? "not-allowed"
+                      : "pointer",
+                  opacity: returning || !enteredId.trim() ? 0.7 : 1,
+                }}
+              >
+                {returning ? "Signing in…" : "Sign back in"}
+              </button>
+            </div>
+          </form>
+
+          <button
+            type="button"
+            onClick={() => {
+              setConfirming(false);
+              setEnteredId("");
+            }}
+            disabled={returning}
+            style={{
+              background: "transparent",
+              color: "#fff",
+              border: "none",
+              fontSize: "0.95rem",
+              textDecoration: "underline",
+              cursor: returning ? "not-allowed" : "pointer",
+              opacity: 0.85,
+            }}
+          >
+            Cancel
+          </button>
+
+          {scannerOpen && (
+            <CameraScanner
+              onScan={(text) => {
+                const id = extractStudentIdFromScan(text);
+                setScannerOpen(false);
+                if (!id) return;
+                setEnteredId(id);
+                // Auto-submit on a successful scan — tapping the badge IS the
+                // confirmation, no extra button press needed.
+                submitReturn(id);
+              }}
+              onCancel={() => setScannerOpen(false)}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -3263,15 +4940,19 @@ function SuccessCard({
   studentId,
   studentFirstName,
   destination,
+  token,
+  photoObjectKey,
   onReset,
 }: {
   mode: Mode;
   studentId: string;
   studentFirstName: string | null;
   destination: string;
+  token: string;
+  photoObjectKey?: string | null;
   onReset: () => void;
 }) {
-  const displayName = studentFirstName ?? studentId;
+  const displayName = studentFirstName ?? "Student";
   return (
     <div
       style={{
@@ -3282,6 +4963,14 @@ function SuccessCard({
         width: "min(480px, 92vw)",
       }}
     >
+      <div style={{ marginBottom: "0.75rem" }}>
+        <KioskPhoto
+          token={token}
+          photoObjectKey={photoObjectKey}
+          firstName={studentFirstName}
+          size={88}
+        />
+      </div>
       <div style={{ fontSize: "3rem", marginBottom: "0.5rem" }}>✓</div>
       <div
         style={{ fontSize: "1.5rem", fontWeight: 600, marginBottom: "0.5rem" }}
@@ -3320,6 +5009,729 @@ function SuccessCard({
       >
         Done
       </button>
+    </div>
+  );
+}
+
+// ===========================================================================
+// On-Time Attendance mode. When an activated kiosk's class is in its passing
+// window, /api/kiosk/attendance/state flips `mode` to "attendance" and this
+// component takes over the screen as a full-bleed overlay. Students earn
+// server-authoritative on-time points by presenting their Local SIS id via
+// three live inputs at once: a focused field (USB scanner + on-screen
+// keypad) and the camera. The card slides down with the result; the last few
+// scans show beneath it. The teacher's "Done" button only appears at the bell.
+// ===========================================================================
+
+type AttState = {
+  enabled: boolean;
+  mode: "hallpass" | "attendance";
+  phase?: "passing" | "post_bell" | "off";
+  incomingPeriodNumber?: number | null;
+  incomingPeriodName?: string | null;
+  minutesRemaining?: number | null;
+  periodKey?: string | null;
+  showDone?: boolean;
+  recent?: {
+    firstName: string;
+    lastName: string;
+    points: number;
+    postBell: boolean;
+  }[];
+};
+
+type AttResult =
+  | {
+      kind: "ok" | "already";
+      firstName: string;
+      points: number;
+      postBell: boolean;
+      house: { id: number; name: string; color: string } | null;
+    }
+  | { kind: "rejected"; firstName: string; message: string }
+  | { kind: "unknown" }
+  | { kind: "closed" }
+  | { kind: "error"; message: string };
+
+function AttendanceMode({
+  token,
+  schoolName,
+  room,
+  onRevoked,
+}: {
+  token: string;
+  schoolName: string;
+  room: string;
+  onRevoked: () => void;
+}) {
+  const [state, setState] = useState<AttState | null>(null);
+  const [studentId, setStudentId] = useState("");
+  const [result, setResult] = useState<AttResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [cameraOn, setCameraOn] = useState(false);
+  const [cameraKey, setCameraKey] = useState(0);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const busyRef = useRef(false);
+  // Per-id debounce so a camera that re-decodes the same badge many times a
+  // second only submits it once per ~2s.
+  const lastScanRef = useRef<{ id: string; at: number } | null>(null);
+  // Web Audio chime + screen flash on each scan result. The AudioContext is
+  // built lazily; the teacher's kiosk-activation tap satisfies the browser
+  // autoplay gesture requirement so later camera scans can play sound.
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+
+  const playChime = useCallback((kind: "success" | "error") => {
+    try {
+      let ctx = audioCtxRef.current;
+      if (!ctx) {
+        ctx = new AudioContext();
+        audioCtxRef.current = ctx;
+      }
+      const audio = ctx;
+      if (audio.state === "suspended") void audio.resume().catch(() => {});
+      const now = audio.currentTime;
+      // Success: a bright rising two-note ding. Error: a low two-note buzz.
+      const notes = kind === "success" ? [659.25, 987.77] : [196, 146.83];
+      notes.forEach((freq, i) => {
+        const osc = audio.createOscillator();
+        const gain = audio.createGain();
+        osc.type = kind === "success" ? "sine" : "triangle";
+        osc.frequency.value = freq;
+        const start = now + i * 0.12;
+        const dur = 0.18;
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.25, start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+        osc.connect(gain);
+        gain.connect(audio.destination);
+        osc.start(start);
+        osc.stop(start + dur);
+      });
+    } catch {
+      // Audio unavailable (no AudioContext / autoplay blocked) — non-fatal.
+    }
+  }, []);
+
+  const active = state?.mode === "attendance";
+
+  const refetchState = useMemo(
+    () => async () => {
+      try {
+        const res = await fetch(
+          `/api/kiosk/attendance/state?token=${encodeURIComponent(token)}`,
+        );
+        if (res.status === 401) {
+          const b = await res.json().catch(() => ({}));
+          if (b.revoked) {
+            onRevoked();
+            return;
+          }
+        }
+        if (!res.ok) return;
+        const data = (await res.json()) as AttState;
+        setState(data);
+      } catch {
+        // ignore — next poll retries
+      }
+    },
+    [token, onRevoked],
+  );
+
+  useEffect(() => {
+    refetchState();
+    const id = setInterval(refetchState, 3000);
+    return () => clearInterval(id);
+  }, [refetchState]);
+
+  // Keep the field focused for the USB scanner / keypad whenever attendance is
+  // active and no result card is up.
+  useEffect(() => {
+    if (active && !result) inputRef.current?.focus();
+  }, [active, result]);
+
+  // On each result: play the chime, flash the screen, and auto-dismiss the
+  // card so the next student isn't blocked.
+  useEffect(() => {
+    if (!result) return;
+    const isSuccess = result.kind === "ok" || result.kind === "already";
+    playChime(isSuccess ? "success" : "error");
+    setFlash(isSuccess ? "rgba(34,197,94,0.55)" : "rgba(239,68,68,0.5)");
+    const flashId = window.setTimeout(() => setFlash(null), 320);
+    const id = window.setTimeout(() => setResult(null), 4000);
+    return () => {
+      window.clearTimeout(flashId);
+      window.clearTimeout(id);
+    };
+  }, [result, playChime]);
+
+  // Release the AudioContext when the kiosk overlay unmounts.
+  useEffect(() => {
+    return () => {
+      void audioCtxRef.current?.close().catch(() => {});
+      audioCtxRef.current = null;
+    };
+  }, []);
+
+  async function submit(rawId: string, source: "usb" | "keypad" | "camera") {
+    const id = rawId.trim();
+    if (!id || busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/kiosk/attendance/checkin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentId: id, token, source }),
+      });
+      if (res.status === 401) {
+        const b = await res.json().catch(() => ({}));
+        if (b.revoked) {
+          onRevoked();
+          return;
+        }
+      }
+      const b = await res.json().catch(() => ({}) as Record<string, unknown>);
+      if (res.status === 409) {
+        setResult({ kind: "closed" });
+      } else if (res.status === 404) {
+        setResult({ kind: "unknown" });
+      } else if (res.ok && b.status === "rejected") {
+        setResult({
+          kind: "rejected",
+          firstName: String(b.firstName ?? ""),
+          message: String(b.message ?? "Wrong door — this isn't your class."),
+        });
+      } else if (res.ok) {
+        setResult({
+          kind: b.status === "already" ? "already" : "ok",
+          firstName: String(b.firstName ?? ""),
+          points: Number(b.points ?? 0),
+          postBell: Boolean(b.postBell),
+          house:
+            b.house && typeof b.house === "object"
+              ? (b.house as { id: number; name: string; color: string })
+              : null,
+        });
+      } else {
+        setResult({
+          kind: "error",
+          message: String(b.error ?? `Check-in failed (${res.status})`),
+        });
+      }
+    } catch (err) {
+      setResult({
+        kind: "error",
+        message: err instanceof Error ? err.message : "Network error",
+      });
+    } finally {
+      setStudentId("");
+      busyRef.current = false;
+      setBusy(false);
+      inputRef.current?.focus();
+      // Refresh the recent-scan list.
+      void refetchState();
+    }
+  }
+
+  function onCameraScan(text: string) {
+    const id = extractStudentIdFromScan(text);
+    if (!id) return;
+    const prev = lastScanRef.current;
+    const nowMs = Date.now();
+    if (prev && prev.id === id && nowMs - prev.at < 2000) return;
+    lastScanRef.current = { id, at: nowMs };
+    void submit(id, "camera");
+    // Re-arm the scanner for the next student (CameraScanner fires once).
+    setCameraKey((k) => k + 1);
+  }
+
+  async function markDone() {
+    try {
+      const res = await fetch("/api/kiosk/attendance/done", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      if (res.status === 401) {
+        const b = await res.json().catch(() => ({}));
+        if (b.revoked) onRevoked();
+      }
+    } catch {
+      // ignore — the auto-revert safety net (and next poll) covers this
+    } finally {
+      void refetchState();
+    }
+  }
+
+  if (!active) return null;
+
+  const mins = state?.minutesRemaining ?? null;
+  const postBell = state?.phase === "post_bell";
+  const periodLabel =
+    state?.incomingPeriodName ||
+    (state?.incomingPeriodNumber != null
+      ? `Period ${state.incomingPeriodNumber}`
+      : "Next class");
+
+  const keypadDigits = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
+
+  // Hero "welcome" card above the list: shows the fresh scan result when one
+  // is up, otherwise the most-recent checked-in student — so a big celebratory
+  // name is always on screen. Keyed by name so it re-animates on each new scan.
+  const newest = state?.recent?.[0];
+  const resultCardSlot = (
+    <div
+      style={{ width: "100%", minHeight: result || newest ? undefined : 0 }}
+    >
+      {result ? (
+        <AttendanceResultCard result={result} />
+      ) : newest ? (
+        <div
+          key={`${newest.firstName}-${newest.lastName}`}
+          style={{
+            background: "rgba(34,197,94,0.15)",
+            border: "1px solid rgba(34,197,94,0.5)",
+            borderRadius: 18,
+            padding: "1.5rem 1.75rem",
+            textAlign: "center",
+            animation: "attRowIn 360ms ease-out",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "0.8rem",
+              textTransform: "uppercase",
+              letterSpacing: "0.16em",
+              opacity: 0.7,
+            }}
+          >
+            🎉 Just scanned in
+          </div>
+          <div
+            style={{
+              fontSize: "clamp(2rem, 4.2vw, 3.4rem)",
+              fontWeight: 800,
+              lineHeight: 1.1,
+              margin: "0.4rem 0 0.35rem",
+            }}
+          >
+            {newest.firstName} {newest.lastName}
+          </div>
+          <div
+            style={{ fontSize: "1.3rem", fontWeight: 700, color: "#86efac" }}
+          >
+            {newest.postBell
+              ? "On time — you made it!"
+              : `+${newest.points} point${newest.points === 1 ? "" : "s"}`}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+
+  // Live "just checked in" name list (newest on top, slides in).
+  const nameFeed = (
+    <div style={{ width: "100%" }}>
+      <style>{`@keyframes attRowIn{from{opacity:0;transform:translateY(-16px) scale(0.97)}to{opacity:1;transform:translateY(0) scale(1)}}`}</style>
+      <div
+        style={{
+          fontSize: "0.85rem",
+          textTransform: "uppercase",
+          letterSpacing: "0.14em",
+          opacity: 0.65,
+          marginBottom: "0.6rem",
+          textAlign: "center",
+        }}
+      >
+        ✅ Just checked in
+      </div>
+      {state?.recent && state.recent.length > 0 ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+          {state.recent.map((r, i) => (
+            <div
+              key={`${r.firstName}-${r.lastName}-${i}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                background:
+                  i === 0
+                    ? "rgba(134,239,172,0.16)"
+                    : "rgba(255,255,255,0.06)",
+                border: `1px solid ${
+                  i === 0 ? "rgba(134,239,172,0.5)" : "rgba(255,255,255,0.1)"
+                }`,
+                borderRadius: 12,
+                padding: "0.8rem 1.1rem",
+                fontSize: "1.35rem",
+                fontWeight: 700,
+                animation: "attRowIn 320ms ease-out",
+              }}
+            >
+              <span>
+                {r.firstName} {r.lastName}
+              </span>
+              <span
+                style={{
+                  fontWeight: 800,
+                  color: "#86efac",
+                  fontSize: "1.1rem",
+                }}
+              >
+                {r.postBell ? "On time" : `+${r.points}`}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div
+          style={{
+            textAlign: "center",
+            opacity: 0.45,
+            fontSize: "1rem",
+            padding: "0.75rem 0",
+          }}
+        >
+          Scan a badge to get on the board
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 60,
+        background:
+          "radial-gradient(1200px 600px at 50% -10%, #15324f 0%, #0b1220 60%, #070b14 100%)",
+        color: "#fff",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        padding: "2rem 1.25rem",
+        overflowY: "auto",
+      }}
+    >
+      {flash && (
+        <div
+          aria-hidden
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: flash,
+            zIndex: 70,
+            pointerEvents: "none",
+            animation: "attFlash 320ms ease-out forwards",
+          }}
+        />
+      )}
+      <style>{`@keyframes attFlash{from{opacity:1}to{opacity:0}}`}</style>
+      <div
+        style={{
+          fontSize: "0.8rem",
+          letterSpacing: "0.18em",
+          textTransform: "uppercase",
+          opacity: 0.6,
+        }}
+      >
+        {schoolName || "PulseEDU"} · On-Time Attendance
+      </div>
+      <h1
+        style={{
+          fontSize: "clamp(1.8rem, 4.5vw, 3rem)",
+          margin: "0.35rem 0 0",
+          fontWeight: 800,
+        }}
+      >
+        {room}
+      </h1>
+      <div
+        style={{
+          fontSize: "1.05rem",
+          opacity: 0.85,
+          marginTop: "0.35rem",
+          textAlign: "center",
+        }}
+      >
+        Scan in for <strong>{periodLabel}</strong>
+      </div>
+      <div
+        style={{
+          marginTop: "0.5rem",
+          fontSize: postBell ? "1.05rem" : "1.25rem",
+          fontWeight: 700,
+          color: postBell ? "#fca5a5" : "#86efac",
+        }}
+      >
+        {postBell
+          ? "Bell has rung — last call!"
+          : mins != null
+            ? `${mins} min until the bell`
+            : "Open now"}
+      </div>
+
+      {/* Live board: camera viewer on the LEFT, names populate on the RIGHT.
+          With the camera off it collapses to a single centered column that
+          sits above the keypad. */}
+      {cameraOn ? (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            justifyContent: "center",
+            alignItems: "flex-start",
+            gap: "2.75rem",
+            width: "100%",
+            maxWidth: 1180,
+            marginTop: "1.25rem",
+          }}
+        >
+          {/* LEFT — camera viewer */}
+          <div style={{ flex: "0 0 auto", width: "min(480px, 94vw)" }}>
+            <CameraScanner
+              key={cameraKey}
+              embedded
+              onScan={onCameraScan}
+              onCancel={() => setCameraOn(false)}
+            />
+          </div>
+          {/* RIGHT — welcome card flowing into the live name list */}
+          <div
+            style={{
+              flex: "1 1 360px",
+              minWidth: 280,
+              maxWidth: 560,
+              display: "flex",
+              flexDirection: "column",
+              gap: "1rem",
+            }}
+          >
+            {resultCardSlot}
+            {nameFeed}
+          </div>
+        </div>
+      ) : (
+        <div
+          style={{
+            width: "min(560px, 94vw)",
+            marginTop: "1.25rem",
+            display: "flex",
+            flexDirection: "column",
+            gap: "1rem",
+          }}
+        >
+          {resultCardSlot}
+          {nameFeed}
+        </div>
+      )}
+
+      {/* Scan field — serves the USB scanner AND the on-screen keypad.
+          Hidden while the camera is open (the camera is the input then). */}
+      {!cameraOn && (
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit(studentId, "usb");
+        }}
+        style={{
+          width: "min(560px, 94vw)",
+          marginTop: "1rem",
+          background: "rgba(255,255,255,0.06)",
+          border: "1px solid rgba(255,255,255,0.12)",
+          borderRadius: 14,
+          padding: "1.25rem",
+          display: "flex",
+          flexDirection: "column",
+          gap: "0.9rem",
+        }}
+      >
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          <input
+            ref={inputRef}
+            type="text"
+            inputMode="numeric"
+            autoComplete="off"
+            autoFocus
+            value={studentId}
+            onChange={(e) => setStudentId(e.target.value)}
+            placeholder="Scan badge or enter your ID"
+            style={{ ...inputStyle, flex: 1, fontSize: "1.3rem", textAlign: "center" }}
+            disabled={busy}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              setCameraOn((v) => !v);
+              setCameraKey((k) => k + 1);
+            }}
+            aria-label="Toggle camera scanning"
+            title="Toggle camera scanning"
+            style={{
+              background: cameraOn ? "#3b82f6" : "rgba(255,255,255,0.1)",
+              border: "1px solid rgba(255,255,255,0.2)",
+              borderRadius: 10,
+              color: "#fff",
+              width: 64,
+              fontSize: "1.6rem",
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            📷
+          </button>
+        </div>
+
+        {/* On-screen keypad (live alongside the USB field). */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, 1fr)",
+            gap: "0.5rem",
+          }}
+        >
+          {keypadDigits.map((d) => (
+            <button
+              key={d}
+              type="button"
+              onClick={() => setStudentId((s) => s + d)}
+              disabled={busy}
+              style={keypadBtnStyle}
+            >
+              {d}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => setStudentId((s) => s.slice(0, -1))}
+            disabled={busy}
+            style={keypadBtnStyle}
+            aria-label="Delete last digit"
+          >
+            ⌫
+          </button>
+          <button
+            type="button"
+            onClick={() => setStudentId((s) => s + "0")}
+            disabled={busy}
+            style={keypadBtnStyle}
+          >
+            0
+          </button>
+          <button
+            type="submit"
+            disabled={busy || !studentId.trim()}
+            style={{
+              ...keypadBtnStyle,
+              background:
+                busy || !studentId.trim() ? "rgba(34,197,94,0.4)" : "#22c55e",
+              border: "none",
+            }}
+            aria-label="Submit check-in"
+          >
+            ✓
+          </button>
+        </div>
+      </form>
+      )}
+
+      {/* Teacher "Done" — only at the bell. One tap reverts to hall pass. */}
+      {state?.showDone && (
+        <button
+          type="button"
+          onClick={markDone}
+          style={{
+            marginTop: "1.5rem",
+            background: "#ef4444",
+            color: "#fff",
+            border: "none",
+            borderRadius: 12,
+            padding: "1.1rem 2.5rem",
+            fontSize: "1.3rem",
+            fontWeight: 800,
+            cursor: "pointer",
+          }}
+        >
+          Done — close attendance
+        </button>
+      )}
+    </div>
+  );
+}
+
+const keypadBtnStyle: React.CSSProperties = {
+  background: "rgba(255,255,255,0.1)",
+  border: "1px solid rgba(255,255,255,0.2)",
+  color: "#fff",
+  borderRadius: 10,
+  padding: "1rem 0",
+  fontSize: "1.5rem",
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+function AttendanceResultCard({ result }: { result: AttResult }) {
+  let bg = "rgba(34,197,94,0.15)";
+  let border = "rgba(34,197,94,0.5)";
+  let title = "";
+  let subtitle = "";
+
+  if (result.kind === "ok") {
+    bg = result.house
+      ? `${result.house.color}26`
+      : "rgba(34,197,94,0.15)";
+    border = result.house ? result.house.color : "rgba(34,197,94,0.6)";
+    title = `Welcome, ${result.firstName}!`;
+    subtitle = result.postBell
+      ? "Checked in — you made it."
+      : `+${result.points} point${result.points === 1 ? "" : "s"}${
+          result.house ? ` for ${result.house.name}` : ""
+        }`;
+  } else if (result.kind === "already") {
+    bg = "rgba(59,130,246,0.15)";
+    border = "rgba(59,130,246,0.6)";
+    title = `You're already in, ${result.firstName}!`;
+    subtitle = "No need to scan twice.";
+  } else if (result.kind === "rejected") {
+    bg = "rgba(234,179,8,0.15)";
+    border = "rgba(234,179,8,0.6)";
+    title = result.firstName ? `Hi ${result.firstName}` : "Wrong door";
+    subtitle = result.message;
+  } else if (result.kind === "unknown") {
+    bg = "rgba(234,179,8,0.15)";
+    border = "rgba(234,179,8,0.6)";
+    title = "ID not found";
+    subtitle = "Check your ID and try again, or see the teacher.";
+  } else if (result.kind === "closed") {
+    bg = "rgba(148,163,184,0.15)";
+    border = "rgba(148,163,184,0.6)";
+    title = "Attendance is closed";
+    subtitle = "This window has ended.";
+  } else if (result.kind === "error") {
+    bg = "rgba(239,68,68,0.15)";
+    border = "rgba(239,68,68,0.6)";
+    title = "Something went wrong";
+    subtitle = result.message;
+  }
+
+  return (
+    <div
+      style={{
+        background: bg,
+        border: `2px solid ${border}`,
+        borderRadius: 14,
+        padding: "1.1rem 1.4rem",
+        textAlign: "center",
+        animation: "attCardIn 220ms ease-out",
+      }}
+    >
+      <style>{`@keyframes attCardIn{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}`}</style>
+      <div style={{ fontSize: "1.6rem", fontWeight: 800 }}>{title}</div>
+      <div style={{ fontSize: "1.1rem", opacity: 0.9, marginTop: "0.3rem" }}>
+        {subtitle}
+      </div>
     </div>
   );
 }

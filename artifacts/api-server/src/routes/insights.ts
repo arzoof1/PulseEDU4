@@ -45,6 +45,7 @@ import {
   studentSeparationsTable,
   studentRetentionsTable,
   housesTable,
+  attendanceCheckinsTable,
 } from "@workspace/db";
 import { and, eq, inArray, isNull, gte, lte, sql, desc, or } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -574,6 +575,39 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
     .orderBy(desc(pulloutsTable.requestedAt))
     .limit(10);
 
+  // On-Time Attendance summary (lives under the flow/Attendance pillar).
+  // SEPARATE ledger from PBIS — these arrival points count toward house
+  // standings but never the Invisible Student calc. We surface a simple
+  // on-time rate (pre-bell check-ins ÷ total check-ins) plus the points
+  // earned this window. Lottery bonus rows are included in points but
+  // excluded from the rate denominator (they aren't an arrival event).
+  const onTimeRows = await db
+    .select({
+      kind: attendanceCheckinsTable.kind,
+      points: attendanceCheckinsTable.points,
+      postBell: attendanceCheckinsTable.postBell,
+    })
+    .from(attendanceCheckinsTable)
+    .where(
+      and(
+        eq(attendanceCheckinsTable.schoolId, schoolId),
+        eq(attendanceCheckinsTable.studentId, studentId),
+        gte(attendanceCheckinsTable.createdAt, window.from),
+        lte(attendanceCheckinsTable.createdAt, window.to),
+      ),
+    );
+  const onTimeCheckins = onTimeRows.filter((r) => r.kind === "checkin");
+  const onTimeCheckinCount = onTimeCheckins.length;
+  const onTimePreBellCount = onTimeCheckins.filter((r) => !r.postBell).length;
+  const onTimePoints = onTimeRows.reduce((sum, r) => sum + (r.points ?? 0), 0);
+  const onTimeLotteryWins = onTimeRows.filter(
+    (r) => r.kind === "lottery",
+  ).length;
+  const onTimeRatePct =
+    onTimeCheckinCount > 0
+      ? Math.round((onTimePreBellCount / onTimeCheckinCount) * 100)
+      : null;
+
   // ----- Pillar: Supports ------------------------------------------------
   const accommodations = await db
     .select({
@@ -954,7 +988,7 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
   const hallPassExcess =
     hallPassSchoolAvg > 0 ? Math.max(0, hallPassCount - hallPassSchoolAvg * 2) : 0;
   flowScore -= Math.min(hallPassExcess * 5, 25);
-  flowScore = Math.max(0, Math.min(100, flowScore));
+  flowScore = Math.max(0, Math.min(100, Math.round(flowScore)));
   const flowRationale =
     tardyRows.length === 0 && issRows.length === 0
       ? `No tardies or ISS days (${window.label.toLowerCase()})`
@@ -1261,6 +1295,16 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
         hallPassCount,
         hallPassSchoolAvg: Number(hallPassSchoolAvg.toFixed(2)),
         recentPullouts,
+        // On-Time Attendance (separate ledger; never affects Invisible
+        // Student). onTimeRatePct is null when the student had no check-ins
+        // in the window so the UI can hide the block cleanly.
+        onTime: {
+          checkinCount: onTimeCheckinCount,
+          onTimeCount: onTimePreBellCount,
+          ratePct: onTimeRatePct,
+          points: onTimePoints,
+          lotteryWins: onTimeLotteryWins,
+        },
       },
       supports: {
         activeAccommodationCount: accommodations.length,
@@ -2006,7 +2050,7 @@ router.get("/insights/engagement", async (req, res) => {
   const nameById = new Map(
     nameRows.map((s) => [
       s.studentId,
-      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || s.studentId,
+      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || "—",
     ]),
   );
 
@@ -2298,7 +2342,7 @@ router.get("/insights/behavior", async (req, res) => {
   const nameById = new Map(
     nameRows.map((s) => [
       s.studentId,
-      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || s.studentId,
+      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || "—",
     ]),
   );
 
@@ -2489,7 +2533,7 @@ router.get("/insights/academics", async (req, res) => {
   const nameById = new Map<string, string>(
     studentRows.map((r) => [
       r.studentId,
-      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || r.studentId,
+      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || "—",
     ]),
   );
 
@@ -2592,7 +2636,7 @@ router.get("/insights/academics", async (req, res) => {
           if (placement.level === 1) {
             const entry: LowPm3 = {
               studentId: r.studentId,
-              studentName: nameById.get(r.studentId) ?? r.studentId,
+              studentName: nameById.get(r.studentId) ?? "—",
               pm3: r.pm3,
               level: 1,
             };
@@ -2607,7 +2651,7 @@ router.get("/insights/academics", async (req, res) => {
         const delta = r.pm3 - r.pm1;
         const entry: Grower = {
           studentId: r.studentId,
-          studentName: nameById.get(r.studentId) ?? r.studentId,
+          studentName: nameById.get(r.studentId) ?? "—",
           pm1: r.pm1,
           pm3: r.pm3,
           delta,
@@ -2830,7 +2874,7 @@ router.get("/insights/academics/band", async (req, res) => {
   const nameById = new Map<string, string>(
     studentRows.map((r) => [
       r.studentId,
-      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || r.studentId,
+      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || "—",
     ]),
   );
 
@@ -2872,7 +2916,7 @@ router.get("/insights/academics/band", async (req, res) => {
     if (!placement || placement.level !== level) continue;
     hits.push({
       studentId: r.studentId,
-      studentName: nameById.get(r.studentId) ?? r.studentId,
+      studentName: nameById.get(r.studentId) ?? "—",
       grade,
       pm1: r.pm1 ?? null,
       pm3: r.pm3,
@@ -2953,6 +2997,7 @@ function levelToBand(
 
 interface TrajectoryStudentRec {
   studentId: string;
+  localSisId: string | null;
   studentName: string;
   grade: number;
   pm1: number | null;
@@ -3127,6 +3172,7 @@ async function loadTrajectoryRecs(
   let studentRows = await db
     .select({
       studentId: studentsTable.studentId,
+      localSisId: studentsTable.localSisId,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
       grade: studentsTable.grade,
@@ -3164,8 +3210,11 @@ async function loadTrajectoryRecs(
   const nameById = new Map<string, string>(
     studentRows.map((r) => [
       r.studentId,
-      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || r.studentId,
+      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || "—",
     ]),
+  );
+  const localSisById = new Map<string, string | null>(
+    studentRows.map((r) => [r.studentId, r.localSisId ?? null]),
   );
 
   const fastRows = await db
@@ -3217,7 +3266,8 @@ async function loadTrajectoryRecs(
 
     recs.push({
       studentId: sr.studentId,
-      studentName: nameById.get(sr.studentId) ?? sr.studentId,
+      localSisId: localSisById.get(sr.studentId) ?? null,
+      studentName: nameById.get(sr.studentId) ?? "—",
       grade,
       pm1,
       pm2,
@@ -3356,6 +3406,7 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
 
   type Hit = {
     studentId: string;
+    localSisId: string | null;
     studentName: string;
     grade: number | null;
     pm1: number | null;
@@ -3372,6 +3423,7 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
     if (subKey && classifySubArchetype(r) !== subKey) continue;
     hits.push({
       studentId: r.studentId,
+      localSisId: r.localSisId ?? null,
       studentName:
         subjects.length > 1
           ? `${r.studentName} (${subj.toUpperCase()})`
@@ -3509,7 +3561,7 @@ router.get(
       return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
     const header = [
-      "student_id",
+      "local_sis_id",
       "student_name",
       "grade",
       "subject",
@@ -3528,7 +3580,7 @@ router.get(
     for (const { subject: subj, rec: r } of sorted) {
       lines.push(
         [
-          esc(r.studentId),
+          esc(r.localSisId ?? ""),
           esc(r.studentName),
           esc(r.grade === 0 ? "K" : r.grade),
           esc(subj),
@@ -3666,7 +3718,7 @@ router.get("/insights/sebsel", async (req, res) => {
   const nameById = new Map<string, string>(
     studentRows.map((r) => [
       r.studentId,
-      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || r.studentId,
+      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || "—",
     ]),
   );
   const gradeById = new Map<string, number | null>(
@@ -5256,14 +5308,14 @@ router.get("/insights/attendance", async (req, res) => {
   const nameById = new Map(
     nameRows.map((s) => [
       s.studentId,
-      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || s.studentId,
+      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || "—",
     ]),
   );
 
   function rollupRow(s: StudentRollup) {
     return {
       studentId: s.studentId,
-      studentName: nameById.get(s.studentId) ?? s.studentId,
+      studentName: nameById.get(s.studentId) ?? "—",
       absences: s.absences,
       rate: s.rate,
     };
@@ -5404,14 +5456,14 @@ router.get("/insights/attendance", async (req, res) => {
     for (const s of moreNames) {
       nameById.set(
         s.studentId,
-        `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || s.studentId,
+        `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || "—",
       );
     }
   }
 
   const recentAbsences = recentRows.map((r) => ({
     studentId: r.studentId,
-    studentName: nameById.get(r.studentId) ?? r.studentId,
+    studentName: nameById.get(r.studentId) ?? "—",
     date: String(r.day).slice(0, 10),
     status: r.status,
     periods: Array.isArray(r.absentPeriods) ? r.absentPeriods : [],

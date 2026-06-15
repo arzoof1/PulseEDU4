@@ -24,13 +24,19 @@ interface Props {
   // holds their activation card up to the screen.
   facingMode?: "environment" | "user";
   label?: string;
+  // When true, render in-flow (no fullscreen dark backdrop) so the scanner
+  // can sit inside a column alongside other content — e.g. the attendance
+  // kiosk, where the live name feed must stay visible while scanning.
+  embedded?: boolean;
 }
 
 // Minimal subset of the BarcodeDetector API we actually use.
 interface NativeDetector {
   detect(
     source: HTMLVideoElement,
-  ): Promise<Array<{ rawValue: string }>>;
+  ): Promise<
+    Array<{ rawValue: string; boundingBox?: { width: number; height: number } }>
+  >;
 }
 
 declare global {
@@ -44,6 +50,7 @@ export function CameraScanner({
   onCancel,
   facingMode = "environment",
   label,
+  embedded = false,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -59,6 +66,9 @@ export function CameraScanner({
   onScanRef.current = onScan;
   const [phase, setPhase] = useState<Phase>("starting");
   const [errorMsg, setErrorMsg] = useState<string>("");
+  // True while a code is detected but not yet confirmed across enough frames —
+  // tints the reticle green so the user knows to hold steady.
+  const [locking, setLocking] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,13 +113,59 @@ export function CameraScanner({
           const detector = new window.BarcodeDetector({
             formats: ["qr_code", "code_128", "ean_13", "code_39"],
           });
+          // Stabilization: only fire after the SAME value decodes on a few
+          // consecutive frames AND the code is large enough in frame. This
+          // stops the scanner from firing on the first flickering edge-read
+          // before the code is actually held steady in view.
+          let lastVal: string | null = null;
+          let stable = 0;
+          const MIN_STABLE = 3;
+          let lockUi = false;
+          const setLockUi = (on: boolean) => {
+            if (on !== lockUi) {
+              lockUi = on;
+              if (!cancelled) setLocking(on);
+            }
+          };
           const tick = async () => {
             if (cancelled || firedRef.current) return;
             try {
               const codes = await detector.detect(video);
-              if (codes.length > 0 && codes[0].rawValue) {
-                deliver(codes[0].rawValue);
-                return;
+              // Prefer the largest candidate (closest / most centered).
+              let best:
+                | { rawValue: string; boundingBox?: { width: number } }
+                | null = null;
+              for (const c of codes) {
+                if (!c.rawValue) continue;
+                if (
+                  !best ||
+                  (c.boundingBox?.width ?? 0) > (best.boundingBox?.width ?? 0)
+                ) {
+                  best = c;
+                }
+              }
+              const vw = video.videoWidth || 0;
+              const bigEnough =
+                !best?.boundingBox ||
+                vw === 0 ||
+                best.boundingBox.width >= vw * 0.2;
+              if (best && bigEnough) {
+                if (best.rawValue === lastVal) {
+                  stable += 1;
+                } else {
+                  lastVal = best.rawValue;
+                  stable = 1;
+                }
+                setLockUi(true);
+                if (stable >= MIN_STABLE) {
+                  setLockUi(false);
+                  deliver(best.rawValue);
+                  return;
+                }
+              } else {
+                lastVal = null;
+                stable = 0;
+                setLockUi(false);
               }
             } catch {
               // BarcodeDetector throws transiently on some frames —
@@ -125,15 +181,38 @@ export function CameraScanner({
         const mod = await import("@zxing/browser");
         if (cancelled) return;
         const reader = new mod.BrowserMultiFormatReader();
+        // Same idea as the native path: require two consecutive identical
+        // decodes before firing so a single noisy frame can't trigger early.
+        let zLast: string | null = null;
+        let zStable = 0;
+        let zLockUi = false;
+        const setZLockUi = (on: boolean) => {
+          if (on !== zLockUi) {
+            zLockUi = on;
+            if (!cancelled) setLocking(on);
+          }
+        };
         const controls = await reader.decodeFromVideoElement(
           video,
           (result, _err, ctrls) => {
-            if (result && !firedRef.current) {
-              deliver(result.getText());
-              try {
-                ctrls.stop();
-              } catch {
-                // ignore
+            if (firedRef.current) return;
+            if (result) {
+              const txt = result.getText();
+              if (txt === zLast) {
+                zStable += 1;
+              } else {
+                zLast = txt;
+                zStable = 1;
+              }
+              setZLockUi(true);
+              if (zStable >= 2) {
+                setZLockUi(false);
+                deliver(txt);
+                try {
+                  ctrls.stop();
+                } catch {
+                  // ignore
+                }
               }
             }
           },
@@ -172,20 +251,30 @@ export function CameraScanner({
 
   return (
     <div
-      role="dialog"
-      aria-modal="true"
+      role={embedded ? "group" : "dialog"}
+      aria-modal={embedded ? undefined : "true"}
       aria-label="Scan badge"
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.85)",
-        zIndex: 100,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "1rem",
-      }}
+      style={
+        embedded
+          ? {
+              width: "100%",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              padding: 0,
+            }
+          : {
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.85)",
+              zIndex: 100,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "1rem",
+            }
+      }
     >
       <div
         style={{
@@ -196,13 +285,14 @@ export function CameraScanner({
         }}
       >
         {phase === "starting" && "Starting camera…"}
-        {phase === "scanning" && (label ?? "Point the camera at the badge")}
+        {phase === "scanning" &&
+          (locking ? "Hold steady…" : (label ?? "Point the camera at the badge"))}
         {phase === "error" && `Camera error: ${errorMsg}`}
       </div>
       <div
         style={{
           position: "relative",
-          width: "min(560px, 92vw)",
+          width: embedded ? "100%" : "min(560px, 92vw)",
           aspectRatio: "4 / 3",
           background: "#000",
           borderRadius: 12,
@@ -227,7 +317,9 @@ export function CameraScanner({
           style={{
             position: "absolute",
             inset: "15%",
-            border: "2px solid rgba(255,255,255,0.7)",
+            border: `2px solid ${
+              locking ? "rgba(34,197,94,0.95)" : "rgba(255,255,255,0.7)"
+            }`,
             borderRadius: 12,
             boxShadow: "0 0 0 9999px rgba(0,0,0,0.25)",
             pointerEvents: "none",

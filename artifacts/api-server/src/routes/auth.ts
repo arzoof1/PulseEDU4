@@ -119,6 +119,18 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     capStaffRoles: row.capStaffRoles,
     capManageRoles: row.capManageRoles,
     capManageDisplays: row.capManageDisplays,
+    capCarRiderMonitor: row.capCarRiderMonitor,
+    capManageDismissal: row.capManageDismissal,
+    capTourNotify: row.capTourNotify,
+    capManageEsign: row.capManageEsign,
+    canApproveAst: row.canApproveAst,
+    canApproveCompTime: row.canApproveCompTime,
+    exemptStatus: row.exemptStatus,
+    isNonExemptRole: row.isNonExemptRole,
+    isFrontOffice: row.isFrontOffice,
+    isSro: row.isSro,
+    isGuardian: row.isGuardian,
+    isCoreTeam: row.isCoreTeam,
     defaultRoom: row.defaultRoom,
   };
 }
@@ -419,6 +431,218 @@ router.post("/auth/change-password", async (req: Request, res) => {
   await bumpStaffAuthTokenVersion(staffId);
 
   res.json({ ok: true });
+});
+
+const STAFF_RESET_LINK_ERROR =
+  "This reset link is no longer valid. Request a new one from the sign-in page.";
+
+// Legacy route aliases for StaffForgotPassword / StaffResetPassword (Replit UI).
+router.post("/auth/request-reset", async (req: Request, res) => {
+  const { email } = (req.body ?? {}) as { email?: unknown };
+  if (typeof email !== "string" || !email.trim() || !email.includes("@")) {
+    res.json({ ok: true });
+    return;
+  }
+
+  await ensureStaffPasswordResetTable();
+  const normalizedEmail = email.trim().toLowerCase();
+  const [staff] = await db
+    .select({
+      id: staffTable.id,
+      email: staffTable.email,
+      displayName: staffTable.displayName,
+      active: staffTable.active,
+    })
+    .from(staffTable)
+    .where(eq(staffTable.email, normalizedEmail));
+
+  if (!staff || !staff.active) {
+    res.json({ ok: true });
+    return;
+  }
+
+  const expiresAt = staffPasswordResetExpiresAt();
+  const [resetRow] = await db
+    .insert(staffPasswordResetsTable)
+    .values({
+      staffId: staff.id,
+      email: normalizedEmail,
+      status: "requested",
+      expiresAt,
+      requestIp: clientIp(req),
+      userAgent: userAgent(req),
+    })
+    .returning({ id: staffPasswordResetsTable.id });
+
+  const resetId = resetRow.id;
+  const token = issueStaffPasswordResetToken({
+    resetId,
+    staffId: staff.id,
+    expiresAt,
+  });
+  const tokenHash = hashStaffPasswordResetToken(token);
+  await db
+    .update(staffPasswordResetsTable)
+    .set({ tokenHash })
+    .where(eq(staffPasswordResetsTable.id, resetId));
+
+  try {
+    await sendStaffPasswordResetEmail({
+      to: staff.email,
+      displayName: staff.displayName,
+      resetUrl: buildStaffPasswordResetUrl(token),
+      expiresMinutes: RESET_LINK_EXPIRES_MINUTES,
+    });
+    await db
+      .update(staffPasswordResetsTable)
+      .set({ status: "sent", emailSentAt: new Date() })
+      .where(eq(staffPasswordResetsTable.id, resetId));
+  } catch (err) {
+    logger.warn({ err, staffId: staff.id }, "staff reset email send failed");
+    await db
+      .update(staffPasswordResetsTable)
+      .set({
+        status: "send_failed",
+        emailError: err instanceof Error ? err.message : String(err),
+      })
+      .where(eq(staffPasswordResetsTable.id, resetId));
+  }
+
+  res.json({ ok: true });
+});
+
+router.get("/auth/reset/:token", async (req: Request, res) => {
+  const token = String(req.params.token || "").trim();
+  const parsed = verifyStaffPasswordResetToken(token);
+  if (!parsed) {
+    res.status(410).json({ error: STAFF_RESET_LINK_ERROR });
+    return;
+  }
+
+  await ensureStaffPasswordResetTable();
+  const tokenHash = hashStaffPasswordResetToken(token);
+  const [resetRow] = await db
+    .select()
+    .from(staffPasswordResetsTable)
+    .where(
+      and(
+        eq(staffPasswordResetsTable.id, parsed.resetId),
+        eq(staffPasswordResetsTable.staffId, parsed.staffId),
+        eq(staffPasswordResetsTable.tokenHash, tokenHash),
+      ),
+    );
+
+  if (!resetRow || resetRow.usedAt || !resetRow.expiresAt) {
+    res.status(410).json({ error: STAFF_RESET_LINK_ERROR });
+    return;
+  }
+  if (resetRow.expiresAt.getTime() < Date.now()) {
+    res.status(410).json({ error: STAFF_RESET_LINK_ERROR });
+    return;
+  }
+
+  const [staff] = await db
+    .select({
+      email: staffTable.email,
+      displayName: staffTable.displayName,
+      active: staffTable.active,
+    })
+    .from(staffTable)
+    .where(eq(staffTable.id, parsed.staffId));
+
+  if (!staff || !staff.active) {
+    res.status(410).json({ error: STAFF_RESET_LINK_ERROR });
+    return;
+  }
+
+  res.json({ email: staff.email, displayName: staff.displayName });
+});
+
+router.post("/auth/reset", async (req: Request, res) => {
+  const { token, newPassword } = (req.body ?? {}) as {
+    token?: unknown;
+    newPassword?: unknown;
+  };
+  if (typeof token !== "string" || !token.trim()) {
+    res.status(400).json({ error: STAFF_RESET_LINK_ERROR });
+    return;
+  }
+  if (typeof newPassword !== "string" || newPassword.length < 8) {
+    res.status(400).json({ error: "Password must be at least 8 characters" });
+    return;
+  }
+
+  const parsed = verifyStaffPasswordResetToken(token.trim());
+  if (!parsed) {
+    res.status(410).json({ error: STAFF_RESET_LINK_ERROR });
+    return;
+  }
+
+  await ensureStaffPasswordResetTable();
+  const tokenHash = hashStaffPasswordResetToken(token.trim());
+  const [resetRow] = await db
+    .select()
+    .from(staffPasswordResetsTable)
+    .where(
+      and(
+        eq(staffPasswordResetsTable.id, parsed.resetId),
+        eq(staffPasswordResetsTable.staffId, parsed.staffId),
+        eq(staffPasswordResetsTable.tokenHash, tokenHash),
+      ),
+    );
+
+  if (!resetRow || resetRow.usedAt || !resetRow.expiresAt) {
+    res.status(410).json({ error: STAFF_RESET_LINK_ERROR });
+    return;
+  }
+  if (resetRow.expiresAt.getTime() < Date.now()) {
+    res.status(410).json({ error: STAFF_RESET_LINK_ERROR });
+    return;
+  }
+
+  const [staff] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.id, parsed.staffId));
+  if (!staff || !staff.active) {
+    res.status(410).json({ error: STAFF_RESET_LINK_ERROR });
+    return;
+  }
+
+  const passwordHash = await bcryptHash(newPassword, 10);
+  await db
+    .update(staffTable)
+    .set({ passwordHash })
+    .where(eq(staffTable.id, staff.id));
+
+  await bumpStaffAuthTokenVersion(staff.id);
+  await db
+    .update(staffPasswordResetsTable)
+    .set({ status: "used", usedAt: new Date(), usedIp: clientIp(req) })
+    .where(eq(staffPasswordResetsTable.id, resetRow.id));
+
+  req.session.regenerate((err) => {
+    if (err) {
+      res.status(500).json({ error: "Could not start session" });
+      return;
+    }
+    req.session.staffId = staff.id;
+    delete req.session.parentId;
+    delete req.session.activeSchoolId;
+    const csrfToken = ensureCsrfToken(req.session);
+    req.session.save(async (saveErr) => {
+      if (saveErr) {
+        res.status(500).json({ error: "Could not save session" });
+        return;
+      }
+      const authToken = await issueStaffAuthTokenIfEnabled(staff.id);
+      res.json({
+        ...publicStaff({ ...staff, passwordHash }),
+        csrfToken,
+        ...(authToken ? { authToken } : {}),
+      });
+    });
+  });
 });
 
 router.get("/auth/me", async (req, res) => {

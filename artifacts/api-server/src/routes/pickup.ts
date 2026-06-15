@@ -11,6 +11,7 @@ import {
   staffTable,
   parentsTable,
   studentPickupAuthorizationsTable,
+  studentEmergencyContactsTable,
   pickupQueueEventsTable,
   bellSchedulesTable,
   bellSchedulePeriodsTable,
@@ -21,7 +22,13 @@ import {
 import { and, eq, inArray, gt, gte, sql, desc, asc } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { canManageDismissal, canManagePickup } from "../lib/coreTeam.js";
-import { renderPickupTagsPdf, type PickupTagInput } from "../lib/pickupTagsPdf.js";
+import {
+  renderPickupTagsPdf,
+  renderPickupOfficeStripPdf,
+  type PickupFamilyTagInput,
+  type PickupOfficeStripFamily,
+} from "../lib/pickupTagsPdf.js";
+import { schoolYearStartDate } from "../lib/schoolYear.js";
 
 const router: IRouter = Router();
 
@@ -406,10 +413,12 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
       ),
     );
 
-  // Siblings = OTHER active authorizations held by the SAME parentId
-  // (not the same student). When parentId is null on the typed auth, we
-  // have no portal-account anchor for this guardian, so siblings can't
-  // be inferred — front office would have to add each student manually.
+  // Resolve the FULL set of students this adult may pick up. Redesigned
+  // rows carry an `adultKey` that groups the same adult across siblings
+  // (portal AND non-portal), so typing ONE code resolves ALL their kids.
+  // Legacy rows (adultKey null) fall back to the old parentId grouping so
+  // tags issued before the start-of-year cutover keep working. When neither
+  // is present we can only release the one student named on the typed tag.
   let siblings: Array<{
     authorizationId: number;
     studentDbId: number;
@@ -423,20 +432,39 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
     photoObjectKey: string | null;
     photoConsent: boolean;
   }> = [];
-  if (auth.parentId !== null && primary) {
-    const sibAuths = await db
-      .select()
-      .from(studentPickupAuthorizationsTable)
-      .where(
-        and(
-          eq(studentPickupAuthorizationsTable.schoolId, schoolId),
-          eq(studentPickupAuthorizationsTable.parentId, auth.parentId),
-          eq(studentPickupAuthorizationsTable.active, true),
-        ),
-      );
-    const sibStudentIds = sibAuths
-      .map((a) => a.studentId)
-      .filter((id) => id !== primary.id);
+  if (primary) {
+    let groupAuths: (typeof auth)[] = [];
+    if (auth.adultKey) {
+      groupAuths = await db
+        .select()
+        .from(studentPickupAuthorizationsTable)
+        .where(
+          and(
+            eq(studentPickupAuthorizationsTable.schoolId, schoolId),
+            eq(studentPickupAuthorizationsTable.adultKey, auth.adultKey),
+            eq(studentPickupAuthorizationsTable.active, true),
+          ),
+        );
+    } else if (auth.parentId !== null) {
+      groupAuths = await db
+        .select()
+        .from(studentPickupAuthorizationsTable)
+        .where(
+          and(
+            eq(studentPickupAuthorizationsTable.schoolId, schoolId),
+            eq(studentPickupAuthorizationsTable.parentId, auth.parentId),
+            eq(studentPickupAuthorizationsTable.active, true),
+          ),
+        );
+    }
+    // One auth row per OTHER student (skip the primary's own row). If the
+    // adult has more than one row for a single student, keep the first.
+    const otherByStudent = new Map<number, typeof auth>();
+    for (const a of groupAuths) {
+      if (a.studentId === primary.id) continue;
+      if (!otherByStudent.has(a.studentId)) otherByStudent.set(a.studentId, a);
+    }
+    const sibStudentIds = Array.from(otherByStudent.keys());
     if (sibStudentIds.length > 0) {
       const sibStudents = await db
         .select({
@@ -458,7 +486,7 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
           ),
         );
       siblings = sibStudents.map((s) => {
-        const sibAuth = sibAuths.find((a) => a.studentId === s.id)!;
+        const sibAuth = otherByStudent.get(s.id)!;
         return {
           authorizationId: sibAuth.id,
           studentDbId: s.id,
@@ -763,13 +791,13 @@ router.post("/pickup/queue/release-undo", requireStaff, async (req, res) => {
     return;
   }
 
-  // Race guard: only allow undo if the actor's release is still the
-  // latest event for this student. If anyone (including the same actor)
-  // wrote a later event — another release, an in_car, a release_undone,
-  // etc. — the queue state has already moved on and undoing would
-  // incorrectly reverse the newer action.
-  const [later] = await db
-    .select({ id: pickupQueueEventsTable.id })
+  // Look at every event for this student strictly newer than the release
+  // we're about to undo, so we can tell "already done" from a genuine
+  // conflict instead of blanket-blocking on any later row.
+  const newer = await db
+    .select({
+      action: pickupQueueEventsTable.action,
+    })
     .from(pickupQueueEventsTable)
     .where(
       and(
@@ -777,11 +805,23 @@ router.post("/pickup/queue/release-undo", requireStaff, async (req, res) => {
         eq(pickupQueueEventsTable.studentId, studentDbId),
         gt(pickupQueueEventsTable.occurredAt, recent.occurredAt),
       ),
-    )
-    .limit(1);
-  if (later) {
+    );
+
+  // Idempotency: if this release has already been undone — e.g. a quick
+  // double-tap on the Undo button, or another teacher already reversed it —
+  // the caller's intent is already satisfied. Return success, never an
+  // error. Undo should never make someone feel they did something wrong.
+  if (newer.some((e) => e.action === "release_undone")) {
+    res.json({ ok: true, alreadyUndone: true });
+    return;
+  }
+
+  // Genuine conflict: a terminal event means the student has already left
+  // (picked up at the curb / walked out for good), so reversing the
+  // walk-release would be incorrect. This is the only case that blocks.
+  if (newer.some((e) => e.action === "in_car" || e.action === "walker_released")) {
     res.status(409).json({
-      error: "Release was superseded by a newer event — cannot undo",
+      error: "This student has already been picked up, so the release can't be undone.",
     });
     return;
   }
@@ -1486,36 +1526,91 @@ router.post("/pickup/authorizations", requireStaff, async (req, res) => {
     }
   }
 
-  // Auto-issue the next free 4-digit number when not supplied. Loop with
-  // an INSERT-and-catch on the partial-unique index would be cleaner, but
-  // the dataset is tiny (max ~3000 active per school) so a single read is
-  // fine. The partial unique index is the source of truth either way.
-  let pickupNumber = requestedNumber;
-  if (!pickupNumber) {
-    const taken = await db
-      .select({ pickupNumber: studentPickupAuthorizationsTable.pickupNumber })
-      .from(studentPickupAuthorizationsTable)
-      .where(
-        and(
-          eq(studentPickupAuthorizationsTable.schoolId, schoolId),
-          eq(studentPickupAuthorizationsTable.active, true),
-        ),
-      );
-    const used = new Set(taken.map((t) => t.pickupNumber));
-    // 4-digit numbers, skipping anything already in use. Start at 1001
-    // so single-digit and 3-digit numbers don't collide visually with
-    // student IDs that families might already know.
-    for (let n = 1001; n <= 9999; n++) {
-      const candidate = String(n);
-      if (!used.has(candidate)) {
-        pickupNumber = candidate;
-        break;
+  // Student-anchored alphanumeric minting. The student keeps ONE stable
+  // base number across all their adults; this adult gets the next free A–H
+  // letter for the current school year; pickup_number = base+letter is the
+  // full code. An explicit requestedNumber (admin override) is honored as-is
+  // and parsed back into base/letter best-effort. Dataset is tiny (max a few
+  // thousand rows per school) so single reads are fine.
+  const allRows = await db
+    .select({
+      studentId: studentPickupAuthorizationsTable.studentId,
+      baseNumber: studentPickupAuthorizationsTable.baseNumber,
+      letter: studentPickupAuthorizationsTable.letter,
+      pickupNumber: studentPickupAuthorizationsTable.pickupNumber,
+      active: studentPickupAuthorizationsTable.active,
+      createdAt: studentPickupAuthorizationsTable.createdAt,
+    })
+    .from(studentPickupAuthorizationsTable)
+    .where(eq(studentPickupAuthorizationsTable.schoolId, schoolId));
+
+  const yearStart = schoolYearStartDate(new Date());
+  // Bases are reserved across ACTIVE and RETIRED rows (anchor safety).
+  const usedBases = new Set<string>();
+  let studentBase: string | null = null;
+  const lettersThisYear = new Set<string>();
+  const activeFullCodes = new Set<string>();
+  for (const r of allRows) {
+    if (r.baseNumber) usedBases.add(r.baseNumber);
+    if (r.active) activeFullCodes.add(r.pickupNumber);
+    if (r.studentId === studentDbId) {
+      if (r.baseNumber) studentBase = r.baseNumber;
+      if (r.letter && r.createdAt && r.createdAt >= yearStart) {
+        lettersThisYear.add(r.letter);
       }
     }
-    if (!pickupNumber) {
-      res.status(409).json({ error: "No free pickup numbers available" });
+  }
+
+  let baseNumber: string | null = studentBase;
+  let letter: string | null = null;
+  let pickupNumber: string;
+  let adultKey: string | null;
+
+  if (requestedNumber) {
+    // Admin override: store the literal code. Parse base+trailing-letter so
+    // the redesigned surfaces (tag ring, office strip) still work when it
+    // matches the scheme; otherwise leave base/letter null.
+    pickupNumber = requestedNumber;
+    const m = /^(\d+)\s*([A-Ha-h]?)$/.exec(requestedNumber);
+    if (m) {
+      // Keep base/letter consistent with the literal code the admin typed —
+      // never blend a parsed override base with the student's existing base,
+      // or the tag ring/office strip (base+letter) would diverge from the
+      // QR/full-code lookup (pickupNumber).
+      baseNumber = m[1]!;
+      letter = m[2] ? m[2]!.toUpperCase() : null;
+    } else {
+      // Non-scheme override (e.g. a custom string): null base/letter so the
+      // redesigned surfaces fall back to the literal code instead of showing
+      // a stale base.
+      baseNumber = null;
+      letter = null;
+    }
+    adultKey = adultKeyFor({ parentId, fallbackLabel: guardianLabel });
+  } else {
+    if (!baseNumber) {
+      baseNumber = nextFreeBase(usedBases);
+      if (!baseNumber) {
+        res.status(409).json({ error: "No free pickup base numbers available" });
+        return;
+      }
+    }
+    letter = nextLetter(lettersThisYear);
+    if (!letter) {
+      res.status(409).json({
+        error:
+          "This student already has the maximum of 8 authorized adults (A–H) for this school year.",
+      });
       return;
     }
+    pickupNumber = `${baseNumber}${letter}`;
+    if (activeFullCodes.has(pickupNumber)) {
+      res.status(409).json({
+        error: "Pickup code collision; please try again.",
+      });
+      return;
+    }
+    adultKey = adultKeyFor({ parentId, fallbackLabel: guardianLabel });
   }
 
   try {
@@ -1526,6 +1621,9 @@ router.post("/pickup/authorizations", requireStaff, async (req, res) => {
         studentId: studentDbId,
         parentId,
         guardianLabel,
+        baseNumber,
+        letter,
+        adultKey,
         pickupNumber,
         restrictedFrom,
         active: true,
@@ -1684,6 +1782,69 @@ function nextFreeNumber(used: Set<string>): string | null {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Student-anchored alphanumeric minting helpers (redesign).
+//
+// Each STUDENT owns ONE stable base number (1001..9999). Each authorized
+// adult on that student gets a letter suffix; the full code (base+letter) is
+// what the family reads/scans and is stored in pickup_number. adultKey groups
+// one adult's authorizations across siblings so typing ONE code resolves ALL
+// their kids.
+// ---------------------------------------------------------------------------
+
+// A–H only. Soft cap of 8 adults/student, and no look/sound-alike letters
+// (I/O/L read as 1/0/1; on the carpool radio staff use NATO phonetics —
+// Alpha, Bravo, Charlie ...). Allocated lowest-first.
+const SAFE_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
+
+function normAdultPart(s: string | null | undefined): string {
+  return (s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+// Stable identity key grouping one real adult across siblings. Portal parents
+// are keyed by their account id (globally unique — never collides). Non-portal
+// SIS contacts are keyed by normalized name + relationship + phone digits; the
+// phone is the strongest available discriminator (no email in the SIS feed) so
+// two distinct same-named adults in one school stay separate as long as either
+// carries a phone. When phone is blank the key degrades to name+relationship
+// (residual collision risk the office can fix by editing a guardian label).
+function normPhone(s: string | null | undefined): string {
+  return (s ?? "").replace(/\D+/g, "");
+}
+function adultKeyFor(opts: {
+  parentId: number | null;
+  contactName?: string | null;
+  relationship?: string | null;
+  contactPhone?: string | null;
+  fallbackLabel?: string | null;
+}): string {
+  if (opts.parentId != null) return `p:${opts.parentId}`;
+  const name = normAdultPart(opts.contactName ?? opts.fallbackLabel);
+  const rel = normAdultPart(opts.relationship);
+  const phone = normPhone(opts.contactPhone);
+  return `c:${name}|${rel}|${phone}`;
+}
+
+// Next free base number given the set of bases already taken by ANY row in
+// the school (active OR retired) — a base is never reused while a printed tag
+// may still reference it (anchor-student safety).
+function nextFreeBase(usedBases: Set<string>): string | null {
+  for (let n = NUMBER_RANGE_MIN; n <= NUMBER_RANGE_MAX; n++) {
+    const candidate = String(n);
+    if (!usedBases.has(candidate)) return candidate;
+  }
+  return null;
+}
+
+// Lowest A–H letter not already used by this student WITHIN the current
+// school year. Retired letters from a PRIOR year recycle (the caller filters
+// the used-set by created_at >= school-year start); within a year a removed
+// adult's letter is retired, never recycled.
+function nextLetter(usedThisYear: Set<string>): string | null {
+  for (const L of SAFE_LETTERS) if (!usedThisYear.has(L)) return L;
+  return null;
+}
+
 // GET /pickup/capacity — used + total + warn flag for the admin tile.
 router.get("/pickup/capacity", requireStaff, async (req, res) => {
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
@@ -1714,10 +1875,17 @@ router.get("/pickup/capacity", requireStaff, async (req, res) => {
 });
 
 // POST /pickup/authorizations/bulk-assign
-// Body: { guardianLabel?: string } — defaults to "Primary".
-// Issues a fresh active authorization for every student in the school
-// who does NOT already have an active authorization. Idempotent — a
-// second run after a partial roster import only fills the new students.
+// Student-anchored alphanumeric cutover. For every student we mint ONE
+// stable base number (1001..9999), then issue ONE letter-suffixed code per
+// SIS emergency contact (Mom = 1001A, Dad = 1001B ...). The SAME real adult
+// across siblings shares an `adultKey` (normalized name + relationship), so
+// typing ANY one of that adult's codes resolves ALL their kids at the curb.
+// Students with no contacts on file get a single "Family" code (letter A).
+// Idempotent + additive: a re-run only fills gaps — (student, adultKey)
+// pairs that already have an active code are skipped, and a student that
+// already has a base keeps it — so it is safe to click after every roster
+// import and is the start-of-year cutover path for legacy bare-number rows.
+// Soft cap: a student with >8 adults skips the overflow (no A–H letter left).
 router.post(
   "/pickup/authorizations/bulk-assign",
   requireStaff,
@@ -1730,77 +1898,294 @@ router.post(
       res.status(403).json({ error: "Not authorized to manage pickup tags" });
       return;
     }
-    const guardianLabel =
-      typeof req.body?.guardianLabel === "string" &&
-      req.body.guardianLabel.trim().length > 0
-        ? String(req.body.guardianLabel).trim()
-        : "Primary";
 
     try {
       const result = await db.transaction(async (tx) => {
-        // 1. Pull students who don't already have an active authorization.
-        const studentsMissing = await tx
-          .select({ id: studentsTable.id })
+        // Serialize bulk-assign per school: a transaction-scoped advisory
+        // lock makes two operators clicking "Assign" at once queue instead
+        // of racing off the same active-number snapshot (which would
+        // otherwise collide on the partial unique index and 500). Released
+        // automatically on commit/rollback. 0x504b_5542 ("PKUB") is an
+        // arbitrary namespace constant unique to this operation.
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock(${0x504b5542}, ${schoolId})`,
+        );
+        // 1. Every student in the school (id = PK, studentId = SIS/district
+        //    code, which is how emergency contacts are keyed).
+        const students = await tx
+          .select({
+            id: studentsTable.id,
+            sisStudentId: studentsTable.studentId,
+          })
           .from(studentsTable)
-          .leftJoin(
-            studentPickupAuthorizationsTable,
-            and(
-              eq(
-                studentPickupAuthorizationsTable.studentId,
-                studentsTable.id,
-              ),
-              eq(studentPickupAuthorizationsTable.active, true),
-            ),
-          )
-          .where(
-            and(
-              eq(studentsTable.schoolId, schoolId),
-              sql`${studentPickupAuthorizationsTable.id} IS NULL`,
-            ),
-          );
+          .where(eq(studentsTable.schoolId, schoolId));
 
-        if (studentsMissing.length === 0) {
-          return { assigned: 0, totalStudents: 0, capacityHit: false };
+        if (students.length === 0) {
+          return {
+            assigned: 0,
+            upgraded: 0,
+            studentsTouched: 0,
+            cappedStudents: 0,
+            capacityHit: false,
+          };
         }
 
-        // 2. Pull all active numbers (school-wide) so we don't collide.
-        const taken = await tx
+        // 2. All emergency contacts for the school, grouped by SIS id.
+        const contacts = await tx
           .select({
+            studentId: studentEmergencyContactsTable.studentId,
+            slot: studentEmergencyContactsTable.slot,
+            contactName: studentEmergencyContactsTable.contactName,
+            relationship: studentEmergencyContactsTable.relationship,
+            phone: studentEmergencyContactsTable.phone,
+          })
+          .from(studentEmergencyContactsTable)
+          .where(eq(studentEmergencyContactsTable.schoolId, schoolId));
+        const contactsBySis = new Map<string, typeof contacts>();
+        for (const c of contacts) {
+          const list = contactsBySis.get(c.studentId) ?? [];
+          list.push(c);
+          contactsBySis.set(c.studentId, list);
+        }
+
+        // 3. ALL authorizations (active + retired) so we can: reserve bases
+        //    across the school (anchor safety — never reuse a base while a
+        //    printed tag may reference it), reuse a student's existing base,
+        //    know which letters a student already burned THIS school year
+        //    (retire-no-recycle), and skip (student, adultKey) pairs that
+        //    already have a live code (idempotency).
+        const allAuths = await tx
+          .select({
+            id: studentPickupAuthorizationsTable.id,
+            studentId: studentPickupAuthorizationsTable.studentId,
+            parentId: studentPickupAuthorizationsTable.parentId,
+            guardianLabel: studentPickupAuthorizationsTable.guardianLabel,
             pickupNumber: studentPickupAuthorizationsTable.pickupNumber,
+            baseNumber: studentPickupAuthorizationsTable.baseNumber,
+            letter: studentPickupAuthorizationsTable.letter,
+            adultKey: studentPickupAuthorizationsTable.adultKey,
+            active: studentPickupAuthorizationsTable.active,
+            createdAt: studentPickupAuthorizationsTable.createdAt,
           })
           .from(studentPickupAuthorizationsTable)
-          .where(
-            and(
-              eq(studentPickupAuthorizationsTable.schoolId, schoolId),
-              eq(studentPickupAuthorizationsTable.active, true),
-            ),
-          );
-        const used = new Set(taken.map((t) => t.pickupNumber));
+          .where(eq(studentPickupAuthorizationsTable.schoolId, schoolId));
 
-        // 3. Issue numbers + insert rows.
-        let assigned = 0;
-        for (const s of studentsMissing) {
-          const num = nextFreeNumber(used);
-          if (!num) {
-            // Throw rolls back the whole batch so we don't partially
-            // assign half the roster.
-            throw new Error("CAPACITY_EXHAUSTED");
+        const yearStart = schoolYearStartDate(new Date());
+        const usedBases = new Set<string>();
+        const usedFullCodes = new Set<string>();
+        const baseByStudent = new Map<number, string>();
+        const lettersThisYearByStudent = new Map<number, Set<string>>();
+        // Live (student, adultKey) pairs — idempotency.
+        const activeAdultPairs = new Set<string>();
+        const studentsWithAnyActive = new Set<number>();
+        for (const a of allAuths) {
+          if (a.baseNumber) {
+            usedBases.add(a.baseNumber);
+            if (!baseByStudent.has(a.studentId)) {
+              baseByStudent.set(a.studentId, a.baseNumber);
+            }
+          } else if (!a.active && !a.letter) {
+            // RETIRED legacy bare-number row (no base/letter): its bare number
+            // was printed on a tag that may still be in circulation, so reserve
+            // it as a base — anchor safety means we never mint/reuse a base
+            // that equals a number a printed tag references. (Active legacy
+            // bares are reused IN PLACE by the 3b upgrade pre-pass below, so we
+            // deliberately do NOT pre-reserve those here.)
+            const bare = a.pickupNumber.trim();
+            const n = Number(bare);
+            if (/^\d+$/.test(bare) && n >= NUMBER_RANGE_MIN && n <= NUMBER_RANGE_MAX) {
+              usedBases.add(bare);
+            }
           }
-          used.add(num);
+          if (a.active) {
+            usedFullCodes.add(a.pickupNumber);
+            studentsWithAnyActive.add(a.studentId);
+            if (a.adultKey) {
+              activeAdultPairs.add(`${a.studentId}:${a.adultKey}`);
+            }
+          }
+          if (a.letter && a.createdAt && a.createdAt >= yearStart) {
+            const set =
+              lettersThisYearByStudent.get(a.studentId) ?? new Set<string>();
+            set.add(a.letter);
+            lettersThisYearByStudent.set(a.studentId, set);
+          }
+        }
+
+        // Ensure a student has a stable base, minting one if needed. Throws
+        // CAPACITY_EXHAUSTED (rolls back the whole batch) if the numeric
+        // range is full — base capacity problems are all-or-nothing.
+        const ensureBase = (studentDbId: number): string => {
+          const existing = baseByStudent.get(studentDbId);
+          if (existing) return existing;
+          const base = nextFreeBase(usedBases);
+          if (!base) throw new Error("CAPACITY_EXHAUSTED");
+          usedBases.add(base);
+          baseByStudent.set(studentDbId, base);
+          return base;
+        };
+
+        // Issue one letter-suffixed code for an adult on a student. Returns
+        // false (skipped) when the student has exhausted A–H this year.
+        const issueAdult = async (
+          studentDbId: number,
+          adultKey: string,
+          guardianLabel: string,
+          contactSlot: number | null,
+        ): Promise<boolean> => {
+          const base = ensureBase(studentDbId);
+          const burned =
+            lettersThisYearByStudent.get(studentDbId) ?? new Set<string>();
+          const letter = nextLetter(burned);
+          if (!letter) return false; // soft cap: >8 adults — skip overflow.
+          const code = `${base}${letter}`;
+          if (usedFullCodes.has(code)) return false; // defensive collision.
+          burned.add(letter);
+          lettersThisYearByStudent.set(studentDbId, burned);
+          usedFullCodes.add(code);
+          activeAdultPairs.add(`${studentDbId}:${adultKey}`);
           await tx.insert(studentPickupAuthorizationsTable).values({
             schoolId,
-            studentId: s.id,
+            studentId: studentDbId,
             parentId: null,
             guardianLabel,
-            pickupNumber: num,
+            contactSlot,
+            baseNumber: base,
+            letter,
+            adultKey,
+            pickupNumber: code,
             restrictedFrom: false,
             active: true,
           });
-          assigned++;
+          return true;
+        };
+
+        // 3b. Upgrade LEGACY bare-number codes (rows created before per-adult
+        //     letters existed: active, letter IS NULL). We give each its
+        //     student's base + the next free A–H letter and rewrite the full
+        //     code IN PLACE, reusing the old bare number AS the base when it's
+        //     a valid, still-free number (1026 → 1026A) so the change is
+        //     minimal; otherwise we mint a fresh base. A missing adultKey is
+        //     backfilled from the guardian label so curb adult-lookup can
+        //     group the code. Done BEFORE new issuance so the rest of the run
+        //     treats the upgraded code as the adult's live code (no
+        //     duplicates). Already-printed bare tags MUST be reprinted — their
+        //     code changed. Soft cap respected (skip if A–H already burned).
+        let upgraded = 0;
+        for (const a of allAuths) {
+          if (!a.active || a.letter) continue; // only legacy letterless rows.
+          // Prefer the student's existing base; else reuse the old bare number
+          // if it's a valid, currently-free base; else mint a fresh one.
+          let base = baseByStudent.get(a.studentId) ?? null;
+          if (!base) {
+            const bare = a.pickupNumber.trim();
+            const n = Number(bare);
+            if (
+              /^\d+$/.test(bare) &&
+              n >= NUMBER_RANGE_MIN &&
+              n <= NUMBER_RANGE_MAX &&
+              !usedBases.has(bare)
+            ) {
+              base = bare;
+              usedBases.add(base);
+              baseByStudent.set(a.studentId, base);
+            } else {
+              base = ensureBase(a.studentId);
+            }
+          }
+          const burned =
+            lettersThisYearByStudent.get(a.studentId) ?? new Set<string>();
+          const letter = nextLetter(burned);
+          if (!letter) continue; // student already burned A–H this year.
+          const code = `${base}${letter}`;
+          if (usedFullCodes.has(code)) continue; // defensive collision guard.
+          const adultKey =
+            a.adultKey ??
+            adultKeyFor({ parentId: a.parentId, fallbackLabel: a.guardianLabel });
+          burned.add(letter);
+          lettersThisYearByStudent.set(a.studentId, burned);
+          usedFullCodes.add(code);
+          activeAdultPairs.add(`${a.studentId}:${adultKey}`);
+          studentsWithAnyActive.add(a.studentId);
+          await tx
+            .update(studentPickupAuthorizationsTable)
+            .set({ baseNumber: base, letter, adultKey, pickupNumber: code })
+            .where(eq(studentPickupAuthorizationsTable.id, a.id));
+          upgraded++;
+        }
+
+        let assigned = 0;
+        const touched = new Set<number>();
+        const capped = new Set<number>();
+        for (const s of students) {
+          const studentContacts = (contactsBySis.get(s.sisStudentId) ?? [])
+            .slice()
+            .sort((a, b) => a.slot - b.slot);
+
+          // Dedup contacts that resolve to the SAME adult on this student
+          // (e.g. the same name listed twice) — one letter per real adult.
+          const seenAdultKeys = new Set<string>();
+          let issuedForStudent = false;
+          for (const c of studentContacts) {
+            const label =
+              c.relationship && c.relationship.trim().length > 0
+                ? c.relationship.trim()
+                : c.contactName && c.contactName.trim().length > 0
+                  ? c.contactName.trim()
+                  : `Contact ${c.slot}`;
+            const adultKey = adultKeyFor({
+              parentId: null,
+              contactName: c.contactName,
+              relationship: c.relationship,
+              contactPhone: c.phone,
+              fallbackLabel: label,
+            });
+            if (seenAdultKeys.has(adultKey)) continue;
+            seenAdultKeys.add(adultKey);
+            const pairKey = `${s.id}:${adultKey}`;
+            if (activeAdultPairs.has(pairKey)) {
+              issuedForStudent = true;
+              continue;
+            }
+            const ok = await issueAdult(s.id, adultKey, label, c.slot);
+            if (ok) {
+              assigned++;
+              touched.add(s.id);
+              issuedForStudent = true;
+            } else {
+              capped.add(s.id);
+            }
+          }
+
+          // No SIS contacts AND no existing live code: issue one shared
+          // "Family" code (adultKey c:family|) so the student is still
+          // releasable at the curb. Grouped across siblings by design.
+          if (
+            studentContacts.length === 0 &&
+            !studentsWithAnyActive.has(s.id) &&
+            !issuedForStudent
+          ) {
+            const familyKey = adultKeyFor({
+              parentId: null,
+              contactName: "family",
+            });
+            if (!activeAdultPairs.has(`${s.id}:${familyKey}`)) {
+              const ok = await issueAdult(s.id, familyKey, "Family", null);
+              if (ok) {
+                assigned++;
+                touched.add(s.id);
+                studentsWithAnyActive.add(s.id);
+              } else {
+                capped.add(s.id);
+              }
+            }
+          }
         }
         return {
           assigned,
-          totalStudents: studentsMissing.length,
+          upgraded,
+          studentsTouched: touched.size,
+          cappedStudents: capped.size,
           capacityHit: false,
         };
       });
@@ -1811,6 +2196,20 @@ router.post(
         res.status(409).json({
           error:
             "Not enough free pickup numbers to cover the remaining roster. Free up numbers or expand the range.",
+        });
+        return;
+      }
+      // Unique-violation (23505) — a concurrent manual issue or assign
+      // grabbed a number/contact-slot mid-run. The whole batch rolled back;
+      // the operator can simply re-click (assign is idempotent).
+      const pgCode =
+        e && typeof e === "object" && "code" in e
+          ? (e as { code?: unknown }).code
+          : undefined;
+      if (pgCode === "23505") {
+        res.status(409).json({
+          error:
+            "Pickup numbers shifted while assigning (another change happened at the same time). Please run Assign again.",
         });
         return;
       }
@@ -1860,27 +2259,62 @@ router.post(
         if (!old.active) {
           throw new Error("ALREADY_INACTIVE");
         }
-        // Deactivate first so its number frees up before we pick.
+        // Deactivate first so its code frees up before we pick.
         await tx
           .update(studentPickupAuthorizationsTable)
           .set({ active: false, deactivatedAt: new Date() })
           .where(eq(studentPickupAuthorizationsTable.id, id));
 
-        const taken = await tx
+        // Reissue keeps the SAME adult on the SAME student, so it keeps the
+        // student's base AND the old letter (a lost-tag reprint must read the
+        // same code so the family's other sibling tags still match). We only
+        // re-mint the letter when the old row predates the redesign (no
+        // letter) — then assign the next free A–H for this year.
+        const rows = await tx
           .select({
+            studentId: studentPickupAuthorizationsTable.studentId,
             pickupNumber: studentPickupAuthorizationsTable.pickupNumber,
+            baseNumber: studentPickupAuthorizationsTable.baseNumber,
+            letter: studentPickupAuthorizationsTable.letter,
+            active: studentPickupAuthorizationsTable.active,
+            createdAt: studentPickupAuthorizationsTable.createdAt,
           })
           .from(studentPickupAuthorizationsTable)
-          .where(
-            and(
-              eq(studentPickupAuthorizationsTable.schoolId, schoolId),
-              eq(studentPickupAuthorizationsTable.active, true),
-            ),
-          );
-        const used = new Set(taken.map((t) => t.pickupNumber));
-        const num = nextFreeNumber(used);
-        if (!num) {
-          throw new Error("CAPACITY_EXHAUSTED");
+          .where(eq(studentPickupAuthorizationsTable.schoolId, schoolId));
+
+        const yearStart = schoolYearStartDate(new Date());
+        const usedBases = new Set<string>();
+        const usedFullCodes = new Set<string>();
+        let studentBase: string | null = old.baseNumber;
+        const lettersThisYear = new Set<string>();
+        for (const r of rows) {
+          if (r.baseNumber) usedBases.add(r.baseNumber);
+          if (r.active) usedFullCodes.add(r.pickupNumber);
+          if (r.studentId === old.studentId) {
+            if (r.baseNumber && !studentBase) studentBase = r.baseNumber;
+            if (r.letter && r.createdAt && r.createdAt >= yearStart) {
+              lettersThisYear.add(r.letter);
+            }
+          }
+        }
+
+        let baseNumber: string | null = studentBase;
+        let letter: string | null = old.letter;
+        let code: string;
+        if (baseNumber && letter) {
+          // Same code reprint — base+letter are stable for this adult.
+          code = `${baseNumber}${letter}`;
+        } else {
+          // Legacy row (no base/letter) or admin-typed number: mint fresh.
+          if (!baseNumber) {
+            baseNumber = nextFreeBase(usedBases);
+            if (!baseNumber) throw new Error("CAPACITY_EXHAUSTED");
+          }
+          // The old letter (if any) was just retired; pick the next free one.
+          letter = nextLetter(lettersThisYear);
+          if (!letter) throw new Error("CAPACITY_EXHAUSTED");
+          code = `${baseNumber}${letter}`;
+          if (usedFullCodes.has(code)) throw new Error("CAPACITY_EXHAUSTED");
         }
         const [inserted] = await tx
           .insert(studentPickupAuthorizationsTable)
@@ -1889,7 +2323,11 @@ router.post(
             studentId: old.studentId,
             parentId: old.parentId,
             guardianLabel: old.guardianLabel,
-            pickupNumber: num,
+            baseNumber,
+            letter,
+            adultKey: old.adultKey,
+            contactSlot: old.contactSlot,
+            pickupNumber: code,
             restrictedFrom: old.restrictedFrom,
             active: true,
           })
@@ -1919,21 +2357,53 @@ router.post(
 );
 
 // Internal helper used by both single-tag and batch-tag PDF endpoints.
-async function loadTagInputs(
+// Stable group key tying one adult's authorizations together across siblings,
+// mirroring the curb resolver: adultKey first, then legacy parentId grouping,
+// then a per-row fallback (the adult only picks up the one named student).
+function tagGroupKey(row: {
+  adultKey: string | null;
+  parentId: number | null;
+  id: number;
+}): string {
+  if (row.adultKey) return row.adultKey;
+  if (row.parentId !== null) return `p:${row.parentId}`;
+  return `a:${row.id}`;
+}
+
+// Numeric value of a base for "representative = lowest base" selection; legacy
+// bare-number rows fall back to the digits in their full code.
+function baseValueOf(row: {
+  baseNumber: string | null;
+  pickupNumber: string;
+}): number {
+  const raw = row.baseNumber ?? row.pickupNumber.replace(/\D+/g, "");
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
+}
+
+// Build ONE FAMILY TAG PER ADULT: active authorizations are grouped by the
+// adult (adultKey), and each group becomes a single tag carrying the adult's
+// representative code (lowest base) + every child that adult picks up (with
+// grade). The QR encodes the representative full code; the curb resolver
+// expands it back to all siblings via adultKey, so any one of the adult's
+// codes works. Optional authIds (auth row ids) limit the output to the adult
+// GROUPS that contain at least one of those ids — so a "print this tag" or a
+// "homeroom stack" request still yields whole-family tags, never partials.
+async function loadFamilyTagInputs(
   schoolId: number,
   authIds: number[] | null,
-): Promise<PickupTagInput[]> {
-  const conds = [
-    eq(studentPickupAuthorizationsTable.schoolId, schoolId),
-    eq(studentPickupAuthorizationsTable.active, true),
-  ];
-  if (authIds !== null) {
-    conds.push(inArray(studentPickupAuthorizationsTable.id, authIds));
-  }
+): Promise<PickupFamilyTagInput[]> {
+  // Always load the whole school's active auths so a group is never truncated;
+  // authIds only selects WHICH groups we keep, never which rows form a group.
   const auths = await db
     .select()
     .from(studentPickupAuthorizationsTable)
-    .where(and(...conds));
+    .where(
+      and(
+        eq(studentPickupAuthorizationsTable.schoolId, schoolId),
+        eq(studentPickupAuthorizationsTable.active, true),
+      ),
+    );
   if (auths.length === 0) return [];
 
   const studentIds = Array.from(new Set(auths.map((a) => a.studentId)));
@@ -1942,6 +2412,7 @@ async function loadTagInputs(
       id: studentsTable.id,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
+      grade: studentsTable.grade,
     })
     .from(studentsTable)
     .where(
@@ -1958,39 +2429,70 @@ async function loadTagInputs(
     .where(eq(schoolSettingsTable.schoolId, schoolId));
   const schoolName = settings?.name ?? "School";
 
-  // Sort by student last name, then first name, then pickup number
-  // (multi-guardian rows for one student stay grouped together in a
-  // deterministic order). Done in JS rather than SQL because the
-  // student join is loaded via a second query and the row order out
-  // of `inArray` isn't guaranteed. Locale-aware compare so e.g.
-  // "Ñ" sorts after "N" instead of with the Z-tail.
+  // Group rows by adult.
+  const groups = new Map<string, (typeof auths)[number][]>();
+  for (const a of auths) {
+    const key = tagGroupKey(a);
+    const arr = groups.get(key);
+    if (arr) arr.push(a);
+    else groups.set(key, [a]);
+  }
+
+  // Restrict to the groups containing a requested auth id (whole groups only).
+  let keep: Set<string> | null = null;
+  if (authIds !== null) {
+    const wanted = new Set(authIds);
+    keep = new Set<string>();
+    for (const a of auths) if (wanted.has(a.id)) keep.add(tagGroupKey(a));
+  }
+
   const cmp = (a: string, b: string) =>
     a.localeCompare(b, undefined, { sensitivity: "base" });
-  return auths
-    .map((a) => {
-      const s = studentById.get(a.studentId);
-      const firstName = s?.firstName ?? "";
-      const lastName = s?.lastName ?? "";
+
+  const tags: Array<PickupFamilyTagInput & { _sortBase: number }> = [];
+  for (const [key, rows] of groups) {
+    if (keep !== null && !keep.has(key)) continue;
+    // Representative = the row with the lowest base number (deterministic).
+    const rep = rows.reduce((lo, r) =>
+      baseValueOf(r) < baseValueOf(lo) ? r : lo,
+    );
+    // One student entry per distinct child in the group.
+    const byStudent = new Map<number, (typeof rows)[number]>();
+    for (const r of rows) if (!byStudent.has(r.studentId)) byStudent.set(r.studentId, r);
+    const studentEntries = Array.from(byStudent.values()).map((r) => {
+      const s = studentById.get(r.studentId);
       const name = s
-        ? `${firstName} ${lastName}`.trim()
-        : `Student #${a.studentId}`;
+        ? `${s.firstName} ${s.lastName}`.trim()
+        : `Student #${r.studentId}`;
       return {
-        pickupNumber: a.pickupNumber,
-        studentName: name,
-        guardianLabel: a.guardianLabel,
-        restricted: a.restrictedFrom,
-        schoolName,
-        _sortLast: lastName,
-        _sortFirst: firstName,
+        name,
+        grade: s ? s.grade : null,
+        restricted: r.restrictedFrom,
       };
-    })
+    });
+    studentEntries.sort(
+      (a, b) => (a.grade ?? 99) - (b.grade ?? 99) || cmp(a.name, b.name),
+    );
+    const restrictedAll =
+      studentEntries.length > 0 && studentEntries.every((s) => s.restricted);
+    tags.push({
+      pickupNumber: rep.pickupNumber,
+      baseNumber: rep.baseNumber ?? null,
+      letter: rep.letter ?? null,
+      guardianLabel: rep.guardianLabel,
+      students: studentEntries,
+      restrictedAll,
+      schoolName,
+      _sortBase: baseValueOf(rep),
+    });
+  }
+
+  return tags
     .sort(
       (a, b) =>
-        cmp(a._sortLast, b._sortLast) ||
-        cmp(a._sortFirst, b._sortFirst) ||
-        cmp(a.pickupNumber, b.pickupNumber),
+        cmp(a.guardianLabel, b.guardianLabel) || a._sortBase - b._sortBase,
     )
-    .map(({ _sortLast: _l, _sortFirst: _f, ...rest }) => rest);
+    .map(({ _sortBase: _b, ...rest }) => rest);
 }
 
 function sendTagsPdf(
@@ -2025,7 +2527,7 @@ router.get(
       res.status(400).json({ error: "Invalid id" });
       return;
     }
-    const tags = await loadTagInputs(schoolId, [id]);
+    const tags = await loadFamilyTagInputs(schoolId, [id]);
     if (tags.length === 0) {
       res.status(404).json({ error: "Authorization not found or inactive" });
       return;
@@ -2034,6 +2536,123 @@ router.get(
     sendTagsPdf(res, pdf, `pickup-tag-${tags[0]!.pickupNumber}.pdf`);
   },
 );
+
+// Build the per-family office-reference rows: one entry per student that has
+// active codes, listing the student's base + every authorized adult's letter
+// + label. Renders the local SIS id only — NEVER the FLEID. Optional
+// studentIds filter (null = whole school).
+async function loadOfficeStripFamilies(
+  schoolId: number,
+  studentIds: number[] | null,
+): Promise<PickupOfficeStripFamily[]> {
+  const conds = [
+    eq(studentPickupAuthorizationsTable.schoolId, schoolId),
+    eq(studentPickupAuthorizationsTable.active, true),
+  ];
+  if (studentIds !== null) {
+    if (studentIds.length === 0) return [];
+    conds.push(inArray(studentPickupAuthorizationsTable.studentId, studentIds));
+  }
+  const auths = await db
+    .select({
+      studentId: studentPickupAuthorizationsTable.studentId,
+      baseNumber: studentPickupAuthorizationsTable.baseNumber,
+      letter: studentPickupAuthorizationsTable.letter,
+      pickupNumber: studentPickupAuthorizationsTable.pickupNumber,
+      guardianLabel: studentPickupAuthorizationsTable.guardianLabel,
+      restrictedFrom: studentPickupAuthorizationsTable.restrictedFrom,
+    })
+    .from(studentPickupAuthorizationsTable)
+    .where(and(...conds));
+  if (auths.length === 0) return [];
+
+  const ids = Array.from(new Set(auths.map((a) => a.studentId)));
+  const students = await db
+    .select({
+      id: studentsTable.id,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      localSisId: studentsTable.localSisId,
+    })
+    .from(studentsTable)
+    .where(
+      and(eq(studentsTable.schoolId, schoolId), inArray(studentsTable.id, ids)),
+    );
+  const studentById = new Map(students.map((s) => [s.id, s]));
+
+  const [settings] = await db
+    .select({ name: schoolSettingsTable.schoolName })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
+  const schoolName = settings?.name ?? "School";
+
+  const byStudent = new Map<number, PickupOfficeStripFamily>();
+  for (const a of auths) {
+    const s = studentById.get(a.studentId);
+    const name = s
+      ? `${s.firstName} ${s.lastName}`.trim()
+      : `Student #${a.studentId}`;
+    // Base falls back to the numeric part of the full code for legacy rows.
+    const base = a.baseNumber ?? a.pickupNumber.replace(/[A-Za-z]+$/, "");
+    let fam = byStudent.get(a.studentId);
+    if (!fam) {
+      fam = {
+        studentName: name,
+        baseNumber: base,
+        localSisId: s?.localSisId ?? null,
+        adults: [],
+        schoolName,
+      };
+      byStudent.set(a.studentId, fam);
+    }
+    fam.adults.push({
+      letter: a.letter ?? null,
+      guardianLabel: a.guardianLabel,
+      restricted: a.restrictedFrom,
+    });
+  }
+
+  const cmp = (x: string, y: string) =>
+    x.localeCompare(y, undefined, { sensitivity: "base" });
+  const families = Array.from(byStudent.values());
+  for (const fam of families) {
+    // Letters A–H first (sorted), then any null-letter legacy rows last.
+    fam.adults.sort((p, q) =>
+      cmp(p.letter ?? "~", q.letter ?? "~") ||
+      cmp(p.guardianLabel, q.guardianLabel),
+    );
+  }
+  families.sort(
+    (a, b) => cmp(a.studentName, b.studentName) || cmp(a.baseNumber, b.baseNumber),
+  );
+  return families;
+}
+
+// GET /pickup/office-strip.pdf — per-family front-desk reference list.
+// Optional ?teacherId=N limits to one teacher's roster (homeroom stack).
+router.get("/pickup/office-strip.pdf", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  if (!canManagePickup(staff)) {
+    res.status(403).json({ error: "Not authorized to manage pickup tags" });
+    return;
+  }
+  let studentIds: number[] | null = null;
+  if (req.query.teacherId !== undefined) {
+    const teacherId = Number(req.query.teacherId);
+    if (!Number.isInteger(teacherId) || teacherId <= 0) {
+      res.status(400).json({ error: "Invalid teacherId" });
+      return;
+    }
+    const rosterIds = await loadOwnRosterStudentIds(schoolId, teacherId);
+    studentIds = Array.from(rosterIds);
+  }
+  const families = await loadOfficeStripFamilies(schoolId, studentIds);
+  const pdf = await renderPickupOfficeStripPdf(families);
+  sendTagsPdf(res, pdf, `pickup-office-reference.pdf`);
+});
 
 // GET /pickup/authorizations/by-teacher?teacherId=N
 // Returns the active authorization ids for every student on a teacher's
@@ -2112,7 +2731,7 @@ router.get("/pickup/tags.pdf", requireStaff, async (req, res) => {
       return;
     }
   }
-  const tags = await loadTagInputs(schoolId, ids);
+  const tags = await loadFamilyTagInputs(schoolId, ids);
   if (tags.length === 0) {
     res.status(404).json({ error: "No active authorizations to print" });
     return;

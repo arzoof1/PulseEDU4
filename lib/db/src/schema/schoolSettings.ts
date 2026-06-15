@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, real, boolean, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, real, boolean, uniqueIndex, jsonb, timestamp } from "drizzle-orm/pg-core";
 
 // Per-school operational settings. As of D4 there is exactly one row per
 // school (enforced by `school_settings_school_id_unique`). Routes
@@ -36,9 +36,26 @@ export const schoolSettingsTable = pgTable(
   issCapacityBehavior: text("iss_capacity_behavior").notNull().default("soft"),
   // PBIS Hub "Needs Attention" thresholds
   pbisQuietTeacherDays: integer("pbis_quiet_teacher_days").notNull().default(5),
+  // DEPRECATED (kept for back-compat, no longer read): the single flat
+  // "Invisible Student" window. Superseded by the three tier-aware windows
+  // below. Left in place to avoid a destructive migration.
   pbisInvisibleStudentDays: integer("pbis_invisible_student_days")
     .notNull()
     .default(10),
+  // Tier-aware "Invisible Student" alert windows (school days). A student
+  // is "invisible" when they have 0 non-voided PBIS recognitions within
+  // the window for their highest active MTSS tier. Higher-need students
+  // surface faster. Tier 1 = no active MTSS plan (general population);
+  // Tier 2 / Tier 3 = most intensive open plan.
+  pbisInvisibleDaysTier1: integer("pbis_invisible_days_tier1")
+    .notNull()
+    .default(8),
+  pbisInvisibleDaysTier2: integer("pbis_invisible_days_tier2")
+    .notNull()
+    .default(5),
+  pbisInvisibleDaysTier3: integer("pbis_invisible_days_tier3")
+    .notNull()
+    .default(3),
   pbisReasonImbalancePct: integer("pbis_reason_imbalance_pct")
     .notNull()
     .default(60),
@@ -124,6 +141,11 @@ export const schoolSettingsTable = pgTable(
   featureDataImports: boolean("feature_data_imports").notNull().default(true),
   featureHouses: boolean("feature_houses").notNull().default(true),
   featureParentPortal: boolean("feature_parent_portal").notNull().default(true),
+  // Partnering with Parents (staff) / Learning at Home (parents) — the
+  // academic work-sample sharing feature. Some schools won't use it.
+  featureAcademicEvidence: boolean("feature_academic_evidence")
+    .notNull()
+    .default(true),
   superFeatureFamilyComm: boolean("super_feature_family_comm").notNull().default(true),
   superFeaturePbis: boolean("super_feature_pbis").notNull().default(true),
   superFeatureSchoolStore: boolean("super_feature_school_store").notNull().default(true),
@@ -142,6 +164,9 @@ export const schoolSettingsTable = pgTable(
   superFeatureDataImports: boolean("super_feature_data_imports").notNull().default(true),
   superFeatureHouses: boolean("super_feature_houses").notNull().default(true),
   superFeatureParentPortal: boolean("super_feature_parent_portal").notNull().default(true),
+  superFeatureAcademicEvidence: boolean("super_feature_academic_evidence")
+    .notNull()
+    .default(true),
   // AST shipped after the original superFeature catalog; added here so
   // the licensing layer can gate it like every other feature.
   superFeatureAst: boolean("super_feature_ast").notNull().default(true),
@@ -285,6 +310,12 @@ export const schoolSettingsTable = pgTable(
   //     house id (stringified): { "12": "Welcome home, Phoenix!" }.
   //     Empty / missing key falls back to kioskWelcomeTemplate.
   // -----------------------------------------------------------------
+  // One-way hall pass: minutes a student may be "in route" (left origin,
+  // not yet checked in at the destination) before the overdue-in-route
+  // alert fires to admin/dean/behavior-specialist/core-team. Default 10.
+  inRouteOverdueMinutes: integer("in_route_overdue_minutes")
+    .notNull()
+    .default(10),
   kioskWelcomeTemplate: text("kiosk_welcome_template")
     .notNull()
     .default("Welcome, {firstName}!"),
@@ -310,6 +341,17 @@ export const schoolSettingsTable = pgTable(
     .$type<string[]>()
     .notNull()
     .default([]),
+  // iReady AP1 cut scores used by the Tier 3 Academic auto-suggest
+  // engine. Per-grade, per-subject scale-score thresholds the MTSS
+  // coordinator fills in: a student is suggested for a Tier 3 Academic
+  // plan when their FAST PM1 places at Level 1 AND their iReady AP1
+  // score is strictly below the cut for their grade + subject. Keyed by
+  // stringified grade (e.g. "6", "7"). Empty maps = not configured (no
+  // Tier 3 suggestions surface until a cut is entered for that grade).
+  ireadyAp1Cuts: jsonb("iready_ap1_cuts")
+    .$type<{ ela: Record<string, number>; math: Record<string, number> }>()
+    .notNull()
+    .default({ ela: {}, math: {} }),
   schoolWideExpectationLetters: jsonb("school_wide_expectation_letters")
     .$type<Array<{ letter: string; word: string }>>()
     .notNull()
@@ -320,6 +362,66 @@ export const schoolSettingsTable = pgTable(
       { letter: "D", word: "Determined" },
       { letter: "E", word: "Engaged" },
     ]),
+  // -----------------------------------------------------------------
+  // On-Time Attendance / Tardy Incentive (classroom-door kiosk).
+  //   onTimeAttendanceEnabled — master switch. When OFF the kiosk never
+  //     auto-flips to Attendance mode (default OFF; opt-in per school).
+  //   onTimeMaxPoints — point value for arriving in the first minute of
+  //     passing; points = min(maxPoints, ceil(minutes until the bell)).
+  //     Caps long (post-lunch) passing periods from over-rewarding.
+  //   onTimeLotteryEnabled — daily "lucky class" bonus draw on/off.
+  //   onTimeLotteryLabel — school-editable name shown in the reveal email
+  //     so it mirrors the school's PBIS theme (e.g. "Paw Pride").
+  //   onTimeLotteryBonusPoints — points awarded to every present student in
+  //     the winning class.
+  //   onTimeLotteryRevealLeadMinutes — minutes before end of day that the
+  //     draw runs + admins are emailed. Picking this late keeps EVERY
+  //     period (even last) eligible without leaking the winner early.
+  // -----------------------------------------------------------------
+  onTimeAttendanceEnabled: boolean("on_time_attendance_enabled")
+    .notNull()
+    .default(false),
+  onTimeMaxPoints: integer("on_time_max_points").notNull().default(4),
+  onTimeLotteryEnabled: boolean("on_time_lottery_enabled")
+    .notNull()
+    .default(false),
+  onTimeLotteryLabel: text("on_time_lottery_label")
+    .notNull()
+    .default("On-Time Champions"),
+  onTimeLotteryBonusPoints: integer("on_time_lottery_bonus_points")
+    .notNull()
+    .default(20),
+  onTimeLotteryRevealLeadMinutes: integer("on_time_lottery_reveal_lead_minutes")
+    .notNull()
+    .default(30),
+  // -----------------------------------------------------------------
+  // On-Time Attendance TEST MODE (admin / Core Team only). Lets a
+  // school demo the time-gated feature without waiting for a real
+  // passing period or the afternoon lottery reveal. Two independent
+  // tools, both off by default and never used in normal operation:
+  //
+  //   onTimeTestLoopEnabled — when true, an activated kiosk ignores the
+  //     bell schedule and instead runs a synthetic passing -> bell ->
+  //     post-bell cycle on a short repeating timer, so you can watch the
+  //     kiosk flip and scan students on demand.
+  //
+  //   onTimeSimClockMinutes / onTimeSimClockSetAt — "demo clock". A
+  //     simulated wall-clock (minutes since local midnight) anchored at
+  //     the moment it was set; it advances in real time from there
+  //     (sim now = minutes + elapsed-since-setAt). When non-null the
+  //     attendance window AND the lottery resolve against this fake
+  //     time, so the REAL bell-schedule math can be exercised against
+  //     any moment of the day. NULL = off (use the real clock).
+  //
+  // The test loop takes precedence over the demo clock when both are on.
+  // -----------------------------------------------------------------
+  onTimeTestLoopEnabled: boolean("on_time_test_loop_enabled")
+    .notNull()
+    .default(false),
+  onTimeSimClockMinutes: integer("on_time_sim_clock_minutes"),
+  onTimeSimClockSetAt: timestamp("on_time_sim_clock_set_at", {
+    withTimezone: true,
+  }),
   },
   (t) => ({
     schoolIdUnique: uniqueIndex("school_settings_school_id_unique").on(

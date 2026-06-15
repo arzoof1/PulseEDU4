@@ -14,6 +14,7 @@ import {
   getSchoolIdsForDistrict,
 } from "../lib/scope";
 import { generateAndHashTempPassword } from "../lib/tempPassword";
+import { bindObjectToSchool } from "./storage.js";
 
 const router: IRouter = Router();
 
@@ -73,6 +74,7 @@ const ROLE_FLAGS = [
   "isFrontOffice",
   "isSro",
   "isGuardian",
+  "isCoreTeam",
 ] as const;
 type RoleFlag = (typeof ROLE_FLAGS)[number];
 
@@ -102,6 +104,7 @@ const CAP_FLAGS = [
   "capCarRiderMonitor",
   "capManageDismissal",
   "capTourNotify",
+  "capManageEsign",
 ] as const;
 type CapFlag = (typeof CAP_FLAGS)[number];
 
@@ -123,6 +126,7 @@ const STAFF_SELECT = {
   id: staffTable.id,
   email: staffTable.email,
   displayName: staffTable.displayName,
+  title: staffTable.title,
   active: staffTable.active,
   isSuperUser: staffTable.isSuperUser,
   isDistrictAdmin: staffTable.isDistrictAdmin,
@@ -141,6 +145,7 @@ const STAFF_SELECT = {
   isFrontOffice: staffTable.isFrontOffice,
   isSro: staffTable.isSro,
   isGuardian: staffTable.isGuardian,
+  isCoreTeam: staffTable.isCoreTeam,
   exemptStatus: staffTable.exemptStatus,
   capHallPasses: staffTable.capHallPasses,
   capTardies: staffTable.capTardies,
@@ -167,9 +172,11 @@ const STAFF_SELECT = {
   capCarRiderMonitor: staffTable.capCarRiderMonitor,
   capManageDismissal: staffTable.capManageDismissal,
   capTourNotify: staffTable.capTourNotify,
+  capManageEsign: staffTable.capManageEsign,
   defaultRoom: staffTable.defaultRoom,
   houseId: staffTable.houseId,
   department: staffTable.department,
+  photoObjectKey: staffTable.photoObjectKey,
   schoolId: staffTable.schoolId,
 } as const;
 
@@ -272,43 +279,32 @@ function csvCell(value: unknown): string {
   return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
 }
 
-// List staff with full role + capability flags. SuperUsers see every school
-// in their own district (the role is district-wide, not cross-district —
-// before D6 the SuperUser branch was unscoped, which leaked across
-// districts the moment Pasco was added). Everyone else — including school
-// admins and cap_staff_roles holders — sees only their own school.
+// List staff with full role + capability flags. Scoped to the active school
+// (`req.schoolId`) for everyone, including SuperUsers — a SuperUser sees the
+// school they're currently switched into, and switches schools to manage
+// another. District-wide reporting lives on dedicated district routes
+// (e.g. districtOverview.ts), gated by capability, not this roster surface.
 router.get(
   "/admin/staff",
   requireAdminOrSuper(),
   async (req: Request, res: Response) => {
-    const actor = (req as Request & { staff: StaffRow }).staff;
-    if (actor.isSuperUser) {
-      const districtId = await getDistrictIdForSchool(actor.schoolId);
-      const districtSchoolIds =
-        districtId !== null ? await getSchoolIdsForDistrict(districtId) : [];
-      const rows =
-        districtSchoolIds.length === 0
-          ? []
-          : await db
-              .select(STAFF_SELECT)
-              .from(staffTable)
-              .where(inArray(staffTable.schoolId, districtSchoolIds))
-              .orderBy(asc(staffTable.displayName));
-      res.json(rows);
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(400).json({ error: "No active school" });
       return;
     }
     const rows = await db
       .select(STAFF_SELECT)
       .from(staffTable)
-      .where(eq(staffTable.schoolId, actor.schoolId))
+      .where(eq(staffTable.schoolId, schoolId))
       .orderBy(asc(staffTable.displayName));
     res.json(rows);
   },
 );
 
 // Export the full staff roster as a CSV (opens in Excel). Same scoping as the
-// list endpoint: SuperUsers get their whole district, everyone else their own
-// school. Cell phone is admin-gated (admin / district admin / super only).
+// list endpoint: the active school only (SuperUsers switch schools to export
+// another). Cell phone is admin-gated (admin / district admin / super only).
 router.get(
   "/admin/staff/export.csv",
   requireAdminOrSuper(),
@@ -317,26 +313,30 @@ router.get(
     const canSeeCell =
       actor.isAdmin || actor.isDistrictAdmin || actor.isSuperUser;
 
-    let rows: StaffRow[];
-    if (actor.isSuperUser) {
-      const districtId = await getDistrictIdForSchool(actor.schoolId);
-      const districtSchoolIds =
-        districtId !== null ? await getSchoolIdsForDistrict(districtId) : [];
-      rows =
-        districtSchoolIds.length === 0
-          ? []
-          : await db
-              .select()
-              .from(staffTable)
-              .where(inArray(staffTable.schoolId, districtSchoolIds))
-              .orderBy(asc(staffTable.displayName));
-    } else {
-      rows = await db
-        .select()
-        .from(staffTable)
-        .where(eq(staffTable.schoolId, actor.schoolId))
-        .orderBy(asc(staffTable.displayName));
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(400).json({ error: "No active school" });
+      return;
     }
+    // status filter mirrors the on-screen roster filter so the CSV matches
+    // what the admin is viewing. "current" = active staff (default),
+    // "historical" = retired/inactive, "all" = both.
+    const status = typeof req.query.status === "string" ? req.query.status : "";
+    const activeCond =
+      status === "historical"
+        ? eq(staffTable.active, false)
+        : status === "all"
+          ? undefined
+          : eq(staffTable.active, true);
+    const rows: StaffRow[] = await db
+      .select()
+      .from(staffTable)
+      .where(
+        activeCond
+          ? and(eq(staffTable.schoolId, schoolId), activeCond)
+          : eq(staffTable.schoolId, schoolId),
+      )
+      .orderBy(asc(staffTable.displayName));
 
     // Resolve school + house names in two small lookups (avoids a join).
     const schoolIds = [...new Set(rows.map((r) => r.schoolId))];
@@ -442,6 +442,22 @@ router.patch(
         updates.defaultRoom = v.trim();
       } else {
         res.status(400).json({ error: "defaultRoom must be a string or null" });
+        return;
+      }
+    }
+    // Optional string field: title (courtesy title / honorific). Empty string
+    // clears it (NULL). Capped at 16 chars — it's a short prefix like "Mr."
+    // or "Coach", not a free-form note.
+    if ("title" in body) {
+      const v = body.title;
+      if (v === null || (typeof v === "string" && v.trim() === "")) {
+        updates.title = null;
+      } else if (typeof v === "string" && v.trim().length <= 16) {
+        updates.title = v.trim();
+      } else {
+        res
+          .status(400)
+          .json({ error: "title must be a string of 16 characters or fewer" });
         return;
       }
     }
@@ -970,6 +986,88 @@ router.post(
       displayName: target.displayName,
       email: target.email,
     });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Staff photo manager — mirrors the student photo flow (routes/students.ts).
+// Bytes go through the existing /api/storage/* pipeline (so the ACL is
+// school-scoped automatically); we just record the resulting objectKey on
+// the staff row. Used for ID badges + staff-facing avatars. Admin-gated.
+// Bytes are NEVER deleted on replace/clear — the previous object stays in
+// storage (orphaned) so an accidental delete can be recovered.
+// ---------------------------------------------------------------------------
+router.post(
+  "/staff/:staffId/photo",
+  requireAdminOrSuper(),
+  async (req: Request, res: Response): Promise<void> => {
+    const staffId = Number(req.params.staffId);
+    const objectPath: string =
+      typeof req.body?.objectPath === "string"
+        ? req.body.objectPath.trim()
+        : "";
+    if (!Number.isInteger(staffId) || staffId <= 0) {
+      res.status(400).json({ error: "staffId required" });
+      return;
+    }
+    if (!objectPath || !objectPath.startsWith("/objects/")) {
+      res.status(400).json({ error: "objectPath required (/objects/...)" });
+      return;
+    }
+    // Cross-school safety — the target staff member must be in the active
+    // school (the one the actor is currently switched into). SuperUsers
+    // switch schools to manage another school's staff.
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(400).json({ error: "No active school" });
+      return;
+    }
+    const [target] = await db
+      .select({ id: staffTable.id, schoolId: staffTable.schoolId })
+      .from(staffTable)
+      .where(and(eq(staffTable.id, staffId), eq(staffTable.schoolId, schoolId)));
+    if (!target) {
+      res.status(404).json({ error: "Staff member not found" });
+      return;
+    }
+    // Bind the freshly-uploaded object to the target's school. Returns
+    // false if the path was issued to a different school or already bound
+    // elsewhere — both reject so a hostile client can't reassign someone
+    // else's image to one of our staff.
+    const ok = await bindObjectToSchool(objectPath, target.schoolId);
+    if (!ok) {
+      res
+        .status(403)
+        .json({ error: "Object not bound — re-upload and try again" });
+      return;
+    }
+    await db
+      .update(staffTable)
+      .set({ photoObjectKey: objectPath })
+      .where(eq(staffTable.id, target.id));
+    res.json({ ok: true, photoObjectKey: objectPath });
+  },
+);
+
+router.delete(
+  "/staff/:staffId/photo",
+  requireAdminOrSuper(),
+  async (req: Request, res: Response): Promise<void> => {
+    const staffId = Number(req.params.staffId);
+    if (!Number.isInteger(staffId) || staffId <= 0) {
+      res.status(400).json({ error: "staffId required" });
+      return;
+    }
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(400).json({ error: "No active school" });
+      return;
+    }
+    const result = await db
+      .update(staffTable)
+      .set({ photoObjectKey: null })
+      .where(and(eq(staffTable.id, staffId), eq(staffTable.schoolId, schoolId)));
+    res.json({ ok: true, updated: result.rowCount ?? 0 });
   },
 );
 

@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import crypto from "node:crypto";
+import { genUrlSafeToken } from "../lib/urlSafeToken.js";
 import {
   db,
   parentInvitesTable,
@@ -46,7 +46,9 @@ async function requireAdmin(req: any, res: any): Promise<boolean> {
 const INVITE_TTL_DAYS = 14;
 
 function newInviteToken(): string {
-  return crypto.randomBytes(32).toString("base64url");
+  // base62, not base64url: this raw token rides in the invite-email URL, where a
+  // trailing '-'/'_' would be stripped by linkifiers. See lib/urlSafeToken.
+  return genUrlSafeToken(43); // ~256 bits, parity with randomBytes(32)
 }
 
 function isValidEmail(s: string | null | undefined): s is string {

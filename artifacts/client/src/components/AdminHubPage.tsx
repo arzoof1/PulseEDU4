@@ -748,7 +748,7 @@ export default function AdminHubPage({
                   if (r.kind !== "iss") return;
                   const name = r.student
                     ? `${r.student.firstName} ${r.student.lastName}`
-                    : r.studentId;
+                    : "Unknown student";
                   setIssDetail({ id: r.id, studentName: name });
                 }}
                 style={{
@@ -779,7 +779,7 @@ export default function AdminHubPage({
                   <div style={{ fontWeight: 600 }}>
                     {r.student
                       ? `${r.student.firstName} ${r.student.lastName}`
-                      : r.studentId}
+                      : "Unknown student"}
                     {r.student?.grade && (
                       <span
                         style={{

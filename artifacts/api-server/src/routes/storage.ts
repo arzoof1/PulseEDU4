@@ -23,6 +23,7 @@ import {
   ObjectNotFoundError,
 } from "../lib/objectStorage.js";
 import { getObjectAclPolicy } from "../lib/objectAcl.js";
+import { getS3Client } from "../lib/storedObject.js";
 import type { TourFlyer } from "@workspace/db";
 
 const router: IRouter = Router();
@@ -115,6 +116,71 @@ router.post("/storage/uploads/request-url", async (req, res) => {
     res.status(500).json({ error: "Failed to generate upload URL" });
   }
 });
+
+// Issue a presigned upload URL on behalf of a specific school, recording it
+// in the pending-uploads ledger so a later `bindObjectToSchool(path, schoolId)`
+// succeeds. Used by feature routes that must mint an upload URL for an
+// UNAUTHENTICATED caller (e.g. the public e-sign signing page, where the
+// recipient is an outside party identified only by a share token — they have
+// no `req.schoolId` of their own, so the document's school is supplied).
+export async function issueSchoolUploadUrl(
+  schoolId: number,
+): Promise<{ uploadURL: string; objectPath: string }> {
+  const uploadURL = await objectStorageService.getObjectEntityUploadURL();
+  const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+  rememberPendingUpload(objectPath, schoolId);
+  return { uploadURL, objectPath };
+}
+
+// Stream a stored object to an Express response WITHOUT any per-request auth
+// check. The CALLER is responsible for authorizing access first (the e-sign
+// signing page authorizes via an unguessable share token before calling this).
+// Returns false if the object does not exist so the caller can 404.
+export async function streamObjectToResponse(
+  objectPath: string,
+  res: Response,
+): Promise<boolean> {
+  let file;
+  try {
+    file = await objectStorageService.getObjectEntityFile(objectPath);
+  } catch (err) {
+    if (err instanceof ObjectNotFoundError) return false;
+    throw err;
+  }
+  const r = await objectStorageService.downloadObject(file);
+  await pipeResponse(r, res);
+  return true;
+}
+
+// Read a stored object fully into memory as a Buffer. The CALLER is responsible
+// for authorizing access first (e.g. binding the object to the school). Returns
+// null if the object does not exist. Use only for small/bounded payloads
+// (e.g. a scanned worksheet PDF) — it buffers the whole object.
+export async function readStoredObject(
+  objectPath: string,
+): Promise<Buffer | null> {
+  return objectStorageService.readObjectAsBuffer(objectPath);
+}
+
+// Delete a stored object by its /objects/... path. Best-effort: a missing
+// object is treated as success (idempotent purge). The CALLER is responsible
+// for authorizing the delete (e.g. the retention cron owns the rows it purges).
+export async function deleteStoredObject(objectPath: string): Promise<void> {
+  try {
+    const ref = await objectStorageService.getObjectEntityFile(objectPath);
+    if (ref.provider === "gcs") {
+      await ref.file.delete({ ignoreNotFound: true });
+      return;
+    }
+    const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
+    await getS3Client().send(
+      new DeleteObjectCommand({ Bucket: ref.bucket, Key: ref.key }),
+    );
+  } catch (err) {
+    if (err instanceof ObjectNotFoundError) return;
+    throw err;
+  }
+}
 
 // Synthetic ACL "owner" used to scope private uploads to a single school.
 // We intentionally use the string form `school:<id>` instead of a per-staff

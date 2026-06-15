@@ -104,18 +104,6 @@ type = "image"
 title = "PulseKinetics — static PNG (4×)"
 
 [[outputs]]
-id = "ATdyS5Z5m2NJp7VhFWdHZ"
-uri = "file://attached_assets/logo-presets/pulse-kinetics-favicon.svg"
-type = "image"
-title = "PulseKinetics — 180×180 favicon SVG"
-
-[[outputs]]
-id = "cVGVNM_hHAlx57XOOYdaj"
-uri = "file://attached_assets/logo-presets/pulse-kinetics-favicon.png"
-type = "image"
-title = "PulseKinetics — 512×512 favicon PNG"
-
-[[outputs]]
 id = "QrfEv3BM5KAXaT8I10_4W"
 uri = "file://attached_assets/logo-presets/pulse-athletics-animated.svg"
 type = "image"
@@ -306,3 +294,81 @@ id = "WFc5pJBaEo_BW9A8ErTaK"
 uri = "file://exports/hall-pass-demo-runbook.pdf"
 type = "pdf"
 title = "Hall Pass Demo Run-Book (PDF)"
+
+[[outputs]]
+id = "0767g4Kr8xlePWgq1JKjR"
+uri = "file://docs/brochure/PulseEDU-Brochure.pdf"
+type = "pdf"
+title = "PulseEDU Brochure (updated)"
+
+[[outputs]]
+id = "gIHf9NKaqUecy0RGLZi8d"
+uri = "file://docs/templates/benchmark_glossary_template.csv"
+type = "table"
+title = "Benchmark Glossary — CSV template"
+
+[[outputs]]
+id = "7_c8XGRub8fLFR8KdN33R"
+uri = "file://docs/templates/intervention_lessons_template.csv"
+type = "table"
+title = "Intervention Lessons — CSV template"
+
+[[outputs]]
+id = "Rbf4H6KSbqAnX3CrUL6Tx"
+uri = "file://attached_assets/tag-proof-guides.pdf"
+type = "pdf"
+title = "Same tag with trim guide"
+
+[[outputs]]
+id = "wf09xdLWBbNqwfVNouKZV"
+uri = "file://attached_assets/tag-proof-clean.pdf"
+type = "pdf"
+title = "Fold-over hanger tag — production output"
+
+[[outputs]]
+id = "M41xDf60MJjMzc9omcSz6"
+uri = "file://docs/demo/district-demo-script.md"
+type = "text"
+title = "District Demo — Presenter Script"
+
+[[outputs]]
+id = "ijZNXe8_L3QIX2pgIfkNe"
+uri = "file://docs/demo/district-demo-shot-list.md"
+type = "text"
+title = "District Demo — Screenshot Shot List"
+
+[[outputs]]
+id = "loP-R0sok56TmXwnapHnw"
+uri = "file://docs/demo/district-demo-readiness-checklist.md"
+type = "text"
+title = "District Demo — Readiness Checklist"
+
+[[outputs]]
+id = "WwfUShvAWCTZ2XvO0HkMx"
+uri = "file://docs/demo/README.md"
+type = "text"
+title = "Demo Kit — Index / README"
+
+[[outputs]]
+id = "PDAERqAIhfmIVWXc2f0bk"
+uri = "file://docs/demo/print/district-demo-script.pdf"
+type = "pdf"
+title = "District Demo — Presenter Script (print)"
+
+[[outputs]]
+id = "RP00qIyw81xcFdRF-00ys"
+uri = "file://docs/demo/print/district-demo-shot-list.pdf"
+type = "pdf"
+title = "District Demo — Shot List (print)"
+
+[[outputs]]
+id = "RLIcFAT4-GC-Yh5_UXIgW"
+uri = "file://docs/demo/print/district-demo-readiness-checklist.pdf"
+type = "pdf"
+title = "District Demo — Readiness Checklist (print)"
+
+[[outputs]]
+id = "6c-AcUXBEPPh0IBJkGl00"
+uri = "file://docs/demo/print/README.pdf"
+type = "pdf"
+title = "Demo Kit — README (print)"

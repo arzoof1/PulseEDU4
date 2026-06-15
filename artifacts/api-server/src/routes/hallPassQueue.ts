@@ -19,11 +19,16 @@ import {
   schoolsTable,
 } from "@workspace/db";
 import { and, eq, inArray, isNull, gt, asc, ne, sql } from "drizzle-orm";
-import { randomBytes } from "node:crypto";
+import { genUrlSafeToken } from "../lib/urlSafeToken.js";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { findPolarityConflict } from "./polarityPairs";
 import { findDailyLimitConflict } from "./studentHallPassLimits";
+import {
+  loadRestroomDestinationNames,
+  loadKioskTeacherDisplayName,
+  passHeadsToKiosk,
+} from "../lib/oneWayPass.js";
 
 // How long a minted viewer token stays usable. The token is also killed
 // the moment the underlying kiosk activation is deactivated, so this is
@@ -165,23 +170,70 @@ async function clearStaleAndList(act: { id: number; schoolId: number }) {
       ),
     );
   const rows = await db
-    .select()
+    .select({
+      id: hallPassQueueTable.id,
+      schoolId: hallPassQueueTable.schoolId,
+      kioskActivationId: hallPassQueueTable.kioskActivationId,
+      room: hallPassQueueTable.room,
+      studentId: hallPassQueueTable.studentId,
+      firstName: hallPassQueueTable.firstName,
+      lastName: hallPassQueueTable.lastName,
+      destination: hallPassQueueTable.destination,
+      position: hallPassQueueTable.position,
+      addedAt: hallPassQueueTable.addedAt,
+      periodKey: hallPassQueueTable.periodKey,
+      // Joined from the roster so the kiosk's next-up confirm can verify the
+      // student-typed Local SIS id without a second round-trip. The queue row
+      // itself stores the internal student_id; the SIS id is the human-facing
+      // value students scan/type.
+      localSisId: studentsTable.localSisId,
+      photoObjectKey: studentsTable.photoObjectKey,
+      photoConsent: studentsTable.photoConsent,
+    })
     .from(hallPassQueueTable)
+    .leftJoin(
+      studentsTable,
+      and(
+        eq(studentsTable.studentId, hallPassQueueTable.studentId),
+        eq(studentsTable.schoolId, hallPassQueueTable.schoolId),
+      ),
+    )
     .where(eq(hallPassQueueTable.kioskActivationId, act.id))
     .orderBy(asc(hallPassQueueTable.position), asc(hallPassQueueTable.id));
   return { periodKey, rows };
 }
 
-function shapeEntry(row: typeof hallPassQueueTable.$inferSelect, idx: number) {
+function shapeEntry(
+  row: {
+    id: number;
+    studentId: string;
+    firstName: string | null;
+    lastName: string | null;
+    destination: string;
+    addedAt: Date | string;
+    localSisId?: string | null;
+    photoObjectKey?: string | null;
+    photoConsent?: boolean | null;
+  },
+  idx: number,
+) {
   return {
     id: row.id,
     studentId: row.studentId,
+    // Human-facing Local SIS id (null when called from a code path that
+    // doesn't join the roster — e.g. the immediate post-add response, where
+    // the client refetches the joined list anyway).
+    localSisId: row.localSisId ?? null,
     firstName: row.firstName,
     lastName: row.lastName,
     destination: row.destination,
     position: idx + 1,
     addedAt:
       row.addedAt instanceof Date ? row.addedAt.toISOString() : row.addedAt,
+    // Consent-gated photo key for the kiosk QueueStrip / NextUp avatar.
+    // Null when the student withholds consent or no photo path is set, or
+    // when called from a non-joined code path (photoConsent undefined).
+    photoObjectKey: row.photoConsent ? row.photoObjectKey ?? null : null,
   };
 }
 
@@ -198,9 +250,117 @@ router.get("/kiosk/queue/:token", async (req, res) => {
     return;
   }
   const { rows } = await clearStaleAndList(act);
+  // The kiosk polls this endpoint. We surface two extra fields so a slot
+  // opening from ANY source — the out student tapping "I'm back", a teacher
+  // ending a pass from the staff app, or a staff queue cancel — advances the
+  // line on the kiosk without anyone re-scanning:
+  //   - nextUp: the first ELIGIBLE waiting student (keep-apart / daily-limit
+  //     holds are skipped, preserving arrival fairness) the kiosk should
+  //     promote to the "Welcome [Name] — enter your ID" handoff prompt.
+  //   - activePassIds: ids of passes still OUT from this room, so the kiosk
+  //     can detect that the student on its TimerScreen was ended remotely
+  //     and clear the now-stale countdown.
+  const nextUp = await firstEligible(rows, act.schoolId);
+  const activeRows = await db
+    .select({ id: hallPassesTable.id })
+    .from(hallPassesTable)
+    .where(
+      and(
+        eq(hallPassesTable.schoolId, act.schoolId),
+        eq(hallPassesTable.status, "active"),
+        eq(hallPassesTable.originRoom, act.room),
+      ),
+    );
+
+  // One-way lifecycle surfaces for this kiosk's room:
+  //   - inRouteFromHere: students who LEFT this room on a one-way pass and
+  //     haven't checked in yet (origin == room). The origin kiosk shows a big
+  //     "IN ROUTE" card per student until they arrive/end.
+  //   - arrivalsToHere: students HEADED to this room (destination == room),
+  //     not yet arrived. A destination kiosk taps one to check them in.
+  // Restroom passes are round-trip and excluded from both.
+  const restroomNames = await loadRestroomDestinationNames(act.schoolId);
+  // Inbound passes are often addressed to the teacher (destination == teacher
+  // displayName) rather than the kiosk's activated room string, so resolve the
+  // activating teacher to match those too. See passHeadsToKiosk.
+  const kioskTeacher = await loadKioskTeacherDisplayName(
+    act.schoolId,
+    act.staffId,
+  );
+  const oneWayActive = (await db
+    .select({
+      id: hallPassesTable.id,
+      studentId: hallPassesTable.studentId,
+      destination: hallPassesTable.destination,
+      originRoom: hallPassesTable.originRoom,
+      createdAt: hallPassesTable.createdAt,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      localSisId: studentsTable.localSisId,
+      photoObjectKey: studentsTable.photoObjectKey,
+      photoConsent: studentsTable.photoConsent,
+    })
+    .from(hallPassesTable)
+    .leftJoin(
+      studentsTable,
+      and(
+        eq(studentsTable.studentId, hallPassesTable.studentId),
+        eq(studentsTable.schoolId, hallPassesTable.schoolId),
+      ),
+    )
+    .where(
+      and(
+        eq(hallPassesTable.schoolId, act.schoolId),
+        eq(hallPassesTable.status, "active"),
+        isNull(hallPassesTable.arrivedAt),
+      ),
+    )) as Array<{
+    id: number;
+    studentId: string;
+    destination: string;
+    originRoom: string;
+    createdAt: string;
+    firstName: string | null;
+    lastName: string | null;
+    localSisId: string | null;
+    photoObjectKey: string | null;
+    photoConsent: boolean | null;
+  }>;
+
+  const shapeOneWay = (r: (typeof oneWayActive)[number]) => ({
+    id: r.id,
+    studentId: r.studentId,
+    localSisId: r.localSisId ?? null,
+    firstName: r.firstName,
+    lastName: r.lastName,
+    destination: r.destination,
+    originRoom: r.originRoom,
+    createdAt: r.createdAt,
+    // Consent-gated: only expose the key when the student consents, so the
+    // kiosk <img> never even attempts to load a non-consenting photo.
+    photoObjectKey: r.photoConsent ? r.photoObjectKey ?? null : null,
+  });
+
+  const inRouteFromHere = oneWayActive
+    .filter(
+      (r) => r.originRoom === act.room && !restroomNames.has(r.destination),
+    )
+    .map(shapeOneWay);
+  const arrivalsToHere = oneWayActive
+    .filter(
+      (r) =>
+        passHeadsToKiosk(r, act.room, kioskTeacher) &&
+        !restroomNames.has(r.destination),
+    )
+    .map(shapeOneWay);
+
   res.json({
     capacity: QUEUE_CAP,
     entries: rows.map((r, i) => shapeEntry(r, i)),
+    nextUp,
+    activePassIds: activeRows.map((r) => r.id),
+    inRouteFromHere,
+    arrivalsToHere,
   });
 });
 
@@ -221,22 +381,25 @@ router.post("/kiosk/queue/:token/add", async (req, res) => {
     res.status(400).json({ error: "destination is required" });
     return;
   }
-  const trimmedId = studentId.trim().toUpperCase();
-
-  // Resolve student to cache name + verify they're in this school.
+  // Students scan/type their human-facing Local SIS id; resolve it to the
+  // canonical roster row so we store the internal student_id on the queue
+  // (and cache the name) while verifying they belong to this school.
   const [student] = await db
     .select()
     .from(studentsTable)
     .where(
       and(
-        eq(studentsTable.studentId, trimmedId),
+        eq(studentsTable.localSisId, studentId.trim()),
         eq(studentsTable.schoolId, act.schoolId),
       ),
     );
   if (!student) {
-    res.status(404).json({ error: `Student ${trimmedId} not found` });
+    res
+      .status(404)
+      .json({ error: "Student not found — check your ID and try again." });
     return;
   }
+  const trimmedId = student.studentId;
 
   // Don't queue someone who's currently out on a pass from this room — they
   // already have one. Saves a footgun and a confusing queue display.
@@ -375,7 +538,10 @@ router.post("/kiosk/queue/:token/skip", async (req, res) => {
     res.status(400).json({ error: "studentId is required" });
     return;
   }
-  const trimmedId = studentId.trim().toUpperCase();
+  // The client sends back the entry's canonical student_id (the value
+  // shapeEntry returned), so match it exactly — no case folding. Queue rows
+  // store the canonical id verbatim; uppercasing here could miss a delete.
+  const trimmedId = studentId.trim();
   await db
     .delete(hallPassQueueTable)
     .where(
@@ -402,14 +568,51 @@ export async function consumeQueueEntry(
   kioskActivationId: number,
   studentId: string,
 ) {
+  // Callers pass the canonical student_id (resolved from local_sis_id in the
+  // kiosk routes). Queue rows store that id verbatim, so match exactly.
   await db
     .delete(hallPassQueueTable)
     .where(
       and(
         eq(hallPassQueueTable.kioskActivationId, kioskActivationId),
-        eq(hallPassQueueTable.studentId, studentId.toUpperCase()),
+        eq(hallPassQueueTable.studentId, studentId),
       ),
     );
+}
+
+// Skip-and-badge: walk arrival order and return the first entry that is
+// currently eligible to leave — i.e. NOT blocked by either a keep-apart
+// hold OR a daily-limit cap they hit while waiting in line. Preserves
+// arrival fairness; blocked students don't lose their place, the kiosk
+// just calls the next eligible kid until they're cleared. Shared by the
+// pass-end "next up" response and the kiosk's queue poll.
+async function firstEligible(
+  rows: Array<{
+    studentId: string;
+    localSisId?: string | null;
+    firstName: string | null;
+    lastName: string | null;
+    destination: string;
+    photoObjectKey?: string | null;
+    photoConsent?: boolean | null;
+  }>,
+  schoolId: number,
+) {
+  for (const row of rows) {
+    const polarity = await findPolarityConflict(row.studentId, schoolId);
+    if (polarity) continue;
+    const limit = await findDailyLimitConflict(row.studentId, schoolId);
+    if (limit) continue;
+    return {
+      studentId: row.studentId,
+      localSisId: row.localSisId ?? null,
+      firstName: row.firstName,
+      lastName: row.lastName,
+      destination: row.destination,
+      photoObjectKey: row.photoConsent ? row.photoObjectKey ?? null : null,
+    };
+  }
+  return null;
 }
 
 export async function peekNextInQueue(act: {
@@ -418,24 +621,7 @@ export async function peekNextInQueue(act: {
 }) {
   const { rows } = await clearStaleAndList(act);
   if (rows.length === 0) return null;
-  // Skip-and-badge: walk arrival order and return the first entry that is
-  // currently eligible to leave — i.e. NOT blocked by either a keep-apart
-  // hold OR a daily-limit cap they hit while waiting in line. Preserves
-  // arrival fairness; blocked students don't lose their place, the kiosk
-  // just calls the next eligible kid until they're cleared.
-  for (const row of rows) {
-    const polarity = await findPolarityConflict(row.studentId, act.schoolId);
-    if (polarity) continue;
-    const limit = await findDailyLimitConflict(row.studentId, act.schoolId);
-    if (limit) continue;
-    return {
-      studentId: row.studentId,
-      firstName: row.firstName,
-      lastName: row.lastName,
-      destination: row.destination,
-    };
-  }
-  return null;
+  return firstEligible(rows, act.schoolId);
 }
 
 // ---------------------------------------------------------------------------
@@ -734,7 +920,7 @@ router.post("/kiosk/viewer-token", requireStaff, async (req, res) => {
     return;
   }
 
-  const token = randomBytes(24).toString("base64url");
+  const token = genUrlSafeToken(32); // ~190 bits, linkifier-safe (lib/urlSafeToken)
   const tokenHash = createHash("sha256").update(token).digest("hex");
   const expiresAt = new Date(
     Math.min(

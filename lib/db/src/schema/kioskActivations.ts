@@ -46,6 +46,11 @@ export const kioskActivationsTable = pgTable(
     activatedByStaffId: integer("activated_by_staff_id"),
     proxyForStaffId: integer("proxy_for_staff_id"),
     sessionKind: text("session_kind"),
+    // On-Time Attendance "Done" marker. Set to the current attendance
+    // period_key when the teacher taps Done at the bell — flips this kiosk
+    // back to hall-pass mode for that passing window. Auto-resets logically
+    // when the period_key changes (next passing window).
+    onTimeEndedKey: text("on_time_ended_key"),
   },
   (t) => ({
     // Defense-in-depth against race conditions in the activate flow:

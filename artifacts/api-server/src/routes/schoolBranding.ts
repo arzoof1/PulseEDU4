@@ -53,6 +53,19 @@ export type BrandingResponse = {
   buttonHoverBgColors: string[];
   buttonHoverBgAngle: number;
   buttonHoverText: string | null;
+  // Student ID card designer.
+  cardBgMode: "colors" | "image";
+  cardBgColors: string[];
+  cardBgAngle: number;
+  cardBgObjectPath: string | null;
+  cardHeaderTextMode: "auto" | "manual";
+  cardHeaderTextColor: string | null;
+  cardShowHouse: boolean;
+  cardHouseBgMode: "house" | "white" | "custom";
+  cardHouseBgColor: string | null;
+  cardHouseTextMode: "auto" | "manual";
+  cardHouseTextColor: string | null;
+  cardOrientation: "landscape" | "portrait";
 };
 
 // Shared loader so other routers (parent portal, kiosk activation) can
@@ -76,6 +89,18 @@ export async function loadBrandingForSchool(
       buttonHoverBgColorsJson: schoolBrandingTable.buttonHoverBgColorsJson,
       buttonHoverBgAngle: schoolBrandingTable.buttonHoverBgAngle,
       buttonHoverText: schoolBrandingTable.buttonHoverText,
+      cardBgMode: schoolBrandingTable.cardBgMode,
+      cardBgColorsJson: schoolBrandingTable.cardBgColorsJson,
+      cardBgAngle: schoolBrandingTable.cardBgAngle,
+      cardBgObjectPath: schoolBrandingTable.cardBgObjectPath,
+      cardHeaderTextMode: schoolBrandingTable.cardHeaderTextMode,
+      cardHeaderTextColor: schoolBrandingTable.cardHeaderTextColor,
+      cardShowHouse: schoolBrandingTable.cardShowHouse,
+      cardHouseBgMode: schoolBrandingTable.cardHouseBgMode,
+      cardHouseBgColor: schoolBrandingTable.cardHouseBgColor,
+      cardHouseTextMode: schoolBrandingTable.cardHouseTextMode,
+      cardHouseTextColor: schoolBrandingTable.cardHouseTextColor,
+      cardOrientation: schoolBrandingTable.cardOrientation,
     })
     .from(schoolBrandingTable)
     .where(eq(schoolBrandingTable.schoolId, schoolId));
@@ -110,6 +135,18 @@ function rowToResponse(row: {
   buttonHoverBgColorsJson: string | null;
   buttonHoverBgAngle: number | null;
   buttonHoverText: string | null;
+  cardBgMode: string | null;
+  cardBgColorsJson: string | null;
+  cardBgAngle: number | null;
+  cardBgObjectPath: string | null;
+  cardHeaderTextMode: string | null;
+  cardHeaderTextColor: string | null;
+  cardShowHouse: number | null;
+  cardHouseBgMode: string | null;
+  cardHouseBgColor: string | null;
+  cardHouseTextMode: string | null;
+  cardHouseTextColor: string | null;
+  cardOrientation: string | null;
 } | null,
 schoolId: number): BrandingResponse {
   if (!row) {
@@ -127,6 +164,18 @@ schoolId: number): BrandingResponse {
       buttonHoverBgColors: [],
       buttonHoverBgAngle: 90,
       buttonHoverText: null,
+      cardBgMode: "colors",
+      cardBgColors: [],
+      cardBgAngle: 135,
+      cardBgObjectPath: null,
+      cardHeaderTextMode: "auto",
+      cardHeaderTextColor: null,
+      cardShowHouse: true,
+      cardHouseBgMode: "house",
+      cardHouseBgColor: null,
+      cardHouseTextMode: "auto",
+      cardHouseTextColor: null,
+      cardOrientation: "landscape",
     };
   }
   return {
@@ -143,6 +192,21 @@ schoolId: number): BrandingResponse {
     buttonHoverBgColors: parseColorsJson(row.buttonHoverBgColorsJson),
     buttonHoverBgAngle: row.buttonHoverBgAngle ?? 90,
     buttonHoverText: row.buttonHoverText,
+    cardBgMode: row.cardBgMode === "image" ? "image" : "colors",
+    cardBgColors: parseColorsJson(row.cardBgColorsJson).slice(0, 2),
+    cardBgAngle: row.cardBgAngle ?? 135,
+    cardBgObjectPath: row.cardBgObjectPath,
+    cardHeaderTextMode: row.cardHeaderTextMode === "manual" ? "manual" : "auto",
+    cardHeaderTextColor: row.cardHeaderTextColor,
+    cardShowHouse: (row.cardShowHouse ?? 1) !== 0,
+    cardHouseBgMode:
+      row.cardHouseBgMode === "white" || row.cardHouseBgMode === "custom"
+        ? row.cardHouseBgMode
+        : "house",
+    cardHouseBgColor: row.cardHouseBgColor,
+    cardHouseTextMode: row.cardHouseTextMode === "manual" ? "manual" : "auto",
+    cardHouseTextColor: row.cardHouseTextColor,
+    cardOrientation: row.cardOrientation === "portrait" ? "portrait" : "landscape",
   };
 }
 
@@ -314,6 +378,121 @@ router.put("/school-branding", async (req, res) => {
 
   const colorsJson = JSON.stringify(colors);
 
+  // --- Student ID card designer fields ----------------------------------
+  // Top background mode. Only 'colors' or 'image' are valid; anything else
+  // falls back to 'colors'.
+  const cardBgMode = body.cardBgMode === "image" ? "image" : "colors";
+
+  // 1-2 hex colors for the top background. Strict: reject bad hex / >2.
+  let cardBgColors: string[] = [];
+  if (Array.isArray(body.cardBgColors)) {
+    const raw = body.cardBgColors as unknown[];
+    if (raw.length > 2) {
+      res.status(400).json({ error: "Card background supports at most 2 colors" });
+      return;
+    }
+    const trimmed = raw.map((c) => (typeof c === "string" ? c.trim() : ""));
+    if (!trimmed.every((c) => isHex(c))) {
+      res.status(400).json({ error: "Each card background color must be #rrggbb" });
+      return;
+    }
+    cardBgColors = trimmed;
+  }
+  const cardBgColorsJson = JSON.stringify(cardBgColors);
+
+  let cardBgAngle = 135;
+  if (typeof body.cardBgAngle === "number" && Number.isFinite(body.cardBgAngle)) {
+    cardBgAngle = Math.max(0, Math.min(360, Math.round(body.cardBgAngle)));
+  }
+
+  // Top background image path (mode='image'). Bind to school like the logo.
+  let cardBgObjectPath: string | null = null;
+  if (typeof body.cardBgObjectPath === "string") {
+    const trimmed = body.cardBgObjectPath.trim();
+    if (trimmed === "") {
+      cardBgObjectPath = null;
+    } else if (trimmed.startsWith("/objects/")) {
+      const ok = await bindObjectToSchool(trimmed, schoolId);
+      if (!ok) {
+        res
+          .status(403)
+          .json({ error: "Card background upload not authorized for this school" });
+        return;
+      }
+      cardBgObjectPath = trimmed;
+    } else {
+      res.status(400).json({ error: "Card background path must start with /objects/" });
+      return;
+    }
+  }
+
+  const cardHeaderTextMode =
+    body.cardHeaderTextMode === "manual" ? "manual" : "auto";
+  let cardHeaderTextColor: string | null = null;
+  if (
+    body.cardHeaderTextColor !== undefined &&
+    body.cardHeaderTextColor !== null &&
+    body.cardHeaderTextColor !== ""
+  ) {
+    if (!isHex(body.cardHeaderTextColor)) {
+      res.status(400).json({ error: "Card header text color must be #rrggbb" });
+      return;
+    }
+    cardHeaderTextColor = (body.cardHeaderTextColor as string).trim();
+  }
+
+  const cardShowHouse = body.cardShowHouse === false ? 0 : 1;
+
+  const cardHouseBgMode =
+    body.cardHouseBgMode === "white" || body.cardHouseBgMode === "custom"
+      ? body.cardHouseBgMode
+      : "house";
+  let cardHouseBgColor: string | null = null;
+  if (
+    body.cardHouseBgColor !== undefined &&
+    body.cardHouseBgColor !== null &&
+    body.cardHouseBgColor !== ""
+  ) {
+    if (!isHex(body.cardHouseBgColor)) {
+      res.status(400).json({ error: "Card footer background color must be #rrggbb" });
+      return;
+    }
+    cardHouseBgColor = (body.cardHouseBgColor as string).trim();
+  }
+
+  const cardHouseTextMode =
+    body.cardHouseTextMode === "manual" ? "manual" : "auto";
+  let cardHouseTextColor: string | null = null;
+  if (
+    body.cardHouseTextColor !== undefined &&
+    body.cardHouseTextColor !== null &&
+    body.cardHouseTextColor !== ""
+  ) {
+    if (!isHex(body.cardHouseTextColor)) {
+      res.status(400).json({ error: "Card footer text color must be #rrggbb" });
+      return;
+    }
+    cardHouseTextColor = (body.cardHouseTextColor as string).trim();
+  }
+
+  const cardOrientation =
+    body.cardOrientation === "portrait" ? "portrait" : "landscape";
+
+  const cardFields = {
+    cardBgMode,
+    cardBgColorsJson,
+    cardBgAngle,
+    cardBgObjectPath,
+    cardHeaderTextMode,
+    cardHeaderTextColor,
+    cardShowHouse,
+    cardHouseBgMode,
+    cardHouseBgColor,
+    cardHouseTextMode,
+    cardHouseTextColor,
+    cardOrientation,
+  };
+
   // Upsert by schoolId (one row per school).
   const [existing] = await db
     .select({ id: schoolBrandingTable.id })
@@ -336,6 +515,7 @@ router.put("/school-branding", async (req, res) => {
         buttonHoverBgColorsJson: hover.bgColorsJson,
         buttonHoverBgAngle: hover.angle,
         buttonHoverText: hover.text,
+        ...cardFields,
         updatedAt: new Date(),
         updatedByStaffId: req.staffId ?? null,
       })
@@ -355,6 +535,7 @@ router.put("/school-branding", async (req, res) => {
       buttonHoverBgColorsJson: hover.bgColorsJson,
       buttonHoverBgAngle: hover.angle,
       buttonHoverText: hover.text,
+      ...cardFields,
       updatedByStaffId: req.staffId ?? null,
     });
   }

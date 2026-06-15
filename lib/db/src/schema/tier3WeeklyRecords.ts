@@ -6,6 +6,7 @@ import {
   timestamp,
   jsonb,
   index,
+  boolean,
 } from "drizzle-orm/pg-core";
 
 // Tier 3 weekly tracking record. ONE row per (student, teacher, week).
@@ -87,6 +88,28 @@ export const tier3WeeklyRecordsTable = pgTable(
       .$type<Record<string, boolean>>()
       .notNull()
       .default({}),
+
+    // --- Academic Tier 3 minutes model (rework) ---
+    // Per-day minutes delivered in the academic small group. Shape:
+    //   { mon: 30, tue: 0, wed: 15, ... }. Only meaningful for academic
+    //   Tier 3 records (the plan carries fastSubject). Behavior records
+    //   leave this as the empty default and keep using monScore..friScore.
+    //   The week is "met" when the sum across days reaches the plan's
+    //   academicMinutesTarget.
+    academicMinutes: jsonb("academic_minutes")
+      .$type<Record<string, number>>()
+      .notNull()
+      .default({}),
+    // Release valve: the interventionist (or a coordinator) marks the week
+    // "no group provided this week" so it counts as EXCUSED rather than
+    // owed on the bell + reports. Captures who released it and why for the
+    // audit trail. Clearing the flag (logging minutes again) reverts it.
+    releasedNoIntervention: boolean("released_no_intervention")
+      .notNull()
+      .default(false),
+    releaseReason: text("release_reason"),
+    releasedByStaffId: integer("released_by_staff_id"),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
 
     // When the teacher clicks "Submit" on the weekly form. NULL means
     // the record is still a working draft — the teacher can save and

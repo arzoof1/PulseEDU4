@@ -9,11 +9,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import BenchmarkStar from "./BenchmarkStar";
+import StandardsBookModal from "./StandardsBookModal";
 
 interface CatalogRow {
   code: string;
   category: string | null;
   label: string | null;
+  description?: string | null;
   source: string;
 }
 
@@ -83,6 +85,7 @@ export default function TeacherInstructionLogTab({
   const [counts, setCounts] = useState<Record<string, CountEntry>>({});
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [ownerCanDelete, setOwnerCanDelete] = useState<boolean>(isOwnRoster);
+  const [standardsBookOpen, setStandardsBookOpen] = useState(false);
   // Inline-edit state for a history row. Only one row is edited at a
   // time. editId is the row's id (null = nothing being edited);
   // editDraft holds the working copy of the editable fields.
@@ -438,9 +441,30 @@ export default function TeacherInstructionLogTab({
         <button onClick={downloadCsv} style={{ padding: "4px 10px" }}>
           Export CSV
         </button>
+        {(subject === "ela" || subject === "math") && (
+          <button
+            onClick={() => setStandardsBookOpen(true)}
+            style={{
+              padding: "4px 10px",
+              background: "#1e3a8a",
+              color: "white",
+              border: "1px solid #1e3a8a",
+              borderRadius: 6,
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+          >
+            {subject === "math" ? "FAST BIG M GUIDE" : "ELA BEST Standards"}
+          </button>
+        )}
         {loading && <span style={{ fontSize: 12, color: "#6b7280" }}>Loading…</span>}
         {err && <span style={{ fontSize: 12, color: "#b91c1c" }}>{err}</span>}
       </div>
+      <StandardsBookModal
+        open={standardsBookOpen}
+        onClose={() => setStandardsBookOpen(false)}
+        subject={subject === "math" ? "math" : "ela"}
+      />
 
       {/* Add form — owner only */}
       {canEdit && (
@@ -521,6 +545,11 @@ export default function TeacherInstructionLogTab({
                       return (
                         <label
                           key={c.code}
+                          title={
+                            c.description
+                              ? `${c.code}${c.label ? ` — ${c.label}` : ""}\n\n${c.description}`
+                              : undefined
+                          }
                           style={{
                             display: "flex",
                             alignItems: "center",

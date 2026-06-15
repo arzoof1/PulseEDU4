@@ -26,6 +26,7 @@ interface SafetyPlanItem {
 interface PlanRow {
   id: number;
   studentId: string;
+  localSisId: string | null;
   studentName: string | null;
   studentGrade: number | null;
   status: string;
@@ -39,6 +40,7 @@ interface PlanRow {
 
 interface Student {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: number;
@@ -120,7 +122,7 @@ export default function SafetyPlansAdminPage({ canManage, onBack }: Props) {
     const needle = filter.trim().toLowerCase();
     return plans.filter(
       (p) =>
-        p.studentId.toLowerCase().includes(needle) ||
+        (p.localSisId ?? "").toLowerCase().includes(needle) ||
         (p.studentName ?? "").toLowerCase().includes(needle),
     );
   }, [plans, filter]);
@@ -143,7 +145,7 @@ export default function SafetyPlansAdminPage({ canManage, onBack }: Props) {
     return sorted
       .filter(
         (s) =>
-          s.studentId.toLowerCase().includes(needle) ||
+          (s.localSisId ?? "").toLowerCase().includes(needle) ||
           s.firstName.toLowerCase().includes(needle) ||
           s.lastName.toLowerCase().includes(needle),
       )
@@ -163,10 +165,10 @@ export default function SafetyPlansAdminPage({ canManage, onBack }: Props) {
     if (fromPlan) {
       return {
         studentId: fromPlan.studentId,
-        name: fromPlan.studentName ?? fromPlan.studentId,
+        name: fromPlan.studentName ?? "Student",
       };
     }
-    return { studentId: editingStudentId, name: editingStudentId };
+    return { studentId: editingStudentId, name: "Student" };
   }, [editingStudentId, students, plans]);
 
   return (
@@ -356,7 +358,7 @@ export default function SafetyPlansAdminPage({ canManage, onBack }: Props) {
                       <div
                         style={{ color: "#64748b", fontSize: "0.78rem" }}
                       >
-                        ID {p.studentId}
+                        ID {p.localSisId ?? "—"}
                         {p.studentGrade != null
                           ? ` • Gr ${p.studentGrade}`
                           : ""}
@@ -575,7 +577,7 @@ export default function SafetyPlansAdminPage({ canManage, onBack }: Props) {
                                   fontSize: "0.78rem",
                                 }}
                               >
-                                Gr {s.grade} · ID {s.studentId}
+                                Gr {s.grade} · ID {s.localSisId ?? "—"}
                               </span>
                             </span>
                           </span>

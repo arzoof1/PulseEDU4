@@ -35,6 +35,14 @@ import {
 import QRCode from "qrcode";
 import { Ticket } from "lucide-react";
 import { parentFetch, setParentToken, navigate, type ParentMe } from "./api";
+import FamilyMessages from "./FamilyMessages";
+import ParentTabBar, { type ParentTab } from "./ParentTabBar";
+import {
+  fetchLearningAtHomeCards,
+  countNewLearningAtHomeCards,
+} from "./learningAtHome";
+import ReinforceAtHomeSection from "./ReinforceAtHomeSection";
+import LearningAtHomeSection from "./LearningAtHomeSection";
 
 interface Snapshot {
   parent: { displayName: string; email: string };
@@ -76,7 +84,22 @@ interface Snapshot {
       status: string;
       createdAt: string;
       endedAt: string | null;
+      // One-way lifecycle: when a non-restroom pass is checked in at the
+      // destination the server stamps WHEN (`arrivedAt`) and WHO received
+      // them (`endedBy`, a staff displayName or "(origin)"/"(system)").
+      // Restroom passes stay round-trip and leave these null.
+      arrivedAt?: string | null;
+      endedBy?: string | null;
+      // True for one-way (non-restroom) passes. Restroom passes are
+      // round-trip and must never show an "in route" state.
+      oneWay?: boolean;
     }>;
+  };
+  lostInstruction: {
+    hallPasses: { count: number; minutes: number };
+    tardies: { count: number; minutes: number };
+    absences: { count: number; minutes: number };
+    totalMinutes: number;
   };
   attendance: {
     tardiesThisWeek: number;
@@ -249,6 +272,85 @@ export default function Dashboard({ me }: { me: ParentMe }) {
   // hitting the server twice.
   const [pdfDownloading, setPdfDownloading] = useState(false);
   const [pdfError, setPdfError] = useState("");
+  // Active bottom-tab. Persisted to sessionStorage so a refresh (or the
+  // Bearer-token re-auth inside the preview iframe) keeps the parent on
+  // the same screen instead of snapping back to Home.
+  const [activeTab, setActiveTab] = useState<ParentTab>(() => {
+    const saved = sessionStorage.getItem("pulseed.parentTab");
+    return saved === "home" ||
+      saved === "behavior" ||
+      saved === "academics" ||
+      saved === "messages" ||
+      saved === "more"
+      ? saved
+      : "home";
+  });
+  useEffect(() => {
+    sessionStorage.setItem("pulseed.parentTab", activeTab);
+  }, [activeTab]);
+
+  // Unread Family Messages count for the bottom-tab "Messages" badge. Family-
+  // (parent-) scoped, not per-student, so it's independent of sibling switching.
+  // We seed it from a lightweight count endpoint on mount + poll, and let the
+  // open inbox push live updates (load / "Got it") via onUnreadCountChange.
+  const [unreadMessages, setUnreadMessages] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    async function loadUnread() {
+      try {
+        const res = await parentFetch("/api/parent/messages/unread-count");
+        if (cancelled || !res.ok) return;
+        const body = (await res.json()) as { unreadCount: number };
+        if (!cancelled) setUnreadMessages(body.unreadCount ?? 0);
+      } catch {
+        /* swallow — badge is best-effort */
+      }
+    }
+    void loadUnread();
+    const timer = window.setInterval(loadUnread, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  // New "Learning at Home" classes for the bottom-tab "Academics" badge. Mirrors
+  // the per-card "New" badge so a family that wasn't planning to open the tab
+  // still sees there's fresh classwork waiting. Per active student (re-fetches on
+  // sibling switch); the count derives from the SAME localStorage signature the
+  // cards use, so opening a card clears the tab count too. Best-effort; returns 0
+  // when the feature is disabled (the cards route returns empty).
+  const [newAcademics, setNewAcademics] = useState(0);
+  useEffect(() => {
+    if (activeStudentId === null) {
+      setNewAcademics(0);
+      return;
+    }
+    let cancelled = false;
+    let cards: import("./learningAtHome").LearningAtHomeCard[] = [];
+    const recount = () => {
+      if (!cancelled) setNewAcademics(countNewLearningAtHomeCards(activeStudentId, cards));
+    };
+    async function loadCards() {
+      try {
+        const r = await fetchLearningAtHomeCards(activeStudentId as number);
+        if (cancelled) return;
+        cards = r.cards;
+        recount();
+      } catch {
+        /* swallow — badge is best-effort */
+      }
+    }
+    void loadCards();
+    const timer = window.setInterval(loadCards, 60_000);
+    // When a card is opened in the section, recompute immediately.
+    window.addEventListener("pulseed:lah-seen", recount);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("pulseed:lah-seen", recount);
+    };
+  }, [activeStudentId, snapshotNonce]);
 
   useEffect(() => {
     if (activeStudentId === null) {
@@ -404,146 +506,142 @@ export default function Dashboard({ me }: { me: ParentMe }) {
     );
   }
 
+  // Home / Behavior / Academics read from the per-student snapshot;
+  // Messages + More are family/account-scoped and render without it.
+  const snapshotNeeded =
+    activeTab === "home" ||
+    activeTab === "behavior" ||
+    activeTab === "academics";
+
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-24">
       <div className="h-1.5 w-full bg-gradient-to-r from-violet-600 via-teal-600 to-green-600" />
 
-      <main className="max-w-6xl mx-auto px-6 pt-8 space-y-8">
-        {/* Identity strip */}
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6 bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-          <div className="flex items-center gap-5 min-w-0">
-            <Avatar className="h-20 w-20 border-4 border-slate-50 shadow-sm ring-1 ring-slate-100">
-              <AvatarFallback className="bg-gradient-to-br from-violet-100 to-teal-100 text-violet-700 text-2xl font-bold">
-                {initials(activeStudent.firstName, activeStudent.lastName)}
-              </AvatarFallback>
-            </Avatar>
-            <div className="space-y-1 min-w-0">
-              <div className="flex items-center gap-3 flex-wrap">
-                {me.students.length > 1 ? (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-                        <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-                          {activeStudent.firstName} {activeStudent.lastName}
-                        </h1>
-                        <ChevronDown className="h-5 w-5 text-slate-400" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-64">
-                      {me.students.map((s) => (
-                        <DropdownMenuItem
-                          key={s.id}
-                          className={
-                            s.id === activeStudent.id
-                              ? "font-medium bg-slate-50"
-                              : ""
-                          }
-                          onSelect={() => setActiveStudentId(s.id)}
-                        >
-                          {s.firstName} {s.lastName} ({gradeLabel(s.grade)})
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                ) : (
-                  <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-                    {activeStudent.firstName} {activeStudent.lastName}
-                  </h1>
-                )}
-              </div>
-              <p className="text-slate-500 font-medium flex items-center gap-2">
-                <span>
-                  {gradeLabel(activeStudent.grade)} · ID {activeStudent.localSisId ?? "—"}
-                </span>
-                {snapshot?.student.retainedGrades &&
-                  snapshot.student.retainedGrades.length > 0 && (
-                    <span
-                      title={`Retained: ${snapshot.student.retainedGrades
-                        .map((g: number) => `Grade ${g}`)
-                        .join(", ")}`}
-                      aria-label={`Retained at ${snapshot.student.retainedGrades
-                        .map((g: number) => `Grade ${g}`)
-                        .join(", ")}`}
-                      className="inline-flex items-center justify-center rounded-full bg-slate-900 text-white text-[11px] font-extrabold leading-none cursor-help"
-                      style={{ width: 18, height: 18 }}
+      {/* Persistent app header — student identity + sibling switcher. Slim
+          and sticky so it reads like a native app's nav bar across all
+          tabs. Account actions (PDF / preferences / sign out) live on the
+          More tab to keep this bar uncluttered. */}
+      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-slate-100">
+        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center gap-3">
+          <Avatar className="h-11 w-11 border-2 border-slate-50 shadow-sm ring-1 ring-slate-100 shrink-0">
+            <AvatarFallback className="bg-gradient-to-br from-violet-100 to-teal-100 text-violet-700 text-sm font-bold">
+              {initials(activeStudent.firstName, activeStudent.lastName)}
+            </AvatarFallback>
+          </Avatar>
+          <div className="min-w-0 flex-1">
+            {me.students.length > 1 ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity max-w-full">
+                    <h1 className="text-lg font-bold text-slate-900 tracking-tight truncate">
+                      {activeStudent.firstName} {activeStudent.lastName}
+                    </h1>
+                    <ChevronDown className="h-4 w-4 text-slate-400 shrink-0" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-64">
+                  {me.students.map((s) => (
+                    <DropdownMenuItem
+                      key={s.id}
+                      className={
+                        s.id === activeStudent.id
+                          ? "font-medium bg-slate-50"
+                          : ""
+                      }
+                      onSelect={() => setActiveStudentId(s.id)}
                     >
-                      R
-                    </span>
-                  )}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <div className="text-right hidden sm:block">
-              <p className="text-xs text-slate-400 uppercase tracking-wider">
-                Signed in
-              </p>
-              <p className="text-sm font-medium text-slate-700">
-                {me.displayName}
-              </p>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleDownloadPdf}
-              disabled={pdfDownloading || !snapshot}
-              className="gap-2"
-              title="Download a PDF copy of this report"
-            >
-              <Download className="h-4 w-4" />
-              <span className="hidden sm:inline">
-                {pdfDownloading ? "Preparing…" : "Download PDF"}
+                      {s.firstName} {s.lastName} ({gradeLabel(s.grade)})
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <h1 className="text-lg font-bold text-slate-900 tracking-tight truncate">
+                {activeStudent.firstName} {activeStudent.lastName}
+              </h1>
+            )}
+            <p className="text-xs text-slate-500 font-medium flex items-center gap-1.5">
+              <span className="truncate">
+                {gradeLabel(activeStudent.grade)} · ID{" "}
+                {activeStudent.localSisId ?? "—"}
               </span>
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setView("prefs")}
-              className="gap-2"
-            >
-              <SlidersHorizontal className="h-4 w-4" />
-              <span className="hidden sm:inline">What I see</span>
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleSignOut}
-              className="gap-2"
-            >
-              <LogOut className="h-4 w-4" />
-              Sign out
-            </Button>
+              {snapshot?.student.retainedGrades &&
+                snapshot.student.retainedGrades.length > 0 && (
+                  <span
+                    title={`Retained: ${snapshot.student.retainedGrades
+                      .map((g: number) => `Grade ${g}`)
+                      .join(", ")}`}
+                    aria-label={`Retained at ${snapshot.student.retainedGrades
+                      .map((g: number) => `Grade ${g}`)
+                      .join(", ")}`}
+                    className="inline-flex items-center justify-center rounded-full bg-slate-900 text-white text-[10px] font-extrabold leading-none cursor-help shrink-0"
+                    style={{ width: 16, height: 16 }}
+                  >
+                    R
+                  </span>
+                )}
+            </p>
           </div>
         </div>
+      </header>
 
-        {pdfError && (
-          <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 text-sm">
-            {pdfError}
-          </div>
-        )}
-
-        {loading && (
+      <main className="max-w-2xl mx-auto px-4 pt-5">
+        {snapshotNeeded && loading && (
           <div className="text-sm text-slate-500 text-center py-12">
-            Loading snapshot…
+            Loading…
           </div>
         )}
 
-        {error && !loading && (
+        {snapshotNeeded && error && !loading && (
           <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">
             {error}
           </div>
         )}
 
-        {snapshot && !loading && (
-          <SnapshotBody snapshot={snapshot} />
+        {activeTab === "home" && snapshot && !loading && (
+          <HomeTab snapshot={snapshot} />
+        )}
+        {activeTab === "behavior" && snapshot && !loading && (
+          <BehaviorTab snapshot={snapshot} />
+        )}
+        {activeTab === "academics" && snapshot && !loading && (
+          <AcademicsTab snapshot={snapshot} />
+        )}
+        {/* Family Messages — school broadcasts. Family-scoped (not tied to
+            the active student) so it lives on its own tab and is unaffected
+            by sibling switching or the snapshot load state. */}
+        {activeTab === "messages" && (
+          <FamilyMessages onUnreadCountChange={setUnreadMessages} />
+        )}
+        {activeTab === "more" && (
+          <MoreTab
+            signedInAs={me.displayName}
+            onDownloadPdf={handleDownloadPdf}
+            pdfDownloading={pdfDownloading}
+            pdfDisabled={!snapshot}
+            pdfError={pdfError}
+            onPrefs={() => setView("prefs")}
+            onSignOut={handleSignOut}
+          />
         )}
       </main>
+
+      <ParentTabBar
+        active={activeTab}
+        onChange={setActiveTab}
+        unreadMessages={unreadMessages}
+        newAcademics={newAcademics}
+      />
     </div>
   );
 }
 
-function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
+// -----------------------------------------------------------------------------
+// HomeTab — the week-at-a-glance screen. Self-contained: takes the shared
+// snapshot and renders the overview surfaces (status, tickets, house, mood,
+// pulse cards, lost instructional time). Maps 1:1 to a native "Home" screen.
+// -----------------------------------------------------------------------------
+function HomeTab({ snapshot }: { snapshot: Snapshot }) {
   const { sectionsAvailable: sec } = snapshot;
   const onTrack = useMemo(() => {
     if (snapshot.pbis.thisWeek >= 5) return true;
@@ -552,7 +650,7 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
   }, [snapshot.pbis.thisWeek, snapshot.attendance.tardiesThisWeek]);
 
   return (
-    <>
+    <div className="space-y-6">
       {/* Status badge */}
       <div className="flex items-center gap-2">
         <Badge
@@ -588,7 +686,7 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
       {sec.recognition && <ParentMoodMeter snapshot={snapshot} />}
 
       {/* Pulse cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-3">
         {sec.recognition && (
           <PulseCard
             label="PBIS Points"
@@ -624,17 +722,215 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
             accent="from-orange-500 to-amber-500"
           />
         )}
-        {sec.accommodations && (
+        {sec.attendance && (
           <PulseCard
-            label="Accommodations"
-            value={snapshot.accommodations.length}
-            delta="active"
-            deltaPositive
-            icon={<GraduationCap className="h-4 w-4 text-blue-500" />}
-            accent="from-blue-500 to-violet-500"
+            label="Attendance"
+            value={
+              snapshot.attendance.pct.ytd
+                ? `${snapshot.attendance.pct.ytd.pct}%`
+                : snapshot.attendance.pct.last30
+                  ? `${snapshot.attendance.pct.last30.pct}%`
+                  : "—"
+            }
+            delta={
+              snapshot.attendance.pct.ytd
+                ? "present YTD"
+                : snapshot.attendance.pct.last30
+                  ? "present (30d)"
+                  : "no data yet"
+            }
+            deltaPositive={
+              (snapshot.attendance.pct.ytd?.pct ??
+                snapshot.attendance.pct.last30?.pct ??
+                100) >= 90
+            }
+            icon={<Calendar className="h-4 w-4 text-emerald-500" />}
+            accent="from-emerald-500 to-teal-500"
           />
         )}
       </div>
+
+      {/* Lost Instructional Time — pinned to the top. Grand total plus a
+          per-source breakdown (hall passes / tardies / absences), all
+          school-year-to-date. Each row respects its own section toggle:
+          hall passes hide with the Hall Passes section, tardies + absences
+          with the Attendance section, and the grand total only sums the
+          rows that are visible. Absences are KIOSK-DERIVED (periods with no
+          door-kiosk check-in), not official daily attendance. */}
+      {(sec.hallPasses || sec.attendance) && (
+        <Section
+          title="Lost Instructional Time"
+          icon={<Clock className="h-4 w-4 text-rose-600" />}
+        >
+          <div className="rounded-lg border border-rose-100 bg-rose-50/60 p-4 mb-3">
+            <div className="text-[10px] uppercase tracking-wide text-rose-700/80">
+              Total this school year
+            </div>
+            <div className="text-3xl font-bold tabular-nums text-rose-700">
+              {snapshot.lostInstruction.totalMinutes} min
+            </div>
+            <div className="text-[11px] text-slate-500">
+              estimated instruction missed
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            {sec.hallPasses && (
+              <AttendanceTile
+                label="Hall passes"
+                value={`${snapshot.lostInstruction.hallPasses.minutes} min`}
+                sub={`${snapshot.lostInstruction.hallPasses.count} ${
+                  snapshot.lostInstruction.hallPasses.count === 1
+                    ? "pass"
+                    : "passes"
+                }`}
+              />
+            )}
+            {sec.attendance && (
+              <AttendanceTile
+                label="Tardies"
+                value={`${snapshot.lostInstruction.tardies.minutes} min`}
+                sub={`${snapshot.lostInstruction.tardies.count} ${
+                  snapshot.lostInstruction.tardies.count === 1
+                    ? "tardy"
+                    : "tardies"
+                }`}
+              />
+            )}
+            {sec.attendance && (
+              <AttendanceTile
+                label="Absences"
+                value={`${snapshot.lostInstruction.absences.minutes} min`}
+                sub={`${snapshot.lostInstruction.absences.count} ${
+                  snapshot.lostInstruction.absences.count === 1
+                    ? "period missed"
+                    : "periods missed"
+                }`}
+              />
+            )}
+          </div>
+          {sec.attendance && (
+            <p className="text-[11px] text-slate-400 mt-2">
+              Absences are estimated from class periods with no door-kiosk
+              check-in, not official daily attendance.
+            </p>
+          )}
+        </Section>
+      )}
+
+      {/* Hall passes — moved here from the Behavior tab so families see the
+          detail list right under Lost Instructional Time. The Behavior-tab
+          slot it vacated is reserved for the intervention-lesson cards. */}
+      {sec.hallPasses && (
+        <Section
+          title="Hall Passes"
+          icon={<Footprints className="h-4 w-4 text-teal-600" />}
+        >
+          {snapshot.hallPasses.recent.length === 0 ? (
+            <Empty text="No hall passes used." />
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {snapshot.hallPasses.recent.map((r) => {
+                // One-way lifecycle states (restroom passes stay round-trip
+                // and leave arrivedAt/endedBy null, so they fall through to
+                // the existing departure-only display):
+                //   • arrived  → checked in at the destination
+                //   • in route → active, non-restroom, not yet checked in
+                const arrived = Boolean(r.arrivedAt);
+                // Only one-way (non-restroom) passes have an "in route" state.
+                // Active restroom passes are round-trip and must fall through
+                // to the plain departure-only display.
+                const inRoute =
+                  r.oneWay !== false && !arrived && r.status === "active";
+                // Hide the "(origin)"/"(system)" sentinels — only surface a
+                // real staff name as the receiver to families.
+                const receivedBy =
+                  r.endedBy && !r.endedBy.startsWith("(") ? r.endedBy : null;
+                return (
+                  <li
+                    key={r.id}
+                    className="flex items-center justify-between py-3 gap-4"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-medium text-slate-800">
+                          {r.destination}
+                        </span>
+                        {arrived && (
+                          <Badge
+                            variant="secondary"
+                            className="bg-green-100 text-green-700 hover:bg-green-100 text-[10px] px-2 py-0"
+                          >
+                            Arrived
+                          </Badge>
+                        )}
+                        {inRoute && (
+                          <Badge
+                            variant="secondary"
+                            className="bg-amber-100 text-amber-700 hover:bg-amber-100 text-[10px] px-2 py-0"
+                          >
+                            In route
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {r.originRoom} · {r.teacherName}
+                      </div>
+                      {arrived && receivedBy && (
+                        <div className="text-xs text-slate-400 mt-0.5">
+                          Received by {receivedBy}
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-xs text-slate-500 text-right shrink-0">
+                      <div>{fmtDate(r.createdAt)}</div>
+                      <div>Left {fmtTime(r.createdAt)}</div>
+                      {arrived && r.arrivedAt && (
+                        <div className="text-green-600">
+                          Arrived {fmtTime(r.arrivedAt)}
+                        </div>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Section>
+      )}
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// BehaviorTab — day-to-day conduct & attendance screen: recognition (PBIS),
+// attendance log, hall passes, staff notes, and out-of-school suspension.
+// Renders a friendly empty state when the school has disabled every section
+// it would otherwise show.
+// -----------------------------------------------------------------------------
+function BehaviorTab({ snapshot }: { snapshot: Snapshot }) {
+  const { sectionsAvailable: sec } = snapshot;
+  const hasAny =
+    sec.recognition ||
+    sec.attendance ||
+    (sec.staffNotes && snapshot.staffNotes.length > 0) ||
+    sec.oss;
+  if (!hasAny) {
+    return (
+      <div className="space-y-6">
+        {/* Reinforce at Home — PulseBrainLab family card. Self-gating: renders
+            only when the child belongs to a Brain Lab small group, so it stays
+            invisible otherwise even when no other behavior sections are on. */}
+        <ReinforceAtHomeSection studentId={snapshot.student.id} />
+        <TabEmpty text="Nothing to show here yet. Recognition, attendance, and hall-pass updates will appear on this tab." />
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-6">
+      {/* Reinforce at Home — PulseBrainLab family card. Self-gating: renders
+          only when the child belongs to a Brain Lab small group, so it stays
+          invisible otherwise. */}
+      <ReinforceAtHomeSection studentId={snapshot.student.id} />
 
       {/* Recognition */}
       {sec.recognition && (
@@ -790,65 +1086,6 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
         </Section>
       )}
 
-      {/* Hall passes */}
-      {sec.hallPasses && (
-        <Section
-          title="Hall Passes"
-          icon={<Footprints className="h-4 w-4 text-teal-600" />}
-        >
-          {snapshot.hallPasses.recent.length === 0 ? (
-            <Empty text="No hall passes used." />
-          ) : (
-            <ul className="divide-y divide-slate-100">
-              {snapshot.hallPasses.recent.map((r) => (
-                <li
-                  key={r.id}
-                  className="flex items-center justify-between py-3 gap-4"
-                >
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium text-slate-800">
-                      {r.destination}
-                    </div>
-                    <div className="text-xs text-slate-500">
-                      {r.originRoom} · {r.teacherName}
-                    </div>
-                  </div>
-                  <div className="text-xs text-slate-500 text-right shrink-0">
-                    <div>{fmtDate(r.createdAt)}</div>
-                    <div>{fmtTime(r.createdAt)}</div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Section>
-      )}
-
-      {/* Accommodations */}
-      {sec.accommodations && (
-        <Section
-          title="Accommodations"
-          icon={<GraduationCap className="h-4 w-4 text-blue-600" />}
-        >
-          {snapshot.accommodations.length === 0 ? (
-            <Empty text="No accommodations on file." />
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {snapshot.accommodations.map((a) => (
-                <div
-                  key={a.id}
-                  className="flex items-center gap-2 bg-blue-50 border border-blue-100 text-blue-800 rounded-full px-3 py-1.5 text-xs"
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  <span className="font-medium">{a.name}</span>
-                  <span className="text-blue-600/70">· {a.category}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </Section>
-      )}
-
       {/* Staff notes (only if school enabled) */}
       {sec.staffNotes && snapshot.staffNotes.length > 0 && (
         <Section
@@ -874,6 +1111,111 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
         </Section>
       )}
 
+      {/* OSS — out-of-school suspension. Always rendered when sec.oss is
+          true (a "0 days this year" tile is itself meaningful — it tells
+          parents the school is sharing OSS info AND there's nothing on
+          file). Reason / notes only appear when the school separately
+          enabled showOssReason; the server already nulls those fields
+          out otherwise so we just render whatever's present. */}
+      {sec.oss && (
+        <Section
+          title="Out-of-School Suspension"
+          icon={<ShieldAlert className="h-4 w-4 text-rose-600" />}
+        >
+          <div className="mb-4 flex items-center gap-3">
+            <div
+              className={
+                "flex items-baseline gap-2 px-3 py-2 rounded-lg border " +
+                ((snapshot.oss?.daysThisYear ?? 0) === 0
+                  ? "bg-emerald-50 border-emerald-200"
+                  : "bg-rose-50 border-rose-200")
+              }
+            >
+              <span
+                className={
+                  "text-2xl font-bold tabular-nums " +
+                  ((snapshot.oss?.daysThisYear ?? 0) === 0
+                    ? "text-emerald-700"
+                    : "text-rose-700")
+                }
+              >
+                {snapshot.oss?.daysThisYear ?? 0}
+              </span>
+              <span className="text-xs text-slate-600 font-medium">
+                day{(snapshot.oss?.daysThisYear ?? 0) === 1 ? "" : "s"} this
+                school year
+              </span>
+            </div>
+          </div>
+          {(snapshot.oss?.recent ?? []).length === 0 ? (
+            <Empty text="No OSS days on file this school year." />
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {(snapshot.oss?.recent ?? []).map((r) => (
+                <li
+                  key={r.day}
+                  className="flex items-start justify-between py-3 gap-4"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-slate-800">
+                      {fmtDate(r.day)}
+                    </div>
+                    {r.reason && (
+                      <div className="text-xs text-slate-600 mt-0.5">
+                        {r.reason}
+                      </div>
+                    )}
+                    {r.notes && (
+                      <div className="text-xs text-slate-500 mt-1 italic">
+                        {r.notes}
+                      </div>
+                    )}
+                  </div>
+                  <Badge className="bg-rose-100 text-rose-700 hover:bg-rose-100 shrink-0">
+                    OSS
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
+      )}
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// AcademicsTab — formal academic & support record: FAST scores, MTSS support
+// plan, focused reteach, recent interventions, and accommodations. Empty state
+// when every section is gated off.
+// -----------------------------------------------------------------------------
+function AcademicsTab({ snapshot }: { snapshot: Snapshot }) {
+  const { sectionsAvailable: sec } = snapshot;
+  // Count of "Learning at Home" class cards that carry shared work. Lifted from
+  // the self-gating section so the empty state below only shows when BOTH the
+  // formal academic sections AND the shared-classwork cards are empty.
+  const [learningAtHomeCount, setLearningAtHomeCount] = useState(0);
+  const hasAny =
+    (sec.fastScores && (snapshot.fastScores ?? []).length > 0) ||
+    sec.mtss ||
+    (sec.reteach && (snapshot.reteach?.items ?? []).length > 0) ||
+    (sec.interventions && (snapshot.interventions ?? []).length > 0) ||
+    sec.accommodations;
+  return (
+    <div className="space-y-6">
+      {/* Learning at Home — academic work samples teachers shared, one card per
+          class. Self-gating: renders nothing until at least one teacher shares,
+          so it stays invisible otherwise even when no other academic sections
+          are on. */}
+      {sec.academicEvidence && (
+        <LearningAtHomeSection
+          studentId={snapshot.student.id}
+          onLoaded={setLearningAtHomeCount}
+        />
+      )}
+      {!hasAny && learningAtHomeCount === 0 && (
+        <TabEmpty text="Nothing to show here yet. FAST scores, support plans, and accommodations will appear on this tab." />
+      )}
       {/* Academics — FAST progress monitoring scores. Each subject is a
           separate tile so families can read ELA and Math independently;
           we always show all three PMs (PM1=fall, PM2=winter, PM3=spring)
@@ -1003,82 +1345,117 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
         </Section>
       )}
 
-      {/* OSS — out-of-school suspension. Always rendered when sec.oss is
-          true (a "0 days this year" tile is itself meaningful — it tells
-          parents the school is sharing OSS info AND there's nothing on
-          file). Reason / notes only appear when the school separately
-          enabled showOssReason; the server already nulls those fields
-          out otherwise so we just render whatever's present. */}
-      {sec.oss && (
+      {/* Accommodations — pinned to the bottom of the stack. */}
+      {sec.accommodations && (
         <Section
-          title="Out-of-School Suspension"
-          icon={<ShieldAlert className="h-4 w-4 text-rose-600" />}
+          title="Accommodations"
+          icon={<GraduationCap className="h-4 w-4 text-blue-600" />}
         >
-          <div className="mb-4 flex items-center gap-3">
-            <div
-              className={
-                "flex items-baseline gap-2 px-3 py-2 rounded-lg border " +
-                ((snapshot.oss?.daysThisYear ?? 0) === 0
-                  ? "bg-emerald-50 border-emerald-200"
-                  : "bg-rose-50 border-rose-200")
-              }
-            >
-              <span
-                className={
-                  "text-2xl font-bold tabular-nums " +
-                  ((snapshot.oss?.daysThisYear ?? 0) === 0
-                    ? "text-emerald-700"
-                    : "text-rose-700")
-                }
-              >
-                {snapshot.oss?.daysThisYear ?? 0}
-              </span>
-              <span className="text-xs text-slate-600 font-medium">
-                day{(snapshot.oss?.daysThisYear ?? 0) === 1 ? "" : "s"} this
-                school year
-              </span>
-            </div>
-          </div>
-          {(snapshot.oss?.recent ?? []).length === 0 ? (
-            <Empty text="No OSS days on file this school year." />
+          {snapshot.accommodations.length === 0 ? (
+            <Empty text="No accommodations on file." />
           ) : (
-            <ul className="divide-y divide-slate-100">
-              {(snapshot.oss?.recent ?? []).map((r) => (
-                <li
-                  key={r.day}
-                  className="flex items-start justify-between py-3 gap-4"
+            <div className="flex flex-wrap gap-2">
+              {snapshot.accommodations.map((a) => (
+                <div
+                  key={a.id}
+                  className="flex items-center gap-2 bg-blue-50 border border-blue-100 text-blue-800 rounded-full px-3 py-1.5 text-xs"
                 >
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium text-slate-800">
-                      {fmtDate(r.day)}
-                    </div>
-                    {r.reason && (
-                      <div className="text-xs text-slate-600 mt-0.5">
-                        {r.reason}
-                      </div>
-                    )}
-                    {r.notes && (
-                      <div className="text-xs text-slate-500 mt-1 italic">
-                        {r.notes}
-                      </div>
-                    )}
-                  </div>
-                  <Badge className="bg-rose-100 text-rose-700 hover:bg-rose-100 shrink-0">
-                    OSS
-                  </Badge>
-                </li>
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  <span className="font-medium">{a.name}</span>
+                  <span className="text-blue-600/70">· {a.category}</span>
+                </div>
               ))}
-            </ul>
+            </div>
           )}
         </Section>
       )}
+    </div>
+  );
+}
+
+// Friendly placeholder shown when every section a tab would render is gated
+// off by the school or the parent's "What I see" preferences.
+function TabEmpty({ text }: { text: string }) {
+  return (
+    <div className="text-center py-16 text-sm text-slate-400">{text}</div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// MoreTab — account & settings screen. Holds the actions that used to live in
+// the old header (download PDF, "What I see" preferences, sign out) plus the
+// signed-in identity and the HeartBEAT footer. Maps to a native "More"/Settings
+// screen.
+// -----------------------------------------------------------------------------
+function MoreTab({
+  signedInAs,
+  onDownloadPdf,
+  pdfDownloading,
+  pdfDisabled,
+  pdfError,
+  onPrefs,
+  onSignOut,
+}: {
+  signedInAs: string;
+  onDownloadPdf: () => void;
+  pdfDownloading: boolean;
+  pdfDisabled: boolean;
+  pdfError: string;
+  onPrefs: () => void;
+  onSignOut: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-2xl border border-slate-100 p-4">
+        <div className="text-xs text-slate-400 uppercase tracking-wider">
+          Signed in as
+        </div>
+        <div className="text-sm font-medium text-slate-700 break-words">
+          {signedInAs}
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-100 divide-y divide-slate-100 overflow-hidden">
+        <button
+          type="button"
+          onClick={onDownloadPdf}
+          disabled={pdfDownloading || pdfDisabled}
+          className="w-full flex items-center gap-3 px-4 py-3.5 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Download a PDF copy of this report"
+        >
+          <Download className="h-4 w-4 text-slate-400 shrink-0" />
+          {pdfDownloading ? "Preparing…" : "Download PDF report"}
+        </button>
+        <button
+          type="button"
+          onClick={onPrefs}
+          className="w-full flex items-center gap-3 px-4 py-3.5 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          <SlidersHorizontal className="h-4 w-4 text-slate-400 shrink-0" />
+          What I see
+        </button>
+        <button
+          type="button"
+          onClick={onSignOut}
+          className="w-full flex items-center gap-3 px-4 py-3.5 text-left text-sm font-medium text-rose-600 hover:bg-rose-50"
+        >
+          <LogOut className="h-4 w-4 shrink-0" />
+          Sign out
+        </button>
+      </div>
+
+      {pdfError && (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 text-sm">
+          {pdfError}
+        </div>
+      )}
 
       <EkgDivider />
-      <div className="text-center text-xs text-slate-400 flex items-center justify-center gap-1.5">
+      <div className="text-center text-xs text-slate-400 flex items-center justify-center gap-1.5 pb-2">
         <Heart className="h-3 w-3" fill="currentColor" />
         Pulse<span className="font-semibold">EDU</span> HeartBEAT Snapshot
       </div>
-    </>
+    </div>
   );
 }
 
@@ -1289,7 +1666,7 @@ function PulseCard({
   sparkline,
 }: {
   label: string;
-  value: number;
+  value: number | string;
   delta: string;
   deltaPositive: boolean;
   icon: React.ReactNode;
@@ -1302,16 +1679,16 @@ function PulseCard({
       <div className={`h-1 w-full bg-gradient-to-r ${accent}`} />
       <CardContent className="p-5">
         <div className="flex justify-between items-start mb-2">
-          <p className="text-sm font-medium text-slate-500">{label}</p>
+          <p className="text-sm font-bold text-slate-600">{label}</p>
           {icon}
         </div>
         <div className="flex items-baseline gap-2">
-          <h3 className="text-3xl font-bold text-slate-800">{value}</h3>
+          <h3 className="text-3xl font-extrabold text-slate-900">{value}</h3>
           <span
-            className={`text-xs font-medium px-1.5 py-0.5 rounded-full ${
+            className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${
               deltaPositive
-                ? "text-green-600 bg-green-50"
-                : "text-amber-700 bg-amber-50"
+                ? "text-green-700 bg-green-50"
+                : "text-amber-800 bg-amber-50"
             }`}
           >
             {delta}

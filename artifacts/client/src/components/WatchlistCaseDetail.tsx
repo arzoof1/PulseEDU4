@@ -13,7 +13,7 @@ import { authFetch } from "../lib/authToken";
 import { formatCaseNumber } from "../lib/caseNumber";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
 import VoiceTextarea from "./watchlist/VoiceTextarea";
-import MentionTextarea from "./watchlist/MentionTextarea";
+import MentionTextarea, { mentionsToPlainText } from "./watchlist/MentionTextarea";
 import MentionSuggestStrip from "./watchlist/MentionSuggestStrip";
 import VideoEvidencePanel from "./watchlist/VideoEvidencePanel";
 import ConsistencyPill from "./watchlist/ConsistencyPill";
@@ -134,6 +134,7 @@ interface Resp {
 
 interface StudentHit {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: string | null;
@@ -1009,7 +1010,7 @@ export default function WatchlistCaseDetail({
                         </div>
                         {i.detail && (
                           <div className="mt-1 text-xs" style={{ color: C.inkSoft }}>
-                            {i.detail}
+                            {mentionsToPlainText(i.detail)}
                           </div>
                         )}
                         {i.participants.length > 0 && (
@@ -1116,7 +1117,7 @@ export default function WatchlistCaseDetail({
                           refId={n.id}
                         />
                       </div>
-                      <div className="mt-1 whitespace-pre-wrap text-sm">{n.body}</div>
+                      <div className="mt-1 whitespace-pre-wrap text-sm">{mentionsToPlainText(n.body)}</div>
                     </div>
                   ))
                 )}
@@ -1730,7 +1731,7 @@ function AddPlayerModal({
                 <div className="text-sm font-semibold">
                   {picked.firstName} {picked.lastName}{" "}
                   <span className="text-[11px] font-normal" style={{ color: C.inkSoft }}>
-                    · Gr {picked.grade ?? "?"} · {picked.studentId}
+                    · Gr {picked.grade ?? "?"} · {picked.localSisId ?? "—"}
                   </span>
                 </div>
                 <button
@@ -1775,7 +1776,7 @@ function AddPlayerModal({
                       >
                         {h.firstName} {h.lastName}{" "}
                         <span className="text-[11px]" style={{ color: C.inkSoft }}>
-                          · Gr {h.grade ?? "?"} · {h.studentId}
+                          · Gr {h.grade ?? "?"} · {h.localSisId ?? "—"}
                         </span>
                       </button>
                     ))}

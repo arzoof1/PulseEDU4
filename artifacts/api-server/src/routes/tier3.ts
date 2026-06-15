@@ -38,6 +38,14 @@ import {
 } from "@workspace/db";
 import { and, desc, eq, sql, inArray } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+import {
+  isAcademicTier3,
+  academicVisibleDays,
+  normalizeAcademicMinutes,
+  mondayOf,
+} from "../lib/academicMinutes.js";
+import { DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
+import { computeAcademicWeeksForTeacher } from "./interventionsBell.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 
 const router: IRouter = Router();
@@ -289,6 +297,77 @@ router.get("/tier3-records", async (req, res) => {
       strategyUsage: usageByRecord.get(r.id) ?? [],
     })),
   );
+});
+
+// Academic Tier 3 week selector. Returns the met/owed/excused status for
+// every week from the plan's start (floored at the rework ship date)
+// through the current week, for a single student + responsible teacher.
+// Powers the weekly form's week picker + needs-attention strip.
+router.get("/tier3-academic-weeks", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+
+  const studentId =
+    typeof req.query.studentId === "string" ? req.query.studentId.trim() : "";
+  if (!studentId) {
+    res.status(400).json({ error: "studentId is required" });
+    return;
+  }
+  const wantedTeacher =
+    typeof req.query.teacherStaffId === "string"
+      ? Number(req.query.teacherStaffId)
+      : NaN;
+  let teacherStaffId = staff.id;
+  if (Number.isInteger(wantedTeacher) && wantedTeacher > 0) {
+    if (wantedTeacher !== staff.id && !isCoreTeam(staff)) {
+      res
+        .status(403)
+        .json({ error: "Only Core Team can view another teacher" });
+      return;
+    }
+    teacherStaffId = wantedTeacher;
+  }
+
+  // Find the active Tier 3 academic plan for this student.
+  const [plan] = await db
+    .select()
+    .from(studentMtssPlansTable)
+    .where(
+      and(
+        eq(studentMtssPlansTable.schoolId, schoolId),
+        eq(studentMtssPlansTable.studentId, studentId),
+        sql`${studentMtssPlansTable.closedAt} IS NULL`,
+        eq(studentMtssPlansTable.tier, 3),
+      ),
+    )
+    .limit(1);
+  if (!plan || !isAcademicTier3(plan)) {
+    res.status(404).json({ error: "No active academic Tier 3 plan" });
+    return;
+  }
+
+  const todayLocal = new Date().toLocaleDateString("en-CA", {
+    timeZone: DEFAULT_SCHOOL_TZ,
+  });
+  const monday = mondayOf(todayLocal);
+
+  const weeks = await computeAcademicWeeksForTeacher(
+    schoolId,
+    teacherStaffId,
+    plan,
+    monday,
+  );
+  res.json({
+    studentId,
+    teacherStaffId,
+    minutesTarget: plan.academicMinutesTarget,
+    academicAnyDay: plan.academicAnyDay,
+    fastSubject: plan.fastSubject,
+    visibleDays: academicVisibleDays(plan),
+    weeks,
+  });
 });
 
 // Upsert a weekly record. If one already exists for the (student, teacher,
@@ -615,6 +694,40 @@ router.post("/tier3-records", async (req, res) => {
       }
     }
   }
+  // --- Academic Tier 3 minutes model ---
+  // Per-day minutes map. For an academic plan we restrict the accepted
+  // days to the plan's visible days (any-day → all five, otherwise the
+  // configured meeting days). Behavior records never send this.
+  if ("academicMinutes" in body) {
+    const allowed =
+      plan && isAcademicTier3(plan)
+        ? new Set<string>(academicVisibleDays(plan))
+        : null;
+    cols.academicMinutes = normalizeAcademicMinutes(
+      body.academicMinutes,
+      allowed,
+    );
+  }
+  // Release valve: mark/clear "no group provided this week". Setting it
+  // stamps who released it + why + when; clearing wipes all three. Any
+  // signed-in interventionist on the plan (or Core Team) may toggle it.
+  if ("releasedNoIntervention" in body) {
+    const released = Boolean(body.releasedNoIntervention);
+    cols.releasedNoIntervention = released;
+    if (released) {
+      cols.releaseReason =
+        typeof body.releaseReason === "string"
+          ? body.releaseReason.trim().slice(0, 1000) || null
+          : null;
+      cols.releasedByStaffId = staff.id;
+      cols.releasedAt = new Date();
+    } else {
+      cols.releaseReason = null;
+      cols.releasedByStaffId = null;
+      cols.releasedAt = null;
+    }
+  }
+
   // Submission flag. `submitted: true` stamps submittedAt = NOW();
   // `submitted: false` reverts it to null (rare, but allows a Core
   // Team un-submit). Omitting the key leaves the existing state alone.
@@ -665,6 +778,13 @@ router.post("/tier3-records", async (req, res) => {
           thu: false,
           fri: false,
         },
+        academicMinutes:
+          (cols.academicMinutes as Record<string, number>) ?? {},
+        releasedNoIntervention:
+          (cols.releasedNoIntervention as boolean) ?? false,
+        releaseReason: (cols.releaseReason as string | null) ?? null,
+        releasedByStaffId: (cols.releasedByStaffId as number | null) ?? null,
+        releasedAt: (cols.releasedAt as Date | null) ?? null,
         submittedAt:
           "submitted" in (req.body ?? {}) && submitted ? new Date() : null,
       })

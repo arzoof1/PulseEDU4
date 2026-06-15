@@ -1,7 +1,9 @@
 import { backfillWitnessSequences } from "./lib/witnessStatementId";
 import { logger } from "./lib/logger";
 import {
+  backfillStaffRoomLocationsAtParrottOnce,
   cleanupLooseSeedInteractionsOnce,
+  ensureAcademicEvidenceSchema,
   ensureAstSchema,
   ensureBadgePrintEventsSchema,
   ensureBenchmarkDeliveriesSchema,
@@ -12,10 +14,18 @@ import {
   ensureFastItemResponsesSchema,
   ensureFeaturePlansColumns,
   ensureFeaturePlansSchema,
+  ensureHallPassPriorityBypassColumn,
   ensureKioskCardsSchema,
   ensureKioskWelcomeSchema,
   ensureLocationAllowedDestinationsBackfill,
+  ensureOnTimeTestModeColumns,
+  ensureOneWayPassSchema,
+  ensureParentMessagesSchema,
+  ensurePbisInvisibleTierColumns,
+  ensurePickupDemoFamily,
   ensurePickupSchema,
+  ensurePulseBrainLabGroupsSchema,
+  ensurePulseDnaVideosSchema,
   ensureSchoolBenchmarksCatalogBackfill,
   ensureSchoolGradeSchema,
   ensureSchoolsTimezoneColumn,
@@ -30,7 +40,9 @@ import {
   matchDemoEmailsToNamesOnce,
   rebalanceFlagsAtParrottOnce,
   remapBenchmarkDeliveriesToRealTeachersOnce,
+  seedAcademicMinutesDemoIfEmpty,
   seedBenchmarkDeliveriesOnce,
+  seedBenchmarkDescriptions,
   seedEngagementEventsIfEmpty,
   seedFastScoresIfEmpty,
   seedHousesIfEmpty,
@@ -39,6 +51,7 @@ import {
   seedMtssPlansIfEmpty,
   seedPbisCatalogIfEmpty,
   seedPbisEntriesIfEmpty,
+  seedPulseBrainLabLessons,
   seedSafetyPlanLibraryIfEmpty,
   seedSafetyPlansIfEmpty,
   seedSeparationReasonTagsIfEmpty,
@@ -51,6 +64,7 @@ import {
   seedWatchlistQuickEntriesIfEmpty,
   seedWatchlistSpotlightsIfMissing,
 } from "./seed";
+import { seedDistrictDemoExtras } from "./seedDemoExtras";
 
 // IMPORTANT: sequential, not Promise.all. seedIfEmpty() reads the schools table
 // that seedTenancy() populates, so on a fresh database the order matters.
@@ -61,6 +75,7 @@ export async function runSeed(): Promise<void> {
   await cleanupLooseSeedInteractionsOnce();
   await seedMtssPlansIfEmpty();
   await seedTieredInterventionsIfEmpty();
+  await seedAcademicMinutesDemoIfEmpty();
   await seedFastScoresIfEmpty();
   await seedIreadyAndSciIfEmpty();
   await seedHousesIfEmpty();
@@ -89,10 +104,14 @@ export async function runSeed(): Promise<void> {
   await seedStudentRetentionsIfEmpty();
   await ensureDataImporterRollbackSchema();
   await ensurePickupSchema();
+  await ensurePickupDemoFamily();
   await ensureAstSchema();
   await ensureFeaturePlansSchema();
   await ensureKioskCardsSchema();
+  await ensureHallPassPriorityBypassColumn();
+  await ensureOneWayPassSchema();
   await ensureKioskWelcomeSchema();
+  await ensurePbisInvisibleTierColumns();
   await ensureBadgePrintEventsSchema();
   await ensureClassComposerSkillClusterSchema();
   await ensureFastItemResponsesSchema();
@@ -100,8 +119,15 @@ export async function runSeed(): Promise<void> {
   await ensureStaffPasswordResetsSchema();
   await ensureSchoolsTimezoneColumn();
   await ensureStudentPhotoColumns();
+  await ensureOnTimeTestModeColumns();
+  await ensureParentMessagesSchema();
+  await ensurePulseDnaVideosSchema();
   await ensureStudentLocalSisIdBackfill();
   try {
+    await seedBenchmarkDescriptions();
+    await seedPulseBrainLabLessons();
+    await ensurePulseBrainLabGroupsSchema();
+    await ensureAcademicEvidenceSchema();
     await ensureBenchmarkDeliveriesSchema();
     await ensureSchoolBenchmarksCatalogBackfill();
     await seedBenchmarkDeliveriesOnce();
@@ -128,6 +154,11 @@ export async function runSeed(): Promise<void> {
   }
   await ensureLocationAllowedDestinationsBackfill();
   try {
+    await backfillStaffRoomLocationsAtParrottOnce();
+  } catch (err) {
+    logger.error({ err }, "[boot] Parrott staff-room locations backfill failed");
+  }
+  try {
     const r = await backfillWitnessSequences();
     if (r.cases > 0) {
       logger.info(r, "[boot] backfilled witness statement sequences");
@@ -135,12 +166,20 @@ export async function runSeed(): Promise<void> {
   } catch (err) {
     logger.warn({ err }, "[boot] witness ws_seq backfill failed");
   }
+  try {
+    await seedDistrictDemoExtras();
+  } catch (err) {
+    logger.error({ err }, "[boot] district demo extras seed failed");
+  }
 }
 
 export async function bootstrapCriticalColumns(): Promise<void> {
   try {
     await ensureSchoolsTimezoneColumn();
     await ensureStudentPhotoColumns();
+    await ensureOnTimeTestModeColumns();
+    await ensureParentMessagesSchema();
+    await ensurePulseDnaVideosSchema();
   } catch (err) {
     logger.error({ err }, "[boot] critical column bootstrap failed");
     throw err;

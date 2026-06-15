@@ -18,6 +18,7 @@ import Tier3WeeklyForm from "./Tier3WeeklyForm";
 
 export interface LauncherStudent {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade?: string | null;
@@ -234,7 +235,7 @@ export default function LogInterventionLauncher({
                     {s.firstName} {s.lastName}
                   </div>
                   <div style={{ fontSize: "0.8rem", color: "#64748b" }}>
-                    ID {s.studentId}
+                    ID {s.localSisId ?? "—"}
                     {s.grade ? ` · Grade ${s.grade}` : ""}
                   </div>
                 </button>

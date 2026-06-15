@@ -1,0 +1,318 @@
+# PulseEDU District Demonstration Preparation Assistant
+
+## Objective
+
+You are preparing a complete district-level demonstration environment for PulseEDU. This is not simply a feature walkthrough. The presentation should tell the story of how PulseEDU supports the entire educational ecosystem:
+
+* The student experience
+* The teacher experience
+* Student support and intervention
+* Family communication
+* School operations
+* Administrative decision making
+
+Your responsibility is to analyze the existing PulseEDU development database, identify the strongest existing demonstration data, create missing demo assets when needed, capture screenshots, and prepare a professional slide deck for presentation.
+
+---
+
+# DEMO FLOW (Presentation Order)
+
+---
+
+# 1. Student Experience: A Day in the Life of a Student
+
+## Hall Pass System
+
+Prepare a live demonstration using Amy Brown's classroom and printed student ID cards.
+
+Ensure the demonstration includes:
+
+* Student scans ID card
+* Student requests destination
+* Destination waiting list appears when capacity is reached
+* Teacher can view waiting queue
+* Teacher can use the "Go Now" bypass feature for immediate approval
+* Hall pass timer and return process
+
+Create screenshots showing:
+
+* Student view
+* Teacher approval view
+* Active pass dashboard
+
+---
+
+## Attendance Check-In and PBIS Recognition
+
+Prepare a demonstration using the same printed student ID cards.
+
+Demonstrate:
+
+* Student ID scan
+* Attendance recorded instantly
+* Automatic PBIS points awarded
+* Administrative tracking of participation and positive behaviors
+
+Capture screenshots of:
+
+* Student scan process
+* Attendance confirmation
+* PBIS points being awarded
+
+---
+
+## School Tour Feature
+
+Prepare a demonstration showing:
+
+* New student orientation
+* Digital campus navigation
+* Important locations and information
+
+Capture attractive screenshots demonstrating the student experience.
+
+---
+
+# 2. Teacher Experience: Reducing Teacher Workload
+
+## Teacher Roster and Benchmark Data
+
+Prepare a classroom with meaningful benchmark data.
+
+Demonstrate:
+
+* Teacher roster
+* Student performance information
+* Benchmark analysis
+
+Transition naturally into academic support.
+
+---
+
+## Small Group Instruction
+
+Demonstrate:
+
+* Identification of students with similar academic needs
+* Creation of a small instructional group
+* Teacher logging of additional academic support
+* Historical records showing intervention provided over time
+
+Capture screenshots of the complete workflow.
+
+---
+
+## Classroom Accommodations
+
+Use Amy Brown's class or Pamela Martin's class.
+
+Ensure approximately five students display accommodations that can be documented.
+
+Demonstrate:
+
+* Teacher sees required accommodations in real time
+* Accommodations can be documented as implemented
+* Historical records of accommodation delivery
+
+Capture screenshots of the accommodation interface.
+
+---
+
+# 3. Student Support: Ensuring No Student Is Invisible
+
+## HeartBEAT Meaningful Connections
+
+This section should be emotionally impactful.
+
+The purpose of HeartBEAT is to identify the "Invisible Student" — the student who is not creating behavior problems, is not failing academically, and therefore can quietly go through an entire school year without developing a meaningful connection with an adult.
+
+Demonstrate:
+
+* Teacher and staff meaningful connection logging
+* Student relationship history
+* Identification of students with few or no adult connections
+* Opportunities to intentionally connect with students before they become disengaged
+
+Key message:
+
+"Every student should be known by someone."
+
+Capture screenshots showing:
+
+* Student connection history
+* HeartBEAT dashboard
+* Connection reports
+
+---
+
+# 4. MTSS Tiered Intervention System
+
+Search the existing PulseEDU database and identify the strongest existing demonstration students.
+
+Find:
+
+## Tier 2 Student
+
+Locate a student with:
+
+* Approximately two months of documented interventions
+* Multiple intervention entries
+* Clear strategies and progress notes
+* A compelling intervention timeline
+
+## Tier 3 Student
+
+Locate a student with:
+
+* Approximately two months of intensive support documentation
+* Academic and/or behavior interventions
+* Multiple staff entries
+* Demonstrated progression of supports
+
+Do not create artificial data unless necessary. Prioritize authentic seeded data.
+
+Capture screenshots demonstrating:
+
+* Student intervention history
+* Timeline of supports
+* Strategies used
+* Progress monitoring
+
+---
+
+# 5. AST and Comp Time Management
+
+Prepare a complete workflow demonstration.
+
+The process should show:
+
+1. Teacher submits a request to earn additional time.
+2. Administrator reviews and approves the request.
+3. Teacher completes the approved work.
+4. Administrator verifies completion.
+5. Approved hours are automatically added to the teacher's bank.
+
+This workflow should demonstrate both:
+
+* AST time
+* Comp Time for EST employees
+
+Capture screenshots from every step of the approval workflow.
+
+---
+
+# 6. Family Communication and PulseDNA AI
+
+This should be one of the major "wow moments" of the demonstration.
+
+Demonstrate PulseDNA, where schools upload their School Communication Profile and teach PulseEDU their unique voice, culture, values, and communication style.
+
+Show:
+
+* The stored Communication DNA profile
+* Administrator entering a rough idea
+
+Example:
+
+"Volleyball team won tonight. Great crowd. Proud of our kids."
+
+Generate:
+
+* Family communication
+* Social media post
+* Video teleprompter script
+
+Key message:
+
+"AI should not replace the principal's voice. It should learn the school's voice."
+
+Capture before-and-after screenshots.
+
+---
+
+# 7. Leadership Intelligence
+
+## Insights Hub
+
+Prepare meaningful examples showing:
+
+* Algebra performance
+* Student learning trajectories
+* Data trends
+* Actionable insights
+
+Key message:
+
+"Data should not simply tell us what happened. It should guide what we do next."
+
+Capture dashboards and analytics.
+
+---
+
+## FAST Coverage Report
+
+This report is not simply about test scores.
+
+Demonstrate how the system analyzes:
+
+* State standards and benchmarks
+* Instructional coverage
+* Percentage of curriculum taught
+* Areas that have not yet received sufficient instructional attention
+
+Capture reports that visually demonstrate curriculum coverage and instructional gaps.
+
+---
+
+# 8. School Operations and Community Engagement
+
+## Event Ticketing
+
+Create a complete demonstration event in advance.
+
+Prepare:
+
+* Event name
+* Date and location
+* Ticket types
+* Generated QR tickets
+* Printed sample tickets
+
+Demonstrate:
+
+* Ticket scanning
+* Validation
+* Prevention of duplicate entry
+
+Capture:
+
+* Ticket creation screen
+* Digital ticket
+* QR validation process
+
+---
+
+## Digital Signage
+
+Prepare compelling examples showing:
+
+* School announcements
+* Student celebrations
+* Upcoming events
+* Dynamic visual displays
+
+Capture presentation-quality signage examples.
+
+---
+
+# Final Deliverables
+
+Produce the following:
+
+1. A complete district demonstration slide deck.
+2. High-resolution screenshots for every feature.
+3. A demo script with talking points.
+4. A checklist of all demo accounts, students, events, and data required.
+5. Any missing seeded demonstration data required to complete the presentation.
+
+The final presentation should communicate that PulseEDU is not another software product. It is the operating system that connects students, teachers, families, and administrators into a single, actionable platform.

@@ -1114,6 +1114,7 @@ ul[style*="listStyle: none"] li button:hover {
 
 /* ===== Create Pass modal & CTA ===== */
 .cp-cta-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1121,6 +1122,27 @@ ul[style*="listStyle: none"] li button:hover {
   padding: 1.5rem 1rem;
   background: var(--primary-soft);
   border: 1px dashed color-mix(in srgb, var(--primary) 30%, transparent);
+}
+.cp-cta-gear {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--primary) 25%, transparent);
+  background: var(--surface, #fff);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.cp-cta-gear:hover {
+  color: var(--primary);
+  border-color: var(--primary);
 }
 .cp-cta-text {
   color: var(--text-muted);
@@ -1231,11 +1253,34 @@ ul[style*="listStyle: none"] li button:hover {
   flex-direction: column;
   max-height: calc(100vh - 6rem);
 }
+.tdp-overlay {
+  justify-content: center;
+  align-items: center;
+  padding: 2rem 1.5rem;
+  background: transparent;
+}
+.tdp-card {
+  max-width: 420px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.35);
+}
 .cp-header {
   display: grid;
   grid-template-columns: 32px 1fr 32px;
   align-items: center;
   padding: 0.75rem 1rem 0.5rem;
+}
+.tdp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.tdp-header .cp-title {
+  flex: 1 1 auto;
+}
+.tdp-header .cp-close {
+  flex: 0 0 auto;
 }
 .cp-back, .cp-close {
   background: none;
@@ -1329,6 +1374,243 @@ ul[style*="listStyle: none"] li button:hover {
 .cp-list-text { display: flex; flex-direction: column; }
 .cp-list-sub { color: var(--text-muted); font-size: 0.8rem; }
 .cp-empty { color: var(--text-muted); padding: 0.5rem 0.25rem; font-size: 0.9rem; }
+
+/* ===== Teacher destination picker (gear) — clear scroll affordance ===== */
+.tdp-body {
+  padding: 1rem 1.25rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 0; /* let the inner scroll panel shrink instead of the modal */
+  overflow: hidden;
+}
+.tdp-intro {
+  color: var(--text-muted);
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.4;
+}
+.tdp-tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.6rem 1rem 0;
+}
+.tdp-tab {
+  flex: 0 0 auto;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid #e2e8f0;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: var(--bg, #f1f5f9);
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 1.2;
+}
+.tdp-tab:hover {
+  color: var(--text);
+}
+.tdp-tab.is-active {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #4f46e5;
+}
+.tdp-kiosk-url {
+  background: var(--bg, #f1f5f9);
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.75rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.tdp-kiosk-url-label {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.tdp-kiosk-url-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+.tdp-kiosk-url-row {
+  display: flex;
+}
+.tdp-kiosk-url-code {
+  flex: 1 1 auto;
+  font-size: 0.85rem;
+  word-break: break-all;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  color: var(--text);
+}
+.tdp-kiosk-url-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.tdp-kiosk-url-copy,
+.tdp-kiosk-url-open {
+  flex: 0 0 auto;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.4rem 0.85rem;
+  border-radius: 6px;
+  border: 1px solid #c7d2fe;
+  background: #eef2ff;
+  color: #4f46e5;
+  cursor: pointer;
+  text-decoration: none;
+  line-height: 1.2;
+}
+.tdp-kiosk-url-open {
+  display: inline-flex;
+  align-items: center;
+}
+.tdp-kiosk-url-copy:hover,
+.tdp-kiosk-url-open:hover {
+  background: #e0e7ff;
+}
+.tdp-kiosk-regen {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.tdp-newcode {
+  margin-top: 0.6rem;
+  background: #fff;
+  border: 1px solid #c7d2fe;
+  border-radius: 10px;
+  padding: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  text-align: center;
+}
+.tdp-newcode-instr {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+}
+.tdp-newcode-qr {
+  width: 240px;
+  height: 240px;
+  image-rendering: pixelated;
+}
+.tdp-newcode-pin {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+}
+.tdp-newcode-pin-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+.tdp-newcode-pin-value {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.tdp-newcode-barcode {
+  width: 100%;
+  max-width: 320px;
+  height: auto;
+  image-rendering: pixelated;
+}
+.tdp-newcode-note {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+.tdp-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.tdp-selectall {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+.tdp-count {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+/* The tinted, bordered panel is the single scroll region. The tint +
+   inset shadow + always-visible scrollbar make it obvious there is more
+   content below the fold. */
+.tdp-scroll {
+  background: var(--bg, #f1f5f9);
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+  overflow-y: auto;
+  min-height: 0;
+  max-height: min(48vh, 360px);
+  box-shadow: inset 0 -10px 12px -10px rgba(15, 23, 42, 0.18),
+    inset 0 10px 12px -10px rgba(15, 23, 42, 0.12);
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 transparent;
+}
+.tdp-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+.tdp-scroll::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 999px;
+  border: 2px solid var(--bg, #f1f5f9);
+}
+.tdp-scroll::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+/* Inside the panel the group lists must NOT create their own nested
+   scroll — the panel is the only scroller. */
+.tdp-scroll .cp-list {
+  max-height: none;
+  overflow: visible;
+}
+.tdp-scroll .cp-list-item {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+}
+.tdp-scroll .cp-list-item:hover {
+  border-color: var(--primary);
+}
+.tdp-footer {
+  border-top: 1px solid #eef2f7;
+  padding: 0.85rem 1.25rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  background: #fff;
+}
 
 .cp-context {
   background: var(--bg);

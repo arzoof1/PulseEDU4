@@ -502,15 +502,42 @@ async function previewAsParentOf(studentRowId: number): Promise<void> {
       alert("Could not open preview: " + text);
       return;
     }
+    // The preview tab can't see the staff session cookie (blocked in the
+    // Replit preview iframe) and has its own sessionStorage, so the swapped
+    // parent cookie session alone leaves it at the login gate. Hand the parent
+    // Bearer token to the new tab via the URL hash; ParentApp consumes it on
+    // boot and strips it from the URL.
+    const body = (await r.json().catch(() => ({}))) as { authToken?: string };
+    const dest = body.authToken
+      ? `/parent#pt=${encodeURIComponent(body.authToken)}`
+      : "/parent";
     if (win) {
-      win.location.href = "/parent";
+      win.location.href = dest;
     } else {
-      window.location.href = "/parent";
+      window.location.href = dest;
     }
   } catch (err) {
     if (win) win.close();
     alert("Could not open preview: " + (err as Error).message);
   }
+}
+
+async function generateParentLinkFor(studentRowId: number): Promise<string> {
+  // Build a shareable parent-preview link WITHOUT swapping this staff session.
+  // The server points the sentinel preview parent at the student and returns a
+  // `/parent#pt=<token>` URL that opens the parent HeartBEAT on any device for
+  // ~12h. Used to hand a live-demo audience the parent view on their own phone.
+  const r = await authFetch("/api/admin/parent-preview/link", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ studentRowId }),
+  });
+  if (!r.ok) {
+    throw new Error(await r.text());
+  }
+  const body = (await r.json().catch(() => ({}))) as { url?: string };
+  if (!body.url) throw new Error("No link returned");
+  return body.url;
 }
 
 function StudentInviteRow({
@@ -536,6 +563,8 @@ function StudentInviteRow({
   const [showAddForm, setShowAddForm] = useState(invites.length === 0);
   const sendKey = `send:${student.id}`;
   const isSendingRow = busyId === sendKey;
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   const handleSend = async () => {
     const email = draftEmail.trim();
@@ -544,6 +573,32 @@ function StudentInviteRow({
     if (ok) {
       setDraftEmail("");
       setShowAddForm(false);
+    }
+  };
+
+  const handleCopyParentLink = async () => {
+    setLinkBusy(true);
+    try {
+      const url = await generateParentLinkFor(student.id);
+      let copied = false;
+      try {
+        await navigator.clipboard.writeText(url);
+        copied = true;
+      } catch {
+        copied = false;
+      }
+      if (copied) {
+        setLinkCopied(true);
+        setTimeout(() => setLinkCopied(false), 2500);
+      } else {
+        // Clipboard is blocked inside the Replit preview iframe — surface the
+        // link so it can be copied by hand.
+        window.prompt("Copy this parent-preview link:", url);
+      }
+    } catch (err) {
+      alert("Could not generate link: " + (err as Error).message);
+    } finally {
+      setLinkBusy(false);
     }
   };
 
@@ -569,11 +624,9 @@ function StudentInviteRow({
         <div>
           <div style={{ fontWeight: 600 }}>{fullName}</div>
           <div style={{ fontSize: 12, color: "var(--text-subtle)" }}>
-            {/* Prefer the local SIS ID (Skyward / Focus) since that's
-                what the front office uses. Fall back to the FLEID
-                (canonical `student_id`) when the local ID hasn't
-                been imported for this student. */}
-            ID {student.localSisId ?? student.studentId}
+            {/* Local SIS ID (Skyward / Focus) — the only student ID we
+                ever surface. Never fall back to the canonical FLEID. */}
+            ID {student.localSisId ?? "—"}
             {student.grade ? ` · Grade ${student.grade}` : ""}
             {student.parentName ? ` · Skyward parent: ${student.parentName}` : ""}
           </div>
@@ -586,6 +639,15 @@ function StudentInviteRow({
             onClick={() => void previewAsParentOf(student.id)}
           >
             Preview as parent
+          </button>
+          <button
+            type="button"
+            style={btnGhost}
+            title="Copy a shareable link to this student's parent HeartBEAT. Send it to an admin during a demo so they can experience the parent view on their own device. Link works for ~12 hours."
+            disabled={linkBusy}
+            onClick={() => void handleCopyParentLink()}
+          >
+            {linkBusy ? "Generating…" : linkCopied ? "Link copied!" : "Generate link"}
           </button>
           <StatusPill status={overallStatus} />
         </div>

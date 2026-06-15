@@ -6,6 +6,7 @@ import { WL_COLORS as C, ROLE_META, severityChipStyle } from "./colors";
 interface ParticipantOut {
   id: number;
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: string | null;
@@ -278,7 +279,7 @@ export default function StatementDetailsModal({
                               className="text-[11px] font-normal"
                               style={{ color: C.inkSoft }}
                             >
-                              · Gr {p.grade ?? "?"} · {p.studentId}
+                              · Gr {p.grade ?? "?"} · {p.localSisId ?? "—"}
                             </span>
                           </div>
                           {p.notes ? (

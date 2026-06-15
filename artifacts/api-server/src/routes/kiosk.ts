@@ -1,5 +1,7 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { randomBytes, createHash } from "node:crypto";
+import { Readable } from "node:stream";
+import { genUrlSafeToken } from "../lib/urlSafeToken.js";
 import {
   db,
   hallPassesTable,
@@ -19,9 +21,27 @@ import {
   bellSchedulesTable,
   bellSchedulePeriodsTable,
   teacherDestinationAllowlistTable,
+  attendanceCheckinsTable,
+  onTimeRejectedScansTable,
+  classSectionsTable,
+  sectionRosterTable,
 } from "@workspace/db";
 import { renderKioskCardsPdf } from "../lib/kioskCardsPdf.js";
-import { and, eq, inArray, isNull, gt, desc, sql, ne, asc } from "drizzle-orm";
+import { encryptSecret, decryptSecret } from "../lib/secretCrypto.js";
+import {
+  renderTeacherBadgesPdf,
+  type TeacherBadgeInput,
+  type CardDesign,
+} from "../lib/teacherBadgesPdf.js";
+import {
+  ObjectStorageService,
+  ObjectNotFoundError,
+} from "../lib/objectStorage.js";
+import {
+  headStoredObject,
+  openStoredObjectWebStream,
+} from "../lib/storedObject.js";
+import { and, eq, inArray, isNull, gt, desc, sql, ne, asc, like } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
@@ -34,6 +54,11 @@ import {
 } from "../lib/loginThrottle.js";
 import { getSchoolTimezone, startOfDayUtc } from "../lib/schoolYear.js";
 import { loadBrandingForSchool } from "./schoolBranding.js";
+import {
+  loadKioskTeacherDisplayName,
+  loadRestroomDestinationNames,
+  passHeadsToKiosk,
+} from "../lib/oneWayPass.js";
 import {
   findPolarityConflict,
   polarityConflictMessage,
@@ -48,6 +73,11 @@ import {
   QUEUE_CAP,
   getCurrentPeriodKey,
 } from "./hallPassQueue";
+import {
+  loadAttendanceWindow,
+  computePoints,
+  type AttendanceWindow,
+} from "../lib/onTimeAttendance.js";
 
 // Default TTL for the legacy email-+-password activation flow. The
 // printed-card path (`/kiosk/activate-by-enrollment`,
@@ -79,6 +109,55 @@ const router: IRouter = Router();
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
+}
+
+// Domain-separation tag for the reversibly-encrypted kiosk PIN. Keeps the
+// derived key distinct from the parent-TOTP encryption (secretCrypto's
+// default purpose) — a value encrypted under one cannot be read under the
+// other. Encrypt + decrypt of pin_encrypted MUST both use this tag.
+const KIOSK_PIN_PURPOSE = "kiosk-pin-v1";
+
+// Trailing subject descriptors that some rosters bake into the display name
+// (e.g. "Marcus Hayes ELA" or "Jane Doe G6"). Stripped only when building the
+// student-facing kiosk teacher label so it reads cleanly; the stored
+// displayName is never modified.
+const SUBJECT_NAME_SUFFIXES = new Set([
+  "ela",
+  "math",
+  "science",
+  "reading",
+  "writing",
+  "civics",
+  "history",
+  "ss",
+]);
+
+// Build the student-facing "teacher of record" label for a kiosk destination.
+//   - With a title:  "Mr." + "Marcus Hayes ELA"  -> "Mr. Hayes"  (last name)
+//   - Without title: "Marcus Hayes ELA"          -> "Marcus Hayes" (full name)
+// We only collapse to a last name when a title is present, because "Mr. Hayes"
+// reads naturally while a bare "Hayes" does not.
+function teacherOfRecordLabel(
+  displayName: string,
+  title: string | null,
+): string {
+  // Drop a " - Subject" suffix (the documented roster format) up front.
+  let base = displayName;
+  const dash = base.indexOf(" - ");
+  if (dash !== -1) base = base.slice(0, dash);
+  let tokens = base.trim().split(/\s+/).filter(Boolean);
+  // Drop a single trailing standalone subject token (e.g. "... Hayes ELA").
+  if (
+    tokens.length > 1 &&
+    SUBJECT_NAME_SUFFIXES.has(tokens[tokens.length - 1].toLowerCase())
+  ) {
+    tokens = tokens.slice(0, -1);
+  }
+  const cleanName = tokens.join(" ") || displayName.trim();
+  const t = (title ?? "").trim();
+  if (!t) return cleanName;
+  const lastName = tokens[tokens.length - 1] ?? cleanName;
+  return `${t} ${lastName}`;
 }
 
 async function requireStaff(
@@ -260,7 +339,7 @@ async function resolveActivation(args: {
   // lock turns that error path into a clean serialized flow. Filter on
   // schoolId AND room so "Room 204" in two different schools never
   // collide.
-  const token = randomBytes(32).toString("base64url");
+  const token = genUrlSafeToken(43); // ~256 bits, linkifier-safe (lib/urlSafeToken)
   const tokenHash = hashToken(token);
   const expiresAt = new Date(Date.now() + ttlMs);
 
@@ -667,7 +746,36 @@ router.get("/kiosk/destinations/:token", async (req, res) => {
   const roomPairDestIds = roomPairRows.map((r) => r.id);
   const teacherDestIds = teacherRows.map((r) => r.id);
 
-  const allIds = Array.from(new Set([...roomPairDestIds, ...teacherDestIds]));
+  // Precedence (teacher list is AUTHORITATIVE when set):
+  //   1. If the activating teacher HAS a per-teacher allowlist (set via the
+  //      self-serve gear or the admin tile) → show ONLY those destinations.
+  //      The teacher's curated list wins; the room-pair matrix is ignored so
+  //      a teacher can genuinely narrow what students see.
+  //   2. Otherwise fall back to the school-wide room-pair matrix.
+  //   3. If that's also empty, show every student-visible non-classroom
+  //      destination so day-one kiosks aren't empty.
+  // Keep this precedence in sync with the POST /kiosk pass-creation check.
+  let allIds: number[];
+  if (teacherDestIds.length > 0) {
+    allIds = Array.from(new Set(teacherDestIds));
+  } else if (roomPairDestIds.length > 0) {
+    allIds = Array.from(new Set(roomPairDestIds));
+  } else {
+    const defaults = await db
+      .select({ id: locationsTable.id })
+      .from(locationsTable)
+      .where(
+        and(
+          eq(locationsTable.schoolId, act.schoolId),
+          eq(locationsTable.active, true),
+          eq(locationsTable.studentVisible, true),
+          eq(locationsTable.isDestination, true),
+          ne(locationsTable.kind, "classroom"),
+        ),
+      );
+    allIds = defaults.map((r) => r.id);
+  }
+
   if (allIds.length === 0) {
     res.json({ originRoom: act.room, destinations: [] });
     return;
@@ -676,6 +784,7 @@ router.get("/kiosk/destinations/:token", async (req, res) => {
     .select({
       id: locationsTable.id,
       name: locationsTable.name,
+      kind: locationsTable.kind,
       active: locationsTable.active,
       studentVisible: locationsTable.studentVisible,
       isDestination: locationsTable.isDestination,
@@ -687,10 +796,54 @@ router.get("/kiosk/destinations/:token", async (req, res) => {
         inArray(locationsTable.id, allIds),
       ),
     );
-  const visible = rows
+  const visibleRows = rows
     .filter((r) => r.active && r.studentVisible && r.isDestination)
-    .map((r) => ({ id: r.id, name: r.name }))
     .sort((a, b) => a.name.localeCompare(b.name));
+
+  // Teacher of record per destination room, so students see "Mr. Hayes —
+  // Room 204" instead of a bare room. The teacher is the active staff member
+  // whose default room matches the destination's name (same school). A room
+  // with no — or more than one — match shows no teacher (we can't pick "the"
+  // teacher of record unambiguously, so we stay silent rather than guess).
+  const teacherByRoom = new Map<string, string>();
+  const roomNames = visibleRows.map((r) => r.name);
+  if (roomNames.length > 0) {
+    const staffRows = await db
+      .select({
+        displayName: staffTable.displayName,
+        title: staffTable.title,
+        defaultRoom: staffTable.defaultRoom,
+      })
+      .from(staffTable)
+      .where(
+        and(
+          eq(staffTable.schoolId, act.schoolId),
+          eq(staffTable.active, true),
+          inArray(staffTable.defaultRoom, roomNames),
+        ),
+      );
+    // Count matches per room first; only rooms with exactly one teacher get a
+    // label (avoids misattributing a shared room to one of several teachers).
+    const countByRoom = new Map<string, number>();
+    for (const s of staffRows) {
+      const room = s.defaultRoom ?? "";
+      countByRoom.set(room, (countByRoom.get(room) ?? 0) + 1);
+    }
+    for (const s of staffRows) {
+      const room = s.defaultRoom ?? "";
+      if (countByRoom.get(room) !== 1) continue;
+      teacherByRoom.set(room, teacherOfRecordLabel(s.displayName, s.title));
+    }
+  }
+
+  const visible = visibleRows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    // Exposed so the kiosk can hide restroom-kind destinations from the
+    // "Go now" line-bypass picker (restrooms must stay line-only).
+    kind: r.kind,
+    teacherName: teacherByRoom.get(r.name) ?? null,
+  }));
   res.json({ originRoom: act.room, destinations: visible });
 });
 
@@ -874,8 +1027,38 @@ router.post(
   },
 );
 
+// Resolve a kiosk-entered identifier to the canonical student record for
+// this school. Students scan/type their human-facing Local SIS id (the value
+// the badge QR + Code128 barcode now encode) — never the internal,
+// FLEID-style student_id. We match on local_sis_id, school-scoped (it is
+// 100%-populated and unique per (school_id, local_sis_id)), and hand back the
+// full row so every caller uses the canonical student_id for downstream
+// storage + matching. Returns null when no student matches.
+async function resolveKioskStudent(
+  rawId: string,
+  schoolId: number,
+): Promise<typeof studentsTable.$inferSelect | null> {
+  const sisId = rawId.trim();
+  if (!sisId) return null;
+  const [student] = await db
+    .select()
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.localSisId, sisId),
+        eq(studentsTable.schoolId, schoolId),
+      ),
+    );
+  return student ?? null;
+}
+
 router.post("/kiosk/hall-passes", async (req, res) => {
   const { studentId, destination, token } = req.body ?? {};
+  // "Go now" line bypass: student summoned to the office/guidance/clinic who
+  // can't wait in the queue. Skips the waiting line and the daily limit, but
+  // keep-apart is still enforced (it alerts instead of silently queuing) and
+  // restroom-kind destinations are never bypassable.
+  const bypassQueue = req.body?.bypassQueue === true;
 
   if (
     typeof studentId !== "string" ||
@@ -959,55 +1142,98 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     });
     return;
   }
+  // Restrooms can never skip the line — the queue exists precisely to meter
+  // bathroom traffic. Mirror of the client, which hides restrooms from the
+  // "Go now" picker; this rejects a crafted bypass POST for one.
+  if (bypassQueue && dest.kind === "restroom") {
+    res.status(400).json({
+      error: "Restroom passes can't skip the line — please get in line.",
+    });
+    return;
+  }
 
-  // Allow the destination if EITHER allowlist matches: the school-wide
-  // room-pair matrix (location_allowed_destinations) OR the activating
-  // teacher's per-staff allowlist (teacher_destination_allowlist). Keep
-  // these in sync with /kiosk/destinations/:token above — they're the
-  // same union, just one validates a single pick and the other lists all.
-  const [roomPairAllowed] = await db
-    .select({ id: locationAllowedDestinationsTable.id })
-    .from(locationAllowedDestinationsTable)
-    .where(
-      and(
-        eq(locationAllowedDestinationsTable.schoolId, act.schoolId),
-        eq(locationAllowedDestinationsTable.originLocationId, origin.id),
-        eq(
-          locationAllowedDestinationsTable.destinationLocationId,
-          dest.id,
-        ),
-      ),
-    );
-  let teacherAllowed: { id: number } | undefined;
-  if (!roomPairAllowed && actStaff?.displayName) {
-    [teacherAllowed] = await db
-      .select({ id: teacherDestinationAllowlistTable.id })
+  // Hard-gate the single pick using the SAME precedence as
+  // /kiosk/destinations/:token above (teacher list authoritative when set):
+  //   1. teacher per-staff allowlist set → allow ONLY its members
+  //      (room matrix ignored so the teacher can genuinely narrow).
+  //   2. else → allow if the school-wide room-pair matrix has this pair.
+  //   3. else (origin has no matrix rows at all) → allow any student-visible
+  //      non-classroom destination (mirror of the show-all default).
+  // Resolve the activating teacher's per-staff allowlist first so we can both
+  // check membership and detect whether they've set a list at all.
+  let teacherDestIdSet = new Set<number>();
+  if (actStaff?.displayName) {
+    const rows = await db
+      .select({
+        destinationLocationId:
+          teacherDestinationAllowlistTable.destinationLocationId,
+      })
       .from(teacherDestinationAllowlistTable)
       .where(
         and(
           eq(teacherDestinationAllowlistTable.schoolId, act.schoolId),
-          eq(
-            teacherDestinationAllowlistTable.staffName,
-            actStaff.displayName,
-          ),
-          eq(
-            teacherDestinationAllowlistTable.destinationLocationId,
-            dest.id,
-          ),
+          eq(teacherDestinationAllowlistTable.staffName, actStaff.displayName),
         ),
       );
+    teacherDestIdSet = new Set(rows.map((r) => r.destinationLocationId));
   }
-  if (!roomPairAllowed && !teacherAllowed) {
+  const teacherHasList = teacherDestIdSet.size > 0;
+
+  let allowed: boolean;
+  if (teacherHasList) {
+    allowed = teacherDestIdSet.has(dest.id);
+  } else {
+    const originPairRows = await db
+      .select({
+        destinationLocationId:
+          locationAllowedDestinationsTable.destinationLocationId,
+      })
+      .from(locationAllowedDestinationsTable)
+      .where(
+        and(
+          eq(locationAllowedDestinationsTable.schoolId, act.schoolId),
+          eq(locationAllowedDestinationsTable.originLocationId, origin.id),
+        ),
+      );
+    if (originPairRows.length > 0) {
+      allowed = originPairRows.some((r) => r.destinationLocationId === dest.id);
+    } else {
+      allowed =
+        dest.active &&
+        dest.studentVisible &&
+        dest.isDestination &&
+        dest.kind !== "classroom";
+    }
+  }
+  // Final eligibility parity with the GET /kiosk/destinations/:token listing,
+  // which always post-filters to `active && studentVisible && isDestination`.
+  // Re-apply it here so a crafted POST can never create a pass to a
+  // destination the listing would have hidden (e.g. one still in a teacher's
+  // list or the room matrix but since deactivated / un-flagged as a
+  // destination). studentVisible is already gated above; this also covers
+  // active + isDestination in the teacher/matrix branches.
+  if (allowed && !(dest.active && dest.studentVisible && dest.isDestination)) {
+    allowed = false;
+  }
+  if (!allowed) {
     res.status(403).json({
       error: `${destination} is not an allowed destination from ${originRoom}`,
     });
     return;
   }
 
-  // Normalize the student-typed ID to uppercase so a kid who types "s2003"
-  // matches the canonical "S2003" in the roster (and so the pass row, the
-  // duplicate-active check, and the polarity check all use the same form).
-  const normalizedStudentId = studentId.trim().toUpperCase();
+  // Students scan/type their human-facing Local SIS id. Resolve it to the
+  // canonical roster row up front; every downstream check + insert below uses
+  // the internal student_id (via normalizedStudentId) so foreign keys stay
+  // stable while no FLEID ever surfaces to the student.
+  const student = await resolveKioskStudent(studentId, act.schoolId);
+  if (!student) {
+    res.status(404).json({
+      error: "Student not found — check your ID and try again.",
+    });
+    return;
+  }
+  const normalizedStudentId = student.studentId;
 
   const existingActive = (await db
     .select()
@@ -1022,7 +1248,7 @@ router.post("/kiosk/hall-passes", async (req, res) => {
   if (existingActive.length > 0) {
     const open = existingActive[0];
     res.status(409).json({
-      error: `Student ${normalizedStudentId} already has an active pass to ${open.destination}. End it before issuing another.`,
+      error: `You already have an active pass to ${open.destination}. Tap "I'm back" to end it before starting another.`,
     });
     return;
   }
@@ -1030,10 +1256,11 @@ router.post("/kiosk/hall-passes", async (req, res) => {
   // Polarity / keep-apart enforcement. The kiosk activation carries the
   // school it was bound to, so the daily limit is read from that school's
   // settings (not the singleton row).
-  const limitConflict = await findDailyLimitConflict(
-    normalizedStudentId,
-    act.schoolId,
-  );
+  // A "Go now" bypass is for an involuntary summons (office/guidance/clinic),
+  // so it is exempt from the per-student daily pass limit.
+  const limitConflict = bypassQueue
+    ? null
+    : await findDailyLimitConflict(normalizedStudentId, act.schoolId);
   if (limitConflict) {
     res.status(409).json({ error: dailyLimitConflictMessage(limitConflict) });
     return;
@@ -1043,6 +1270,17 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     act.schoolId,
   );
   if (conflict) {
+    // A "Go now" bypass must NOT silently queue on a keep-apart hit — that
+    // would defeat the bypass. Safety still wins over the summons: block and
+    // alert so the teacher resolves it (the two kept-apart students can't be
+    // in the hall together regardless of who called the student down).
+    if (bypassQueue) {
+      res.status(409).json({
+        error:
+          "You can't leave right now — please see your teacher. (A keep-apart rule is active.)",
+      });
+      return;
+    }
     // Keep-apart at the kiosk: instead of bouncing the student with an
     // error that names the other kid, drop them silently into THIS kiosk's
     // queue and tell them they're on hold. The companion queue panel and
@@ -1050,18 +1288,6 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     // partner's pass ends, at which point the hold clears automatically.
     // We deliberately don't echo the partner's name in the response.
     try {
-      const [student] = await db
-        .select({
-          firstName: studentsTable.firstName,
-          lastName: studentsTable.lastName,
-        })
-        .from(studentsTable)
-        .where(
-          and(
-            eq(studentsTable.studentId, normalizedStudentId),
-            eq(studentsTable.schoolId, act.schoolId),
-          ),
-        );
       const periodKey = await getCurrentPeriodKey(act.schoolId);
       // Stale-clear before insert so a previous-period queue doesn't count
       // toward this period's cap. Mirrors /kiosk/queue/:token/add.
@@ -1159,18 +1385,9 @@ router.post("/kiosk/hall-passes", async (req, res) => {
       createdAt: new Date().toISOString(),
       maxDurationMinutes: config.defaultHallPassDurationMinutes,
       endedAt: null,
+      priorityBypass: bypassQueue,
     })
     .returning();
-
-  const [student] = await db
-    .select({ firstName: studentsTable.firstName })
-    .from(studentsTable)
-    .where(
-      and(
-        eq(studentsTable.studentId, normalizedStudentId),
-        eq(studentsTable.schoolId, act.schoolId),
-      ),
-    );
 
   // If this student was queued on this kiosk, remove their queue entry now
   // that the pass has started. Safe no-op if they weren't in the queue
@@ -1218,9 +1435,16 @@ router.post("/kiosk/hall-passes/return", async (req, res) => {
     return;
   }
 
-  // Match the kiosk-create flow: uppercase the typed ID so a kid who types
-  // "s2003" still finds their active "S2003" pass.
-  const trimmedId = studentId.trim().toUpperCase();
+  // Students type/scan their human-facing Local SIS id; resolve it to the
+  // canonical student_id stored on the pass row.
+  const student = await resolveKioskStudent(studentId, act.schoolId);
+  if (!student) {
+    res.status(404).json({
+      error: `No active hall pass found from ${act.room}.`,
+    });
+    return;
+  }
+  const trimmedId = student.studentId;
   // Scope to passes that originated from THIS kiosk's room so "I'm back"
   // means "back to the room this kiosk is in." A pass from Room 102 can't
   // be ended from a Cafeteria kiosk — they have to use the right one.
@@ -1238,7 +1462,7 @@ router.post("/kiosk/hall-passes/return", async (req, res) => {
 
   if (activePasses.length === 0) {
     res.status(404).json({
-      error: `No active hall pass found for student ${trimmedId} from ${act.room}.`,
+      error: `No active hall pass found from ${act.room}.`,
     });
     return;
   }
@@ -1258,16 +1482,6 @@ router.post("/kiosk/hall-passes/return", async (req, res) => {
     .where(eq(hallPassesTable.id, target.id))
     .returning();
 
-  const [student] = await db
-    .select({ firstName: studentsTable.firstName })
-    .from(studentsTable)
-    .where(
-      and(
-        eq(studentsTable.studentId, trimmedId),
-        eq(studentsTable.schoolId, act.schoolId),
-      ),
-    );
-
   // Pop the next student off this kiosk's queue (if any) so the kiosk can
   // show a "Welcome [Name] — enter your ID to start your pass" prompt. We
   // do NOT auto-create the pass — the next student must scan/enter their
@@ -1282,6 +1496,192 @@ router.post("/kiosk/hall-passes/return", async (req, res) => {
     studentFirstName: student?.firstName ?? null,
     nextInQueue,
   });
+});
+
+// Destination check-in (one-way arrival). A kiosk standing AT the destination
+// room receives an inbound student: this ENDS the pass, stamps arrivedAt, and
+// records endedBy as the destination room. Idempotent — a second tap (or a
+// pass already received by a staff member from the app) returns ok rather than
+// erroring. Restroom passes never use this path (they're round-trip).
+router.post("/kiosk/hall-passes/arrive", async (req, res) => {
+  const { passId, token } = req.body ?? {};
+
+  if (typeof token !== "string" || token.length < 16) {
+    res.status(401).json({
+      error: "Kiosk activation token is required",
+      revoked: true,
+    });
+    return;
+  }
+  const numericPassId = Number(passId);
+  if (!Number.isFinite(numericPassId) || numericPassId <= 0) {
+    res.status(400).json({ error: "passId is required" });
+    return;
+  }
+
+  const [act] = await db
+    .select()
+    .from(kioskActivationsTable)
+    .where(
+      and(
+        eq(kioskActivationsTable.tokenHash, hashToken(token)),
+        isNull(kioskActivationsTable.deactivatedAt),
+        gt(kioskActivationsTable.expiresAt, new Date()),
+      ),
+    );
+  if (!act) {
+    res.status(401).json({
+      error: "Kiosk activation not found, revoked, or expired",
+      revoked: true,
+    });
+    return;
+  }
+
+  const [pass] = await db
+    .select()
+    .from(hallPassesTable)
+    .where(
+      and(
+        eq(hallPassesTable.id, numericPassId),
+        eq(hallPassesTable.schoolId, act.schoolId),
+      ),
+    );
+  if (!pass) {
+    res.status(404).json({ error: "Hall pass not found." });
+    return;
+  }
+  // Restroom passes are round-trip: the student taps "I'm back" at their own
+  // room, they are never checked in at a destination kiosk. Mirrors the
+  // "Heading here" list, which excludes restrooms, so the two stay in lockstep.
+  const restroomNames = await loadRestroomDestinationNames(act.schoolId);
+  if (restroomNames.has(pass.destination)) {
+    res.status(400).json({
+      error: `Restroom passes return to the student's own room — there's no destination check-in.`,
+    });
+    return;
+  }
+  // The kiosk can receive students whose pass is headed here — either the
+  // destination IS this room, or it is addressed to the activating teacher
+  // (destinations are often named after the teacher, not the room string).
+  // Kept in lockstep with the "Heading here" list via passHeadsToKiosk.
+  const kioskTeacher = await loadKioskTeacherDisplayName(
+    act.schoolId,
+    act.staffId,
+  );
+  if (!passHeadsToKiosk(pass, act.room, kioskTeacher)) {
+    res.status(403).json({
+      error: `That pass is headed to ${pass.destination}, not ${act.room}.`,
+    });
+    return;
+  }
+  // Self-check-in identity gate. When the arriving student confirms by
+  // scanning/typing their badge, the resolved Local SIS id must belong to
+  // THIS pass — so a mis-tap on the wrong chip can never check in another
+  // student. studentId is optional for backward compatibility; when present
+  // it is enforced. Mirrors the "I'm back" return flow's scan requirement.
+  const arriveStudentId = req.body?.studentId;
+  if (typeof arriveStudentId === "string" && arriveStudentId.trim()) {
+    const scanned = await resolveKioskStudent(arriveStudentId, act.schoolId);
+    if (!scanned || scanned.studentId !== pass.studentId) {
+      res.status(403).json({
+        error:
+          "That badge doesn't match this student. Scan the badge of the student checking in.",
+      });
+      return;
+    }
+  }
+  // Idempotent: already received / ended → return as-is.
+  if (pass.status !== "active") {
+    res.json({ ...pass, alreadyReceived: true });
+    return;
+  }
+
+  const nowIso = new Date().toISOString();
+  const [updated] = await db
+    .update(hallPassesTable)
+    .set({
+      status: "ended",
+      endedAt: nowIso,
+      arrivedAt: nowIso,
+      endedBy: `${act.room} (kiosk)`,
+    })
+    .where(eq(hallPassesTable.id, pass.id))
+    .returning();
+
+  res.json(updated);
+});
+
+// Token-scoped student photo for kiosk surfaces. The kiosk is an
+// UNAUTHENTICATED device (no staff session) — it only holds a kiosk
+// activation token. So a plain <img src> can't reach the authed
+// /api/storage path. This GET resolves the activation → school, then
+// streams the photo bytes ONLY if a CONSENTING student in that same
+// school actually owns the requested object key. That double gate
+// (school match + consent + ownership) prevents a kiosk token from
+// being used to enumerate arbitrary objects. Missing/!consent/!owned
+// all 404 → the client falls back to the initials disc.
+const kioskPhotoStorage = new ObjectStorageService();
+router.get("/kiosk/photo/:token", async (req, res) => {
+  const token = req.params.token;
+  const key = typeof req.query.key === "string" ? req.query.key : "";
+  if (typeof token !== "string" || token.length < 16 || !key) {
+    res.status(404).end();
+    return;
+  }
+
+  const [act] = await db
+    .select({ schoolId: kioskActivationsTable.schoolId })
+    .from(kioskActivationsTable)
+    .where(
+      and(
+        eq(kioskActivationsTable.tokenHash, hashToken(token)),
+        isNull(kioskActivationsTable.deactivatedAt),
+        gt(kioskActivationsTable.expiresAt, new Date()),
+      ),
+    );
+  if (!act) {
+    res.status(404).end();
+    return;
+  }
+
+  // Confirm a consenting student in this school owns the key.
+  const [owner] = await db
+    .select({ studentId: studentsTable.studentId })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.schoolId, act.schoolId),
+        eq(studentsTable.photoObjectKey, key),
+        eq(studentsTable.photoConsent, true),
+      ),
+    );
+  if (!owner) {
+    res.status(404).end();
+    return;
+  }
+
+  try {
+    const ref = await kioskPhotoStorage.getObjectEntityFile(key);
+    const metadata = await headStoredObject(ref);
+    res.setHeader(
+      "Content-Type",
+      metadata.contentType || "application/octet-stream",
+    );
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    const webStream = await openStoredObjectWebStream(ref);
+    const nodeStream = Readable.fromWeb(webStream as import("stream/web").ReadableStream);
+    nodeStream.on("error", () => {
+      if (!res.headersSent) res.status(404);
+      res.end();
+    });
+    nodeStream.pipe(res);
+  } catch (err) {
+    if (err instanceof ObjectNotFoundError) {
+      res.status(404).end();
+      return;
+    }
+    res.status(404).end();
+  }
 });
 
 // =====================================================================
@@ -1368,7 +1768,9 @@ function generatePin(): string {
 }
 
 function generateEnrollToken(): string {
-  return randomBytes(24).toString("base64url");
+  // base62, not base64url: this token rides in the kiosk-enroll QR/URL, where a
+  // trailing '-'/'_' would be stripped by linkifiers. See lib/urlSafeToken.
+  return genUrlSafeToken(32); // ~190 bits, parity with randomBytes(24)
 }
 
 // Compute the public-facing kiosk URL the QR should encode. We trust
@@ -1426,12 +1828,41 @@ async function activateForTeacher(args: {
       .select()
       .from(staffDefaultsTable)
       .where(eq(staffDefaultsTable.staffId, teacher.id));
-    const previewRoom = (room && room.trim()) || defaultRow?.defaultLocationName || null;
+    // Resolve the preview room with the SAME fallback chain as
+    // resolveActivation (kiosk default-room picker → admin staff-editor
+    // room). Without the staff.default_room fallback, a teacher whose
+    // room was only set in the staff editor gets previewRoom:null here,
+    // the client can't auto-confirm, and the QR/PIN scan drops to the
+    // manual room-entry screen — even though the password sign-in path
+    // (which calls resolveActivation) already knows the room. This kept
+    // the four sign-in methods from agreeing on the room assignment.
+    const previewRoom =
+      (room && room.trim()) ||
+      defaultRow?.defaultLocationName?.trim() ||
+      teacher.defaultRoom?.trim() ||
+      null;
+    // Ship the valid origin rooms too, so when manual entry IS needed
+    // (no default configured, or a sub) the QR/PIN confirm screen can
+    // render the SAME searchable room picker as the password sign-in
+    // path instead of a free-text box.
+    const locations = (
+      await db
+        .select()
+        .from(locationsTable)
+        .where(
+          and(
+            eq(locationsTable.isOrigin, true),
+            eq(locationsTable.active, true),
+            eq(locationsTable.schoolId, teacher.schoolId),
+          ),
+        )
+    ).map((l) => l.name);
     res.status(200).json({
       requiresConfirm: true,
       staffId: teacher.id,
       staffName: teacher.displayName,
       previewRoom,
+      locations,
       ttlDays: Math.round(ttlMs / (24 * 60 * 60 * 1000)),
       sessionKind,
     });
@@ -1687,15 +2118,15 @@ router.post("/kiosk/class-signin", async (req, res) => {
     return;
   }
 
-  // Student must belong to the kiosk's school — students.student_id is
-  // globally unique on the schema but we still enforce the school
-  // filter so a leaked id from another tenant can't trigger a sign-in.
+  // Students scan/type their human-facing Local SIS id (the value the badge
+  // QR encodes). Resolve to the canonical roster row, scoped to the kiosk's
+  // school so a leaked id from another tenant can't trigger a sign-in.
   const [student] = await db
     .select()
     .from(studentsTable)
     .where(
       and(
-        eq(studentsTable.studentId, studentId.trim()),
+        eq(studentsTable.localSisId, studentId.trim()),
         eq(studentsTable.schoolId, act.schoolId),
       ),
     );
@@ -1777,6 +2208,362 @@ router.post("/kiosk/class-signin", async (req, res) => {
     house,
     welcomeMessage,
   });
+});
+
+// ===========================================================================
+// On-Time Attendance (classroom-door kiosk auto-flip)
+//
+// During the passing window before a class, an activated kiosk flips from
+// hall-pass mode to Attendance mode. Students scan their Local SIS id to earn
+// on-time points (server-authoritative). Points land in a SEPARATE ledger
+// (attendance_checkins) that DOES count toward house standings but is NEVER
+// part of the Invisible-Student calc. All three endpoints are token-authed
+// (no session) like the rest of the kiosk surface.
+// ===========================================================================
+
+// Resolve the kiosk activation + the class the kiosk runs attendance for this
+// passing window. Returns null pieces rather than throwing so each route can
+// shape its own response.
+async function resolveAttendanceContext(token: unknown): Promise<
+  | { error: { status: number; body: Record<string, unknown> } }
+  | {
+      act: InferSelectModel<typeof kioskActivationsTable>;
+      enabled: boolean;
+      maxPoints: number;
+      win: AttendanceWindow;
+      // Roster gate result for the incoming class:
+      //   sectionId  — the teacher's class_sections row for the incoming
+      //                period (null = no section → OPEN FALLBACK, accept all).
+      //   isPlanning — the section is the teacher's planning period (no class).
+      sectionId: number | null;
+      isPlanning: boolean;
+      endedByTeacher: boolean;
+    }
+> {
+  if (typeof token !== "string" || token.length < 16) {
+    return {
+      error: { status: 401, body: { error: "Kiosk token required", revoked: true } },
+    };
+  }
+  const [act] = await db
+    .select()
+    .from(kioskActivationsTable)
+    .where(
+      and(
+        eq(kioskActivationsTable.tokenHash, hashToken(token)),
+        isNull(kioskActivationsTable.deactivatedAt),
+        gt(kioskActivationsTable.expiresAt, new Date()),
+      ),
+    );
+  if (!act) {
+    return {
+      error: {
+        status: 401,
+        body: { error: "Kiosk activation not found, revoked, or expired", revoked: true },
+      },
+    };
+  }
+
+  const [settings] = await db
+    .select({
+      enabled: schoolSettingsTable.onTimeAttendanceEnabled,
+      maxPoints: schoolSettingsTable.onTimeMaxPoints,
+    })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, act.schoolId));
+
+  const win = await loadAttendanceWindow(act.schoolId);
+
+  // Test loop is a self-contained admin demo: when its synthetic window is
+  // active (periodKey prefixed "testloop:") the kiosk must flip to Attendance
+  // mode even if the school hasn't turned the On-Time Attendance feature on —
+  // the whole point is to demo without any setup. In normal operation the
+  // periodKey is never "testloop:" so this never relaxes the real gate.
+  const isTestLoopWindow = win.periodKey?.startsWith("testloop:") ?? false;
+
+  // Roster gate context: does the kiosk's teacher have a class for the
+  // incoming period, and is it their planning period?
+  let sectionId: number | null = null;
+  let isPlanning = false;
+  if (win.incomingPeriodNumber !== null) {
+    const [section] = await db
+      .select({ id: classSectionsTable.id, isPlanning: classSectionsTable.isPlanning })
+      .from(classSectionsTable)
+      .where(
+        and(
+          eq(classSectionsTable.schoolId, act.schoolId),
+          eq(classSectionsTable.teacherStaffId, act.staffId),
+          eq(classSectionsTable.period, win.incomingPeriodNumber),
+        ),
+      );
+    if (section) {
+      sectionId = section.id;
+      isPlanning = section.isPlanning;
+    }
+  }
+
+  const endedByTeacher =
+    win.periodKey !== null && act.onTimeEndedKey === win.periodKey;
+
+  return {
+    act,
+    enabled: (settings?.enabled ?? false) || isTestLoopWindow,
+    maxPoints: settings?.maxPoints ?? 4,
+    win,
+    sectionId,
+    isPlanning,
+    endedByTeacher,
+  };
+}
+
+// GET /api/kiosk/attendance/state?token=...
+// Polled by the kiosk (a few-second cadence) to know whether to show the
+// Attendance screen, the countdown, the post-bell "Done" button, and the
+// recent-scan list. Read-only.
+router.get("/kiosk/attendance/state", async (req, res) => {
+  const ctx = await resolveAttendanceContext(req.query.token);
+  if ("error" in ctx) {
+    res.status(ctx.error.status).json(ctx.error.body);
+    return;
+  }
+  const { act, enabled, win, isPlanning, endedByTeacher } = ctx;
+
+  const attendanceActive =
+    enabled && win.phase !== "off" && !isPlanning && !endedByTeacher;
+
+  if (!attendanceActive) {
+    res.json({ enabled, mode: "hallpass" as const });
+    return;
+  }
+
+  // Recent scans (newest first) for the on-screen slide-down name list.
+  // During a test loop the periodKey changes every cycle (~4 min), which would
+  // otherwise wipe the list each rollover. Span all of today's test-loop cycles
+  // so names persist and accumulate; a real period keeps its single periodKey.
+  const isTestLoop = (win.periodKey ?? "").startsWith("testloop:");
+  const FEED_LIMIT = 8;
+  const recentRows = await db
+    .select({
+      studentId: attendanceCheckinsTable.studentId,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      localSisId: studentsTable.localSisId,
+      points: attendanceCheckinsTable.points,
+      postBell: attendanceCheckinsTable.postBell,
+      createdAt: attendanceCheckinsTable.createdAt,
+    })
+    .from(attendanceCheckinsTable)
+    .leftJoin(
+      studentsTable,
+      and(
+        eq(studentsTable.studentId, attendanceCheckinsTable.studentId),
+        eq(studentsTable.schoolId, attendanceCheckinsTable.schoolId),
+      ),
+    )
+    .where(
+      and(
+        eq(attendanceCheckinsTable.schoolId, act.schoolId),
+        eq(attendanceCheckinsTable.kioskActivationId, act.id),
+        isTestLoop
+          ? like(attendanceCheckinsTable.periodKey, `testloop:%:${win.dayKey}`)
+          : eq(attendanceCheckinsTable.periodKey, win.periodKey as string),
+        eq(attendanceCheckinsTable.kind, "checkin"),
+      ),
+    )
+    .orderBy(desc(attendanceCheckinsTable.createdAt))
+    .limit(FEED_LIMIT * 4);
+
+  // Newest scan per student, capped — so a student re-scanning across cycles
+  // appears once (at the top) and older names slide off the bottom.
+  const seenStudents = new Set<string>();
+  const recent: {
+    firstName: string;
+    lastName: string;
+    points: number;
+    postBell: boolean;
+  }[] = [];
+  for (const r of recentRows) {
+    const key = r.studentId ?? `${r.firstName ?? ""}|${r.lastName ?? ""}`;
+    if (seenStudents.has(key)) continue;
+    seenStudents.add(key);
+    recent.push({
+      firstName: r.firstName ?? "",
+      lastName: r.lastName ?? "",
+      points: r.points,
+      postBell: r.postBell,
+    });
+    if (recent.length >= FEED_LIMIT) break;
+  }
+
+  res.json({
+    enabled: true,
+    mode: "attendance" as const,
+    phase: win.phase,
+    incomingPeriodNumber: win.incomingPeriodNumber,
+    incomingPeriodName: win.incomingPeriodName,
+    minutesRemaining: win.minutesRemaining,
+    periodKey: win.periodKey,
+    // The big Done button only appears once the bell has rung.
+    showDone: win.phase === "post_bell",
+    recent,
+  });
+});
+
+// POST /api/kiosk/attendance/checkin  { token, studentId, source? }
+// studentId is the human-facing Local SIS id (what the badge QR encodes).
+router.post("/kiosk/attendance/checkin", async (req, res) => {
+  const { studentId, token, source } = req.body ?? {};
+  if (typeof studentId !== "string" || !studentId.trim()) {
+    res.status(400).json({ error: "studentId is required" });
+    return;
+  }
+  const ctx = await resolveAttendanceContext(token);
+  if ("error" in ctx) {
+    res.status(ctx.error.status).json(ctx.error.body);
+    return;
+  }
+  const { act, enabled, maxPoints, win, sectionId, isPlanning, endedByTeacher } =
+    ctx;
+
+  if (!enabled || win.phase === "off" || isPlanning || endedByTeacher) {
+    res.status(409).json({ status: "closed", error: "Attendance is not open" });
+    return;
+  }
+  if (!checkSigninRate(act.id)) {
+    res.status(429).json({ error: "Too many scans on this kiosk" });
+    return;
+  }
+
+  const scanned = studentId.trim();
+  const [student] = await db
+    .select()
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.localSisId, scanned),
+        eq(studentsTable.schoolId, act.schoolId),
+      ),
+    );
+
+  if (!student) {
+    await db.insert(onTimeRejectedScansTable).values({
+      schoolId: act.schoolId,
+      studentId: null,
+      scannedLocalSisId: scanned,
+      kioskActivationId: act.id,
+      staffId: act.staffId,
+      periodNumber: win.incomingPeriodNumber,
+      periodKey: win.periodKey,
+      day: win.dayKey,
+      reason: "unknown_student",
+    });
+    res.status(404).json({ status: "unknown", error: "Student not found" });
+    return;
+  }
+
+  // Roster gate: when the teacher HAS a roster for the incoming class, only
+  // its students earn credit. No section row → open fallback (shared rooms /
+  // schools that don't load class_sections).
+  if (sectionId !== null) {
+    const [rostered] = await db
+      .select({ id: sectionRosterTable.id })
+      .from(sectionRosterTable)
+      .where(
+        and(
+          eq(sectionRosterTable.schoolId, act.schoolId),
+          eq(sectionRosterTable.sectionId, sectionId),
+          eq(sectionRosterTable.studentId, student.studentId),
+        ),
+      );
+    if (!rostered) {
+      await db.insert(onTimeRejectedScansTable).values({
+        schoolId: act.schoolId,
+        studentId: student.studentId,
+        scannedLocalSisId: scanned,
+        kioskActivationId: act.id,
+        staffId: act.staffId,
+        periodNumber: win.incomingPeriodNumber,
+        periodKey: win.periodKey,
+        day: win.dayKey,
+        reason: "not_rostered",
+      });
+      res.status(200).json({
+        status: "rejected",
+        firstName: student.firstName,
+        message: "Wrong door — this isn't your class right now.",
+      });
+      return;
+    }
+  }
+
+  const points = computePoints(win, maxPoints);
+  const inserted = await db
+    .insert(attendanceCheckinsTable)
+    .values({
+      schoolId: act.schoolId,
+      studentId: student.studentId,
+      kioskActivationId: act.id,
+      staffId: act.staffId,
+      scheduleId: win.scheduleId,
+      periodNumber: win.incomingPeriodNumber ?? 0,
+      periodKey: win.periodKey as string,
+      day: win.dayKey,
+      kind: "checkin",
+      points,
+      minutesRemaining: win.phase === "passing" ? win.minutesRemaining : null,
+      postBell: win.phase === "post_bell",
+      source: typeof source === "string" ? source.slice(0, 16) : null,
+    })
+    .onConflictDoNothing()
+    .returning({ id: attendanceCheckinsTable.id });
+
+  let house: { id: number; name: string; color: string } | null = null;
+  if (student.houseId !== null && student.houseId !== undefined) {
+    const [h] = await db
+      .select({ id: housesTable.id, name: housesTable.name, color: housesTable.color })
+      .from(housesTable)
+      .where(
+        and(
+          eq(housesTable.id, student.houseId),
+          eq(housesTable.schoolId, act.schoolId),
+        ),
+      );
+    if (h) house = h;
+  }
+
+  res.status(inserted.length > 0 ? 201 : 200).json({
+    status: inserted.length > 0 ? "ok" : "already",
+    firstName: student.firstName,
+    lastName: student.lastName,
+    points,
+    postBell: win.phase === "post_bell",
+    house,
+  });
+});
+
+// POST /api/kiosk/attendance/done  { token }
+// Teacher taps the big Done button at the bell to close attendance for this
+// passing window and revert the kiosk to hall-pass mode early.
+router.post("/kiosk/attendance/done", async (req, res) => {
+  const ctx = await resolveAttendanceContext(req.body?.token);
+  if ("error" in ctx) {
+    res.status(ctx.error.status).json(ctx.error.body);
+    return;
+  }
+  const { act, win } = ctx;
+  // Server-authoritative "no End before bell": the teacher Done button only
+  // appears post-bell on the client, but a crafted request must not be able
+  // to close attendance early and shrink the on-time scoring window. Only
+  // honor Done once the bell has rung (phase === "post_bell").
+  if (win.phase !== "post_bell" || !win.periodKey) {
+    res.status(409).json({ error: "Attendance can only be ended after the bell." });
+    return;
+  }
+  await db
+    .update(kioskActivationsTable)
+    .set({ onTimeEndedKey: win.periodKey })
+    .where(eq(kioskActivationsTable.id, act.id));
+  res.json({ ok: true });
 });
 
 router.post("/kiosk/activate-by-enrollment", async (req, res) => {
@@ -2033,6 +2820,81 @@ router.post("/kiosk/my-active/revoke-all", requireStaff, async (req, res) => {
   res.json({ revoked: result.length });
 });
 
+// Owner-only reveal of the caller's OWN 6-digit kiosk PIN — the same code
+// printed on their badge. Surfaced in the Hall Pass gear ("Get kiosk URL"
+// tab) so a teacher who lost their badge can still activate a classroom
+// device. Scoped strictly to (req.staff.schoolId, req.staff.id): there is
+// no staffId parameter, so one teacher can never read another's PIN.
+// Response status distinguishes the three states so the UI can message
+// accurately (a legacy badge is NOT the same as having no badge):
+//   "ok"     — pin present, revealed.
+//   "legacy" — a live badge exists, but its PIN was stored one-way (bcrypt)
+//              before reversible encryption existed, OR can no longer be
+//              decrypted (e.g. SESSION_SECRET rotated). The printed badge
+//              STILL WORKS on the kiosk; it just can't be read back here.
+//              Admin must reprint to surface a fresh, revealable code.
+//   "none"   — the teacher has no live enrollment token at all.
+router.get("/kiosk/my-pin", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const [row] = await db
+    .select({ pinEncrypted: kioskEnrollTokensTable.pinEncrypted })
+    .from(kioskEnrollTokensTable)
+    .where(
+      and(
+        eq(kioskEnrollTokensTable.schoolId, staff.schoolId),
+        eq(kioskEnrollTokensTable.staffId, staff.id),
+        isNull(kioskEnrollTokensTable.revokedAt),
+      ),
+    );
+  if (!row) {
+    res.json({ pin: null, status: "none" });
+    return;
+  }
+  if (!row.pinEncrypted) {
+    res.json({ pin: null, status: "legacy" });
+    return;
+  }
+  try {
+    res.json({
+      pin: decryptSecret(row.pinEncrypted, KIOSK_PIN_PURPOSE),
+      status: "ok",
+    });
+  } catch (err) {
+    // A decrypt failure (e.g. SESSION_SECRET rotated since issuance) is not
+    // fatal — the badge still works on the kiosk. Treat it like a legacy
+    // row so the UI shows the reprint hint rather than erroring.
+    req.log.warn({ err, staffId: staff.id }, "kiosk my-pin decrypt failed");
+    res.json({ pin: null, status: "legacy" });
+  }
+});
+
+// Teacher self-service: rotate the caller's OWN enrollment token. Kills
+// the old code (any previously printed card / on-screen code stops
+// working for FUTURE activations) and mints a fresh one. Scoped strictly
+// to (req.staff.schoolId, req.staff.id) — there is no staffId parameter,
+// so a teacher can only ever rotate their own code. Works whether the
+// teacher has no token yet ("generate my first code"), a live token
+// ("rotate"), or a legacy badge ("replace with a readable code").
+// Returns the RAW token + RAW PIN ONCE so the client can render an
+// on-screen QR + PIN; never re-displayable after this response. Audit
+// row is tagged reason "self_regenerate" so admins keep full visibility.
+router.post("/kiosk/my-code/regenerate", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const issued = await issueEnrollToken({
+    schoolId: staff.schoolId,
+    staffId: staff.id,
+    actorStaffId: staff.id,
+    reason: "self_regenerate",
+  });
+  res.status(201).json({
+    enrollToken: issued.rawToken,
+    pin: issued.rawPin,
+    tokenId: issued.tokenId,
+  });
+});
+
 // ---- Admin: enrollment-token management ----------------------------
 
 // One row per active teacher with their enrollment-token status.
@@ -2182,13 +3044,17 @@ async function issueEnrollToken(args: {
   schoolId: number;
   staffId: number;
   actorStaffId: number;
-  reason: "regenerate" | "bulk_generate" | "card_print";
+  reason: "regenerate" | "bulk_generate" | "card_print" | "self_regenerate";
   bulkContext?: string;
 }): Promise<{ rawToken: string; rawPin: string; tokenId: number }> {
   const rawToken = generateEnrollToken();
   const tokenHash = hashToken(rawToken);
   const rawPin = generatePin();
   const pinHash = await bcryptHash(rawPin, 10);
+  // Reversibly-encrypted copy so the owning teacher can read this exact
+  // code back from the Hall Pass gear ("Get kiosk URL" tab). Owner-only
+  // reveal — see GET /kiosk/my-pin. Distinct purpose tag from parent TOTP.
+  const pinEncrypted = encryptSecret(rawPin, KIOSK_PIN_PURPOSE);
 
   const tokenId = await db.transaction(async (tx) => {
     await tx
@@ -2211,6 +3077,7 @@ async function issueEnrollToken(args: {
         staffId: args.staffId,
         tokenHash,
         pinHash,
+        pinEncrypted,
         createdByStaffId: args.actorStaffId,
         rotatedAt: new Date(),
       })
@@ -2534,6 +3401,343 @@ router.post("/kiosk/cards.pdf", requireAdmin, async (req, res) => {
   res.setHeader(
     "Content-Disposition",
     `attachment; filename="kiosk-cards-${new Date().toISOString().slice(0, 10)}.pdf"`,
+  );
+  res.send(pdf);
+});
+
+// ---- Admin: printable TEACHER ID BADGE PDF -------------------------
+// Lanyard-style staff ID badge that ALSO carries the live kiosk
+// activation payload (QR + Code 128 + 6-digit PIN), so one worn card
+// both identifies the teacher and activates their room kiosk. Shares
+// the per-school CardDesign + photo pipeline with student badges, and
+// the same enroll-token modes (presupplied / all / staffIds) as
+// /kiosk/cards.pdf above. POST so the mutating (rotation) modes can't
+// be triggered by a cross-site navigation.
+const teacherBadgeObjectStorage = new ObjectStorageService();
+
+// Fetch raw object bytes for embedding in the PDF. Returns null on any
+// failure (missing object, network glitch) — the renderer falls back
+// to the initials disc silently.
+async function fetchTeacherPhotoBytes(
+  objectPath: string,
+): Promise<Buffer | null> {
+  return teacherBadgeObjectStorage.readObjectAsBuffer(objectPath);
+}
+
+// Resolve the per-school card design once per batch (shared with the
+// student badge route). Image-mode top background is fetched a single
+// time; SVG is filtered out (pdfkit can't rasterize it).
+async function buildTeacherCardDesign(schoolId: number): Promise<CardDesign> {
+  const b = await loadBrandingForSchool(schoolId);
+  let bgImageBytes: Buffer | null = null;
+  if (b.cardBgMode === "image" && b.cardBgObjectPath) {
+    const MAX_BG_BYTES = 5 * 1024 * 1024;
+    const bytes = await fetchTeacherPhotoBytes(b.cardBgObjectPath);
+    if (bytes && bytes.length <= MAX_BG_BYTES) {
+      const head = bytes.slice(0, 16).toString("utf8").trimStart();
+      if (!head.startsWith("<")) bgImageBytes = bytes;
+    }
+  }
+  return {
+    orientation: b.cardOrientation,
+    bgMode: b.cardBgMode,
+    bgColors: b.cardBgColors.slice(0, 2),
+    bgAngle: b.cardBgAngle,
+    bgImageBytes,
+    headerTextMode: b.cardHeaderTextMode,
+    headerTextColor: b.cardHeaderTextColor,
+    showHouse: b.cardShowHouse,
+    houseBgMode: b.cardHouseBgMode,
+    houseBgColor: b.cardHouseBgColor,
+    houseTextMode: b.cardHouseTextMode,
+    houseTextColor: b.cardHouseTextColor,
+  };
+}
+
+router.post("/kiosk/teacher-badges.pdf", requireAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const actor = (req as Request & {
+    staff: typeof staffTable.$inferSelect;
+  }).staff;
+
+  const body = (req.body ?? {}) as {
+    all?: boolean;
+    staffIds?: number[];
+    presupplied?: Array<{
+      staffId?: unknown;
+      enrollToken?: unknown;
+      pin?: unknown;
+    }>;
+  };
+
+  // Mode 1: presupplied raw token/PIN values — validate shape + verify
+  // each maps to a LIVE row with a matching PIN (same gate as cards.pdf).
+  type Presupplied = { staffId: number; enrollToken: string; pin: string };
+  const presupplied: Presupplied[] = [];
+  if (Array.isArray(body.presupplied) && body.presupplied.length > 0) {
+    for (const raw of body.presupplied) {
+      if (
+        typeof raw.staffId !== "number" ||
+        !Number.isInteger(raw.staffId) ||
+        raw.staffId <= 0 ||
+        typeof raw.enrollToken !== "string" ||
+        raw.enrollToken.length === 0 ||
+        typeof raw.pin !== "string" ||
+        !/^\d{6}$/.test(raw.pin)
+      ) {
+        res.status(400).json({ error: "Invalid presupplied entry shape" });
+        return;
+      }
+      presupplied.push({
+        staffId: raw.staffId,
+        enrollToken: raw.enrollToken,
+        pin: raw.pin,
+      });
+    }
+    for (const p of presupplied) {
+      // eslint-disable-next-line no-await-in-loop
+      const [row] = await db
+        .select({
+          id: kioskEnrollTokensTable.id,
+          pinHash: kioskEnrollTokensTable.pinHash,
+        })
+        .from(kioskEnrollTokensTable)
+        .where(
+          and(
+            eq(kioskEnrollTokensTable.schoolId, schoolId),
+            eq(kioskEnrollTokensTable.staffId, p.staffId),
+            eq(kioskEnrollTokensTable.tokenHash, hashToken(p.enrollToken)),
+            isNull(kioskEnrollTokensTable.revokedAt),
+          ),
+        );
+      if (!row || !row.pinHash) {
+        res.status(409).json({
+          error:
+            "One of the supplied cards has been revoked or rotated. Reissue and try again.",
+        });
+        return;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      const pinOk = await bcryptCompare(p.pin, row.pinHash);
+      if (!pinOk) {
+        res.status(400).json({
+          error: "Supplied PIN does not match the live card for this teacher.",
+        });
+        return;
+      }
+    }
+  }
+
+  const all =
+    body.all === true || req.query.all === "1" || req.query.all === "true";
+  const bodyIds = Array.isArray(body.staffIds)
+    ? body.staffIds.filter((n): n is number => Number.isInteger(n) && n > 0)
+    : [];
+  const queryIdsRaw =
+    typeof req.query.staffIds === "string" ? req.query.staffIds : "";
+  const queryIds = queryIdsRaw
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  const staffIds = bodyIds.length ? bodyIds : queryIds;
+
+  if (presupplied.length === 0 && !all && staffIds.length === 0) {
+    res
+      .status(400)
+      .json({ error: "Provide presupplied=[...], staffIds=1,2,3, or all=1" });
+    return;
+  }
+
+  const filterStaffIds =
+    presupplied.length > 0 ? presupplied.map((p) => p.staffId) : staffIds;
+  const useAllFilter = presupplied.length === 0 && all;
+  const teachers = await db
+    .select()
+    .from(staffTable)
+    .where(
+      and(
+        eq(staffTable.schoolId, schoolId),
+        eq(staffTable.active, true),
+        ...(useAllFilter ? [] : [inArray(staffTable.id, filterStaffIds)]),
+      ),
+    )
+    .orderBy(asc(staffTable.displayName));
+
+  if (teachers.length === 0) {
+    res.status(404).json({ error: "No matching teachers" });
+    return;
+  }
+
+  const [school] = await db
+    .select({ name: schoolsTable.name })
+    .from(schoolsTable)
+    .where(eq(schoolsTable.id, schoolId));
+  const schoolName = school?.name ?? "PulseEDU";
+
+  // Per-teacher default room.
+  const teacherIds = teachers.map((t) => t.id);
+  const roomByStaffId = new Map<number, string | null>();
+  if (teacherIds.length) {
+    const defaults = await db
+      .select({
+        staffId: staffDefaultsTable.staffId,
+        defaultLocationName: staffDefaultsTable.defaultLocationName,
+      })
+      .from(staffDefaultsTable)
+      .where(inArray(staffDefaultsTable.staffId, teacherIds));
+    for (const d of defaults) {
+      if (d.staffId == null) continue;
+      roomByStaffId.set(d.staffId, d.defaultLocationName ?? null);
+    }
+  }
+
+  // Per-teacher house (color + name + icon + optional uploaded logo bytes).
+  const houseIds = Array.from(
+    new Set(
+      teachers
+        .map((t) => (t as { houseId: number | null }).houseId)
+        .filter((id): id is number => typeof id === "number"),
+    ),
+  );
+  const houseById = new Map<
+    number,
+    {
+      name: string;
+      color: string;
+      iconKey: string | null;
+      logoObjectPath: string | null;
+    }
+  >();
+  if (houseIds.length) {
+    const rows = await db
+      .select({
+        id: housesTable.id,
+        name: housesTable.name,
+        color: housesTable.color,
+        iconKey: housesTable.iconKey,
+        iconObjectKey: housesTable.iconObjectKey,
+      })
+      .from(housesTable)
+      .where(
+        and(
+          eq(housesTable.schoolId, schoolId),
+          inArray(housesTable.id, houseIds),
+        ),
+      );
+    for (const r of rows) {
+      // SVG house logos can't be rasterized by pdfkit — skip them so the
+      // renderer falls back to the colored letter emblem.
+      const logoPath =
+        r.iconObjectKey && !r.iconObjectKey.toLowerCase().endsWith(".svg")
+          ? r.iconObjectKey
+          : null;
+      houseById.set(r.id, {
+        name: r.name,
+        color: r.color,
+        iconKey: r.iconKey,
+        logoObjectPath: logoPath,
+      });
+    }
+  }
+
+  // Resolve the shared card design + house logo bytes once for the batch.
+  const design = await buildTeacherCardDesign(schoolId);
+  const houseLogoBytesByPath = new Map<string, Buffer | null>();
+  for (const h of houseById.values()) {
+    if (h.logoObjectPath && !houseLogoBytesByPath.has(h.logoObjectPath)) {
+      // eslint-disable-next-line no-await-in-loop
+      const bytes = await fetchTeacherPhotoBytes(h.logoObjectPath);
+      const MAX = 4 * 1024 * 1024;
+      let usable: Buffer | null = null;
+      if (bytes && bytes.length <= MAX) {
+        const head = bytes.slice(0, 16).toString("utf8").trimStart();
+        if (!head.startsWith("<")) usable = bytes;
+      }
+      houseLogoBytesByPath.set(h.logoObjectPath, usable);
+    }
+  }
+
+  // Fetch teacher photos with bounded concurrency (cap 6, max 4MB each).
+  const photoByStaffId = new Map<number, Buffer | null>();
+  const withPhotos = teachers.filter(
+    (t) => (t as { photoObjectKey: string | null }).photoObjectKey,
+  );
+  const CONCURRENCY = 6;
+  const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
+  for (let i = 0; i < withPhotos.length; i += CONCURRENCY) {
+    const slice = withPhotos.slice(i, i + CONCURRENCY);
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.all(
+      slice.map(async (t) => {
+        const key = (t as { photoObjectKey: string | null }).photoObjectKey;
+        if (!key) return;
+        const bytes = await fetchTeacherPhotoBytes(key);
+        photoByStaffId.set(
+          t.id,
+          bytes && bytes.length <= MAX_PHOTO_BYTES ? bytes : null,
+        );
+      }),
+    );
+  }
+
+  const baseUrl = kioskBaseUrl(req);
+  const bulkContext = `teacher_badge:${randomBytes(6).toString("hex")}`;
+  const presuppliedByStaffId = new Map<number, Presupplied>();
+  for (const p of presupplied) presuppliedByStaffId.set(p.staffId, p);
+
+  const badges: TeacherBadgeInput[] = [];
+  for (const t of teachers) {
+    const pre = presuppliedByStaffId.get(t.id);
+    let rawToken: string;
+    let rawPin: string;
+    if (pre) {
+      rawToken = pre.enrollToken;
+      rawPin = pre.pin;
+    } else {
+      // eslint-disable-next-line no-await-in-loop
+      const issued = await issueEnrollToken({
+        schoolId,
+        staffId: t.id,
+        actorStaffId: actor.id,
+        reason: "card_print",
+        bulkContext,
+      });
+      rawToken = issued.rawToken;
+      rawPin = issued.rawPin;
+    }
+    const teacherHouseId = (t as { houseId: number | null }).houseId;
+    const house =
+      teacherHouseId !== null && teacherHouseId !== undefined
+        ? houseById.get(teacherHouseId) ?? null
+        : null;
+    badges.push({
+      teacherName: t.displayName,
+      room: roomByStaffId.get(t.id) ?? null,
+      schoolName,
+      enrollToken: rawToken,
+      pin: rawPin,
+      baseUrl,
+      house: house
+        ? {
+            name: house.name,
+            color: house.color,
+            iconKey: house.iconKey,
+            logoBytes: house.logoObjectPath
+              ? houseLogoBytesByPath.get(house.logoObjectPath) ?? null
+              : null,
+          }
+        : null,
+      photoBytes: photoByStaffId.get(t.id) ?? null,
+      design,
+    });
+  }
+
+  const pdf = await renderTeacherBadgesPdf(badges);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="teacher-id-badges-${new Date().toISOString().slice(0, 10)}.pdf"`,
   );
   res.send(pdf);
 });

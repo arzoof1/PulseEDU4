@@ -15,6 +15,7 @@ import { authFetch } from "../lib/authToken";
 interface BenchmarkRow {
   code: string;
   category: string | null;
+  description?: string | null;
   attempts: number;
   earned: number;
   possible: number;
@@ -68,30 +69,46 @@ function Sparkline({
   thresholdPct,
   width = 64,
   height = 18,
+  activeWindow,
+  activeSchoolYear,
 }: {
   points: HistoryPoint[];
   thresholdPct: number;
   width?: number;
   height?: number;
+  // The currently-selected testing window ("pm1"/"pm2"/"pm3") and school
+  // year. The dot for THIS window+year is emphasized so the big dot
+  // tracks the window toggle (not always PM3). When no point matches
+  // (the selected window has no data for this benchmark), every dot
+  // renders at the smaller size.
+  activeWindow?: string | null;
+  activeSchoolYear?: string | null;
 }): ReactElement | null {
   if (points.length < 2) return null;
-  const padX = 2;
-  const padY = 2;
-  const innerW = width - padX * 2;
-  const innerH = height - padY * 2;
+  // Dot radii: the dot for the selected window is emphasized; all other
+  // windows (+ any cross-year history) get a smaller-but-clearly-visible
+  // dot. The plot padding is reserved to the LARGEST dot radius so no dot
+  // ever clips on any edge of the fixed-size cell (cell height stays put).
+  const emphasizedIdx = points.findIndex(
+    (p) =>
+      p.window === activeWindow &&
+      (activeSchoolYear == null || p.schoolYear === activeSchoolYear),
+  );
+  const endR = 6;
+  const midR = 4;
+  const pad = endR;
+  const innerW = width - pad * 2;
+  const innerH = height - pad * 2;
   const xs = points.map((_, i) =>
     points.length === 1
-      ? padX + innerW / 2
-      : padX + (i / (points.length - 1)) * innerW,
+      ? pad + innerW / 2
+      : pad + (i / (points.length - 1)) * innerW,
   );
   const ys = points.map(
-    (p) => padY + innerH * (1 - Math.max(0, Math.min(100, p.pct)) / 100),
+    (p) => pad + innerH * (1 - Math.max(0, Math.min(100, p.pct)) / 100),
   );
   const path = xs.map((x, i) => `${i === 0 ? "M" : "L"}${x},${ys[i]}`).join(" ");
-  const lastIdx = points.length - 1;
-  const lastPct = points[lastIdx].pct;
-  const endColor = cellColor(lastPct, thresholdPct).fg;
-  const thresholdY = padY + innerH * (1 - thresholdPct / 100);
+  const thresholdY = pad + innerH * (1 - thresholdPct / 100);
   const label = points
     .map((p) => `${p.schoolYear} ${p.window.toUpperCase()}: ${p.pct}%`)
     .join(" → ");
@@ -99,8 +116,8 @@ function Sparkline({
     <svg width={width} height={height} role="img" aria-label={label}>
       <title>{label}</title>
       <line
-        x1={padX}
-        x2={padX + innerW}
+        x1={pad}
+        x2={pad + innerW}
         y1={thresholdY}
         y2={thresholdY}
         stroke="#d1d5db"
@@ -108,7 +125,17 @@ function Sparkline({
         strokeWidth={0.5}
       />
       <path d={path} stroke="#475569" strokeWidth={1} fill="none" />
-      <circle cx={xs[lastIdx]} cy={ys[lastIdx]} r={1.8} fill={endColor} />
+      {points.map((p, i) => (
+        <circle
+          key={`${p.schoolYear}-${p.window}-${i}`}
+          cx={xs[i]}
+          cy={ys[i]}
+          r={i === emphasizedIdx ? endR : midR}
+          fill={cellColor(p.pct, thresholdPct).fg}
+          stroke="#ffffff"
+          strokeWidth={1}
+        />
+      ))}
     </svg>
   );
 }
@@ -400,7 +427,7 @@ function SubjectColumn({
                               overflow: "hidden",
                               textOverflow: "ellipsis",
                             }}
-                            title={`${r.code}${r.category ? ` — ${r.category}` : ""}`}
+                            title={`${r.code}${r.category ? ` — ${r.category}` : ""}${r.description ? `\n\n${r.description}` : ""}`}
                           >
                             {r.code}
                             {r.mtssTagged && (
@@ -478,6 +505,8 @@ function SubjectColumn({
                                 thresholdPct={data.thresholdPct}
                                 width={120}
                                 height={24}
+                                activeWindow={activeWindow}
+                                activeSchoolYear={schoolYear ?? data.schoolYear}
                               />
                             ) : (
                               <span

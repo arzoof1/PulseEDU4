@@ -16,6 +16,7 @@ import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 interface Link {
   id: number;
   studentId: string;
+  localSisId?: string | null;
   staffId: number;
   studentFirstName: string | null;
   studentLastName: string | null;
@@ -511,7 +512,7 @@ export default function TrustedAdultsAdmin({ canManage }: Props) {
                       </span>
                     )}
                     <div style={{ fontSize: "0.75rem", color: "#9ca3af" }}>
-                      {l.studentId}
+                      {l.localSisId ?? "—"}
                     </div>
                   </td>
                   <td style={{ padding: "0.5rem" }}>

@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import healthRouter from "./health";
 import studentsRouter from "./students";
 import hallPassesRouter from "./hallPasses";
+import coverageRouter from "./coverage";
 import tardiesRouter from "./tardies";
 import pbisRouter from "./pbis";
 import supportNotesRouter from "./supportNotes";
@@ -14,6 +15,7 @@ import locationsRouter from "./locations";
 import staffDefaultsRouter from "./staffDefaults";
 import locationAllowedDestinationsRouter from "./locationAllowedDestinations";
 import kioskRouter from "./kiosk";
+import onTimeAdminRouter from "./onTimeAdmin";
 import studentIdBadgesRouter from "./studentIdBadges";
 import authRouter from "./auth";
 import reportsRouter from "./reports";
@@ -45,6 +47,7 @@ import issRosterRouter from "./issRoster";
 import issAttendanceRouter from "./issAttendance";
 import tenancyRouter from "./tenancy";
 import storageRouter from "./storage";
+import esignRouter from "./esign";
 import classroomStoreRouter from "./classroomStore";
 import schoolStoreRouter from "./schoolStore";
 import mtssPlansRouter from "./mtssPlans";
@@ -102,6 +105,14 @@ import toursRouter from "./tours";
 import ticketingRouter from "./ticketing";
 import parentTicketsRouter from "./parentTickets";
 import schoolGradeRouter from "./schoolGrade";
+import parentMessagesRouter from "./parentMessages";
+import pulseDnaRouter from "./pulseDna";
+import standardsBookRouter from "./standardsBook";
+import pulseBrainLabRouter from "./pulseBrainLab";
+import pulseBrainLabDeliveryRouter from "./pulseBrainLabDelivery";
+import pulseBrainLabParentRouter from "./pulseBrainLabParent";
+import academicEvidenceRouter from "./academicEvidence";
+import academicEvidenceParentRouter from "./academicEvidenceParent";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -117,6 +128,7 @@ router.use(healthRouter);
 router.use(studentIdBadgesRouter);
 router.use(studentsRouter);
 router.use(hallPassesRouter);
+router.use(coverageRouter);
 router.use(tardiesRouter);
 router.use(pbisRouter);
 router.use(supportNotesRouter);
@@ -129,6 +141,7 @@ router.use(locationsRouter);
 router.use(staffDefaultsRouter);
 router.use(locationAllowedDestinationsRouter);
 router.use(kioskRouter);
+router.use(onTimeAdminRouter);
 router.use(authRouter);
 router.use(reportsRouter);
 router.use(listsAdminRouter);
@@ -195,6 +208,16 @@ router.use(
   requireFeatureForParent("parentPortal"),
 );
 
+// Family Messages — Core-Team → parent broadcast. Staff compose/monitor
+// surface gated on the school's `familyComm` license; the parent-facing inbox
+// + acknowledge surface gated on the same license resolved from the parent's
+// school. Mounted ahead of parentMessagesRouter so the gate fires first.
+router.use("/family-messages", requireFeature("familyComm"));
+router.use("/parent/messages", requireFeatureForParent("familyComm"));
+// PulseDNA studio (communication profile + AI drafting) lives under the same
+// Family Communication license. Core-Team gate is enforced inside the router.
+router.use("/pulse-dna", requireFeature("familyComm"));
+
 router.use(parentEmailRouter);
 router.use(pulloutReasonsRouter);
 router.use(pulloutNoteTemplatesRouter);
@@ -209,6 +232,7 @@ router.use(issRosterRouter);
 router.use(issAttendanceRouter);
 router.use(tenancyRouter);
 router.use(storageRouter);
+router.use(esignRouter);
 router.use(classroomStoreRouter);
 router.use(schoolStoreRouter);
 router.use(mtssPlansRouter);
@@ -266,5 +290,13 @@ router.use(helpAssistantRouter);
 router.use(toursRouter);
 router.use(ticketingRouter);
 router.use(schoolGradeRouter);
+router.use(parentMessagesRouter);
+router.use(pulseDnaRouter);
+router.use(standardsBookRouter);
+router.use(pulseBrainLabRouter);
+router.use(pulseBrainLabDeliveryRouter);
+router.use(pulseBrainLabParentRouter);
+router.use(academicEvidenceRouter);
+router.use(academicEvidenceParentRouter);
 
 export default router;

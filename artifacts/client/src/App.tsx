@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
 } from "react";
 import Login from "./Login";
 import {
@@ -17,6 +18,8 @@ import {
   HelpToggleButton,
 } from "./components/HowToUseHelp";
 import AdminHubPage from "./components/AdminHubPage";
+import FamilyMessagesHub from "./components/FamilyMessagesHub";
+import PulseDnaStudio from "./components/PulseDnaStudio";
 import HelpAssistant from "./components/HelpAssistant";
 import { TileHome, type Tile as TileHomeTile } from "./pages/TileHome";
 import StaffAstPage from "./components/ast/StaffAstPage";
@@ -37,6 +40,7 @@ import PickupSettingsPage from "./components/PickupSettingsPage";
 import TourAdminPage, { TourLeadBanner } from "./components/TourAdminPage";
 import TicketingAdminPage from "./components/TicketingAdminPage";
 import SchoolGradeCalculatorPage from "./components/SchoolGradeCalculatorPage";
+import EsignManagerPage from "./components/EsignManagerPage";
 import PickupTagsPanel from "./components/PickupTagsPanel";
 import FastCoveragePage from "./components/FastCoveragePage";
 import CameraRegistryPage from "./components/CameraRegistryPage";
@@ -49,7 +53,6 @@ import { StudentBadgesPanel } from "./components/StudentBadgesPanel";
 import { RollCallPanel } from "./components/RollCallPanel";
 import SpotlightPanel from "./components/SpotlightPanel";
 import SpotlightLaunchButton from "./components/SpotlightLaunchButton";
-import LogTardyModal from "./components/LogTardyModal";
 import CheckInOutModal from "./components/CheckInOutModal";
 import LogInterventionLauncher from "./components/LogInterventionLauncher";
 import InterventionsBell from "./components/InterventionsBell";
@@ -62,7 +65,8 @@ import AuditHealthPanel from "./components/districtOverview/AuditHealthPanel";
 import CrossDistrictReports from "./components/districtOverview/CrossDistrictReports";
 import BulkOverridesPanel from "./components/districtOverview/BulkOverridesPanel";
 import {
-  initFeatures,
+  clearFeatures,
+  refreshFeatures,
   useFeatureVisible,
   LockedBadge,
   FeatureGate,
@@ -99,6 +103,8 @@ import PbisPointsHub, {
   SchoolWidePbisAdminView,
   SchoolStoreView,
 } from "./components/PbisPointsHub";
+import PulseBrainLabHub from "./components/pulseBrainLab/PulseBrainLabHub";
+import PartneringWithParentsHub from "./components/academicEvidence/PartneringWithParentsHub";
 import TenancyPanel from "./components/TenancyPanel";
 import LogoGeneratorPage from "./components/LogoGeneratorPage";
 import SchoolPlansAdminPage from "./components/SchoolPlansAdminPage";
@@ -106,6 +112,7 @@ import ParentAccess from "./components/ParentAccess";
 import StaffPreviewPage from "./components/StaffPreviewPage";
 import HeartbeatSectionsAdmin from "./components/HeartbeatSectionsAdmin";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
+import TeacherDestinationPicker from "./components/TeacherDestinationPicker";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
 import LocationsAdmin from "./components/LocationsAdmin";
 import RestroomAccessAdmin from "./components/RestroomAccessAdmin";
@@ -198,6 +205,8 @@ interface HallPass {
   maxDurationMinutes: number;
   createdAt: string;
   endedAt: string | null;
+  arrivedAt?: string | null;
+  endedBy?: string | null;
   isTardyReturn?: boolean;
 }
 
@@ -209,6 +218,7 @@ const teachers = ["Ms. Rivera", "Mr. Johnson", "Coach Lee"];
 interface Tardy {
   id: number;
   studentId: string;
+  localSisId: string | null;
   teacherName: string;
   period: string;
   reason: string;
@@ -217,11 +227,28 @@ interface Tardy {
   notes: string;
   createdBy: string | null;
   createdAt: string;
+  // Lost-instruction minutes (server-computed: check-in time − scheduled
+  // period start). Only 'tardy' rows carry a value; null = not computable
+  // (no bell time for the period, or non-tardy entry type).
+  lostMinutes?: number | null;
+}
+
+// YYYY-MM-DD bounds of the current school year. Aug 1 cutover, matching
+// the parent HeartBEAT (`schoolYearBounds` on the server) so the staff
+// tardy totals and the parent portal agree on the window. `end` is
+// exclusive (next Aug 1) so future-dated rows don't leak into the total.
+function schoolYearBoundsIso(now: Date = new Date()): {
+  start: string;
+  end: string;
+} {
+  const y = now.getMonth() >= 7 ? now.getFullYear() : now.getFullYear() - 1;
+  return { start: `${y}-08-01`, end: `${y + 1}-08-01` };
 }
 
 interface PbisEntry {
   id: number;
   studentId: string;
+  localSisId: string | null;
   reason: string;
   points: number;
   staffId: number | null;
@@ -437,7 +464,8 @@ function RequestPulloutSection({
           (s) =>
             s.firstName.toLowerCase().includes(q) ||
             s.lastName.toLowerCase().includes(q) ||
-            s.studentId.toLowerCase().includes(q),
+            s.studentId.toLowerCase().includes(q) ||
+            (s.localSisId?.toLowerCase().includes(q) ?? false),
         )
       : students;
     // Admins/SuperUsers see all matches; non-admins keep the original 50-cap
@@ -591,10 +619,17 @@ function RequestPulloutSection({
             onChange={(e) => {
               const v = e.target.value;
               setStudentSearch(v);
+              const typed = v.trim();
               const match = sortedStudents.find(
                 (s) =>
-                  `${s.firstName} ${s.lastName} (${s.studentId})` === v ||
-                  s.studentId === v.trim(),
+                  // Must mirror the <option> value rendered below — it
+                  // uses localSisId, so matching on studentId here never
+                  // fired and the form's studentId stayed empty (submit
+                  // button permanently disabled).
+                  `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})` ===
+                    v ||
+                  s.studentId === typed ||
+                  (s.localSisId != null && s.localSisId === typed),
               );
               setStudentId(match ? match.studentId : "");
             }}
@@ -1285,8 +1320,10 @@ function VerifyPulloutsSection({
                   setCalledInStudentSearch(v);
                   const match = sortedStudentsForCalledIn.find(
                     (s) =>
-                      `${s.firstName} ${s.lastName} (${s.studentId})` ===
-                        v || s.studentId === v.trim(),
+                      `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})` ===
+                        v ||
+                      s.studentId === v.trim() ||
+                      (s.localSisId ?? "") === v.trim(),
                   );
                   setCalledInStudentId(match ? match.studentId : "");
                 }}
@@ -2470,8 +2507,10 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                     setAddStudentSearch(v);
                     const m = sortedStudents.find(
                       (s) =>
-                        `${s.firstName} ${s.lastName} (${s.studentId})` ===
-                          v || s.studentId === v.trim(),
+                        `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})` ===
+                          v ||
+                        s.studentId === v.trim() ||
+                        (s.localSisId ?? "") === v.trim(),
                     );
                     setAddStudentId(m ? m.studentId : "");
                   }}
@@ -3656,10 +3695,12 @@ function PolarityStudentPicker({
                 }}
                 onClick={() => {
                   setSelected(s.studentId);
-                  setSearch(`${s.firstName} ${s.lastName} (${s.studentId})`);
+                  setSearch(
+                    `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`,
+                  );
                 }}
               >
-                {s.firstName} {s.lastName} ({s.studentId})
+                {s.firstName} {s.lastName} ({s.localSisId ?? "—"})
               </button>
             </li>
           ))}
@@ -3686,7 +3727,7 @@ function StudentCombobox({
 }) {
   const selected = students.find((s) => s.studentId === value);
   const labelOf = (s: Student) =>
-    `${s.firstName} ${s.lastName} (${s.studentId})`;
+    `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`;
   const [query, setQuery] = useState(selected ? labelOf(selected) : "");
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(0);
@@ -3835,7 +3876,7 @@ function StudentCombobox({
                 {s.firstName} {s.lastName}
               </strong>{" "}
               <span style={{ color: "#64748b" }}>
-                · {s.studentId} · Gr {s.grade}
+                · {s.localSisId ?? "—"} · Gr {s.grade}
               </span>
             </li>
           ))}
@@ -4108,7 +4149,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "behaviorReview",
   ],
   specialPrograms: ["accommodations", "ese"],
-  family: ["student", "parentAccess"],
+  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess"],
   people: ["teacherRoster", "staffRoles"],
   // hallPassMgmt is reached via the Hall Passes admin tools; it has no
   // dedicated nav item so we anchor it to School Admin so the sidebar
@@ -4327,6 +4368,7 @@ function PlaceholderCard({
   );
 }
 
+
 // Per-category accommodation chip with fixed-position popover (mirrors
 // TeacherRosterPage ProgramPill) so the panel anchors under the chip, not
 // the student name column.
@@ -4442,6 +4484,325 @@ function ClassViewAccChip({
   );
 }
 
+// ---------------------------------------------------------------------------
+// On-Time Attendance / Tardy Lottery TEST MODE panel (admin / Core Team only).
+//
+// Renders inside the "On-Time Attendance & Lottery" settings card. Lets staff
+// demo the time-gated feature without waiting for a real passing period or the
+// afternoon lottery reveal. Two tools:
+//   * Demo clock — set a simulated time; it advances in real time and the real
+//     bell-schedule + lottery math run against it.
+//   * Test loop — a synthetic passing→bell cycle on a short timer (no bell
+//     schedule needed), plus "Run lottery draw now".
+// All state is server-side (per school) and managed via dedicated admin
+// endpoints, so it is isolated from the normal School Settings save flow.
+// ---------------------------------------------------------------------------
+interface OnTimeTestStatus {
+  attendanceEnabled: boolean;
+  lotteryEnabled: boolean;
+  realNow: string;
+  simEnabled: boolean;
+  simNow: string | null;
+  testLoop: boolean;
+  loop: { phase: string; minutesRemaining: number; cycleSeconds: number } | null;
+  loopConfig: { passingSeconds: number; postBellSeconds: number };
+}
+
+function OnTimeTestingPanel() {
+  const [status, setStatus] = useState<OnTimeTestStatus | null>(null);
+  const [busy, setBusy] = useState<string>("");
+  const [timeInput, setTimeInput] = useState<string>("07:45");
+  const [note, setNote] = useState<string>("");
+  const [error, setError] = useState<string>("");
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const res = await authFetch("/api/on-time/test/status");
+      if (!res.ok) {
+        if (res.status === 403 || res.status === 401) return;
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as OnTimeTestStatus;
+      setStatus(data);
+    } catch {
+      // Transient; the next poll retries.
+    }
+  }, []);
+
+  // Poll while the panel is mounted so the live "simulated now" + loop
+  // countdown tick. Only mounted on the settings card for Core Team, so this
+  // doesn't run app-wide.
+  useEffect(() => {
+    void loadStatus();
+    const id = window.setInterval(() => void loadStatus(), 4000);
+    return () => window.clearInterval(id);
+  }, [loadStatus]);
+
+  const post = useCallback(
+    async (action: string, url: string, body?: unknown): Promise<unknown> => {
+      setBusy(action);
+      setError("");
+      setNote("");
+      try {
+        const res = await authFetch(url, {
+          method: "POST",
+          headers: body ? { "Content-Type": "application/json" } : undefined,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const text = await res.text();
+        const data = text ? JSON.parse(text) : {};
+        if (!res.ok) {
+          throw new Error(
+            (data && (data.error as string)) || `HTTP ${res.status}`,
+          );
+        }
+        await loadStatus();
+        return data;
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Request failed");
+        return null;
+      } finally {
+        setBusy("");
+      }
+    },
+    [loadStatus],
+  );
+
+  const labelStyle: CSSProperties = {
+    fontSize: "0.85rem",
+    color: "var(--text-subtle, #64748b)",
+  };
+
+  return (
+    <div
+      style={{
+        marginTop: "1.25rem",
+        padding: "1rem",
+        border: "1px dashed #f59e0b",
+        borderRadius: "0.5rem",
+        background: "rgba(245, 158, 11, 0.06)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "0.5rem",
+          fontWeight: 700,
+        }}
+      >
+        <span
+          style={{
+            fontSize: "0.7rem",
+            fontWeight: 700,
+            color: "#92400e",
+            background: "#fde68a",
+            borderRadius: "0.25rem",
+            padding: "0.1rem 0.4rem",
+            textTransform: "uppercase",
+            letterSpacing: "0.04em",
+          }}
+        >
+          Testing
+        </span>
+        <span>Demo &amp; time-travel tools</span>
+      </div>
+      <p style={{ ...labelStyle, marginTop: "0.4rem" }}>
+        Admin / Core Team only. Try On-Time Attendance and the Tardy Lottery
+        without waiting for a real passing period or the afternoon reveal. These
+        tools only affect this school&apos;s demo timing — turn them off when you
+        are done.
+      </p>
+
+      {/* Live status readout */}
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "1rem",
+          margin: "0.5rem 0 0.75rem",
+          fontSize: "0.85rem",
+        }}
+      >
+        <span>
+          Real time: <strong>{status?.realNow ?? "—"}</strong>
+        </span>
+        <span>
+          Simulated now:{" "}
+          <strong>{status?.simEnabled ? status?.simNow : "off"}</strong>
+        </span>
+        <span>
+          Test loop:{" "}
+          <strong>
+            {status?.testLoop
+              ? `on (${status.loop?.phase ?? "—"})`
+              : "off"}
+          </strong>
+        </span>
+      </div>
+
+      {/* Demo clock */}
+      <div style={{ marginBottom: "0.85rem" }}>
+        <div style={{ fontWeight: 600, marginBottom: "0.3rem" }}>Demo clock</div>
+        <div style={labelStyle}>
+          Set a simulated time of day. It advances in real time from there, and
+          the real bell schedule + lottery run against it.
+        </div>
+        <div
+          style={{
+            display: "flex",
+            gap: "0.5rem",
+            alignItems: "center",
+            marginTop: "0.4rem",
+            flexWrap: "wrap",
+          }}
+        >
+          <input
+            type="time"
+            value={timeInput}
+            onChange={(e) => setTimeInput(e.target.value)}
+            style={{ width: "8rem" }}
+          />
+          <button
+            type="button"
+            disabled={busy !== ""}
+            onClick={() =>
+              void post("set-clock", "/api/on-time/test/sim-clock", {
+                time: timeInput,
+              })
+            }
+          >
+            {busy === "set-clock" ? "Setting…" : "Set demo clock"}
+          </button>
+          <button
+            type="button"
+            disabled={busy !== "" || !status?.simEnabled}
+            onClick={() =>
+              void post("clear-clock", "/api/on-time/test/sim-clock/clear")
+            }
+          >
+            {busy === "clear-clock" ? "Clearing…" : "Use real time"}
+          </button>
+        </div>
+      </div>
+
+      {/* Test loop */}
+      <div style={{ marginBottom: "0.85rem" }}>
+        <div style={{ fontWeight: 600, marginBottom: "0.3rem" }}>Test loop</div>
+        <div style={labelStyle}>
+          Forces an activated kiosk into a repeating passing→bell cycle (
+          {Math.round((status?.loopConfig.passingSeconds ?? 150) / 60)}–
+          {Math.round((status?.loopConfig.postBellSeconds ?? 90) / 60)} min)
+          so you can watch it flip and scan students on demand — no bell
+          schedule required. Every scanned student earns credit during the loop.
+        </div>
+        <div
+          style={{
+            display: "flex",
+            gap: "0.5rem",
+            alignItems: "center",
+            marginTop: "0.4rem",
+          }}
+        >
+          <button
+            type="button"
+            disabled={busy !== ""}
+            onClick={() =>
+              void post("toggle-loop", "/api/on-time/test/loop", {
+                enabled: !status?.testLoop,
+              })
+            }
+          >
+            {busy === "toggle-loop"
+              ? "Saving…"
+              : status?.testLoop
+                ? "Stop test loop"
+                : "Start test loop"}
+          </button>
+        </div>
+      </div>
+
+      {/* Run lottery now */}
+      <div>
+        <div style={{ fontWeight: 600, marginBottom: "0.3rem" }}>
+          Tardy Lottery
+        </div>
+        <div style={labelStyle}>
+          Draw the lottery right now using today&apos;s check-ins, ignoring the
+          reveal time. Re-running clears the prior draw so you can demo it again.
+        </div>
+        <div style={{ marginTop: "0.4rem" }}>
+          <button
+            type="button"
+            disabled={busy !== "" || !status?.lotteryEnabled}
+            onClick={() => {
+              void post(
+                "run-lottery",
+                "/api/on-time/lottery/run-now",
+              ).then((data) => {
+                const d = data as {
+                  status?: string;
+                  teacherName?: string;
+                  winnerCount?: number;
+                  reason?: string;
+                } | null;
+                if (!d) return;
+                if (d.status === "revealed") {
+                  setNote(
+                    `Lottery drawn: ${d.teacherName ?? "a class"} — ${
+                      d.winnerCount ?? 0
+                    } student(s) rewarded.`,
+                  );
+                } else if (d.status === "skipped") {
+                  setNote("No eligible class ran attendance today yet.");
+                } else if (d.reason === "disabled") {
+                  setNote("Lottery is turned off for this school.");
+                } else {
+                  setNote(`Lottery result: ${d.status ?? "done"}.`);
+                }
+              });
+            }}
+          >
+            {busy === "run-lottery" ? "Drawing…" : "Run lottery draw now"}
+          </button>
+          {!status?.lotteryEnabled && (
+            <span style={{ ...labelStyle, marginLeft: "0.5rem" }}>
+              Enable the lottery above to use this.
+            </span>
+          )}
+        </div>
+      </div>
+
+      {note && (
+        <p style={{ color: "#15803d", marginTop: "0.6rem", fontSize: "0.85rem" }}>
+          {note}
+        </p>
+      )}
+      {error && (
+        <p style={{ color: "#b91c1c", marginTop: "0.6rem", fontSize: "0.85rem" }}>
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// Consistent "← Back to Insights Hub" bar rendered above each Insights
+// domain dashboard so a user who opens the wrong tile always has a way back
+// in the same place (these dashboards otherwise have no back control, leaving
+// the sidebar as the only escape).
+function InsightsBackBar({ onBack }: { onBack: () => void }) {
+  return (
+    <button
+      type="button"
+      className="back-button-purple"
+      onClick={onBack}
+    >
+      ← Back to Insights Hub
+    </button>
+  );
+}
+
 function App() {
   // Apply per-school branding (header gradient, logo) to the document root
   // so any component reading var(--brand-header-bg) retints automatically.
@@ -4449,6 +4810,7 @@ function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
   const [createPassOpen, setCreatePassOpen] = useState(false);
+  const [destPickerOpen, setDestPickerOpen] = useState(false);
   // Forced-acknowledgement modal for keep-apart overrides. The server
   // returns a 409 with code KEEP_APART_CONFLICT when a teacher tries to
   // issue a pass for a student whose keep-apart partner is currently out.
@@ -4517,11 +4879,13 @@ function App() {
     isFrontOffice?: boolean;
     isSro?: boolean;
     isGuardian?: boolean;
+    isCoreTeam?: boolean;
     capStaffRoles?: boolean;
     capManageRoles?: boolean;
     capManageDisplays?: boolean;
     capManageDismissal?: boolean;
     capTourNotify?: boolean;
+    capManageEsign?: boolean;
     canApproveAst?: boolean;
     canApproveCompTime?: boolean;
     exemptStatus?: string | null;
@@ -4577,10 +4941,43 @@ function App() {
   const [changePwOk, setChangePwOk] = useState(false);
   const [dateFilter, setDateFilter] = useState<"today" | "all">("all");
   const [staffFilter, setStaffFilter] = useState<"all" | "mine">("all");
+  // "mine" is the combined "Mine & heading to me" view (passes I created OR
+  // passes routed to me); "all" is every active pass school-wide.
   const [passFilter, setPassFilter] = useState<"all" | "mine">("all");
+  // Destination location names the signed-in staff covers (their own room ∪
+  // admin-assigned receiving locations). Drives the "Heading to me" scope in
+  // Out Right Now — active non-restroom passes whose destination is in here.
+  const [coveredLocations, setCoveredLocations] = useState<string[]>([]);
+
+  // Ownership relationship helpers for the Out Right Now panel. Shared by the
+  // active-view filter/tint/button logic and the full-log filter so the two
+  // surfaces always agree on what "mine" vs "heading to me" means.
+  //   - passIsMine: I issued this pass (teacherName is the creator).
+  //   - passHeadingToMe: this pass is routed to me. Three match paths, any of
+  //     which is sufficient:
+  //       (a) the destination is a location I cover (room-based coverage);
+  //       (b) the destination string IS my displayName — schools commonly name
+  //           a teacher's destination location after the teacher (e.g.
+  //           "Amy Brown - Math G7"), and currentStaffUser is that displayName.
+  //           This is the common case: the primary Create Pass modal stores the
+  //           teacher-room as `destination` and leaves `destinationTeacher` null;
+  //       (c) destinationTeacher names me directly (legacy inline form +
+  //           tardy-return path, which do populate destinationTeacher).
+  //     The "(K)" suffix is the kiosk marker that can appear on a teacher label.
+  const passIsMine = (p: HallPass): boolean =>
+    p.teacherName === currentStaffUser ||
+    p.teacherName === `${currentStaffUser} (K)`;
+  const passHeadingToMe = (p: HallPass): boolean =>
+    coveredLocations.includes(p.destination) ||
+    p.destination === currentStaffUser ||
+    p.destination === `${currentStaffUser} (K)` ||
+    p.destinationTeacher === currentStaffUser ||
+    p.destinationTeacher === `${currentStaffUser} (K)`;
 
   // Hall pass top-level view: overview (current default) vs reports (admin/ESE).
-  const [hpView, setHpView] = useState<"overview" | "reports">("overview");
+  const [hpView, setHpView] = useState<"overview" | "reports" | "tardies">(
+    "overview",
+  );
   const [hpReportSection, setHpReportSection] = useState<"hub" | "overview" | "byDay" | "ytd" | "research">("hub");
   const [researchStart, setResearchStart] = useState<string>(() => {
     const d = new Date();
@@ -4616,11 +5013,13 @@ function App() {
     activePassCount: number;
     topStudentTakers: Array<{
       studentId: string;
+      localSisId: string | null;
       studentName: string;
       count: number;
     }>;
     topStudentLostMinutes: Array<{
       studentId: string;
+      localSisId: string | null;
       studentName: string;
       minutes: number;
     }>;
@@ -4653,6 +5052,8 @@ function App() {
     | "issDashboard"
     | "behaviorReview"
     | "behaviorSpecialist"
+    | "pulseBrainLab"
+    | "partneringWithParents"
     | "hallPassMgmt"
     | "mtssCoordinator"
     | "mtssTemplates"
@@ -4708,6 +5109,8 @@ function App() {
     | "compInsights"
     | "pickupTags"
     | "classComposer"
+    | "familyMessages"
+    | "pulseDnaStudio"
     | "tileHome"
   >("hallPasses");
   // Tile Home is a full-screen launcher that takes over the viewport.
@@ -4799,8 +5202,17 @@ function App() {
     globalDailyHallPassLimit: number | null;
     pbisQuietTeacherDays: number;
     pbisInvisibleStudentDays: number;
+    pbisInvisibleDaysTier1: number;
+    pbisInvisibleDaysTier2: number;
+    pbisInvisibleDaysTier3: number;
     pbisReasonImbalancePct: number;
     pbisColdPeriodMultiple: number;
+    onTimeAttendanceEnabled: boolean;
+    onTimeMaxPoints: number;
+    onTimeLotteryEnabled: boolean;
+    onTimeLotteryLabel: string;
+    onTimeLotteryBonusPoints: number;
+    onTimeLotteryRevealLeadMinutes: number;
     finderShowAbsentBanner: boolean;
     staffDirectoryShowCellPhone: boolean;
     manualRosterUploadEnabled: boolean;
@@ -4844,6 +5256,8 @@ function App() {
     superFeatureDataImports: boolean;
     superFeatureHouses: boolean;
     superFeatureParentPortal: boolean;
+    featureAcademicEvidence: boolean;
+    superFeatureAcademicEvidence: boolean;
   }>({
     schoolName: "",
     fromName: "",
@@ -4854,8 +5268,17 @@ function App() {
     globalDailyHallPassLimit: null,
     pbisQuietTeacherDays: 5,
     pbisInvisibleStudentDays: 10,
+    pbisInvisibleDaysTier1: 8,
+    pbisInvisibleDaysTier2: 5,
+    pbisInvisibleDaysTier3: 3,
     pbisReasonImbalancePct: 60,
     pbisColdPeriodMultiple: 5,
+    onTimeAttendanceEnabled: false,
+    onTimeMaxPoints: 4,
+    onTimeLotteryEnabled: false,
+    onTimeLotteryLabel: "On-Time Champions",
+    onTimeLotteryBonusPoints: 20,
+    onTimeLotteryRevealLeadMinutes: 30,
     finderShowAbsentBanner: false,
     staffDirectoryShowCellPhone: false,
     manualRosterUploadEnabled: false,
@@ -4896,6 +5319,8 @@ function App() {
     superFeatureDataImports: true,
     superFeatureHouses: true,
     superFeatureParentPortal: true,
+    featureAcademicEvidence: true,
+    superFeatureAcademicEvidence: true,
   });
   const [settingsStatus, setSettingsStatus] = useState<
     "idle" | "saving" | "saved" | "error"
@@ -5194,9 +5619,11 @@ function App() {
   type PolarityPair = {
     id: number;
     studentIdA: string;
+    studentLocalSisIdA: string | null;
     studentAFirstName: string | null;
     studentALastName: string | null;
     studentIdB: string;
+    studentLocalSisIdB: string | null;
     studentBFirstName: string | null;
     studentBLastName: string | null;
     note: string | null;
@@ -5214,6 +5641,7 @@ function App() {
   type StudentHallPassLimit = {
     id: number;
     studentId: string;
+    localSisId: string | null;
     dailyLimit: number;
     note: string | null;
     parentApproved: boolean;
@@ -5266,6 +5694,7 @@ function App() {
     accommodations: { id: number; name: string }[];
     students: {
       studentId: string;
+      localSisId: string | null;
       firstName: string;
       lastName: string;
       grade: number;
@@ -5313,6 +5742,7 @@ function App() {
     id: number;
     createdAt: string;
     studentId: string;
+    localSisId: string | null;
     studentName: string;
     reason: string;
     points: number;
@@ -5367,6 +5797,7 @@ function App() {
   type PbisMilestoneEmailRow = {
     id: number;
     studentId: string;
+    localSisId: string | null;
     milestonePoints: number;
     sentAt: string;
     emailTo: string | null;
@@ -5487,7 +5918,12 @@ function App() {
     period: string;
     from: string | null;
     until: string;
-    students: { studentId: string; total: number; count: number }[];
+    students: {
+      studentId: string;
+      localSisId: string | null;
+      total: number;
+      count: number;
+    }[];
     staff: { staffId: number; staffName: string; total: number; count: number }[];
   };
   const [leaderboardPeriod, setLeaderboardPeriod] =
@@ -6059,7 +6495,9 @@ function App() {
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 1000);
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
     return () => clearInterval(interval);
   }, []);
 
@@ -6190,6 +6628,17 @@ function App() {
       .catch((err) => console.error("Failed to load hall passes:", err));
   };
 
+  const loadMyCoverage = () => {
+    authFetch("/api/hall-passes/my-coverage")
+      .then((res) => (res.ok ? res.json() : { locations: [] }))
+      .then((data: { locations?: string[] }) =>
+        setCoveredLocations(
+          Array.isArray(data?.locations) ? data.locations : [],
+        ),
+      )
+      .catch((err) => console.error("Failed to load hall-pass coverage:", err));
+  };
+
   useEffect(() => {
     import("./lib/authToken").then(({ authFetch, setAuthToken }) => {
       import("./lib/csrf").then(({ setCsrfToken }) => {
@@ -6200,9 +6649,6 @@ function App() {
             if (user?.authToken) setAuthToken(user.authToken);
             if (user?.csrfToken) setCsrfToken(user.csrfToken);
             setAuthUser(user);
-            // Kick off feature-licensing fetch as soon as auth lands.
-            // Idempotent: no-op on repeated calls.
-            if (user) initFeatures();
           },
         )
         .catch(() => setAuthUser(null))
@@ -6210,6 +6656,21 @@ function App() {
       });
     });
   }, []);
+
+  // Load feature-licensing whenever the authenticated user changes.
+  // The mount effect above only covers an existing session at page
+  // load; a fresh sign-in via the Login form flows through here so
+  // feature-gated nav items and pages never get stuck closed (the
+  // gates fall closed until /api/me/features resolves). Force-refresh
+  // so a new login always pulls that user's current licensing, and
+  // clear on logout so the next user starts clean.
+  useEffect(() => {
+    if (authUser) {
+      void refreshFeatures(true);
+    } else {
+      clearFeatures();
+    }
+  }, [authUser?.id]);
 
   useEffect(() => {
     if (!authUser) return;
@@ -6309,12 +6770,28 @@ function App() {
     loadSchoolAccommodations();
 
     loadHallPasses();
+    loadMyCoverage();
 
     loadTardies();
     loadPbis();
     loadPbisReasons();
     loadSupportNotes();
     loadSchoolSettings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser?.id]);
+
+  // Poll hall passes so passes created on OTHER devices (especially door
+  // kiosks) show up in the staff app's active list + "Currently Active"
+  // count without a manual reload. Without this, loadHallPasses() only ran
+  // on mount and after the signed-in user's own create/end actions, so a
+  // kiosk-issued pass never moved the count here even though the server had
+  // already stored it as active. 15s matches the pullout-count pollers.
+  useEffect(() => {
+    if (!authUser) return;
+    const interval = setInterval(() => {
+      loadHallPasses();
+    }, 15000);
+    return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser?.id]);
 
@@ -6409,7 +6886,7 @@ function App() {
       !authUser.isAdmin &&
       !authUser.isSuperUser &&
       !authUser.isEseCoordinator &&
-      hpView !== "overview"
+      hpView === "reports"
     ) {
       setHpView("overview");
     }
@@ -6551,6 +7028,18 @@ function App() {
             typeof data.pbisInvisibleStudentDays === "number"
               ? data.pbisInvisibleStudentDays
               : 10,
+          pbisInvisibleDaysTier1:
+            typeof data.pbisInvisibleDaysTier1 === "number"
+              ? data.pbisInvisibleDaysTier1
+              : 8,
+          pbisInvisibleDaysTier2:
+            typeof data.pbisInvisibleDaysTier2 === "number"
+              ? data.pbisInvisibleDaysTier2
+              : 5,
+          pbisInvisibleDaysTier3:
+            typeof data.pbisInvisibleDaysTier3 === "number"
+              ? data.pbisInvisibleDaysTier3
+              : 3,
           pbisReasonImbalancePct:
             typeof data.pbisReasonImbalancePct === "number"
               ? data.pbisReasonImbalancePct
@@ -6559,6 +7048,31 @@ function App() {
             typeof data.pbisColdPeriodMultiple === "number"
               ? data.pbisColdPeriodMultiple
               : 5,
+          onTimeAttendanceEnabled:
+            typeof data.onTimeAttendanceEnabled === "boolean"
+              ? data.onTimeAttendanceEnabled
+              : false,
+          onTimeMaxPoints:
+            typeof data.onTimeMaxPoints === "number"
+              ? data.onTimeMaxPoints
+              : 4,
+          onTimeLotteryEnabled:
+            typeof data.onTimeLotteryEnabled === "boolean"
+              ? data.onTimeLotteryEnabled
+              : false,
+          onTimeLotteryLabel:
+            typeof data.onTimeLotteryLabel === "string" &&
+            data.onTimeLotteryLabel.trim()
+              ? data.onTimeLotteryLabel
+              : "On-Time Champions",
+          onTimeLotteryBonusPoints:
+            typeof data.onTimeLotteryBonusPoints === "number"
+              ? data.onTimeLotteryBonusPoints
+              : 20,
+          onTimeLotteryRevealLeadMinutes:
+            typeof data.onTimeLotteryRevealLeadMinutes === "number"
+              ? data.onTimeLotteryRevealLeadMinutes
+              : 30,
           finderShowAbsentBanner:
             typeof data.finderShowAbsentBanner === "boolean"
               ? data.finderShowAbsentBanner
@@ -6617,6 +7131,10 @@ function App() {
           superFeatureDataImports: boolOrTrue(data.superFeatureDataImports),
           superFeatureHouses: boolOrTrue(data.superFeatureHouses),
           superFeatureParentPortal: boolOrTrue(data.superFeatureParentPortal),
+          featureAcademicEvidence: boolOrTrue(data.featureAcademicEvidence),
+          superFeatureAcademicEvidence: boolOrTrue(
+            data.superFeatureAcademicEvidence,
+          ),
         }),
       )
       .catch((err) => console.error("Failed to load school settings:", err));
@@ -6662,6 +7180,18 @@ function App() {
           typeof data.pbisInvisibleStudentDays === "number"
             ? data.pbisInvisibleStudentDays
             : 10,
+        pbisInvisibleDaysTier1:
+          typeof data.pbisInvisibleDaysTier1 === "number"
+            ? data.pbisInvisibleDaysTier1
+            : 8,
+        pbisInvisibleDaysTier2:
+          typeof data.pbisInvisibleDaysTier2 === "number"
+            ? data.pbisInvisibleDaysTier2
+            : 5,
+        pbisInvisibleDaysTier3:
+          typeof data.pbisInvisibleDaysTier3 === "number"
+            ? data.pbisInvisibleDaysTier3
+            : 3,
         pbisReasonImbalancePct:
           typeof data.pbisReasonImbalancePct === "number"
             ? data.pbisReasonImbalancePct
@@ -6670,6 +7200,29 @@ function App() {
           typeof data.pbisColdPeriodMultiple === "number"
             ? data.pbisColdPeriodMultiple
             : 5,
+        onTimeAttendanceEnabled:
+          typeof data.onTimeAttendanceEnabled === "boolean"
+            ? data.onTimeAttendanceEnabled
+            : false,
+        onTimeMaxPoints:
+          typeof data.onTimeMaxPoints === "number" ? data.onTimeMaxPoints : 4,
+        onTimeLotteryEnabled:
+          typeof data.onTimeLotteryEnabled === "boolean"
+            ? data.onTimeLotteryEnabled
+            : false,
+        onTimeLotteryLabel:
+          typeof data.onTimeLotteryLabel === "string" &&
+          data.onTimeLotteryLabel.trim()
+            ? data.onTimeLotteryLabel
+            : "On-Time Champions",
+        onTimeLotteryBonusPoints:
+          typeof data.onTimeLotteryBonusPoints === "number"
+            ? data.onTimeLotteryBonusPoints
+            : 20,
+        onTimeLotteryRevealLeadMinutes:
+          typeof data.onTimeLotteryRevealLeadMinutes === "number"
+            ? data.onTimeLotteryRevealLeadMinutes
+            : 30,
         finderShowAbsentBanner:
           typeof data.finderShowAbsentBanner === "boolean"
             ? data.finderShowAbsentBanner
@@ -6724,6 +7277,10 @@ function App() {
         superFeatureDataImports: boolOrTrue(data.superFeatureDataImports),
         superFeatureHouses: boolOrTrue(data.superFeatureHouses),
         superFeatureParentPortal: boolOrTrue(data.superFeatureParentPortal),
+        featureAcademicEvidence: boolOrTrue(data.featureAcademicEvidence),
+        superFeatureAcademicEvidence: boolOrTrue(
+          data.superFeatureAcademicEvidence,
+        ),
       });
       setSettingsStatus("saved");
       setTimeout(() => setSettingsStatus("idle"), 2000);
@@ -7972,7 +8529,7 @@ function App() {
       if (myActives.length > 0) {
         const lines = myActives
           .slice(0, 5)
-          .map((p) => `• ${p.studentId} → ${p.destination}`)
+          .map((p) => `• ${studentName(p.studentId)} → ${p.destination}`)
           .join("\n");
         const more =
           myActives.length > 5
@@ -8027,7 +8584,7 @@ function App() {
       if (res.status === 409 && body?.code === "STUDENT_HAS_ACTIVE_PASS") {
         const ex = body.existingPass;
         const detail = ex
-          ? `${payload.studentId} is already out → ${ex.destination}` +
+          ? `${studentName(payload.studentId)} is already out → ${ex.destination}` +
             (ex.teacherName ? ` (issued by ${ex.teacherName})` : "")
           : body.error ?? "Student already has an active pass.";
         const ok = window.confirm(
@@ -8078,6 +8635,30 @@ function App() {
       loadHallPasses();
     } catch (err) {
       console.error("Failed to end hall pass:", err);
+    }
+  };
+
+  // Receive / check in an inbound one-way pass at its destination. Ends the
+  // pass while stamping arrivedAt + who received it (the signed-in staff).
+  // Idempotent server-side — a double-tap on an already-received pass is a
+  // friendly no-op that still refreshes the list.
+  const handleReceivePass = async (id: number) => {
+    try {
+      const res = await authFetch(`/api/hall-passes/${id}/end`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          endedBy: currentStaffUser,
+          arrived: true,
+        }),
+      });
+      if (!res.ok) {
+        console.error("Failed to check in hall pass:", await res.text());
+        return;
+      }
+      loadHallPasses();
+    } catch (err) {
+      console.error("Failed to check in hall pass:", err);
     }
   };
 
@@ -8203,7 +8784,10 @@ function App() {
 
   const studentName = (id: string): string => {
     const s = students.find((x) => x.studentId === id);
-    return s ? `${s.firstName} ${s.lastName}` : id;
+    // NEVER fall back to `id` — that is the FLEID (students.student_id) and
+    // must never render to a user. Show a neutral label when the roster cache
+    // misses; the row's localSisId line still shows the human-facing ID.
+    return s ? `${s.firstName} ${s.lastName}` : "Unknown student";
   };
 
   // SuperUser is a strict superset of Admin — anyone with the
@@ -8226,6 +8810,19 @@ function App() {
     isAdmin ||
     authUser?.isDistrictAdmin === true ||
     authUser?.isSuperUser === true;
+  // Core Team membership — mirrors isCoreTeam() in lib/coreTeam.ts: the
+  // role-derived members (Admin / District Admin / SuperUser / Behavior
+  // Specialist / MTSS Coordinator / School Psychologist) plus the explicit
+  // admin-assignable `isCoreTeam` flag from Settings → Staff & Roles. Drives
+  // the hall-pass "create a pass on behalf of another teacher" picker.
+  const isCoreTeamMember =
+    isAdmin ||
+    authUser?.isDistrictAdmin === true ||
+    authUser?.isSuperUser === true ||
+    authUser?.isBehaviorSpecialist === true ||
+    authUser?.isMtssCoordinator === true ||
+    authUser?.isSchoolPsychologist === true ||
+    authUser?.isCoreTeam === true;
   // Pickup-tag management gate — mirrors canManagePickup() in
   // lib/coreTeam.ts. Admin / Core Team (BS, MTSS, school psych,
   // district admin, super) / counselor (school OR guidance) /
@@ -8274,6 +8871,14 @@ function App() {
     authUser?.isGuidanceCounselor === true ||
     authUser?.capManageDismissal === true ||
     authUser?.canApproveAst === true;
+  // Document e-Sign gate — mirrors canManageEsign() in lib/coreTeam.ts
+  // (admin/SuperUser OR the assignable capManageEsign flag). Documents are
+  // private to the creator; drives the Settings tile.
+  const canManageEsign =
+    isAdmin ||
+    authUser?.isDistrictAdmin === true ||
+    authUser?.isSuperUser === true ||
+    authUser?.capManageEsign === true;
   // School Grade Calculator gate — mirrors canManageSchoolGrade() in
   // lib/coreTeam.ts (admin + Core Team only; this is an accountability
   // planning tool, not a classroom one).
@@ -8723,6 +9328,9 @@ function App() {
   // sidebar entries and hub tiles. Built off `schoolSettings` so it
   // updates instantly when an admin toggles something.
   const effectiveFeatures = {
+    AcademicEvidence:
+      schoolSettings.featureAcademicEvidence &&
+      schoolSettings.superFeatureAcademicEvidence,
     FamilyComm:
       schoolSettings.featureFamilyComm && schoolSettings.superFeatureFamilyComm,
     Pbis: schoolSettings.featurePbis && schoolSettings.superFeaturePbis,
@@ -8769,7 +9377,6 @@ function App() {
   };
   const allBaseNavSections: NavSection[] = [
     { key: "hallPasses", label: "Hall Passes", icon: IconDoor },
-    { key: "tardies", label: "Tardy Pass", icon: IconClock },
     { key: "student", label: "Family Communication", icon: IconUser },
     // Teacher Roster moved to Quick Access (rendered directly in the
     // sidebar above the accordions) — kept out of this list to avoid
@@ -8819,7 +9426,7 @@ function App() {
     !authUser?.isSuperUser &&
     !authUser?.isDistrictAdmin;
   const isFrontOfficeOnly = Boolean(authUser?.isFrontOffice);
-  const NON_EXEMPT_ALLOWED_KEYS = new Set(["hallPasses", "tardies", "comp"]);
+  const NON_EXEMPT_ALLOWED_KEYS = new Set(["hallPasses", "comp"]);
   const baseNavSections: NavSection[] = allBaseNavSections.filter((s) => {
     if (isNonExemptOnly && !NON_EXEMPT_ALLOWED_KEYS.has(s.key)) return false;
     if (isFrontOfficeOnly && s.key === "requestPullout") return false;
@@ -8838,6 +9445,19 @@ function App() {
   ];
   const behaviorSpecNavSections: NavSection[] = [
     { key: "behaviorSpecialist", label: "Behavior Specialist", icon: IconClipboard },
+  ];
+  const pulseBrainLabNavSections: NavSection[] = [
+    { key: "pulseBrainLab", label: "PulseBrainLab", icon: IconClipboard },
+  ];
+  // Partnering with Parents — academic work-sample sharing. Like the Teacher
+  // Roster, it is available to any active teaching staff (not Behavior-Spec
+  // only); cross-teacher access is gated server-side via isCoreTeam.
+  const partneringWithParentsNavSections: NavSection[] = [
+    {
+      key: "partneringWithParents",
+      label: "Partnering with Parents",
+      icon: IconUser,
+    },
   ];
   const mtssCoordNavSections: NavSection[] = [
     { key: "mtssCoordinator", label: "MTSS Coordinator", icon: IconClipboard },
@@ -9087,19 +9707,19 @@ function App() {
       emoji: "🚪",
       group: "quick",
     });
-    add(effectiveFeatures.TardyPass !== false, {
-      key: "tardies",
-      label: "Tardy Pass",
-      description: "Log late arrivals and print entry slips.",
-      emoji: "⏰",
-      group: "quick",
-    });
     add(!isNonExemptOnly, {
       key: "teacherRoster",
       label: "Teacher Roster",
       description: "Your class lists, FAST scores, and student quick actions.",
       emoji: "👥",
       group: "quick",
+    });
+    add(effectiveFeatures.AcademicEvidence && !isNonExemptOnly, {
+      key: "partneringWithParents",
+      label: "Partnering with Parents",
+      description: "Capture classwork samples and share them with families.",
+      emoji: "🤝",
+      group: "family",
     });
     add(effectiveFeatures.Pbis && !isNonExemptOnly, {
       key: "pbis",
@@ -9405,6 +10025,10 @@ function App() {
         <div
           role="status"
           style={{
+            // Span the full app-shell grid width (sidebar + main) so the
+            // bar is full-bleed across the top like the header — otherwise
+            // it gets trapped in the 240px sidebar column and wraps.
+            gridColumn: "1 / -1",
             // Sticky so the Exit button is always reachable even if the
             // user has scrolled or the page header tries to overlap.
             position: "sticky",
@@ -9417,13 +10041,13 @@ function App() {
             alignItems: "center",
             gap: 12,
             justifyContent: "space-between",
-            // No wrap: keep the button on the same row as the label so
-            // it can never get hidden under the header on narrow widths.
-            // The label gets ellipsis truncation via min-width:0 + the
-            // inner span's overflow rules below.
-            flexWrap: "nowrap",
-            fontSize: 12.5,
-            lineHeight: 1.4,
+            // Wrap so the teacher name is never truncated: on narrow
+            // widths the Exit button drops to its own line instead of
+            // squeezing the label into an ellipsis. Seeing exactly which
+            // teacher you're previewing as is the whole point of the bar.
+            flexWrap: "wrap",
+            fontSize: 13.5,
+            lineHeight: 1.45,
             borderBottom: "1px solid #f59e0b",
           }}
         >
@@ -9432,9 +10056,7 @@ function App() {
               display: "inline-flex",
               alignItems: "center",
               gap: 8,
-              minWidth: 0,
               flex: "1 1 auto",
-              overflow: "hidden",
             }}
           >
             <span
@@ -9448,15 +10070,11 @@ function App() {
                 flexShrink: 0,
               }}
             />
-            <span
-              style={{
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                minWidth: 0,
-              }}
-            >
-              Previewing as <strong>{authUser.displayName}</strong>
+            <span>
+              Previewing as{" "}
+              <strong style={{ fontSize: "1.1em" }}>
+                {authUser.displayName}
+              </strong>
               <span style={{ opacity: 0.7 }}>
                 {" "}— signed in as {authUser.impersonatorDisplayName}
               </span>
@@ -9873,11 +10491,6 @@ function App() {
               label: "Hall Passes",
               icon: IconDoor,
             })}
-            {renderNavItem({
-              key: "tardies",
-              label: "Tardy Pass",
-              icon: IconClock,
-            })}
             {/* Teacher Roster promoted to Quick Access — every teacher's
                 daily landing for their students. Always visible (no
                 feature flag); cross-teacher access still gated server-side. */}
@@ -9886,6 +10499,12 @@ function App() {
               label: "Teacher Roster",
               icon: IconUser,
             })}
+            {/* Partnering with Parents — academic work-sample sharing,
+                available to any active teaching staff (cross-teacher reach
+                gated server-side). */}
+            {effectiveFeatures.AcademicEvidence &&
+              !isNonExemptOnly &&
+              partneringWithParentsNavSections.map(renderNavItem)}
             {effectiveFeatures.RequestPullout &&
               renderNavItem({
                 key: "requestPullout",
@@ -10170,6 +10789,8 @@ function App() {
                     out of Behavior Support to avoid duplication. */}
                 {isBehaviorSpec &&
                   behaviorSpecNavSections.map(renderNavItem)}
+                {isBehaviorSpec &&
+                  pulseBrainLabNavSections.map(renderNavItem)}
                 {(isAdmin ||
                   Boolean(authUser?.isSuperUser) ||
                   Boolean(authUser?.isDistrictAdmin) ||
@@ -10254,6 +10875,20 @@ function App() {
                   renderNavItem({
                     key: "student",
                     label: "Family Communication",
+                    icon: IconUser,
+                  })}
+                {effectiveFeatures.FamilyComm &&
+                  isCoreTeamMember &&
+                  renderNavItem({
+                    key: "familyMessages",
+                    label: "Family Messages",
+                    icon: IconUser,
+                  })}
+                {effectiveFeatures.FamilyComm &&
+                  isCoreTeamMember &&
+                  renderNavItem({
+                    key: "pulseDnaStudio",
+                    label: "PulseDNA Studio",
                     icon: IconUser,
                   })}
                 {canManageSettings && (
@@ -10372,7 +11007,10 @@ function App() {
           Hall Pass Mgmt.
         </RoleSection>
       </HowToUseHelp>
-      {(authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && (
+      {(authUser?.isAdmin ||
+        authUser?.isSuperUser ||
+        authUser?.isEseCoordinator ||
+        isCoreTeamMember) && (
         <div className="card no-print" style={{ paddingTop: "0.75rem", paddingBottom: "0.75rem" }}>
           <button
             type="button"
@@ -10382,16 +11020,187 @@ function App() {
           >
             Create
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              setHpView("reports");
-              setHpReportSection("hub");
+          {(authUser?.isAdmin ||
+            authUser?.isSuperUser ||
+            authUser?.isEseCoordinator) && (
+            <button
+              type="button"
+              onClick={() => {
+                setHpView("reports");
+                setHpReportSection("hub");
+              }}
+              disabled={hpView === "reports"}
+              style={{ marginRight: "0.25rem" }}
+            >
+              Reports
+            </button>
+          )}
+          {isCoreTeamMember && (
+            <button
+              type="button"
+              onClick={() => setHpView("tardies")}
+              disabled={hpView === "tardies"}
+            >
+              Tardy History
+            </button>
+          )}
+        </div>
+      )}
+      {hpView === "tardies" && isCoreTeamMember && (
+        <div className="card">
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+              gap: "0.5rem",
+              marginBottom: "0.25rem",
             }}
-            disabled={hpView === "reports"}
           >
-            Reports
-          </button>
+            <h2 style={{ margin: 0 }}>Tardy / Check-In History</h2>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <select
+                value={dateFilter}
+                onChange={(e) =>
+                  setDateFilter(e.target.value as "today" | "all")
+                }
+              >
+                <option value="today">Today</option>
+                <option value="all">All dates</option>
+              </select>
+              <select
+                value={staffFilter}
+                onChange={(e) =>
+                  setStaffFilter(e.target.value as "all" | "mine")
+                }
+              >
+                <option value="all">All staff</option>
+                <option value="mine">Mine</option>
+              </select>
+            </div>
+          </div>
+          <p
+            style={{
+              marginTop: 0,
+              color: "var(--text-subtle)",
+              fontSize: "0.85rem",
+            }}
+          >
+            Read-only. To log a tardy, use “+ Create Pass” and check “Log as
+            tardy” — the student is logged and sent back to their
+            current-period teacher.
+          </p>
+          {(() => {
+            const { start: syStart, end: syEnd } = schoolYearBoundsIso();
+            const syTardies = tardies.filter(
+              (t) =>
+                t.entryType === "tardy" &&
+                t.createdAt >= syStart &&
+                t.createdAt < syEnd,
+            );
+            const totalTardies = syTardies.length;
+            let totalLost = 0;
+            let uncomputable = 0;
+            for (const t of syTardies) {
+              if (typeof t.lostMinutes === "number") totalLost += t.lostMinutes;
+              else uncomputable++;
+            }
+            return (
+              <>
+                <div className="stat-grid" style={{ marginBottom: "0.5rem" }}>
+                  <div className="stat-card">
+                    <span className="stat-label">Total Tardies (SY)</span>
+                    <span className="stat-value">
+                      {totalTardies.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="stat-card">
+                    <span className="stat-label">
+                      Lost Instruction · min (SY)
+                    </span>
+                    <span className="stat-value">
+                      {totalLost.toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+                {uncomputable > 0 && (
+                  <p
+                    style={{
+                      marginTop: 0,
+                      marginBottom: "0.5rem",
+                      color: "var(--text-subtle)",
+                      fontSize: "0.8rem",
+                    }}
+                  >
+                    {uncomputable.toLocaleString()}{" "}
+                    {uncomputable === 1 ? "tardy is" : "tardies are"} not counted
+                    toward lost minutes — no bell time for their period.
+                    Configure a default bell schedule to include them.
+                  </p>
+                )}
+              </>
+            );
+          })()}
+          <table
+            className="pulse-table"
+            border={1}
+            cellPadding={6}
+            style={{ borderCollapse: "collapse" }}
+          >
+            <thead>
+              <tr>
+                <th>Student</th>
+                <th>Teacher</th>
+                <th>Type</th>
+                <th>Period</th>
+                <th>Min Lost</th>
+                <th>Reason</th>
+                <th>Check-In With</th>
+                <th>Notes</th>
+                <th>Created By</th>
+                <th>Logged</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tardies
+                .filter((t) =>
+                  dateFilter === "today" ? isCreatedToday(t.createdAt) : true,
+                )
+                .filter((t) =>
+                  staffFilter === "mine"
+                    ? t.teacherName === currentStaffUser
+                    : true,
+                )
+                .map((t) => (
+                  <tr key={t.id}>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>
+                        {studentName(t.studentId)}
+                      </div>
+                      <div
+                        style={{ fontSize: 11, color: "var(--text-subtle)" }}
+                      >
+                        {t.localSisId ?? "—"}
+                      </div>
+                    </td>
+                    <td>{t.teacherName}</td>
+                    <td>{t.entryType}</td>
+                    <td>{t.period}</td>
+                    <td>
+                      {typeof t.lostMinutes === "number"
+                        ? t.lostMinutes.toLocaleString()
+                        : "—"}
+                    </td>
+                    <td>{t.reason}</td>
+                    <td>{t.checkInWith ?? "-"}</td>
+                    <td>{t.notes}</td>
+                    <td>{t.createdBy ?? "-"}</td>
+                    <td>{fmtTime(t.createdAt)}</td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
         </div>
       )}
       {hpView === "overview" && (<>
@@ -10400,6 +11209,26 @@ function App() {
           Previously sat below the stats — fine on desktop, awkward on
           a narrow viewport where the stats stack into a tall column. */}
       <div className="card cp-cta-card">
+        <button
+          type="button"
+          className="cp-cta-gear"
+          onClick={() => setDestPickerOpen(true)}
+          title="Choose which locations your students can pick"
+          aria-label="Choose which locations your students can pick"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"
+              stroke="currentColor"
+              strokeWidth="1.6"
+            />
+            <path
+              d="M19.4 13a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 8.4 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H2a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 3.6 8.4a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H8a1.65 1.65 0 0 0 1-1.51V2a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V8a1.65 1.65 0 0 0 1.51 1H22a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"
+              stroke="currentColor"
+              strokeWidth="1.6"
+            />
+          </svg>
+        </button>
         <div className="cp-cta-text">Need to Create a Pass?</div>
         <button
           type="button"
@@ -10409,13 +11238,21 @@ function App() {
           + Create Pass
         </button>
       </div>
-      {/* Companion Queue Panel — visible whenever there is at least one
-          live kiosk waiting line the signed-in staff member is allowed
-          to manage. Reorder/remove from here without disturbing the
-          front-of-room kiosk; "Show QR" mints a phone-ready view-only
-          link. The component self-hides when nothing is in scope. */}
-      <CompanionQueuePanel user={authUser} />
 
+      <TeacherDestinationPicker
+        open={destPickerOpen}
+        onClose={() => setDestPickerOpen(false)}
+        currentStaffUser={currentStaffUser}
+        currentAllowlist={teacherAllowlistMap[currentStaffUser] ?? []}
+        onSaved={(next) =>
+          setTeacherAllowlistMap((prev) => {
+            const m = { ...prev };
+            if (next.length === 0) delete m[currentStaffUser];
+            else m[currentStaffUser] = next;
+            return m;
+          })
+        }
+      />
       {/* Create Pass CTA was here — moved to the top of the overview
           so it's tappable on mobile without scrolling past the stats. */}
 
@@ -10428,7 +11265,7 @@ function App() {
         currentStaffUser={currentStaffUser}
         staffUsers={staffUsers}
         staffDefaults={staffDefaults}
-        canChangeTeacher={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
+        canChangeTeacher={isCoreTeamMember}
         nearDestinations={teacherAllowlistMap[currentStaffUser] ?? []}
         bypassContactAck={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
         restroomAccessEnabled={restroomAccessEnabled}
@@ -10437,6 +11274,59 @@ function App() {
         restroomTeacherOverrides={restroomTeacherOverrides}
         maxMinutes={schoolSettings.hallPassMaxMinutes}
         defaultMinutes={schoolSettings.hallPassDefaultMinutes}
+        canLogTardy={isCoreTeamMember}
+        onLogTardy={async ({ studentId, period }) => {
+          const res = await authFetch("/api/tardies", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              studentId,
+              teacherName: currentStaffUser,
+              period,
+              reason: "",
+              entryType: "tardy",
+              checkInWith: null,
+              notes: "",
+            }),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || "Failed to log tardy.");
+          }
+          const lookupRes = await authFetch(
+            `/api/section-lookup?studentId=${encodeURIComponent(studentId)}&period=${encodeURIComponent(period)}`,
+          );
+          if (!lookupRes.ok) {
+            loadTardies();
+            const text = await lookupRes.text();
+            throw new Error(
+              text ||
+                `No teacher found for ${studentName(studentId)} in period ${period}.`,
+            );
+          }
+          const info = await lookupRes.json();
+          try {
+            await submitHallPassWithOverrides(
+              {
+                studentId,
+                destination: info.teacherName,
+                originRoom: "Front Office",
+                teacherName: currentStaffUser,
+                destinationTeacher: info.teacherName,
+                contactedAcknowledged: true,
+                isTardyReturn: true,
+              },
+              { skipMyActivesPrewarning: true },
+            );
+          } catch (err) {
+            loadTardies();
+            if (err instanceof Error && err.message === "Cancelled.") return;
+            throw err instanceof Error
+              ? err
+              : new Error("Failed to create return pass.");
+          }
+          loadTardies();
+        }}
         onCreate={async (payload) => {
           await submitHallPassWithOverrides({
             studentId: payload.studentId,
@@ -10509,7 +11399,7 @@ function App() {
               onClick={() => setPassFilter("mine")}
               disabled={passFilter === "mine"}
             >
-              Mine
+              Mine &amp; heading to me
             </button>
             <button
               type="button"
@@ -10525,12 +11415,18 @@ function App() {
           (() => {
             const visible = hallPasses
               .filter((p) => p.status === "active")
-              .filter((p) =>
-                passFilter === "mine"
-                  ? p.teacherName === currentStaffUser ||
-                    p.teacherName === `${currentStaffUser} (K)`
-                  : true,
-              )
+              .filter((p) => {
+                if (passFilter === "mine") {
+                  // Combined view: passes I created (green) OR passes routed
+                  // to me and not yet checked in (purple). Restroom passes are
+                  // round-trip (no destination check-in) and won't match a
+                  // covered classroom/office destination anyway.
+                  return (
+                    passIsMine(p) || (!p.arrivedAt && passHeadingToMe(p))
+                  );
+                }
+                return true;
+              })
               .sort(
                 (a, b) =>
                   new Date(a.createdAt).getTime() -
@@ -10544,7 +11440,9 @@ function App() {
                     padding: "0.75rem 0",
                   }}
                 >
-                  No active passes right now.
+                  {passFilter === "mine"
+                    ? "No passes involving you right now."
+                    : "No active passes right now."}
                 </div>
               );
             }
@@ -10556,6 +11454,17 @@ function App() {
                     : getTimeStatusColor(p, now);
                   const status = formatTimeStatus(p, now);
                   const overdue = status === "Overdue";
+                  // Ownership stripe (left border) so it coexists with the
+                  // time-status / tardy background instead of overriding it.
+                  // Green = I created it; purple = routed to me. Green wins
+                  // when a pass is both (I sent a student to myself).
+                  const mine = passIsMine(p);
+                  const headingToMe = !p.arrivedAt && passHeadingToMe(p);
+                  const ownStripe = mine
+                    ? "#16a34a"
+                    : headingToMe
+                      ? "#7c3aed"
+                      : null;
                   return (
                     <div
                       key={p.id}
@@ -10571,6 +11480,9 @@ function App() {
                         border: p.isTardyReturn
                           ? "1px solid #c4b5fd"
                           : "1px solid var(--border)",
+                        borderLeft: ownStripe
+                          ? `5px solid ${ownStripe}`
+                          : undefined,
                       }}
                     >
                       <div>
@@ -10583,7 +11495,9 @@ function App() {
                             color: "var(--text-subtle)",
                           }}
                         >
-                          {p.studentId} · from {p.originRoom}
+                          {students.find((s) => s.studentId === p.studentId)
+                            ?.localSisId ?? "—"}{" "}
+                          · from {p.originRoom}
                           {p.isTardyReturn && (
                             <span
                               style={{
@@ -10614,7 +11528,7 @@ function App() {
                             with {p.destinationTeacher}
                           </div>
                         )}
-                        {passFilter === "all" && (
+                        {!mine && (
                           <div
                             style={{
                               fontSize: 11,
@@ -10633,12 +11547,21 @@ function App() {
                       >
                         {status}
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleEndPass(p.id)}
-                      >
-                        End Pass
-                      </button>
+                      {headingToMe ? (
+                        <button
+                          type="button"
+                          onClick={() => handleReceivePass(p.id)}
+                        >
+                          Received / Check in
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleEndPass(p.id)}
+                        >
+                          End Pass
+                        </button>
+                      )}
                     </div>
                   );
                 })}
@@ -10674,8 +11597,7 @@ function App() {
                 )
                 .filter((p) =>
                   passFilter === "mine"
-                    ? p.teacherName === currentStaffUser ||
-                      p.teacherName === `${currentStaffUser} (K)`
+                    ? passIsMine(p) || passHeadingToMe(p)
                     : true,
                 )
                 .map((p) => {
@@ -10836,6 +11758,7 @@ function App() {
           </table>
         )}
       </div>
+
       {(() => {
         let active = 0;
         let overdue = 0;
@@ -11001,6 +11924,13 @@ function App() {
           </>
         );
       })()}
+
+      {/* Companion Queue Panel (Live Hall Pass Kiosks) — anchored at the
+          bottom of the overview stack, below the Hall Pass Summary. Visible
+          whenever there is at least one live kiosk waiting line the signed-in
+          staff member is allowed to manage; "Show QR" mints a phone-ready
+          view-only link; self-hides when nothing is in scope. */}
+      <CompanionQueuePanel user={authUser} />
 
       </>)}
       {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "hub" && (() => {
@@ -11802,13 +12732,19 @@ function App() {
             {(() => {
               const studentInfo = new Map<
                 string,
-                { first: string; last: string; grade: number }
+                {
+                  first: string;
+                  last: string;
+                  grade: number;
+                  localSisId: string | null;
+                }
               >();
               for (const s of students) {
                 studentInfo.set(s.studentId, {
                   first: s.firstName,
                   last: s.lastName,
                   grade: s.grade,
+                  localSisId: s.localSisId ?? null,
                 });
               }
               const stats = new Map<
@@ -11843,6 +12779,7 @@ function App() {
                     first: info.first,
                     last: info.last,
                     grade: info.grade,
+                    localSisId: info.localSisId,
                     passes: v.passes,
                     autoEnded: v.autoEnded,
                     lostMin: Math.round(v.lostMin),
@@ -11920,7 +12857,7 @@ function App() {
                               <td style={{ padding: "0.55rem 0.75rem" }}>
                                 {String(r.grade).padStart(2, "0")}
                               </td>
-                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.sid}</td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.localSisId ?? "—"}</td>
                               <td style={{ padding: "0.55rem 0.75rem" }}>{r.passes}</td>
                               <td style={{ padding: "0.55rem 0.75rem" }}>{r.autoEnded}</td>
                               <td style={{ padding: "0.55rem 0.75rem" }}>
@@ -12188,12 +13125,13 @@ function App() {
       {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "research" && (() => {
         const studentInfo = new Map<
           string,
-          { name: string; grade: number }
+          { name: string; grade: number; localSisId: string | null }
         >();
         for (const s of students) {
           studentInfo.set(s.studentId, {
             name: `${s.firstName} ${s.lastName}`,
             grade: s.grade,
+            localSisId: s.localSisId ?? null,
           });
         }
         const startMs = new Date(`${researchStart}T00:00:00`).getTime();
@@ -12344,7 +13282,7 @@ function App() {
                         )
                         .map((s) => (
                           <option key={s.id} value={`${s.firstName} ${s.lastName}`}>
-                            {s.studentId}
+                            {s.localSisId ?? "—"}
                           </option>
                         ))}
                     </datalist>
@@ -12474,7 +13412,7 @@ function App() {
                             <td style={{ padding: "0.5rem 0.75rem" }}>
                               {info ? String(info.grade).padStart(2, "0") : "—"}
                             </td>
-                            <td style={{ padding: "0.5rem 0.75rem" }}>{p.studentId}</td>
+                            <td style={{ padding: "0.5rem 0.75rem" }}>{info?.localSisId ?? "—"}</td>
                             <td style={{ padding: "0.5rem 0.75rem" }}>{fmtDateTime(p.createdAt)}</td>
                             <td style={{ padding: "0.5rem 0.75rem" }}>
                               {d == null ? "active" : `${d.toFixed(2)} min`}
@@ -12658,7 +13596,7 @@ function App() {
                             <td>{i + 1}</td>
                             <td>
                               {r.studentName}{" "}
-                              <span className="muted">({r.studentId})</span>
+                              <span className="muted">({r.localSisId ?? "—"})</span>
                             </td>
                             <td style={{ textAlign: "right" }}>{r.count}</td>
                           </tr>
@@ -12688,7 +13626,7 @@ function App() {
                             <td>{i + 1}</td>
                             <td>
                               {r.studentName}{" "}
-                              <span className="muted">({r.studentId})</span>
+                              <span className="muted">({r.localSisId ?? "—"})</span>
                             </td>
                             <td style={{ textAlign: "right" }}>{r.minutes}</td>
                           </tr>
@@ -12759,283 +13697,6 @@ function App() {
 
       </>)}
 
-      {activeSection === "tardies" && (<>
-      <HowToUseHelp title="How to use Tardies">
-        <HowToSection title="What this page is">
-          Track late arrivals, early check-outs, and mid-day check-ins
-          in one log. Each entry pulls the timestamp from the system
-          so you can't accidentally back-date.
-        </HowToSection>
-        <RoleSection for={["admin", "coreTeam"]} title="Admin uses">
-          Heavy tardies show up in the Insights → Flow dashboard and
-          on the parent HeartBEAT snapshot. Use the export to share
-          weekly attendance stats with the front office.
-        </RoleSection>
-      </HowToUseHelp>
-      <div className="card cp-cta-card">
-        <div className="cp-cta-text">Student Arriving Late?</div>
-        <button
-          type="button"
-          className="cp-cta-button cp-cta-button--blue"
-          onClick={() => setLogTardyOpen(true)}
-        >
-          + Log Tardy
-        </button>
-      </div>
-      <div className="card" style={{ display: "none" }}>
-      <h2>Log Tardy / Check-In</h2>
-      <form onSubmit={handleTardySubmit} style={{ marginBottom: "1rem" }}>
-        <div style={{ marginBottom: "0.5rem" }}>
-          <label>
-            Entry Type:{" "}
-            <select
-              value={tardyEntryType}
-              onChange={(e) =>
-                setTardyEntryType(
-                  e.target.value as "tardy" | "checkin" | "checkout",
-                )
-              }
-            >
-              <option value="tardy">Tardy</option>
-              <option value="checkin">Check-In</option>
-              <option value="checkout">Check-Out</option>
-            </select>
-          </label>
-        </div>
-        <div style={{ marginBottom: "0.5rem" }}>
-          <label>
-            Student:{" "}
-            <input
-              type="text"
-              placeholder="Search by name or ID"
-              value={tardyStudentSearch}
-              onChange={(e) => {
-                setTardyStudentSearch(e.target.value);
-                setTardyStudentId("");
-              }}
-            />
-          </label>
-          {tardyStudentId ? (
-            <div style={{ marginTop: "0.25rem" }}>
-              Selected: <strong>{tardyStudentId}</strong>{" "}
-              {(() => {
-                const s = students.find(
-                  (s) => s.studentId === tardyStudentId,
-                );
-                return s ? `- ${s.firstName} ${s.lastName}` : "";
-              })()}{" "}
-              <button
-                type="button"
-                onClick={() => {
-                  setTardyStudentId("");
-                  setTardyStudentSearch("");
-                }}
-              >
-                Clear
-              </button>
-            </div>
-          ) : (
-            tardyStudentSearch && (
-              <ul
-                style={{
-                  listStyle: "none",
-                  padding: 0,
-                  margin: "0.25rem 0",
-                  border: "1px solid #ccc",
-                  maxWidth: "20rem",
-                }}
-              >
-                {students
-                  .filter((s) => {
-                    const q = tardyStudentSearch.toLowerCase();
-                    return (
-                      s.firstName.toLowerCase().includes(q) ||
-                      s.lastName.toLowerCase().includes(q) ||
-                      s.studentId.toLowerCase().includes(q)
-                    );
-                  })
-                  .map((s) => (
-                    <li key={s.id}>
-                      <button
-                        type="button"
-                        style={{
-                          width: "100%",
-                          textAlign: "left",
-                          padding: "0.25rem 0.5rem",
-                          background: "none",
-                          border: "none",
-                          cursor: "pointer",
-                        }}
-                        onClick={() => {
-                          setTardyStudentId(s.studentId);
-                          setTardyStudentSearch(
-                            `${s.studentId} - ${s.firstName} ${s.lastName}`,
-                          );
-                        }}
-                      >
-                        {s.studentId} - {s.firstName} {s.lastName}
-                      </button>
-                    </li>
-                  ))}
-                {students.filter((s) => {
-                  const q = tardyStudentSearch.toLowerCase();
-                  return (
-                    s.firstName.toLowerCase().includes(q) ||
-                    s.lastName.toLowerCase().includes(q) ||
-                    s.studentId.toLowerCase().includes(q)
-                  );
-                }).length === 0 && (
-                  <li style={{ padding: "0.25rem 0.5rem", color: "#666" }}>
-                    No matches
-                  </li>
-                )}
-              </ul>
-            )
-          )}
-        </div>
-        <div style={{ marginBottom: "0.5rem" }}>
-          <label>
-            Period:{" "}
-            <select
-              value={tardyPeriod}
-              onChange={(e) => setTardyPeriod(e.target.value)}
-              required
-            >
-              <option value="">-- select a period --</option>
-              {["1", "2", "3", "4", "5", "6", "7"].map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        {tardyEntryType === "tardy" && (
-          <div style={{ marginBottom: "0.5rem" }}>
-            <label>
-              Reason:{" "}
-              <input
-                type="text"
-                value={tardyReason}
-                onChange={(e) => setTardyReason(e.target.value)}
-              />
-            </label>
-          </div>
-        )}
-        {tardyEntryType === "tardy" && (
-          <div style={{ marginBottom: "0.5rem" }}>
-            <label>
-              <input
-                type="checkbox"
-                checked={tardyCreateReturnPass}
-                onChange={(e) => setTardyCreateReturnPass(e.target.checked)}
-              />{" "}
-              Create return pass to class
-            </label>
-            {tardyCreateReturnPass && (
-              <div style={{ marginTop: "0.25rem" }}>
-                <label>
-                  Receiving Teacher:{" "}
-                  <select
-                    value={tardyReturnPassTeacher}
-                    onChange={(e) => setTardyReturnPassTeacher(e.target.value)}
-                  >
-                    {teachers.map((t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            )}
-          </div>
-        )}
-        {(tardyEntryType === "checkin" || tardyEntryType === "checkout") && (
-          <div style={{ marginBottom: "0.5rem" }}>
-            <label>
-              {tardyEntryType === "checkin" ? "Check-In With:" : "Check-Out With:"}{" "}
-              <select
-                value={tardyCheckInWith}
-                onChange={(e) => setTardyCheckInWith(e.target.value)}
-                required
-              >
-                <option value="">-- select --</option>
-                {checkInWithOptions.map((o) => (
-                  <option key={o} value={o}>
-                    {o}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        )}
-        <div style={{ marginBottom: "0.5rem" }}>
-          <label>
-            Notes (optional):{" "}
-            <input
-              type="text"
-              value={tardyNotes}
-              onChange={(e) => setTardyNotes(e.target.value)}
-            />
-          </label>
-        </div>
-        <button type="submit">
-          {tardyEntryType === "tardy"
-            ? "Log Tardy"
-            : tardyEntryType === "checkin"
-              ? "Log Check-In"
-              : "Log Check-Out"}
-        </button>
-      </form>
-      </div>
-
-      <div className="card">
-      <h2>Tardy / Check-Ins</h2>
-      <table className="pulse-table" border={1} cellPadding={6} style={{ borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th>Student</th>
-            <th>Teacher</th>
-            <th>Type</th>
-            <th>Period</th>
-            <th>Reason</th>
-            <th>Check-In With</th>
-            <th>Notes</th>
-            <th>Created By</th>
-            <th>Logged</th>
-          </tr>
-        </thead>
-        <tbody>
-          {tardies
-            .filter((t) =>
-              dateFilter === "today" ? isCreatedToday(t.createdAt) : true,
-            )
-            .filter((t) =>
-              staffFilter === "mine" ? t.teacherName === currentStaffUser : true,
-            )
-            .map((t) => (
-            <tr key={t.id}>
-              <td>
-                <div style={{ fontWeight: 600 }}>{studentName(t.studentId)}</div>
-                <div style={{ fontSize: 11, color: "var(--text-subtle)" }}>
-                  {t.studentId}
-                </div>
-              </td>
-              <td>{t.teacherName}</td>
-              <td>{t.entryType}</td>
-              <td>{t.period}</td>
-              <td>{t.reason}</td>
-              <td>{t.checkInWith ?? "-"}</td>
-              <td>{t.notes}</td>
-              <td>{t.createdBy ?? "-"}</td>
-              <td>{fmtTime(t.createdAt)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      </div>
-      </>)}
 
       {activeSection === "student" && (
         <>
@@ -13072,7 +13733,9 @@ function App() {
                     setActivityStudentId(id);
                     const s = students.find((x) => x.studentId === id);
                     setActivityStudentSearch(
-                      s ? `${s.firstName} ${s.lastName} (${s.studentId})` : "",
+                      s
+                        ? `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`
+                        : "",
                     );
                   }}
                   minWidth={400}
@@ -13136,11 +13799,11 @@ function App() {
                           onClick={() => {
                             setActivityStudentId(s.studentId);
                             setActivityStudentSearch(
-                              `${s.studentId} - ${s.firstName} ${s.lastName}`,
+                              `${s.localSisId ?? "—"} - ${s.firstName} ${s.lastName}`,
                             );
                           }}
                         >
-                          {s.studentId} - {s.firstName} {s.lastName}
+                          {s.localSisId ?? "—"} - {s.firstName} {s.lastName}
                         </button>
                       </li>
                     ))}
@@ -14430,7 +15093,7 @@ function App() {
                                           color: "var(--text-subtle)",
                                         }}
                                       >
-                                        {s.studentId} · Gr. {s.grade}
+                                        {s.localSisId ?? "—"} · Gr. {s.grade}
                                       </div>
                                     </div>
                                     <div>
@@ -15686,9 +16349,20 @@ function App() {
       </>)}
 
       {activeSection === "pbis" && <PbisPointsHub />}
+      {activeSection === "pulseBrainLab" && isBehaviorSpec && <PulseBrainLabHub />}
+      {activeSection === "partneringWithParents" &&
+        !isNonExemptOnly &&
+        effectiveFeatures.AcademicEvidence && <PartneringWithParentsHub />}
 
       {activeSection === "houseRankings" && (
-        <FeatureGate feature="houses" label="PBIS Houses">
+        // House Rankings is part of the PBIS surface and its nav entry is
+        // gated on `effectiveFeatures.Pbis` (same as the PBIS Points page,
+        // which renders with no page-level FeatureGate). It is intentionally
+        // NOT wrapped in <FeatureGate feature="houses"> — that page-side gate
+        // resolves through /api/me/features while the nav gates through
+        // /api/school-settings, so the two could disagree and leave a visible
+        // "House Rankings" nav item dead-clicking into a blank page.
+        <>
           {/* Admin / Core Team tooling (bulk sort + audit log) renders
               above the public rankings; everyone else gets a 403 from
               those endpoints so the panel's empty/error state is what
@@ -15724,7 +16398,7 @@ function App() {
               the logged-in session, which is what we want for in-app
               embedding. */}
           <HousesSignage schoolId="session" />
-        </FeatureGate>
+        </>
       )}
 
       {/* Read-only School Store catalog — sidebar entry visible to every
@@ -15870,11 +16544,11 @@ function App() {
                             onClick={() => {
                               setPbisStudentId(s.studentId);
                               setPbisStudentSearch(
-                                `${s.studentId} - ${s.firstName} ${s.lastName}`,
+                                `${s.localSisId ?? "—"} - ${s.firstName} ${s.lastName}`,
                               );
                             }}
                           >
-                            {s.studentId} - {s.firstName} {s.lastName}
+                            {s.localSisId ?? "—"} - {s.firstName} {s.lastName}
                           </button>
                         </li>
                       ))}
@@ -16271,7 +16945,7 @@ function App() {
                         <div
                           style={{ fontSize: 11, color: "var(--text-subtle)" }}
                         >
-                          {entry.studentId}
+                          {entry.localSisId ?? "—"}
                         </div>
                       </td>
                       <td style={cellStyle}>
@@ -16421,7 +17095,7 @@ function App() {
                         <td>
                           {studentName(s.studentId)}{" "}
                           <span style={{ color: "var(--muted, #64748b)", fontSize: "0.8rem" }}>
-                            {s.studentId}
+                            {s.localSisId ?? "—"}
                           </span>
                         </td>
                         <td>{s.total}</td>
@@ -16571,7 +17245,11 @@ function App() {
                   <ul style={{ margin: "0.25rem 0 0 1rem" }}>
                     {bulkResult.errors.map((e) => (
                       <li key={e.studentId}>
-                        <code>{e.studentId}</code>: {e.error}
+                        <code>
+                          {students.find((s) => s.studentId === e.studentId)
+                            ?.localSisId ?? "—"}
+                        </code>
+                        : {e.error}
                       </li>
                     ))}
                   </ul>
@@ -16865,7 +17543,7 @@ function App() {
                         <td style={{ padding: "0.25rem" }}>
                           {r.studentName}
                           <div style={{ fontSize: 11, color: "var(--text-subtle, #94a3b8)" }}>
-                            {r.studentId}
+                            {r.localSisId ?? "—"}
                           </div>
                         </td>
                         <td style={{ padding: "0.25rem" }}>{r.reason}</td>
@@ -18125,7 +18803,6 @@ function App() {
       {activeSection === "mtssTemplates" && canAccessMtssHub && (() => {
         const mergeTokens: Array<{ token: string; label: string }> = [
           { token: "studentName", label: "Student Name" },
-          { token: "studentId", label: "Student ID" },
           { token: "parentName", label: "Parent Name" },
           { token: "parentEmail", label: "Parent Email" },
           { token: "hallPassCount", label: "Hall Pass Count" },
@@ -18718,6 +19395,7 @@ function App() {
                       if (!s) return null;
                       return {
                         studentId: s.studentId,
+                        localSisId: s.localSisId ?? null,
                         firstName: s.firstName,
                         lastName: s.lastName,
                         grade: s.grade,
@@ -18729,6 +19407,7 @@ function App() {
                         x,
                       ): x is {
                         studentId: string;
+                        localSisId: string | null;
                         firstName: string;
                         lastName: string;
                         grade: number;
@@ -18836,7 +19515,7 @@ function App() {
                                     {s.lastName}, {s.firstName}
                                   </strong>{" "}
                                   <span style={{ color: "#64748b" }}>
-                                    · {s.studentId} · Gr {s.grade}
+                                    · {s.localSisId ?? "—"} · Gr {s.grade}
                                   </span>
                                   {isExtra && hasNoAssignments && (
                                     <button
@@ -18968,13 +19647,13 @@ function App() {
                           onClick={() => {
                             setEseStudentId(s.studentId);
                             setEseStudentSearch(
-                              `${s.studentId} - ${s.firstName} ${s.lastName}`,
+                              `${s.localSisId ?? "—"} - ${s.firstName} ${s.lastName}`,
                             );
                             setEseAddSelected(new Set());
                             loadEseStudentAccs(s.studentId);
                           }}
                         >
-                          {s.studentId} — {s.firstName} {s.lastName}
+                          {s.localSisId ?? "—"} — {s.firstName} {s.lastName}
                         </button>
                       </li>
                     ))}
@@ -19594,9 +20273,9 @@ function App() {
                       {new Date(r.sentAt).toLocaleString()}
                     </td>
                     <td style={{ padding: "0.4rem" }}>
-                      {studentName(r.studentId) || r.studentId}{" "}
+                      {studentName(r.studentId) || (r.localSisId ?? "—")}{" "}
                       <span style={{ color: "var(--muted, #64748b)", fontSize: "0.8rem" }}>
-                        {r.studentId}
+                        {r.localSisId ?? "—"}
                       </span>
                     </td>
                     <td style={{ padding: "0.4rem" }}>{r.milestonePoints} pts</td>
@@ -20006,8 +20685,8 @@ function App() {
                 {hpLimits.map((l) => {
                   const name =
                     l.firstName && l.lastName
-                      ? `${l.firstName} ${l.lastName} (${l.studentId})`
-                      : l.studentId;
+                      ? `${l.firstName} ${l.lastName} (${l.localSisId ?? "—"})`
+                      : (l.localSisId ?? "—");
                   return (
                     <tr key={l.id} style={{ borderBottom: "1px solid #eee" }}>
                       <td style={{ padding: "0.4rem" }}>{name}</td>
@@ -20152,12 +20831,12 @@ function App() {
                 {polarityPairs.map((p) => {
                   const nameA =
                     p.studentAFirstName && p.studentALastName
-                      ? `${p.studentAFirstName} ${p.studentALastName} (${p.studentIdA})`
-                      : p.studentIdA;
+                      ? `${p.studentAFirstName} ${p.studentALastName} (${p.studentLocalSisIdA ?? "—"})`
+                      : (p.studentLocalSisIdA ?? "—");
                   const nameB =
                     p.studentBFirstName && p.studentBLastName
-                      ? `${p.studentBFirstName} ${p.studentBLastName} (${p.studentIdB})`
-                      : p.studentIdB;
+                      ? `${p.studentBFirstName} ${p.studentBLastName} (${p.studentLocalSisIdB ?? "—"})`
+                      : (p.studentLocalSisIdB ?? "—");
                   return (
                     <tr key={p.id} style={{ borderBottom: "1px solid #eee" }}>
                       <td style={{ padding: "0.4rem" }}>{nameA}</td>
@@ -20468,6 +21147,10 @@ function App() {
         <TicketingAdminPage />
       )}
 
+      {activeSection === "settings" && canManageEsign && settingsTile === "e-sign" && (
+        <EsignManagerPage />
+      )}
+
       {activeSection === "settings" && canManageSchoolGrade && settingsTile === "school-grade" && (
         <SchoolGradeCalculatorPage />
       )}
@@ -20518,7 +21201,8 @@ function App() {
                 id: "kiosk-setup",
                 icon: "🔗",
                 title: "Kiosk Setup",
-                subtitle: "URL, PIN, and QR code for kiosk activation.",
+                subtitle:
+                  "One place: kiosk URL, rooms, teacher rooms, cards & activation.",
                 group: "hall-pass-locations",
               },
               {
@@ -20756,6 +21440,19 @@ function App() {
                 subtitle:
                   "Free-ticket events · allocate by grade, email QR tickets, scan at the gate.",
                 group: "family-signage",
+              });
+            }
+            // Document e-Sign — upload a PDF/image, share a signing link
+            // (copy or email), collect the signed copy back. Documents are
+            // private to the creator. Office-side gate.
+            if (canManageEsign) {
+              tiles.push({
+                id: "e-sign",
+                icon: "✍️",
+                title: "Document e-Sign",
+                subtitle:
+                  "Upload a PDF or image · share a signing link · collect the signed copy.",
+                group: "admin-tenancy",
               });
             }
             // School Grade Estimated Calculator — admin/Core-Team tool that
@@ -21126,6 +21823,18 @@ function App() {
         />
       )}
 
+      {activeSection === "familyMessages" &&
+        effectiveFeatures.FamilyComm &&
+        isCoreTeamMember && (
+          <FamilyMessagesHub
+            grades={Array.from(new Set(students.map((s) => s.grade)))}
+          />
+        )}
+
+      {activeSection === "pulseDnaStudio" &&
+        effectiveFeatures.FamilyComm &&
+        isCoreTeamMember && <PulseDnaStudio />}
+
       {activeSection === "insightsWatchlist" && (
         <InsightsWatchlist
           onOpenStudent={(studentId) => {
@@ -21168,99 +21877,123 @@ function App() {
       )}
 
       {activeSection === "engagementDashboard" && canAccessMtssHub && (
-        <EngagementDashboard
-          onOpenProfile={(studentId) => {
-            setSelectedInsightsStudentId(studentId);
-            // Pin the back-target so the profile's Back button returns
-            // to the engagement dashboard (not the watchlist or
-            // wherever the user was before).
-            setStudentProfileReturnTo("engagementDashboard");
-            setActiveSection("studentProfile");
-          }}
-        />
+        <>
+          <InsightsBackBar onBack={() => setActiveSection("insights")} />
+          <EngagementDashboard
+            onOpenProfile={(studentId) => {
+              setSelectedInsightsStudentId(studentId);
+              // Pin the back-target so the profile's Back button returns
+              // to the engagement dashboard (not the watchlist or
+              // wherever the user was before).
+              setStudentProfileReturnTo("engagementDashboard");
+              setActiveSection("studentProfile");
+            }}
+          />
+        </>
       )}
 
       {activeSection === "behaviorDashboard" && canAccessMtssHub && (
-        <BehaviorDashboard
-          onOpenProfile={(studentId) => {
-            setSelectedInsightsStudentId(studentId);
-            // Pin the back-target so the profile's Back button returns
-            // to the behavior dashboard.
-            setStudentProfileReturnTo("behaviorDashboard");
-            setActiveSection("studentProfile");
-          }}
-        />
+        <>
+          <InsightsBackBar onBack={() => setActiveSection("insights")} />
+          <BehaviorDashboard
+            onOpenProfile={(studentId) => {
+              setSelectedInsightsStudentId(studentId);
+              // Pin the back-target so the profile's Back button returns
+              // to the behavior dashboard.
+              setStudentProfileReturnTo("behaviorDashboard");
+              setActiveSection("studentProfile");
+            }}
+          />
+        </>
       )}
 
       {activeSection === "academicsDashboard" && canAccessMtssHub && (
-        <AcademicsDashboard
-          onOpenProfile={(studentId) => {
-            setSelectedInsightsStudentId(studentId);
-            // Pin the back-target so the profile's Back button returns
-            // to the academics dashboard.
-            setStudentProfileReturnTo("academicsDashboard");
-            setActiveSection("studentProfile");
-          }}
-        />
+        <>
+          <InsightsBackBar onBack={() => setActiveSection("insights")} />
+          <AcademicsDashboard
+            onOpenProfile={(studentId) => {
+              setSelectedInsightsStudentId(studentId);
+              // Pin the back-target so the profile's Back button returns
+              // to the academics dashboard.
+              setStudentProfileReturnTo("academicsDashboard");
+              setActiveSection("studentProfile");
+            }}
+          />
+        </>
       )}
 
       {activeSection === "academicsTrajectory" && canAccessMtssHub && (
-        <AcademicsTrajectory
-          onOpenProfile={(studentId) => {
-            setSelectedInsightsStudentId(studentId);
-            // Pin the back-target so the profile's Back button returns
-            // to the trajectory dashboard.
-            setStudentProfileReturnTo("academicsTrajectory");
-            setActiveSection("studentProfile");
-          }}
-        />
+        <>
+          <InsightsBackBar onBack={() => setActiveSection("insights")} />
+          <AcademicsTrajectory
+            onOpenProfile={(studentId) => {
+              setSelectedInsightsStudentId(studentId);
+              // Pin the back-target so the profile's Back button returns
+              // to the trajectory dashboard.
+              setStudentProfileReturnTo("academicsTrajectory");
+              setActiveSection("studentProfile");
+            }}
+          />
+        </>
       )}
 
       {activeSection === "attendanceDashboard" && canAccessMtssHub && (
-        <AttendanceDashboard
-          onOpenProfile={(studentId) => {
-            setSelectedInsightsStudentId(studentId);
-            // Pin the back-target so the profile's Back button returns
-            // to the attendance dashboard.
-            setStudentProfileReturnTo("attendanceDashboard");
-            setActiveSection("studentProfile");
-          }}
-        />
+        <>
+          <InsightsBackBar onBack={() => setActiveSection("insights")} />
+          <AttendanceDashboard
+            onOpenProfile={(studentId) => {
+              setSelectedInsightsStudentId(studentId);
+              // Pin the back-target so the profile's Back button returns
+              // to the attendance dashboard.
+              setStudentProfileReturnTo("attendanceDashboard");
+              setActiveSection("studentProfile");
+            }}
+          />
+        </>
       )}
 
       {activeSection === "sebSelDashboard" && canAccessMtssHub && (
-        <SebSelDashboard
-          onOpenProfile={(studentId) => {
-            setSelectedInsightsStudentId(studentId);
-            // Pin the back-target so the profile's Back button returns
-            // to the SEB/SEL dashboard.
-            setStudentProfileReturnTo("sebSelDashboard");
-            setActiveSection("studentProfile");
-          }}
-        />
+        <>
+          <InsightsBackBar onBack={() => setActiveSection("insights")} />
+          <SebSelDashboard
+            onOpenProfile={(studentId) => {
+              setSelectedInsightsStudentId(studentId);
+              // Pin the back-target so the profile's Back button returns
+              // to the SEB/SEL dashboard.
+              setStudentProfileReturnTo("sebSelDashboard");
+              setActiveSection("studentProfile");
+            }}
+          />
+        </>
       )}
 
       {activeSection === "equityDashboard" && canAccessMtssHub && (
-        <EquityDashboard
-          onOpenProfile={(studentId) => {
-            setSelectedInsightsStudentId(studentId);
-            // V1 equity view is aggregate-only (no per-student lists yet),
-            // but we wire the return-to anyway so a future drill-in can
-            // navigate back to this dashboard cleanly.
-            setStudentProfileReturnTo("equityDashboard");
-            setActiveSection("studentProfile");
-          }}
-        />
+        <>
+          <InsightsBackBar onBack={() => setActiveSection("insights")} />
+          <EquityDashboard
+            onOpenProfile={(studentId) => {
+              setSelectedInsightsStudentId(studentId);
+              // V1 equity view is aggregate-only (no per-student lists yet),
+              // but we wire the return-to anyway so a future drill-in can
+              // navigate back to this dashboard cleanly.
+              setStudentProfileReturnTo("equityDashboard");
+              setActiveSection("studentProfile");
+            }}
+          />
+        </>
       )}
 
       {activeSection === "earlyWarningDashboard" && canAccessMtssHub && (
-        <EarlyWarningDashboard
-          onOpenProfile={(studentId) => {
-            setSelectedInsightsStudentId(studentId);
-            setStudentProfileReturnTo("earlyWarningDashboard");
-            setActiveSection("studentProfile");
-          }}
-        />
+        <>
+          <InsightsBackBar onBack={() => setActiveSection("insights")} />
+          <EarlyWarningDashboard
+            onOpenProfile={(studentId) => {
+              setSelectedInsightsStudentId(studentId);
+              setStudentProfileReturnTo("earlyWarningDashboard");
+              setActiveSection("studentProfile");
+            }}
+          />
+        </>
       )}
 
       {activeSection === "studentProfile" && selectedInsightsStudentId && (
@@ -21700,57 +22433,125 @@ function App() {
       )}
 
       {activeSection === "kioskCards" && canManageSettings && (
-        <KioskCardsPanel authUser={authUser} />
+        <KioskCardsPanel
+          authUser={authUser}
+          originLocations={Object.keys(effectiveDestinationsByRoom).sort((a, b) =>
+            a.localeCompare(b),
+          )}
+        />
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "kiosk-setup" && (() => {
         const kioskUrl = `${window.location.origin}${import.meta.env.BASE_URL}kiosk`;
+        const originLocations = Object.keys(effectiveDestinationsByRoom).sort(
+          (a, b) => a.localeCompare(b),
+        );
+        const refreshDestinations = () => {
+          authFetch("/api/location-allowed-destinations")
+            .then((r) => r.json())
+            .then((data: { originName: string; destinationName: string }[]) => {
+              const map: Record<string, string[]> = {};
+              for (const row of data) {
+                if (!map[row.originName]) map[row.originName] = [];
+                map[row.originName].push(row.destinationName);
+              }
+              for (const k of Object.keys(map)) {
+                map[k].sort((a, b) => a.localeCompare(b));
+              }
+              setApiDestinationMap(map);
+            })
+            .catch(() => {});
+        };
+        const refreshStaffDefaults = () => {
+          authFetch("/api/staff-defaults")
+            .then((r) => (r.ok ? r.json() : []))
+            .then(
+              (
+                rows: Array<{
+                  staffName: string;
+                  defaultLocationName: string | null;
+                }>,
+              ) => {
+                const map: Record<string, string> = {};
+                for (const r of rows) {
+                  if (r.defaultLocationName)
+                    map[r.staffName] = r.defaultLocationName;
+                }
+                setStaffDefaults(map);
+              },
+            )
+            .catch(() => {});
+        };
         return (
-          <div className="card" style={{ marginBottom: "1rem" }}>
-            <h2>Kiosk URL</h2>
-            <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
-              Open this on a classroom Chromebook (full-screen). The teacher
-              in the room signs in once to activate the device — the room is
-              picked up from their default location, or from a one-time
-              picker if they don't have one set yet.
-            </p>
-            <div
-              style={{
-                display: "flex",
-                gap: "0.5rem",
-                alignItems: "center",
-                flexWrap: "wrap",
-              }}
-            >
-              <code
+          <div style={{ display: "grid", gap: "1rem", marginBottom: "1rem" }}>
+            <div className="card">
+              <h2>Kiosk URL</h2>
+              <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+                Open this on a classroom Chromebook (full-screen). The teacher
+                in the room signs in once to activate the device — the room is
+                picked up from their default location, or from a one-time
+                picker if they don't have one set yet.
+              </p>
+              <div
                 style={{
-                  fontSize: "0.9rem",
-                  wordBreak: "break-all",
-                  background: "var(--surface-subtle, rgba(0,0,0,0.04))",
-                  padding: "0.5rem 0.75rem",
-                  borderRadius: 6,
-                  flex: "1 1 320px",
+                  display: "flex",
+                  gap: "0.5rem",
+                  alignItems: "center",
+                  flexWrap: "wrap",
                 }}
               >
-                {kioskUrl}
-              </code>
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(kioskUrl);
-                    setCopiedRoom("__kiosk__");
-                    setTimeout(() => setCopiedRoom(null), 1500);
-                  } catch {
-                    setCopiedRoom(null);
-                  }
-                }}
-              >
-                {copiedRoom === "__kiosk__" ? "Copied!" : "Copy"}
-              </button>
-              <a href={kioskUrl} target="_blank" rel="noreferrer">
-                Open
-              </a>
+                <code
+                  style={{
+                    fontSize: "0.9rem",
+                    wordBreak: "break-all",
+                    background: "var(--surface-subtle, rgba(0,0,0,0.04))",
+                    padding: "0.5rem 0.75rem",
+                    borderRadius: 6,
+                    flex: "1 1 320px",
+                  }}
+                >
+                  {kioskUrl}
+                </code>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(kioskUrl);
+                      setCopiedRoom("__kiosk__");
+                      setTimeout(() => setCopiedRoom(null), 1500);
+                    } catch {
+                      setCopiedRoom(null);
+                    }
+                  }}
+                >
+                  {copiedRoom === "__kiosk__" ? "Copied!" : "Copy"}
+                </button>
+                <a href={kioskUrl} target="_blank" rel="noreferrer">
+                  Open
+                </a>
+              </div>
+            </div>
+
+            <div className="card">
+              <h2 style={{ marginTop: 0 }}>Step 1 · Rooms</h2>
+              <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+                Define the rooms (origin locations) students leave from. These
+                feed the room dropdowns below and on the kiosk itself.
+              </p>
+              <LocationsAdmin onChanged={refreshDestinations} />
+            </div>
+
+            <div className="card">
+              <h2 style={{ marginTop: 0 }}>Step 2 · Teacher rooms &amp; cards</h2>
+              <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+                Assign each teacher their default room (one click, or bulk-import
+                from a CSV), print activation cards, and activate sub kiosks.
+              </p>
+              <KioskCardsPanel
+                authUser={authUser}
+                originLocations={originLocations}
+                onRoomSaved={refreshStaffDefaults}
+              />
             </div>
           </div>
         );
@@ -21775,9 +22576,25 @@ function App() {
             unit: "days",
           },
           {
-            field: "pbisInvisibleStudentDays" as const,
-            label: "Invisible Student window (school days)",
-            help: 'Students with 0 points in this many school days appear in "invisible students" alert.',
+            field: "pbisInvisibleDaysTier1" as const,
+            label: "Invisible Student — Tier 1 (no active MTSS plan)",
+            help: 'General-population students with 0 points in this many school days appear in the "invisible students" alert. Default 8.',
+            min: 1,
+            max: 180,
+            unit: "days",
+          },
+          {
+            field: "pbisInvisibleDaysTier2" as const,
+            label: "Invisible Student — Tier 2 (active MTSS plan)",
+            help: "Students with an active Tier 2 MTSS plan surface after this many school days with 0 points. Default 5.",
+            min: 1,
+            max: 180,
+            unit: "days",
+          },
+          {
+            field: "pbisInvisibleDaysTier3" as const,
+            label: "Invisible Student — Tier 3 (active MTSS plan)",
+            help: "Students with an active Tier 3 MTSS plan surface fastest — this many school days with 0 points. Default 3.",
             min: 1,
             max: 180,
             unit: "days",
@@ -21889,6 +22706,281 @@ function App() {
                 )}
               </div>
             </div>
+            <div
+              className="card"
+              style={{ marginTop: "1rem", maxWidth: 560 }}
+            >
+              <h2 style={{ marginTop: 0 }}>On-Time Attendance &amp; Lottery</h2>
+              <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+                During each passing period the door kiosk flips to an On-Time
+                check-in screen. Students who scan in before the bell earn
+                house points (a separate ledger that never affects the
+                Invisible Student calc). Changes save with "Save School
+                Settings" above.
+              </p>
+              <div style={{ display: "grid", gap: "1rem" }}>
+                <label
+                  style={{
+                    display: "flex",
+                    gap: "0.6rem",
+                    alignItems: "flex-start",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={schoolSettings.onTimeAttendanceEnabled}
+                    onChange={(e) =>
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        onTimeAttendanceEnabled: e.target.checked,
+                      })
+                    }
+                    style={{ marginTop: "0.25rem" }}
+                  />
+                  <span>
+                    Enable On-Time Attendance
+                    <span
+                      style={{
+                        display: "block",
+                        color: "var(--text-subtle, #64748b)",
+                        fontSize: "0.82rem",
+                        fontWeight: "normal",
+                      }}
+                    >
+                      Activated kiosks switch to the check-in screen
+                      automatically during passing periods.
+                    </span>
+                  </span>
+                </label>
+
+                <label style={{ display: "grid", gap: "0.25rem" }}>
+                  <span>
+                    Maximum on-time points
+                    <span
+                      style={{
+                        color: "var(--text-subtle, #64748b)",
+                        fontWeight: "normal",
+                        marginLeft: "0.5rem",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      (1–10 points)
+                    </span>
+                  </span>
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontSize: "0.82rem",
+                    }}
+                  >
+                    Earned points = minutes until the bell, capped here.
+                    In-line after the bell is always 1.
+                  </span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    step={1}
+                    value={schoolSettings.onTimeMaxPoints}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      const next = Number.isFinite(n)
+                        ? Math.max(1, Math.min(10, Math.trunc(n)))
+                        : schoolSettings.onTimeMaxPoints;
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        onTimeMaxPoints: next,
+                      });
+                    }}
+                    style={{ width: "6rem" }}
+                  />
+                </label>
+
+                <hr
+                  style={{
+                    border: "none",
+                    borderTop: "1px solid var(--border, #e2e8f0)",
+                    margin: "0.25rem 0",
+                  }}
+                />
+
+                <label
+                  style={{
+                    display: "flex",
+                    gap: "0.6rem",
+                    alignItems: "flex-start",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={schoolSettings.onTimeLotteryEnabled}
+                    onChange={(e) =>
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        onTimeLotteryEnabled: e.target.checked,
+                      })
+                    }
+                    style={{ marginTop: "0.25rem" }}
+                  />
+                  <span>
+                    Enable daily Tardy Lottery
+                    <span
+                      style={{
+                        display: "block",
+                        color: "var(--text-subtle, #64748b)",
+                        fontSize: "0.82rem",
+                        fontWeight: "normal",
+                      }}
+                    >
+                      Once per school day a random class that ran attendance is
+                      drawn; every student who checked in that period earns a
+                      bonus, revealed near the end of the day.
+                    </span>
+                  </span>
+                </label>
+
+                <label style={{ display: "grid", gap: "0.25rem" }}>
+                  <span>Lottery label</span>
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontSize: "0.82rem",
+                    }}
+                  >
+                    Shown to families and on the reveal email. Defaults to
+                    "On-Time Champions".
+                  </span>
+                  <input
+                    type="text"
+                    maxLength={60}
+                    placeholder="On-Time Champions"
+                    value={schoolSettings.onTimeLotteryLabel}
+                    onChange={(e) =>
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        onTimeLotteryLabel: e.target.value,
+                      })
+                    }
+                    style={{ maxWidth: "20rem" }}
+                  />
+                </label>
+
+                <label style={{ display: "grid", gap: "0.25rem" }}>
+                  <span>
+                    Bonus points
+                    <span
+                      style={{
+                        color: "var(--text-subtle, #64748b)",
+                        fontWeight: "normal",
+                        marginLeft: "0.5rem",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      (1–500 points)
+                    </span>
+                  </span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    step={1}
+                    value={schoolSettings.onTimeLotteryBonusPoints}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      const next = Number.isFinite(n)
+                        ? Math.max(1, Math.min(500, Math.trunc(n)))
+                        : schoolSettings.onTimeLotteryBonusPoints;
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        onTimeLotteryBonusPoints: next,
+                      });
+                    }}
+                    style={{ width: "6rem" }}
+                  />
+                </label>
+
+                <label style={{ display: "grid", gap: "0.25rem" }}>
+                  <span>
+                    Reveal lead time
+                    <span
+                      style={{
+                        color: "var(--text-subtle, #64748b)",
+                        fontWeight: "normal",
+                        marginLeft: "0.5rem",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      (5–240 minutes before end of day)
+                    </span>
+                  </span>
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontSize: "0.82rem",
+                    }}
+                  >
+                    How long before dismissal the winning class is revealed and
+                    the admin/Core-Team email goes out.
+                  </span>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.75rem",
+                    }}
+                  >
+                    <input
+                      type="number"
+                      min={5}
+                      max={240}
+                      step={1}
+                      value={schoolSettings.onTimeLotteryRevealLeadMinutes}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        const next = Number.isFinite(n)
+                          ? Math.max(5, Math.min(240, Math.trunc(n)))
+                          : schoolSettings.onTimeLotteryRevealLeadMinutes;
+                        setSchoolSettings({
+                          ...schoolSettings,
+                          onTimeLotteryRevealLeadMinutes: next,
+                        });
+                      }}
+                      style={{ width: "6rem" }}
+                    />
+                    <span style={{ color: "var(--text-subtle, #64748b)" }}>
+                      minutes
+                    </span>
+                  </div>
+                </label>
+
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "0.5rem",
+                    alignItems: "center",
+                    marginTop: "0.5rem",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => void saveSchoolSettings()}
+                    disabled={settingsStatus === "saving"}
+                  >
+                    {settingsStatus === "saving"
+                      ? "Saving…"
+                      : "Save School Settings"}
+                  </button>
+                  {settingsStatus === "saved" && (
+                    <span style={{ color: "#15803d" }}>Saved.</span>
+                  )}
+                  {settingsStatus === "error" && (
+                    <span style={{ color: "#b91c1c" }}>{settingsError}</span>
+                  )}
+                </div>
+
+                {(isAdmin || isCoreTeamMember) && <OnTimeTestingPanel />}
+              </div>
+            </div>
           </div>
         );
       })()}
@@ -21906,10 +22998,16 @@ function App() {
             | "SchoolStore"
             | "Accommodations"
             | "LogIntervention"
-            | "RequestPullout";
+            | "RequestPullout"
+            | "AcademicEvidence";
           label: string;
           help: string;
         }> = [
+          {
+            key: "AcademicEvidence",
+            label: "Partnering with Parents / Learning at Home",
+            help: "Staff capture classwork samples to share with families; parents see them under the Academics tab. Turn off if your school won't use it.",
+          },
           {
             key: "FamilyComm",
             label: "Family Communication",
@@ -22526,67 +23624,6 @@ function App() {
         </>
       )}
 
-      <LogTardyModal
-        open={logTardyOpen}
-        onClose={() => setLogTardyOpen(false)}
-        students={students}
-        onSubmit={async (payload) => {
-          const res = await authFetch("/api/tardies", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              studentId: payload.studentId,
-              teacherName: currentStaffUser,
-              period: payload.period,
-              reason: "",
-              entryType: "tardy",
-              checkInWith: null,
-              notes: "",
-            }),
-          });
-          if (!res.ok) {
-            const text = await res.text();
-            throw new Error(text || "Failed to log tardy.");
-          }
-          if (payload.createReturnPass) {
-            const lookupRes = await authFetch(
-              `/api/section-lookup?studentId=${encodeURIComponent(payload.studentId)}&period=${encodeURIComponent(payload.period)}`,
-            );
-            if (!lookupRes.ok) {
-              loadTardies();
-              const text = await lookupRes.text();
-              throw new Error(
-                text ||
-                  `No teacher found for student ${payload.studentId} in period ${payload.period}.`,
-              );
-            }
-            const info = await lookupRes.json();
-            try {
-              await submitHallPassWithOverrides(
-                {
-                  studentId: payload.studentId,
-                  destination: info.teacherName,
-                  originRoom: "Front Office",
-                  teacherName: currentStaffUser,
-                  destinationTeacher: info.teacherName,
-                  contactedAcknowledged: true,
-                  isTardyReturn: true,
-                },
-                { skipMyActivesPrewarning: true },
-              );
-            } catch (err) {
-              loadTardies();
-              if (err instanceof Error && err.message === "Cancelled.") {
-                return;
-              }
-              throw err instanceof Error
-                ? err
-                : new Error("Failed to create return pass.");
-            }
-          }
-          loadTardies();
-        }}
-      />
 
       <CheckInOutModal
         open={checkInOutOpen}

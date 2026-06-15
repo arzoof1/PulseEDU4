@@ -7,6 +7,7 @@ import MentionTextarea from "./MentionTextarea";
 
 interface StudentHit {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: string | null;
@@ -335,7 +336,7 @@ export default function LogInteractionModal({
                     className="text-[11px] font-normal"
                     style={{ color: WL_COLORS.inkSoft }}
                   >
-                    · Gr {witness.grade ?? "?"} · {witness.studentId}
+                    · Gr {witness.grade ?? "?"} · {witness.localSisId ?? "—"}
                   </span>
                 </div>
                 <button
@@ -384,7 +385,7 @@ export default function LogInteractionModal({
                       >
                         {h.firstName} {h.lastName}{" "}
                         <span className="text-[11px]" style={{ color: WL_COLORS.inkSoft }}>
-                          · Gr {h.grade ?? "?"} · {h.studentId}
+                          · Gr {h.grade ?? "?"} · {h.localSisId ?? "—"}
                         </span>
                       </button>
                     ))}
@@ -632,7 +633,7 @@ export default function LogInteractionModal({
                     >
                       {h.firstName} {h.lastName}{" "}
                       <span className="text-[11px]" style={{ color: WL_COLORS.inkSoft }}>
-                        · Gr {h.grade ?? "?"} · {h.studentId}
+                        · Gr {h.grade ?? "?"} · {h.localSisId ?? "—"}
                       </span>
                     </button>
                   ))}

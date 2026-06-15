@@ -6,15 +6,21 @@ import {
   schoolsTable,
   housesTable,
   badgePrintEventsTable,
+  classSectionsTable,
+  sectionRosterTable,
 } from "@workspace/db";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import {
   renderStudentBadgesPdf,
-  type BadgeSize,
   type StudentBadgeInput,
+  type CardDesign,
 } from "../lib/studentIdBadgesPdf";
-import { ObjectStorageService } from "../lib/objectStorage.js";
+import {
+  ObjectStorageService,
+  ObjectNotFoundError,
+} from "../lib/objectStorage.js";
+import { loadBrandingForSchool } from "./schoolBranding.js";
 
 const objectStorage = new ObjectStorageService();
 
@@ -26,6 +32,38 @@ const objectStorage = new ObjectStorageService();
 // the GCS readStream directly into a buffer.
 async function fetchObjectBytes(objectPath: string): Promise<Buffer | null> {
   return objectStorage.readObjectAsBuffer(objectPath);
+}
+
+// Resolve the per-school card design once per batch: load the saved
+// branding row and, for image mode, fetch the top-background bytes a
+// single time (every badge in the batch shares them). SVG is filtered
+// out — pdfkit can't rasterize it. Failure to load the image silently
+// degrades to the configured colors / house color, never blocks a print.
+async function buildCardDesign(schoolId: number): Promise<CardDesign> {
+  const b = await loadBrandingForSchool(schoolId);
+  let bgImageBytes: Buffer | null = null;
+  if (b.cardBgMode === "image" && b.cardBgObjectPath) {
+    const MAX_BG_BYTES = 5 * 1024 * 1024;
+    const bytes = await fetchObjectBytes(b.cardBgObjectPath);
+    if (bytes && bytes.length <= MAX_BG_BYTES) {
+      const head = bytes.slice(0, 16).toString("utf8").trimStart();
+      if (!head.startsWith("<")) bgImageBytes = bytes;
+    }
+  }
+  return {
+    orientation: b.cardOrientation,
+    bgMode: b.cardBgMode,
+    bgColors: b.cardBgColors.slice(0, 2),
+    bgAngle: b.cardBgAngle,
+    bgImageBytes,
+    headerTextMode: b.cardHeaderTextMode,
+    headerTextColor: b.cardHeaderTextColor,
+    showHouse: b.cardShowHouse,
+    houseBgMode: b.cardHouseBgMode,
+    houseBgColor: b.cardHouseBgColor,
+    houseTextMode: b.cardHouseTextMode,
+    houseTextColor: b.cardHouseTextColor,
+  };
 }
 
 const router: IRouter = Router();
@@ -76,13 +114,13 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
   const body = (req.body ?? {}) as {
     all?: boolean;
     studentIds?: number[];
-    size?: string;
+    teacherId?: number;
+    period?: number;
     reason?: string;
   };
-  // Badge physical size — "lanyard" (default, portrait 3.375"×4.25")
-  // or "cr80" (landscape 3.375"×2.125", standard credit-card ID).
-  const sizeRaw = body.size ?? req.query.size;
-  const size: BadgeSize = sizeRaw === "cr80" ? "cr80" : "lanyard";
+  // Single badge format — a landscape credit-card / CR80 ID
+  // (3.375"×2.125"). Stored on the audit ledger as "card".
+  const size = "card";
   const all =
     body.all === true || req.query.all === "1" || req.query.all === "true";
   const bodyIds = Array.isArray(body.studentIds)
@@ -96,11 +134,95 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
     .filter((n) => Number.isInteger(n) && n > 0);
   const studentIds = bodyIds.length ? bodyIds : queryIds;
 
-  if (!all && studentIds.length === 0) {
+  // Optional "print by teacher (+ period)" filter. Mirrors the
+  // teacher-roster join: class_sections (by teacher [+period]) →
+  // section_roster → students. Only consulted when neither `all` nor an
+  // explicit `studentIds` list was provided, so existing callers are
+  // untouched.
+  const teacherIdRaw = body.teacherId ?? req.query.teacherId;
+  let teacherId: number | null = null;
+  if (
+    teacherIdRaw !== undefined &&
+    teacherIdRaw !== null &&
+    teacherIdRaw !== ""
+  ) {
+    const t = Number(teacherIdRaw);
+    if (!Number.isInteger(t) || t <= 0) {
+      res.status(400).json({ error: "Invalid teacherId" });
+      return;
+    }
+    teacherId = t;
+  }
+  const periodRaw = body.period ?? req.query.period;
+  let period: number | null = null;
+  if (periodRaw !== undefined && periodRaw !== null && periodRaw !== "") {
+    const p = Number(periodRaw);
+    if (!Number.isInteger(p) || p <= 0) {
+      res.status(400).json({ error: "Invalid period" });
+      return;
+    }
+    period = p;
+  }
+
+  if (!all && studentIds.length === 0 && teacherId === null) {
     res
       .status(400)
-      .json({ error: "Provide studentIds=1,2,3 or all=1" });
+      .json({ error: "Provide studentIds=1,2,3, teacherId, or all=1" });
     return;
+  }
+
+  // Resolve a teacher's roster to district student IDs when the
+  // teacher/period filter is in play (and no explicit id list was given).
+  let rosterDistrictIds: string[] | null = null;
+  if (!all && studentIds.length === 0 && teacherId !== null) {
+    const [teacher] = await db
+      .select({ id: staffTable.id })
+      .from(staffTable)
+      .where(
+        and(
+          eq(staffTable.id, teacherId),
+          eq(staffTable.schoolId, schoolId),
+        ),
+      );
+    if (!teacher) {
+      res.status(404).json({ error: "Teacher not found" });
+      return;
+    }
+    const sectionWhere = period
+      ? and(
+          eq(classSectionsTable.schoolId, schoolId),
+          eq(classSectionsTable.teacherStaffId, teacherId),
+          eq(classSectionsTable.period, period),
+        )
+      : and(
+          eq(classSectionsTable.schoolId, schoolId),
+          eq(classSectionsTable.teacherStaffId, teacherId),
+        );
+    const sections = await db
+      .select({ id: classSectionsTable.id })
+      .from(classSectionsTable)
+      .where(sectionWhere);
+    if (sections.length === 0) {
+      res
+        .status(404)
+        .json({ error: "No class sections for that teacher/period" });
+      return;
+    }
+    const sectionIds = sections.map((s) => s.id);
+    const rosterRows = await db
+      .select({ studentId: sectionRosterTable.studentId })
+      .from(sectionRosterTable)
+      .where(
+        and(
+          eq(sectionRosterTable.schoolId, schoolId),
+          inArray(sectionRosterTable.sectionId, sectionIds),
+        ),
+      );
+    rosterDistrictIds = Array.from(new Set(rosterRows.map((r) => r.studentId)));
+    if (rosterDistrictIds.length === 0) {
+      res.status(404).json({ error: "No students on that roster" });
+      return;
+    }
   }
 
   const students = await db
@@ -109,7 +231,11 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
     .where(
       and(
         eq(studentsTable.schoolId, schoolId),
-        ...(all ? [] : [inArray(studentsTable.id, studentIds)]),
+        ...(all
+          ? []
+          : studentIds.length
+            ? [inArray(studentsTable.id, studentIds)]
+            : [inArray(studentsTable.studentId, rosterDistrictIds ?? [])]),
       ),
     )
     .orderBy(asc(studentsTable.lastName), asc(studentsTable.firstName));
@@ -240,12 +366,15 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
     );
   }
 
+  // Per-school card design (top background, contrast text, optional house
+  // footer). Loaded once and shared across every badge in the batch.
+  const design = await buildCardDesign(schoolId);
+
   const badges: StudentBadgeInput[] = students.map((s) => ({
     studentId: s.studentId,
-    // District-level Local SIS ID (6-digit). When present, the visible
-    // "ID xxxx" line on the badge shows this instead of FLEID. The
-    // barcode + QR continue to encode student_id (FLEID) so existing
-    // sign-in scanners keep working.
+    // District-level Local SIS id (the human-facing id students scan/type).
+    // The visible "ID" line, the QR, and the Code128 barcode all encode this
+    // — the internal FLEID-style student_id never reaches a student.
     localSisId: s.localSisId ?? null,
     firstName: s.firstName,
     lastName: s.lastName,
@@ -265,6 +394,7 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
       };
     })(),
     photoBytes: photoByStudent.get(s.id) ?? null,
+    design,
   }));
 
   // Audit ledger — one row per student per batch. Optional reason
@@ -291,7 +421,7 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
     // Audit is best-effort; never block a print.
   }
 
-  const pdf = await renderStudentBadgesPdf(badges, size);
+  const pdf = await renderStudentBadgesPdf(badges);
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader(
     "Content-Disposition",
@@ -315,7 +445,9 @@ router.get(
       .select({
         id: badgePrintEventsTable.id,
         studentId: badgePrintEventsTable.studentId,
-        studentRecordId: studentsTable.studentId,
+        // Forward-facing ID is the local SIS id ONLY — never the FLEID-style
+        // students.studentId.
+        localSisId: studentsTable.localSisId,
         firstName: studentsTable.firstName,
         lastName: studentsTable.lastName,
         grade: studentsTable.grade,
@@ -341,6 +473,71 @@ router.get(
     res.json({ events: rows });
   },
 );
+
+// Sample badge — renders ONE synthetic student with the school's currently
+// saved card design so an admin can "Print sample badge" while tuning the
+// designer without picking a real student or writing an audit row. No PII,
+// no FLEID: the synthetic localSisId is a fixed demo value.
+async function handleSampleBadge(req: Request, res: Response): Promise<void> {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+
+  const [school] = await db
+    .select({ name: schoolsTable.name })
+    .from(schoolsTable)
+    .where(eq(schoolsTable.id, schoolId));
+  const schoolName = school?.name ?? "PulseEDU";
+
+  // Pick the first house (if any) so the optional footer band has a real
+  // name/color to preview. Best-effort — the sample still renders if the
+  // school has no houses configured yet.
+  const [firstHouse] = await db
+    .select({
+      name: housesTable.name,
+      color: housesTable.color,
+      iconKey: housesTable.iconKey,
+    })
+    .from(housesTable)
+    .where(eq(housesTable.schoolId, schoolId))
+    .orderBy(asc(housesTable.name))
+    .limit(1);
+
+  const design = await buildCardDesign(schoolId);
+  const baseUrl = kioskBaseUrl(req);
+
+  const sample: StudentBadgeInput = {
+    studentId: "SAMPLE",
+    localSisId: "100200",
+    firstName: "Jordan",
+    lastName: "Sample",
+    grade: 7,
+    teacherName: "Ms. Johnson",
+    dismissalMode: "car_rider",
+    schoolName,
+    baseUrl,
+    house: firstHouse
+      ? {
+          name: firstHouse.name,
+          color: firstHouse.color,
+          iconKey: firstHouse.iconKey,
+          logoBytes: null,
+        }
+      : null,
+    photoBytes: null,
+    design,
+  };
+
+  const pdf = await renderStudentBadgesPdf([sample]);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    'attachment; filename="student-id-sample.pdf"',
+  );
+  res.send(pdf);
+}
+
+router.post("/students/id-badges-sample.pdf", requireAdmin, handleSampleBadge);
+router.get("/students/id-badges-sample.pdf", requireAdmin, handleSampleBadge);
 
 router.post("/students/id-badges.pdf", requireAdmin, handleBadges);
 router.get("/students/id-badges.pdf", requireAdmin, handleBadges);

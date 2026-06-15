@@ -913,7 +913,14 @@ export async function rebuildParrott(): Promise<{
       log.push(`tardies: ${rows.length}`);
     }
 
-    // Attendance — 30 school days, ~95% present, deterministic shape.
+    // Attendance — 30 school days, per-STUDENT attendance-rate buckets so the
+    // parent-portal % and insights dashboards show a realistic spread:
+    //   ~2% chronic (~60% present), most (~60% of students) at ~92%, and the
+    //   balance (~38%) at 100%.
+    // Status strings MUST be canonical (present | tardy | excused | unexcused):
+    // the on-time-streak walker (parentSnapshot) and insights ADA only
+    // recognize these — "absent_excused"/"absent_unexcused" silently fall
+    // through and miscount.
     {
       const schoolDays: string[] = [];
       const d = new Date();
@@ -922,20 +929,60 @@ export async function rebuildParrott(): Promise<{
         if (day !== 0 && day !== 6) schoolDays.push(d.toISOString().slice(0, 10));
         d.setDate(d.getDate() - 1);
       }
+      const numDays = schoolDays.length;
+      // Bucket by index → exact proportions regardless of student count.
+      const chronicCutoff = Math.round(students.length * 0.02); // ~2%
+      const midCutoff = Math.round(students.length * 0.62); // next ~60%
       const rows: Array<typeof studentAttendanceDayTable.$inferInsert> = [];
-      for (const date of schoolDays) {
-        for (const st of students) {
-          const r = rng();
+      for (let s = 0; s < students.length; s++) {
+        const st = students[s]!;
+        // Per-student bucket → how many of the 30 days are absences.
+        let absentCount: number;
+        let chronic = false;
+        if (s < chronicCutoff) {
+          chronic = true;
+          absentCount = 11 + Math.floor(rng() * 3); // 11–13 absent → ~60%
+        } else if (s < midCutoff) {
+          absentCount = rng() < 0.6 ? 2 : 3; // 2–3 absent → ~92% (mean 27.6/30)
+        } else {
+          absentCount = 0; // perfect attendance
+        }
+        // Deterministic Fisher–Yates shuffle of day indices; first N are absent
+        // so absences spread across the window (feeds the last-30 view too).
+        const order = schoolDays.map((_, i) => i);
+        for (let i = order.length - 1; i > 0; i--) {
+          const j = Math.floor(rng() * (i + 1));
+          [order[i], order[j]] = [order[j]!, order[i]!];
+        }
+        const absentDays = new Set(order.slice(0, absentCount));
+        // ~15% of students get one tardy day among their present days, to keep
+        // the on-time-streak data realistic. (Tardy counts as present for %.)
+        let tardyDay = -1;
+        if (rng() < 0.15) {
+          const present = order.slice(absentCount);
+          if (present.length > 0)
+            tardyDay = present[Math.floor(rng() * present.length)]!;
+        }
+        for (let i = 0; i < numDays; i++) {
           let status: string;
-          if (r < 0.92) status = "present";
-          else if (r < 0.96) status = "absent_excused";
-          else if (r < 0.99) status = "absent_unexcused";
-          else status = "tardy";
+          let absentPeriods: number[] = [];
+          if (absentDays.has(i)) {
+            // Chronic kids lean unexcused; everyone else ~50/50.
+            const unexcused = chronic ? rng() < 0.75 : rng() < 0.5;
+            status = unexcused ? "unexcused" : "excused";
+            absentPeriods = [1, 2, 3, 4, 5, 6, 7];
+          } else if (i === tardyDay) {
+            status = "tardy";
+            absentPeriods = [1];
+          } else {
+            status = "present";
+          }
           rows.push({
             schoolId: SCHOOL_ID,
             studentId: st.studentId,
-            day: date,
+            day: schoolDays[i]!,
             status,
+            absentPeriods,
           });
         }
       }

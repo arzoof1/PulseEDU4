@@ -4,6 +4,7 @@ import { authFetch } from "../lib/authToken";
 export interface CheckInStudent {
   id: number | string;
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
 }
@@ -105,7 +106,7 @@ export default function CheckInOutModal({
     for (const s of students) {
       const first = s.firstName.toLowerCase();
       const last = s.lastName.toLowerCase();
-      const sid = s.studentId.toLowerCase();
+      const sid = (s.localSisId ?? "").toLowerCase();
       let rank = -1;
       if (first.startsWith(q) || last.startsWith(q)) rank = 0;
       else if (sid.startsWith(q)) rank = 1;
@@ -293,7 +294,7 @@ export default function CheckInOutModal({
                         <strong>
                           {s.firstName} {s.lastName}
                         </strong>
-                        <span className="cp-list-sub">{s.studentId}</span>
+                        <span className="cp-list-sub">{s.localSisId ?? "—"}</span>
                       </span>
                     </button>
                   </li>

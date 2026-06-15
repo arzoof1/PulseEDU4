@@ -22,6 +22,20 @@ export type BrandingPayload = {
   buttonHoverBgColors: string[];
   buttonHoverBgAngle: number;
   buttonHoverText: string | null;
+  // Student ID card designer. Empty cardBgColors[] + mode 'colors' means
+  // "not customized" — the printed badge keeps its legacy house-colored look.
+  cardOrientation: "landscape" | "portrait";
+  cardBgMode: "colors" | "image";
+  cardBgColors: string[];
+  cardBgAngle: number;
+  cardBgObjectPath: string | null;
+  cardHeaderTextMode: "auto" | "manual";
+  cardHeaderTextColor: string | null;
+  cardShowHouse: boolean;
+  cardHouseBgMode: "house" | "white" | "custom";
+  cardHouseBgColor: string | null;
+  cardHouseTextMode: "auto" | "manual";
+  cardHouseTextColor: string | null;
 };
 
 // PulseEDU defaults — preserved for any school that hasn't customized.

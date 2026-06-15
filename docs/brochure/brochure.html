@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PulseEDU — The true HeartBEAT of your school</title>
+<style>
+  @page {
+    size: Letter;
+    margin: 0;
+  }
+
+  :root {
+    --teal: #0f766e;
+    --cyan: #0e7490;
+    --cyan-bright: #06b6d4;
+    --violet: #7c3aed;
+    --blue: #2563eb;
+    --blue-bright: #1d8cff;
+    --ink: #0f172a;
+    --muted: #475569;
+    --subtle: #64748b;
+    --line: #e5e7eb;
+    --bg-light: #f6f8fb;
+    --surface: #ffffff;
+    --surface-2: #f1f5f9;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    font-family: "DejaVu Sans", "Helvetica Neue", Arial, sans-serif;
+    color: var(--ink);
+  }
+
+  .page {
+    position: relative;
+    width: 215.9mm;
+    height: 279.4mm;
+    overflow: hidden;
+    page-break-after: always;
+    page-break-inside: avoid;
+    break-inside: avoid;
+    background: var(--bg-light);
+  }
+  .page:last-child { page-break-after: auto; }
+
+  /* ---------- shared bits ---------- */
+  .eyebrow {
+    display: inline-block;
+    font-size: 9.5pt;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+    font-weight: 700;
+    padding: 5px 14px;
+    border-radius: 999px;
+  }
+
+  /* ---------- COVER ---------- */
+  .cover {
+    background:
+      radial-gradient(120% 80% at 50% 0%, #122247 0%, #0a1430 45%, #060b18 100%);
+    color: #fff;
+  }
+  .cover .stars {
+    position: absolute; top:0; right:0; bottom:0; left:0;
+    background-image:
+      radial-gradient(1.5px 1.5px at 12% 18%, rgba(255,255,255,0.55), transparent),
+      radial-gradient(1.5px 1.5px at 82% 12%, rgba(255,255,255,0.45), transparent),
+      radial-gradient(1.2px 1.2px at 67% 28%, rgba(255,255,255,0.40), transparent),
+      radial-gradient(1.2px 1.2px at 28% 38%, rgba(255,255,255,0.35), transparent),
+      radial-gradient(1.6px 1.6px at 90% 60%, rgba(255,255,255,0.30), transparent),
+      radial-gradient(1.3px 1.3px at 18% 72%, rgba(255,255,255,0.30), transparent),
+      radial-gradient(1.4px 1.4px at 55% 82%, rgba(255,255,255,0.25), transparent);
+  }
+  .cover .glow {
+    position: absolute;
+    top: -130mm; left: 50%; margin-left: -130mm;
+    width: 260mm; height: 260mm;
+    background: radial-gradient(circle, rgba(37,99,235,0.30) 0%, rgba(124,58,237,0.14) 35%, transparent 65%);
+  }
+  .cover-inner {
+    position: absolute; top:0; right:0; bottom:0; left:0;
+    padding: 26mm 24mm;
+    text-align: center;
+  }
+  .cover .badge {
+    color: #7cc4ff;
+    border: 1px solid rgba(124,196,255,0.45);
+    background: rgba(29,140,255,0.10);
+    margin-top: 16mm;
+  }
+
+  .wordmark { margin-top: 18mm; }
+  .wm-pulse {
+    font-size: 60pt;
+    font-weight: 800;
+    color: #ffffff;
+    letter-spacing: -1.5px;
+    vertical-align: middle;
+  }
+  .wm-edu {
+    display: inline-block;
+    font-size: 46pt;
+    font-weight: 800;
+    color: #ffffff;
+    letter-spacing: 0.5px;
+    vertical-align: middle;
+    margin-left: 10px;
+    padding: 4px 18px 8px 18px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, var(--cyan-bright) 0%, var(--violet) 55%, var(--blue) 100%);
+  }
+
+  .cover .tagline {
+    margin-top: 14mm;
+    font-size: 23pt;
+    font-weight: 700;
+    line-height: 1.25;
+  }
+  .cover .tagline .accent { color: #c4b5fd; }
+  .cover .sub {
+    margin-top: 8mm;
+    margin-left: auto; margin-right: auto;
+    max-width: 150mm;
+    font-size: 12.5pt;
+    line-height: 1.6;
+    color: #b9c6e0;
+  }
+  .cover .pulseline { margin-top: 13mm; }
+
+  .chipline { margin-top: 13mm; text-align: center; }
+  .chip {
+    display: inline-block;
+    font-size: 9.5pt;
+    font-weight: 600;
+    color: #dbe6fb;
+    border: 1px solid rgba(255,255,255,0.16);
+    background: rgba(255,255,255,0.05);
+    border-radius: 999px;
+    padding: 6px 13px;
+    margin: 4px 3px;
+  }
+
+  .cover .footer {
+    position: absolute;
+    bottom: 16mm; left: 0; right: 0;
+    text-align: center;
+    color: #8aa0c6;
+    font-size: 10pt;
+    letter-spacing: 1px;
+  }
+  .cover .footer b { color: #dce6f7; }
+
+  /* ---------- CONTENT PAGE HEADER ---------- */
+  .phead {
+    position: relative;
+    padding: 13mm 18mm 8mm 18mm;
+    color: #fff;
+    background: linear-gradient(120deg, var(--teal) 0%, var(--cyan) 52%, var(--violet) 100%);
+  }
+  .phead.alt {
+    background: linear-gradient(120deg, var(--violet) 0%, var(--blue) 100%);
+  }
+  .phead .kicker {
+    font-size: 9.5pt;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: rgba(255,255,255,0.85);
+  }
+  .phead h2 {
+    margin: 5px 0 0 0;
+    font-size: 23pt;
+    font-weight: 800;
+    line-height: 1.08;
+    letter-spacing: -0.4px;
+  }
+  .phead p {
+    margin: 6px 0 0 0;
+    font-size: 11pt;
+    color: rgba(255,255,255,0.92);
+    max-width: 165mm;
+  }
+  .phead .hpulse { position: absolute; right: 16mm; top: 14mm; }
+
+  .pbody { padding: 6mm 18mm 0 18mm; }
+
+  /* ---------- FEATURE CARDS ---------- */
+  .cards { display: flex; flex-wrap: wrap; margin: 0 -4mm; }
+  .card { width: 50%; padding: 0 4mm 6mm 4mm; }
+  .card-inner {
+    height: 100%;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    border-left: 5px solid var(--cyan);
+    padding: 6mm 6mm 5mm 6mm;
+  }
+  .card-inner.v { border-left-color: var(--violet); }
+  .card-inner.b { border-left-color: var(--blue); }
+  .card-inner.t { border-left-color: var(--teal); }
+  .card .badgewrap { display: flex; align-items: center; margin-bottom: 4mm; }
+  .dot {
+    width: 28px; height: 28px;
+    border-radius: 8px;
+    margin-right: 9px;
+    color: #fff;
+    font-size: 12.5pt;
+    line-height: 28px;
+    text-align: center;
+    background: linear-gradient(135deg, var(--cyan), var(--violet));
+  }
+  .dot.v { background: linear-gradient(135deg, var(--violet), var(--blue)); }
+  .dot.t { background: linear-gradient(135deg, var(--teal), var(--cyan)); }
+  .dot.b { background: linear-gradient(135deg, var(--blue), var(--cyan-bright)); }
+  .card h3 { margin: 0; font-size: 12pt; font-weight: 800; color: var(--ink); }
+  .card p { margin: 0; font-size: 9.4pt; line-height: 1.42; color: var(--muted); }
+  .card .tag {
+    display: inline-block;
+    margin-top: 3mm;
+    font-size: 8pt;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--cyan);
+    background: #ecfeff;
+    border-radius: 999px;
+    padding: 3px 9px;
+  }
+  .card .tag.v { color: var(--violet); background: #f3eeff; }
+
+  .pfoot {
+    position: absolute;
+    bottom: 9mm; left: 18mm; right: 18mm;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 8.5pt;
+    color: var(--subtle);
+    border-top: 1px solid var(--line);
+    padding-top: 4mm;
+  }
+  .pfoot .brand { font-weight: 800; color: var(--cyan); }
+  .pfoot .brand span { color: var(--violet); }
+
+  /* ---------- INTRO PAGE ---------- */
+  .intro-hero { padding: 22mm 18mm 0 18mm; }
+  .intro-hero h1 {
+    font-size: 27pt;
+    font-weight: 800;
+    line-height: 1.12;
+    letter-spacing: -0.6px;
+    margin: 6mm 0 0 0;
+    color: var(--ink);
+  }
+  .intro-hero h1 .g { color: var(--violet); }
+  .intro-hero .lead {
+    margin-top: 7mm;
+    font-size: 12pt;
+    line-height: 1.65;
+    color: var(--muted);
+    max-width: 172mm;
+  }
+  .stats { display: flex; margin: 12mm -3mm 0 -3mm; }
+  .stat { width: 25%; padding: 0 3mm; }
+  .stat-inner {
+    border-radius: 12px;
+    padding: 7mm 5mm;
+    color: #fff;
+    height: 100%;
+    background: linear-gradient(135deg, var(--cyan), var(--violet));
+  }
+  .stat-inner.b { background: linear-gradient(135deg, var(--violet), var(--blue)); }
+  .stat-inner.t { background: linear-gradient(135deg, var(--teal), var(--cyan)); }
+  .stat-inner.x { background: linear-gradient(135deg, var(--blue), var(--cyan-bright)); }
+  .stat .num { font-size: 21pt; font-weight: 800; line-height: 1; }
+  .stat .lbl { margin-top: 3mm; font-size: 9pt; line-height: 1.35; color: rgba(255,255,255,0.92); }
+
+  .why {
+    margin: 13mm 18mm 0 18mm;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 9mm;
+  }
+  .why h4 { margin: 0 0 5mm 0; font-size: 13pt; font-weight: 800; color: var(--ink); }
+  .why-row { display: flex; flex-wrap: wrap; margin: 0 -4mm; }
+  .why-item { width: 50%; padding: 0 4mm 5mm 4mm; }
+  .why-item .t { font-weight: 800; font-size: 10pt; color: var(--cyan); }
+  .why-item .t.v { color: var(--violet); }
+  .why-item p { margin: 1mm 0 0 0; font-size: 9.5pt; line-height: 1.5; color: var(--muted); }
+
+  /* ---------- COMPLIANCE ---------- */
+  .compliance {
+    background: radial-gradient(120% 90% at 50% 0%, #122247 0%, #0a1430 50%, #060b18 100%);
+    color: #fff;
+  }
+  .compliance .stars {
+    position: absolute; top:0; right:0; bottom:0; left:0;
+    background-image:
+      radial-gradient(1.4px 1.4px at 14% 22%, rgba(255,255,255,0.45), transparent),
+      radial-gradient(1.3px 1.3px at 78% 16%, rgba(255,255,255,0.40), transparent),
+      radial-gradient(1.2px 1.2px at 60% 30%, rgba(255,255,255,0.32), transparent),
+      radial-gradient(1.4px 1.4px at 86% 70%, rgba(255,255,255,0.26), transparent);
+  }
+  .cmp-inner { position: absolute; top:0; right:0; bottom:0; left:0; padding: 15mm 18mm; }
+  .cmp-inner .badge {
+    color: #7df0d8;
+    border: 1px solid rgba(125,240,216,0.45);
+    background: rgba(15,118,110,0.18);
+  }
+  .cmp-inner h2 { font-size: 23pt; font-weight: 800; margin: 6mm 0 0 0; line-height: 1.1; }
+  .cmp-inner .sub { margin-top: 4mm; font-size: 10.5pt; color: #c2d0ea; max-width: 170mm; line-height: 1.55; }
+
+  .cmp-cards { display: flex; margin: 8mm -4mm 0 -4mm; }
+  .cmp-card { width: 50%; padding: 0 4mm; }
+  .cmp-card-inner {
+    height: 100%;
+    background: rgba(255,255,255,0.055);
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 14px;
+    padding: 6mm;
+  }
+  .cmp-card .seal {
+    width: 38px; height: 38px; border-radius: 10px;
+    text-align: center; line-height: 38px; font-size: 16pt; color: #fff;
+    background: linear-gradient(135deg, var(--teal), var(--cyan));
+    margin-bottom: 4mm;
+  }
+  .cmp-card .seal.v { background: linear-gradient(135deg, var(--violet), var(--blue)); }
+  .cmp-card h3 { margin: 0; font-size: 14pt; font-weight: 800; }
+  .cmp-card .mini { font-size: 8.5pt; letter-spacing: 1px; text-transform: uppercase; color: #8fa6cb; margin-top: 1mm; }
+  .cmp-card ul { margin: 4mm 0 0 0; padding: 0; list-style: none; }
+  .cmp-card li { font-size: 9.2pt; line-height: 1.45; color: #d4dded; padding-left: 16px; margin-bottom: 2.5mm; position: relative; }
+  .cmp-card li:before { content: "\2713"; position: absolute; left: 0; top: 0; color: #5eead4; font-weight: 700; }
+
+  .trust-strip { margin: 7mm -4mm 0 -4mm; display: flex; }
+  .trust { width: 33.33%; padding: 0 4mm; }
+  .trust-inner {
+    border: 1px solid rgba(255,255,255,0.14);
+    background: rgba(255,255,255,0.04);
+    border-radius: 12px;
+    padding: 5mm;
+    height: 100%;
+  }
+  .trust .t { font-weight: 800; font-size: 10pt; color: #9ad7ff; }
+  .trust p { margin: 2mm 0 0 0; font-size: 9pt; line-height: 1.45; color: #c2d0ea; }
+
+  .cmp-foot {
+    margin-top: 9mm;
+    border-top: 1px solid rgba(255,255,255,0.14);
+    padding-top: 6mm;
+    text-align: center;
+  }
+  .cmp-foot .big { font-size: 15pt; font-weight: 800; }
+  .cmp-foot .big .g { color: #c4b5fd; }
+  .cmp-foot .line { margin-top: 3mm; font-size: 10pt; color: #aebcd8; }
+  .cmp-foot .disclaimer { margin: 4mm auto 0 auto; max-width: 165mm; font-size: 7.5pt; line-height: 1.4; color: #7e90b3; }
+  .cmp-foot .brand { margin-top: 4mm; font-size: 10pt; letter-spacing: 1px; color: #dce6f7; font-weight: 700; }
+</style>
+</head>
+<body>
+
+<!-- ============ PAGE 1 — COVER ============ -->
+<div class="page cover">
+  <div class="glow"></div>
+  <div class="stars"></div>
+  <div class="cover-inner">
+    <span class="eyebrow badge">&#9889;&nbsp; The Next Generation of EdTech</span>
+
+    <div class="wordmark">
+      <span class="wm-pulse">Pulse</span><span class="wm-edu">EDU</span>
+    </div>
+
+    <div class="tagline">The true <span class="accent">HeartBEAT</span><br/>of your school.</div>
+
+    <div class="sub">
+      One unified platform for school operations, behavior &amp; PBIS, MTSS and academics,
+      family engagement, and district-wide insights &mdash; purpose-built for K&ndash;12 schools.
+    </div>
+
+    <div class="pulseline">
+      <svg width="320" height="40" viewBox="0 0 320 40" xmlns="http://www.w3.org/2000/svg">
+        <polyline points="0,20 90,20 110,20 122,6 138,34 152,20 168,12 182,28 200,20 320,20"
+          fill="none" stroke="#5eead4" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+
+    <div class="chipline">
+      <span class="chip">Daily Operations</span>
+      <span class="chip">Behavior &amp; PBIS</span>
+      <span class="chip">MTSS &amp; Academics</span>
+      <span class="chip">Family Engagement</span>
+      <span class="chip">District Insights</span>
+      <span class="chip">FERPA &amp; COPPA Aligned</span>
+    </div>
+  </div>
+
+  <div class="footer">
+    A <b>Pulse Kinetics</b> Platform &nbsp;&bull;&nbsp; District Evaluation Brochure &nbsp;&bull;&nbsp; pulsekinetics.us
+  </div>
+</div>
+
+<!-- ============ PAGE 2 — INTRO / WHY ============ -->
+<div class="page">
+  <div class="intro-hero">
+    <span class="eyebrow" style="color:#fff;background:linear-gradient(120deg,var(--teal),var(--violet));">Why PulseEDU</span>
+    <h1>Every system your school runs on,<br/><span class="g">beating as one.</span></h1>
+    <div class="lead">
+      Schools juggle a dozen disconnected tools &mdash; one for hall passes, another for behavior points,
+      spreadsheets for interventions, and email for families. <b>PulseEDU</b> replaces the chaos with a single,
+      multi-tenant platform where operations, student support, and data live together. Less friction for staff,
+      more time for students, and a clear, real-time picture for leadership.
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="stat-inner t"><div class="num">16+</div><div class="lbl">Integrated modules in one login</div></div></div>
+    <div class="stat"><div class="stat-inner"><div class="num">6</div><div class="lbl">Insight dashboards with drill-down</div></div></div>
+    <div class="stat"><div class="stat-inner b"><div class="num">K&ndash;12</div><div class="lbl">Multi-school, district-ready by design</div></div></div>
+    <div class="stat"><div class="stat-inner x"><div class="num">100%</div><div class="lbl">School-scoped data isolation</div></div></div>
+  </div>
+
+  <div class="why">
+    <h4>Built for the people who run schools</h4>
+    <div class="why-row">
+      <div class="why-item"><div class="t">For Teachers</div><p>Fewer clicks, fewer tabs. Rosters, behavior, hall passes, and intervention check-ins surface exactly when needed &mdash; with bell-driven reminders.</p></div>
+      <div class="why-item"><div class="t v">For Administrators</div><p>Live visibility into climate, attendance friction, MTSS fidelity, and early-warning signals &mdash; without chasing reports.</p></div>
+      <div class="why-item"><div class="t">For Support Teams</div><p>Counselors, MTSS, and behavior specialists work from shared plans, audit trails, and safety information with role-based access.</p></div>
+      <div class="why-item"><div class="t v">For Families</div><p>A secure parent portal and bilingual school communications keep guardians informed and engaged in their student&rsquo;s journey.</p></div>
+    </div>
+  </div>
+
+  <div class="pfoot">
+    <span class="brand">Pulse<span>EDU</span></span>
+    <span>The true HeartBEAT of your school</span>
+  </div>
+</div>
+
+<!-- ============ PAGE 3 — DAILY OPERATIONS ============ -->
+<div class="page">
+  <div class="phead">
+    <svg class="hpulse" width="120" height="34" viewBox="0 0 120 34" xmlns="http://www.w3.org/2000/svg">
+      <polyline points="0,17 38,17 48,5 58,29 66,17 120,17" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="2.5" stroke-linecap="round"/>
+    </svg>
+    <div class="kicker">Module Group 01</div>
+    <h2>Daily Operations</h2>
+    <p>Run the building, not the chaos. The everyday logistics of a school &mdash; movement, arrival, dismissal, events, and what&rsquo;s on every screen &mdash; handled in one place.</p>
+  </div>
+  <div class="pbody">
+    <div class="cards">
+      <div class="card"><div class="card-inner t">
+        <div class="badgewrap"><div class="dot t">&#10138;</div><h3>Hall Pass &amp; Kiosk</h3></div>
+        <p>A self-serve door kiosk with a period-aware <b>waiting line</b> (caps reset on the bell) and a <b>&ldquo;Go Now&rdquo;</b> skip-the-line for students summoned to the office, guidance, or clinic. Keep-apart &amp; daily-limit safety blocks, a teacher Companion Queue with a live <b>&ldquo;heading to me&rdquo;</b> view, and printable activation cards &amp; badges.</p>
+        <span class="tag">Movement &amp; Safety</span>
+      </div></div>
+      <div class="card"><div class="card-inner t">
+        <div class="badgewrap"><div class="dot t">&#8962;</div><h3>Parent Pick-Up</h3></div>
+        <p>A curb keypad and walker gate, admin-authorized QR car tags with printable PDFs, a classroom signage tile, and an Admin Hub &ldquo;still on campus&rdquo; reconciliation view for safe, orderly dismissal.</p>
+        <span class="tag">Arrival &amp; Dismissal</span>
+      </div></div>
+      <div class="card"><div class="card-inner t">
+        <div class="badgewrap"><div class="dot t">&#9635;</div><h3>Digital Displays &amp; Signage</h3></div>
+        <p>Per-school playlists (image, video, audio, PDF) with scheduling, PBIS house standings, active hall passes, and HeartBEAT signage &mdash; plus <b>Live Remote Control</b> to drive every TV PowerPoint-style without re-entering URLs.</p>
+        <span class="tag">Communication</span>
+      </div></div>
+      <div class="card"><div class="card-inner t">
+        <div class="badgewrap"><div class="dot t">&#9670;</div><h3>Event Ticketing</h3></div>
+        <p>Free-ticket events with per-grade quotas, QR tickets delivered by email, PDF, and the parent portal, no-login volunteer scanning with atomic first-scan-wins, capacity caps, and a full scan-history audit.</p>
+        <span class="tag">Events</span>
+      </div></div>
+      <div class="card"><div class="card-inner t">
+        <div class="badgewrap"><div class="dot t">&#9776;</div><h3>Bell Schedules &amp; Tardy</h3></div>
+        <p>Configurable bell schedules power period-aware queue resets, MTSS check-in windows, and notifications &mdash; the heartbeat clock the rest of the platform runs on.</p>
+        <span class="tag">Scheduling</span>
+      </div></div>
+      <div class="card"><div class="card-inner t">
+        <div class="badgewrap"><div class="dot t">&#9873;</div><h3>School Tours &amp; Enrollment</h3></div>
+        <p>A public, bilingual (EN/ES) per-school brag page with a tour-request lead pipeline &mdash; owners, timelines, overdue clocks, a conversion report, and brag-sheet &amp; post-tour PDFs to win families.</p>
+        <span class="tag">Enrollment</span>
+      </div></div>
+    </div>
+  </div>
+  <div class="pfoot"><span class="brand">Pulse<span>EDU</span></span><span>Daily Operations</span></div>
+</div>
+
+<!-- ============ PAGE 4 — BEHAVIOR & PBIS ============ -->
+<div class="page">
+  <div class="phead alt">
+    <svg class="hpulse" width="120" height="34" viewBox="0 0 120 34" xmlns="http://www.w3.org/2000/svg">
+      <polyline points="0,17 38,17 48,5 58,29 66,17 120,17" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="2.5" stroke-linecap="round"/>
+    </svg>
+    <div class="kicker">Module Group 02</div>
+    <h2>Behavior &amp; PBIS</h2>
+    <p>Build the culture you want to see. Recognize the positive, support the struggling, and keep everyone safe &mdash; with the records and fairness controls schools need.</p>
+  </div>
+  <div class="pbody">
+    <div class="cards">
+      <div class="card"><div class="card-inner v">
+        <div class="badgewrap"><div class="dot v">&#9733;</div><h3>PBIS Hub &amp; Store</h3></div>
+        <p>Point tracking and student recognition with two reward catalogs: a teacher-run Classroom Store and a school-wide School Store (read-only for teachers, full edit for admins &amp; PBIS coordinators).</p>
+        <span class="tag v">Positive Behavior</span>
+      </div></div>
+      <div class="card"><div class="card-inner v">
+        <div class="badgewrap"><div class="dot v">&#9889;</div><h3>Spotlight Recognition</h3></div>
+        <p>A governed, quartile-tiered random recognition engine that keeps house races competitive &mdash; the value a teacher sees is exactly the value stored, with re-spin protection when standings shift.</p>
+        <span class="tag v">Engagement</span>
+      </div></div>
+      <div class="card"><div class="card-inner v">
+        <div class="badgewrap"><div class="dot v">&#9851;</div><h3>House System</h3></div>
+        <p>School-wide house standings that surface on classroom and hallway signage, turning everyday positive behavior into a shared, school-spirited competition.</p>
+        <span class="tag v">Climate</span>
+      </div></div>
+      <div class="card"><div class="card-inner v">
+        <div class="badgewrap"><div class="dot v">&#9760;</div><h3>Safety Plans</h3></div>
+        <p>Per-student behavioral and physical safety checklists built from a reusable library, with full audit logs and role-based access &mdash; Guidance &amp; Core Team edit, all staff view what they need.</p>
+        <span class="tag v">Student Safety</span>
+      </div></div>
+      <div class="card"><div class="card-inner v">
+        <div class="badgewrap"><div class="dot v">&#9998;</div><h3>Behavior Documentation</h3></div>
+        <p>Consistent logging of incidents and supports tied to each student, feeding the Behavior and Equity dashboards so patterns surface early and interventions are timely.</p>
+        <span class="tag v">Records</span>
+      </div></div>
+      <div class="card"><div class="card-inner v">
+        <div class="badgewrap"><div class="dot v">&#10003;</div><h3>Consistency Guardrails</h3></div>
+        <p>Built-in checks help Core Teams apply behavior responses fairly and consistently across staff &mdash; supporting equitable, defensible decisions.</p>
+        <span class="tag v">Equity</span>
+      </div></div>
+    </div>
+  </div>
+  <div class="pfoot"><span class="brand">Pulse<span>EDU</span></span><span>Behavior &amp; PBIS</span></div>
+</div>
+
+<!-- ============ PAGE 5 — MTSS, ACADEMICS & EARLY WARNING ============ -->
+<div class="page">
+  <div class="phead">
+    <svg class="hpulse" width="120" height="34" viewBox="0 0 120 34" xmlns="http://www.w3.org/2000/svg">
+      <polyline points="0,17 38,17 48,5 58,29 66,17 120,17" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="2.5" stroke-linecap="round"/>
+    </svg>
+    <div class="kicker">Module Group 03</div>
+    <h2>MTSS, Academics &amp; Early Warning</h2>
+    <p>Catch every student before they fall. Tiered intervention, FAST-driven academics, and data that points the way &mdash; without the spreadsheet sprawl.</p>
+  </div>
+  <div class="pbody">
+    <div class="cards">
+      <div class="card"><div class="card-inner b">
+        <div class="badgewrap"><div class="dot b">&#9650;</div><h3>MTSS Intervention Plans</h3></div>
+        <p>Behavior &amp; Academic Tier 2/3 tracking &mdash; goal setting, weekly progress monitoring, strategy categories, completion reports, and bell-driven check-ins. A dual-gate engine surfaces Tier 3 academic candidates from FAST &amp; iReady evidence.</p>
+        <span class="tag">Multi-Tiered Support</span>
+      </div></div>
+      <div class="card"><div class="card-inner b">
+        <div class="badgewrap"><div class="dot b">&#9707;</div><h3>Teacher Roster</h3></div>
+        <p>A per-teacher student view with FAST scores, ESE/504/ELL flags, safety-plan indicators, and the FAST learning-gain green-check. Core Team can view any teacher&rsquo;s roster.</p>
+        <span class="tag">Classroom Insight</span>
+      </div></div>
+      <div class="card"><div class="card-inner b">
+        <div class="badgewrap"><div class="dot b">&#9783;</div><h3>Intensive Group Insights</h3></div>
+        <p>A read-only Class Composer proposes intensive-group sections from FAST item-level weakness, plus a Group Insights tab &mdash; never overwriting your SIS, which stays the source of truth.</p>
+        <span class="tag">Grouping</span>
+      </div></div>
+      <div class="card"><div class="card-inner b">
+        <div class="badgewrap"><div class="dot b">&#9878;</div><h3>School Grade Calculator</h3></div>
+        <p>An admin estimate of the Florida MS school grade per progress-monitoring window &mdash; FAST components auto-computed, learning gains projected at PM1/PM2 and strict PM3-to-PM3 at PM3.</p>
+        <span class="tag">Accountability</span>
+      </div></div>
+      <div class="card"><div class="card-inner b">
+        <div class="badgewrap"><div class="dot b">&#8599;</div><h3>Multi-Year FAST History</h3></div>
+        <p>Longitudinal trajectory chips on the student profile, teacher roster, and MTSS plan editor &mdash; giving every decision the context of where a student has been, not just where they are.</p>
+        <span class="tag">Growth</span>
+      </div></div>
+      <div class="card"><div class="card-inner b">
+        <div class="badgewrap"><div class="dot b">&#9888;</div><h3>Early Warning</h3></div>
+        <p>An early-warning dashboard blends attendance friction, behavior, and academic signals to flag students who need attention now &mdash; with one-click drill-down to the full student profile.</p>
+        <span class="tag">Prevention</span>
+      </div></div>
+    </div>
+  </div>
+  <div class="pfoot"><span class="brand">Pulse<span>EDU</span></span><span>MTSS, Academics &amp; Early Warning</span></div>
+</div>
+
+<!-- ============ PAGE 6 — INSIGHTS, DATA & FAMILY ============ -->
+<div class="page">
+  <div class="phead alt">
+    <svg class="hpulse" width="120" height="34" viewBox="0 0 120 34" xmlns="http://www.w3.org/2000/svg">
+      <polyline points="0,17 38,17 48,5 58,29 66,17 120,17" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="2.5" stroke-linecap="round"/>
+    </svg>
+    <div class="kicker">Module Group 04 &amp; 05</div>
+    <h2>Insights, Data &amp; Family</h2>
+    <p>Decisions backed by data &mdash; and families brought into the loop. Turn everything your school records into clear pictures, and share the right parts with guardians.</p>
+  </div>
+  <div class="pbody">
+    <div class="cards">
+      <div class="card"><div class="card-inner">
+        <div class="badgewrap"><div class="dot">&#9638;</div><h3>Insights Dashboards</h3></div>
+        <p>Engagement, Behavior, Academics, SEB/SEL, Equity, and Early Warning &mdash; aggregates, trends, top-N, grade and window filters, demographic disaggregation, and drill-down straight to a student&rsquo;s profile.</p>
+        <span class="tag">Analytics</span>
+      </div></div>
+      <div class="card"><div class="card-inner">
+        <div class="badgewrap"><div class="dot">&#8682;</div><h3>Data Importer</h3></div>
+        <p>A generic CSV importer for assessments, rosters, and behavior &mdash; with template mapping, preview, commit, and rollback, so onboarding district data is fast and reversible.</p>
+        <span class="tag">Onboarding</span>
+      </div></div>
+      <div class="card"><div class="card-inner v">
+        <div class="badgewrap"><div class="dot v">&#9825;</div><h3>Parent Portal</h3></div>
+        <p>A secure mobile portal for a student&rsquo;s HeartBEAT &mdash; PBIS, hall passes, tardies with <b>lost-instruction minutes</b>, FAST scores, accommodations, and staff notes &mdash; with admin invites, sibling switching, configurable visibility, and PDF export.</p>
+        <span class="tag v">Family Access</span>
+      </div></div>
+      <div class="card"><div class="card-inner v">
+        <div class="badgewrap"><div class="dot v">&#9993;</div><h3>Family HeartBEAT &amp; Messaging</h3></div>
+        <p>Core-Team broadcasts &mdash; whole-school, by grade, by house, or by list &mdash; land in the parent portal inbox with an email nudge, as text <b>or recorded video</b>. Sent &rarr; Reached &rarr; Got-it counters close the loop, and a derived <b>Power Reader</b> badge recognizes engaged families.</p>
+        <span class="tag v">Engagement</span>
+      </div></div>
+      <div class="card"><div class="card-inner v">
+        <div class="badgewrap"><div class="dot v">&#9998;</div><h3>PulseDNA Studio</h3></div>
+        <p>A saved per-school <b>communication DNA</b> profile teaches the built-in AI your school&rsquo;s voice, then drafts family messages on demand &mdash; with an in-app <b>video recording studio</b> and teleprompter for principals to record a personal HeartBEAT message in minutes.</p>
+        <span class="tag v">AI &amp; Voice</span>
+      </div></div>
+      <div class="card"><div class="card-inner b">
+        <div class="badgewrap"><div class="dot b">&#10070;</div><h3>District, Multi-School &amp; Branding</h3></div>
+        <p>Multi-tenant by design: a district-wide SuperUser role spans schools while every other role stays school-scoped &mdash; and each school carries its own colors, logo, and signage identity. One platform, many schools, each feeling like its own.</p>
+        <span class="tag">District-Ready</span>
+      </div></div>
+    </div>
+  </div>
+  <div class="pfoot"><span class="brand">Pulse<span>EDU</span></span><span>Insights, Data &amp; Family Engagement</span></div>
+</div>
+
+<!-- ============ PAGE 7 — COMPLIANCE & TRUST ============ -->
+<div class="page compliance">
+  <div class="stars"></div>
+  <div class="cmp-inner">
+    <span class="eyebrow badge">&#10003;&nbsp; Privacy, Security &amp; Compliance</span>
+    <h2>Vetted, protected, and built for student privacy.</h2>
+    <div class="sub">
+      PulseEDU is engineered from the ground up to support <b>FERPA</b> and <b>COPPA</b> compliance.
+      Student data is treated as what it is &mdash; protected educational information &mdash; with isolation,
+      access controls, and audit trails at the core of the architecture, not bolted on afterward.
+    </div>
+
+    <div class="cmp-cards">
+      <div class="cmp-card"><div class="cmp-card-inner">
+        <div class="seal">&#167;</div>
+        <h3>FERPA</h3>
+        <div class="mini">Family Educational Rights &amp; Privacy Act</div>
+        <ul>
+          <li>Education records are restricted by strict, role-based access &mdash; staff see only what their role permits.</li>
+          <li>Guardian access is limited to their own student(s) through verified, admin-issued portal invites.</li>
+          <li>Sensitive actions are recorded in audit logs, supporting accountability and records requests.</li>
+          <li>Student data is not sold and is used to deliver the school&rsquo;s educational services.</li>
+        </ul>
+      </div></div>
+      <div class="cmp-card"><div class="cmp-card-inner">
+        <div class="seal v">&#9829;</div>
+        <h3>COPPA</h3>
+        <div class="mini">Children&rsquo;s Online Privacy Protection Act</div>
+        <ul>
+          <li>Designed for the school-authorized consent model for K&ndash;12, acting on the district&rsquo;s behalf.</li>
+          <li>Configurable consent and visibility controls let districts govern what is shared, in line with their policies.</li>
+          <li>No third-party advertising and no behavioral ad tracking of students.</li>
+          <li>Data collection is focused on what is needed to serve students and run school operations.</li>
+        </ul>
+      </div></div>
+    </div>
+
+    <div class="trust-strip">
+      <div class="trust"><div class="trust-inner"><div class="t">Tenant Isolation</div><p>Records are school-scoped, keeping each school&rsquo;s data separated by tenant across core student records.</p></div></div>
+      <div class="trust"><div class="trust-inner"><div class="t">Secured Access</div><p>Role-based permissions and authenticated sessions gate access across the platform.</p></div></div>
+      <div class="trust"><div class="trust-inner"><div class="t">Protected Storage</div><p>Uploaded files are access-controlled with per-school ACLs and tenant-bound permissions.</p></div></div>
+    </div>
+
+    <div class="cmp-foot">
+      <div class="big">Ready to bring the <span class="g">HeartBEAT</span> to your district?</div>
+      <div class="line">Let&rsquo;s schedule a walkthrough and a compliance review with your team.</div>
+      <div class="disclaimer">Supports FERPA/COPPA-aligned district implementations; final compliance depends on district policies, configuration, and data-processing agreement terms.</div>
+      <div class="brand">Pulse Kinetics &nbsp;&bull;&nbsp; pulsekinetics.us</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

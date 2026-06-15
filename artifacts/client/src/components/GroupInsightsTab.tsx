@@ -29,6 +29,7 @@ interface WindowOpt {
 }
 interface Profile {
   studentId: string;
+  localSisId: string | null;
   firstName: string | null;
   lastName: string | null;
   grade: number | null;
@@ -190,7 +191,7 @@ export default function GroupInsightsTab({
         "Focus",
         "Cohesion %",
         "Avg dominant %",
-        "Student ID",
+        "Local SIS ID",
         "Last name",
         "First name",
         "Grade",
@@ -205,7 +206,7 @@ export default function GroupInsightsTab({
           g.dominantCategory ?? "Mixed",
           String(g.cohesionPct),
           g.avgDominantPct != null ? String(g.avgDominantPct) : "",
-          s.studentId,
+          s.localSisId ?? "",
           s.lastName ?? "",
           s.firstName ?? "",
           s.grade != null ? String(s.grade) : "",
@@ -475,7 +476,7 @@ export default function GroupInsightsTab({
                   <ul style={{ paddingLeft: 18, fontSize: 12 }}>
                     {data.drift.outgrew.map((s) => (
                       <li key={s.studentId}>
-                        {s.name ?? s.studentId}
+                        {s.name ?? "Student"}
                       </li>
                     ))}
                     {data.drift.outgrew.length === 0 && (
@@ -491,7 +492,7 @@ export default function GroupInsightsTab({
                   </div>
                   <ul style={{ paddingLeft: 18, fontSize: 12 }}>
                     {data.drift.wouldNowFit.map((s) => (
-                      <li key={s.studentId}>{s.name ?? s.studentId}</li>
+                      <li key={s.studentId}>{s.name ?? "Student"}</li>
                     ))}
                     {data.drift.wouldNowFit.length === 0 && (
                       <li style={{ color: "#6b7280", listStyle: "none" }}>

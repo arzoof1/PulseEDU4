@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import Kiosk from "./Kiosk";
 import KioskViewer from "./KioskViewer";
+import KioskCodeMirror from "./KioskCodeMirror";
 import ParentApp from "./parent/ParentApp";
 import SignageApp from "./signage/SignageApp";
 import PickupApp from "./pickup/PickupApp";
@@ -9,6 +10,8 @@ import TourApp from "./tour/TourApp";
 import ScannerApp from "./scan/ScannerApp";
 import StaffResetApp from "./StaffResetApp";
 import SmsPolicyPage from "./SmsPolicyPage";
+import SignApp from "./sign/SignApp";
+import RecordingStudio from "./studio/RecordingStudio";
 import "./index.css";
 
 const path = window.location.pathname;
@@ -16,7 +19,11 @@ const path = window.location.pathname;
 // the read-only mirror page wins the dispatch instead of falling into
 // the full kiosk activation flow.
 const isKioskViewer = path.includes("/kiosk-view");
-const isKiosk = !isKioskViewer && path.includes("/kiosk");
+// Phone "carry over" mirror for a teacher's activation code
+// (/kiosk-code#t=...&p=...). Checked before /kiosk so the read-only display
+// page wins the dispatch instead of falling into the full activation flow.
+const isKioskCode = path.includes("/kiosk-code");
+const isKiosk = !isKioskViewer && !isKioskCode && path.includes("/kiosk");
 const isParent = path.includes("/parent");
 // Public, unauthenticated staff self-service password reset pages
 // (/forgot-password, /reset-password/<token>). Checked AFTER isParent
@@ -36,10 +43,19 @@ const isTour = path.includes("/tour");
 const isScan = path.includes("/scan");
 // Public SMS opt-in / policy page for AWS SNS registration (no auth).
 const isSmsPolicy = path.includes("/sms-policy");
+// Public, unauthenticated document e-sign page (/sign/<token>). Must be
+// checked AFTER isSignage — "/signage" also contains the "/sign" substring,
+// and the signage player must win that dispatch.
+const isSign = !isSignage && path.includes("/sign");
+// Standalone video Recording Studio (/studio) — opened in its own tab so the
+// camera/mic work outside the Replit preview iframe.
+const isStudio = path.includes("/studio");
 
 createRoot(document.getElementById("root")!).render(
-  isSignage ? <SignageApp />
+  isStudio ? <RecordingStudio />
+    : isSignage ? <SignageApp />
     : isKioskViewer ? <KioskViewer />
+    : isKioskCode ? <KioskCodeMirror />
     : isKiosk ? <Kiosk />
     : isParent ? <ParentApp />
     : isStaffReset ? <StaffResetApp />
@@ -47,5 +63,6 @@ createRoot(document.getElementById("root")!).render(
     : isTour ? <TourApp />
     : isScan ? <ScannerApp />
     : isSmsPolicy ? <SmsPolicyPage />
+    : isSign ? <SignApp />
     : <App />,
 );

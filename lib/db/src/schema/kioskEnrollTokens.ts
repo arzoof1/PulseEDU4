@@ -31,6 +31,13 @@ export const kioskEnrollTokensTable = pgTable(
     // bcrypt of the 6-digit PIN. Nullable so future bulk-issue flows
     // could create token-only cards if a school disables typed PINs.
     pinHash: text("pin_hash"),
+    // Reversibly-encrypted copy of the same 6-digit PIN (AES-256-GCM via
+    // secretCrypto, purpose "kiosk-pin-v1"). Lets the OWNING teacher read
+    // back the exact code printed on their badge from the Hall Pass gear
+    // ("Get kiosk URL" tab) without an admin reprint. Owner-only reveal —
+    // never exposed cross-staff. Nullable: tokens issued before this column
+    // existed have no recoverable PIN (teacher must get a fresh badge).
+    pinEncrypted: text("pin_encrypted"),
     label: text("label"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

@@ -35,6 +35,7 @@ export const FEATURE_KEYS = [
   "DataImports",
   "Houses",
   "ParentPortal",
+  "AcademicEvidence",
 ] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 type SettingsRow = typeof schoolSettingsTable.$inferSelect;
@@ -108,6 +109,9 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     globalDailyHallPassLimit,
     pbisQuietTeacherDays,
     pbisInvisibleStudentDays,
+    pbisInvisibleDaysTier1,
+    pbisInvisibleDaysTier2,
+    pbisInvisibleDaysTier3,
     pbisReasonImbalancePct,
     pbisColdPeriodMultiple,
     pbisNegativeAffectsTotal,
@@ -130,6 +134,13 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     compTimeAuthFormObjectKey,
     fastHistoryYearsVisible,
     restroomAccessControlEnabled,
+    ireadyAp1Cuts,
+    onTimeAttendanceEnabled,
+    onTimeMaxPoints,
+    onTimeLotteryEnabled,
+    onTimeLotteryLabel,
+    onTimeLotteryBonusPoints,
+    onTimeLotteryRevealLeadMinutes,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -240,6 +251,27 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       "pbisInvisibleStudentDays",
     ),
     intRange(
+      "pbisInvisibleDaysTier1",
+      pbisInvisibleDaysTier1,
+      1,
+      180,
+      "pbisInvisibleDaysTier1",
+    ),
+    intRange(
+      "pbisInvisibleDaysTier2",
+      pbisInvisibleDaysTier2,
+      1,
+      180,
+      "pbisInvisibleDaysTier2",
+    ),
+    intRange(
+      "pbisInvisibleDaysTier3",
+      pbisInvisibleDaysTier3,
+      1,
+      180,
+      "pbisInvisibleDaysTier3",
+    ),
+    intRange(
       "pbisReasonImbalancePct",
       pbisReasonImbalancePct,
       10,
@@ -263,6 +295,25 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       2,
       5,
       "fastHistoryYearsVisible",
+    ),
+    // On-Time Attendance — max points awarded for the earliest passing-window
+    // scan (the ceil(min-until-bell) value is capped at this).
+    intRange("onTimeMaxPoints", onTimeMaxPoints, 1, 10, "onTimeMaxPoints"),
+    // Tardy Lottery — bonus points each winner receives, and how many minutes
+    // before end-of-day the draw is revealed.
+    intRange(
+      "onTimeLotteryBonusPoints",
+      onTimeLotteryBonusPoints,
+      1,
+      500,
+      "onTimeLotteryBonusPoints",
+    ),
+    intRange(
+      "onTimeLotteryRevealLeadMinutes",
+      onTimeLotteryRevealLeadMinutes,
+      5,
+      240,
+      "onTimeLotteryRevealLeadMinutes",
     ),
   ]) {
     if (err) {
@@ -461,6 +512,41 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.staffDirectoryShowCellPhone = staffDirectoryShowCellPhone;
+  }
+  // -----------------------------------------------------------------
+  // On-Time Attendance + Tardy Lottery toggles and the lottery label.
+  // Any settings-manager can flip these (same gate as the rest of the
+  // PUT); the int-valued knobs are validated in the intRange block above.
+  // -----------------------------------------------------------------
+  if (onTimeAttendanceEnabled !== undefined) {
+    if (typeof onTimeAttendanceEnabled !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "onTimeAttendanceEnabled must be a boolean" });
+      return;
+    }
+    updates.onTimeAttendanceEnabled = onTimeAttendanceEnabled;
+  }
+  if (onTimeLotteryEnabled !== undefined) {
+    if (typeof onTimeLotteryEnabled !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "onTimeLotteryEnabled must be a boolean" });
+      return;
+    }
+    updates.onTimeLotteryEnabled = onTimeLotteryEnabled;
+  }
+  if (onTimeLotteryLabel !== undefined) {
+    if (typeof onTimeLotteryLabel !== "string") {
+      res
+        .status(400)
+        .json({ error: "onTimeLotteryLabel must be a string" });
+      return;
+    }
+    const cleaned = onTimeLotteryLabel.trim().slice(0, 60);
+    // Non-null column with a default — empty resets to the default label.
+    updates.onTimeLotteryLabel =
+      cleaned.length === 0 ? "On-Time Champions" : cleaned;
   }
   // Pick-Up cutoff time: "HH:MM" 24h, validated lexically. Used by the
   // Admin Hub "Still on campus" reconciliation tile and (eventually)
@@ -778,6 +864,49 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       }
     }
     updates.compTimeAuthFormObjectKey = compTimeAuthFormObjectKey || null;
+  }
+
+  if (ireadyAp1Cuts !== undefined) {
+    // Per-grade, per-subject iReady AP1 cut scores. Shape:
+    // { ela: { "6": 480, ... }, math: { "7": 500, ... } }. Validate
+    // each value is a finite positive integer and keys are plain grade
+    // strings; drop anything malformed so a bad client can't poison the
+    // map. An empty value for a grade clears that cut.
+    if (
+      typeof ireadyAp1Cuts !== "object" ||
+      ireadyAp1Cuts === null ||
+      Array.isArray(ireadyAp1Cuts)
+    ) {
+      res.status(400).json({ error: "ireadyAp1Cuts must be an object" });
+      return;
+    }
+    const clean: { ela: Record<string, number>; math: Record<string, number> } =
+      { ela: {}, math: {} };
+    for (const subject of ["ela", "math"] as const) {
+      const raw = (ireadyAp1Cuts as Record<string, unknown>)[subject];
+      if (raw == null) continue;
+      if (typeof raw !== "object" || Array.isArray(raw)) {
+        res.status(400).json({
+          error: `ireadyAp1Cuts.${subject} must be a grade→score map`,
+        });
+        return;
+      }
+      for (const [grade, value] of Object.entries(
+        raw as Record<string, unknown>,
+      )) {
+        if (!/^\d{1,2}$/.test(grade)) continue;
+        if (
+          typeof value !== "number" ||
+          !Number.isInteger(value) ||
+          value <= 0 ||
+          value > 1000
+        ) {
+          continue;
+        }
+        clean[subject][grade] = value;
+      }
+    }
+    updates.ireadyAp1Cuts = clean;
   }
 
   if (Object.keys(updates).length === 0) {

@@ -234,6 +234,7 @@ router.get("/insights/my-watchlist", async (req, res) => {
     const students = await db
       .select({
         studentId: studentsTable.studentId,
+        localSisId: studentsTable.localSisId,
         firstName: studentsTable.firstName,
         lastName: studentsTable.lastName,
         grade: studentsTable.grade,
@@ -293,6 +294,7 @@ router.get("/insights/my-watchlist", async (req, res) => {
         return {
           id: e.id,
           studentId: e.studentId,
+          localSisId: s.localSisId ?? null,
           firstName: s.firstName,
           lastName: s.lastName,
           grade: s.grade,

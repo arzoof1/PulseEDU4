@@ -11,6 +11,7 @@ import VoiceTextarea from "./VoiceTextarea";
 
 interface StudentHit {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: string | null;
@@ -472,7 +473,7 @@ export default function NewCaseWizard({
                           className="text-[11px]"
                           style={{ color: C.inkSoft }}
                         >
-                          · Gr {h.grade ?? "?"} · {h.studentId}
+                          · Gr {h.grade ?? "?"} · {h.localSisId ?? "—"}
                         </span>
                       </button>
                     ))}

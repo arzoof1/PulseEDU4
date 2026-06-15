@@ -14,3 +14,823 @@ import * as zod from "zod";
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
 });
+
+/**
+ * Lightweight catalog of the curated PulseBrainLab lessons (global reference, identical for every school). Optionally filter by grade band.
+
+ * @summary List PulseBrainLab lessons
+ */
+export const ListPulseBrainLabLessonsQueryParams = zod.object({
+  gradeBand: zod.enum(["K-2", "3-5", "6-8", "9-12"]).optional(),
+});
+
+export const ListPulseBrainLabLessonsResponseItem = zod.object({
+  lessonKey: zod.string(),
+  gradeBand: zod.enum(["K-2", "3-5", "6-8", "9-12"]),
+  week: zod.number(),
+  session: zod.number(),
+  title: zod.string(),
+  skillArea: zod.string(),
+  brainModelTag: zod.enum(["Spotlight", "Velcro", "Echo", "Rewire"]),
+});
+export const ListPulseBrainLabLessonsResponse = zod.array(
+  ListPulseBrainLabLessonsResponseItem,
+);
+
+/**
+ * Full lesson object including bilingual parent card and student worksheet.
+ * @summary Get a single PulseBrainLab lesson
+ */
+export const GetPulseBrainLabLessonParams = zod.object({
+  lessonKey: zod.coerce.string(),
+});
+
+export const GetPulseBrainLabLessonResponse = zod.object({
+  id: zod.string(),
+  gradeBand: zod.enum(["K-2", "3-5", "6-8", "9-12"]),
+  week: zod.number(),
+  session: zod.number(),
+  title: zod.string(),
+  skillArea: zod.string(),
+  brainConcept: zod.string(),
+  brainModelTag: zod.enum(["Spotlight", "Velcro", "Echo", "Rewire"]),
+  objective: zod.string(),
+  materials: zod.string(),
+  durationMinutes: zod.number(),
+  flow: zod.object({
+    connect: zod.string(),
+    teach: zod.string(),
+    practice: zod.string(),
+    close: zod.string(),
+  }),
+  contentQuestions: zod.array(
+    zod.object({
+      id: zod.string(),
+      text: zod.string(),
+    }),
+  ),
+  followupQuestions: zod.array(
+    zod.object({
+      id: zod.string(),
+      text: zod.string(),
+    }),
+  ),
+  skillTags: zod.array(zod.string()),
+  parentReinforcement: zod.object({
+    summary: zod.object({
+      en: zod.string(),
+      es: zod.string(),
+    }),
+    brainIdea: zod.enum(["Spotlight", "Velcro", "Echo", "Rewire"]),
+    askYourChild: zod.array(
+      zod.object({
+        en: zod.string(),
+        es: zod.string(),
+      }),
+    ),
+    whyThisWorks: zod.object({
+      en: zod.string(),
+      es: zod.string(),
+    }),
+    tryTogether: zod.object({
+      en: zod.string(),
+      es: zod.string(),
+    }),
+  }),
+  studentWorksheet: zod.object({
+    intro: zod.object({
+      en: zod.string(),
+      es: zod.string(),
+    }),
+    prompts: zod.array(
+      zod.object({
+        id: zod.string(),
+        text: zod.object({
+          en: zod.string(),
+          es: zod.string(),
+        }),
+        responseType: zod.enum(["write", "draw", "checklist"]),
+      }),
+    ),
+  }),
+});
+
+/**
+ * The four-part parent recall card resolved to one language. Strictly learning / brain-science framing — never "SEL". Core Team gated. `lang` is a path segment (not a query param) to keep the generated client free of the orval path+query `*Params` name collision.
+
+ * @summary Parent "Reinforce at Home" recall card (single language)
+ */
+export const GetPulseBrainLabParentCardParams = zod.object({
+  lessonKey: zod.coerce.string(),
+  lang: zod.enum(["en", "es"]),
+});
+
+export const GetPulseBrainLabParentCardResponse = zod
+  .object({
+    lessonKey: zod.string(),
+    lessonTitle: zod.string(),
+    skillArea: zod.string(),
+    brainIdea: zod.enum(["Spotlight", "Velcro", "Echo", "Rewire"]),
+    language: zod.enum(["en", "es"]),
+    summary: zod.string(),
+    askYourChild: zod.array(zod.string()),
+    whyThisWorks: zod.string(),
+    tryTogether: zod.string(),
+  })
+  .describe(
+    'The four-part \"Reinforce at Home\" recall card, resolved to a single language. Strictly learning \/ brain-science framing — never \"SEL\".\n',
+  );
+
+/**
+ * @summary List PulseBrainLab groups for the active school
+ */
+export const ListPulseBrainLabGroupsResponseItem = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  gradeBand: zod.enum(["K-2", "3-5", "6-8", "9-12"]),
+  schoolYear: zod.string(),
+  memberCount: zod.number(),
+  createdAt: zod.string(),
+});
+export const ListPulseBrainLabGroupsResponse = zod.array(
+  ListPulseBrainLabGroupsResponseItem,
+);
+
+/**
+ * @summary Create a PulseBrainLab group
+ */
+export const CreatePulseBrainLabGroupBody = zod.object({
+  name: zod.string(),
+  gradeBand: zod.enum(["K-2", "3-5", "6-8", "9-12"]),
+  studentIds: zod.array(zod.string()).optional(),
+});
+
+/**
+ * @summary Get a group with members
+ */
+export const GetPulseBrainLabGroupParams = zod.object({
+  groupId: zod.coerce.number(),
+});
+
+export const GetPulseBrainLabGroupResponse = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  gradeBand: zod.enum(["K-2", "3-5", "6-8", "9-12"]),
+  schoolYear: zod.string(),
+  members: zod.array(
+    zod.object({
+      studentId: zod.string(),
+      localSisId: zod.string().nullable(),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      gradeLevel: zod.string().nullish(),
+    }),
+  ),
+  createdAt: zod.string(),
+});
+
+/**
+ * @summary Update a group
+ */
+export const UpdatePulseBrainLabGroupParams = zod.object({
+  groupId: zod.coerce.number(),
+});
+
+export const UpdatePulseBrainLabGroupBody = zod.object({
+  name: zod.string().optional(),
+  schoolYear: zod.string().optional(),
+});
+
+export const UpdatePulseBrainLabGroupResponse = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  gradeBand: zod.enum(["K-2", "3-5", "6-8", "9-12"]),
+  schoolYear: zod.string(),
+  members: zod.array(
+    zod.object({
+      studentId: zod.string(),
+      localSisId: zod.string().nullable(),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      gradeLevel: zod.string().nullish(),
+    }),
+  ),
+  createdAt: zod.string(),
+});
+
+/**
+ * @summary Delete a group
+ */
+export const DeletePulseBrainLabGroupParams = zod.object({
+  groupId: zod.coerce.number(),
+});
+
+/**
+ * @summary Add members to a group
+ */
+export const AddPulseBrainLabGroupMembersParams = zod.object({
+  groupId: zod.coerce.number(),
+});
+
+export const AddPulseBrainLabGroupMembersBody = zod.object({
+  studentIds: zod.array(zod.string()),
+});
+
+export const AddPulseBrainLabGroupMembersResponse = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  gradeBand: zod.enum(["K-2", "3-5", "6-8", "9-12"]),
+  schoolYear: zod.string(),
+  members: zod.array(
+    zod.object({
+      studentId: zod.string(),
+      localSisId: zod.string().nullable(),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      gradeLevel: zod.string().nullish(),
+    }),
+  ),
+  createdAt: zod.string(),
+});
+
+/**
+ * @summary Remove a member from a group
+ */
+export const RemovePulseBrainLabGroupMemberParams = zod.object({
+  groupId: zod.coerce.number(),
+  studentId: zod.coerce.string(),
+});
+
+export const RemovePulseBrainLabGroupMemberResponse = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  gradeBand: zod.enum(["K-2", "3-5", "6-8", "9-12"]),
+  schoolYear: zod.string(),
+  members: zod.array(
+    zod.object({
+      studentId: zod.string(),
+      localSisId: zod.string().nullable(),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      gradeLevel: zod.string().nullish(),
+    }),
+  ),
+  createdAt: zod.string(),
+});
+
+/**
+ * @summary List sessions delivered to a group
+ */
+export const ListPulseBrainLabSessionsParams = zod.object({
+  groupId: zod.coerce.number(),
+});
+
+export const ListPulseBrainLabSessionsResponseItem = zod.object({
+  id: zod.number(),
+  groupId: zod.number(),
+  lessonKey: zod.string(),
+  lessonTitle: zod.string(),
+  sessionDate: zod.string(),
+  notes: zod.string().nullish(),
+  createdAt: zod.string(),
+});
+export const ListPulseBrainLabSessionsResponse = zod.array(
+  ListPulseBrainLabSessionsResponseItem,
+);
+
+/**
+ * @summary Deliver a lesson to a group (create a session)
+ */
+export const CreatePulseBrainLabSessionParams = zod.object({
+  groupId: zod.coerce.number(),
+});
+
+export const CreatePulseBrainLabSessionBody = zod.object({
+  lessonKey: zod.string(),
+  sessionDate: zod.string(),
+  notes: zod.string().optional(),
+});
+
+/**
+ * @summary Get a session with attendance
+ */
+export const GetPulseBrainLabSessionParams = zod.object({
+  sessionId: zod.coerce.number(),
+});
+
+export const GetPulseBrainLabSessionResponse = zod.object({
+  id: zod.number(),
+  groupId: zod.number(),
+  lessonKey: zod.string(),
+  lessonTitle: zod.string(),
+  sessionDate: zod.string(),
+  notes: zod.string().nullish(),
+  createdAt: zod.string(),
+  gradeMode: zod
+    .union([
+      zod.literal("score"),
+      zod.literal("participation"),
+      zod.literal(null),
+    ])
+    .nullish()
+    .describe("'score' | 'participation' | null (ungraded assignment)."),
+  maxScore: zod.number().nullish(),
+  benchmarkCode: zod.string().nullish(),
+  benchmarkSubject: zod.string().nullish(),
+  benchmarkLabel: zod.string().nullish(),
+  publishedAt: zod
+    .string()
+    .nullish()
+    .describe(
+      "ISO timestamp when published to families; null = draft (staff-only).",
+    ),
+  attendance: zod.array(
+    zod.object({
+      studentId: zod.string(),
+      localSisId: zod.string().nullable(),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      status: zod.enum(["present", "absent", "excused"]),
+    }),
+  ),
+});
+
+/**
+ * @summary Delete a session
+ */
+export const DeletePulseBrainLabSessionParams = zod.object({
+  sessionId: zod.coerce.number(),
+});
+
+/**
+ * @summary Publish a session to families
+ */
+export const PublishPulseBrainLabSessionParams = zod.object({
+  sessionId: zod.coerce.number(),
+});
+
+export const PublishPulseBrainLabSessionResponse = zod.object({
+  id: zod.number(),
+  groupId: zod.number(),
+  lessonKey: zod.string(),
+  lessonTitle: zod.string(),
+  sessionDate: zod.string(),
+  notes: zod.string().nullish(),
+  createdAt: zod.string(),
+  gradeMode: zod
+    .union([
+      zod.literal("score"),
+      zod.literal("participation"),
+      zod.literal(null),
+    ])
+    .nullish()
+    .describe("'score' | 'participation' | null (ungraded assignment)."),
+  maxScore: zod.number().nullish(),
+  benchmarkCode: zod.string().nullish(),
+  benchmarkSubject: zod.string().nullish(),
+  benchmarkLabel: zod.string().nullish(),
+  publishedAt: zod
+    .string()
+    .nullish()
+    .describe(
+      "ISO timestamp when published to families; null = draft (staff-only).",
+    ),
+  attendance: zod.array(
+    zod.object({
+      studentId: zod.string(),
+      localSisId: zod.string().nullable(),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      status: zod.enum(["present", "absent", "excused"]),
+    }),
+  ),
+});
+
+/**
+ * @summary Retract a session from families (back to draft)
+ */
+export const UnpublishPulseBrainLabSessionParams = zod.object({
+  sessionId: zod.coerce.number(),
+});
+
+export const UnpublishPulseBrainLabSessionResponse = zod.object({
+  id: zod.number(),
+  groupId: zod.number(),
+  lessonKey: zod.string(),
+  lessonTitle: zod.string(),
+  sessionDate: zod.string(),
+  notes: zod.string().nullish(),
+  createdAt: zod.string(),
+  gradeMode: zod
+    .union([
+      zod.literal("score"),
+      zod.literal("participation"),
+      zod.literal(null),
+    ])
+    .nullish()
+    .describe("'score' | 'participation' | null (ungraded assignment)."),
+  maxScore: zod.number().nullish(),
+  benchmarkCode: zod.string().nullish(),
+  benchmarkSubject: zod.string().nullish(),
+  benchmarkLabel: zod.string().nullish(),
+  publishedAt: zod
+    .string()
+    .nullish()
+    .describe(
+      "ISO timestamp when published to families; null = draft (staff-only).",
+    ),
+  attendance: zod.array(
+    zod.object({
+      studentId: zod.string(),
+      localSisId: zod.string().nullable(),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      status: zod.enum(["present", "absent", "excused"]),
+    }),
+  ),
+});
+
+/**
+ * @summary Set per-member attendance for a session
+ */
+export const SetPulseBrainLabAttendanceParams = zod.object({
+  sessionId: zod.coerce.number(),
+});
+
+export const SetPulseBrainLabAttendanceBody = zod.object({
+  entries: zod.array(
+    zod.object({
+      studentId: zod.string(),
+      status: zod.enum(["present", "absent", "excused"]),
+    }),
+  ),
+});
+
+export const SetPulseBrainLabAttendanceResponse = zod.object({
+  id: zod.number(),
+  groupId: zod.number(),
+  lessonKey: zod.string(),
+  lessonTitle: zod.string(),
+  sessionDate: zod.string(),
+  notes: zod.string().nullish(),
+  createdAt: zod.string(),
+  gradeMode: zod
+    .union([
+      zod.literal("score"),
+      zod.literal("participation"),
+      zod.literal(null),
+    ])
+    .nullish()
+    .describe("'score' | 'participation' | null (ungraded assignment)."),
+  maxScore: zod.number().nullish(),
+  benchmarkCode: zod.string().nullish(),
+  benchmarkSubject: zod.string().nullish(),
+  benchmarkLabel: zod.string().nullish(),
+  publishedAt: zod
+    .string()
+    .nullish()
+    .describe(
+      "ISO timestamp when published to families; null = draft (staff-only).",
+    ),
+  attendance: zod.array(
+    zod.object({
+      studentId: zod.string(),
+      localSisId: zod.string().nullable(),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      status: zod.enum(["present", "absent", "excused"]),
+    }),
+  ),
+});
+
+/**
+ * The "routing brain" shared by both intake paths. The phone path decodes the QR live in the browser; the copier-batch path rasterizes each PDF page in the browser and decodes its QR. Either way the opaque base62 token is POSTed here, resolved server-side to exactly one (school, session, student), and the uploaded object is bound to the school and filed as a work sample.
+
+ * @summary File a scanned work sample to its (session, student) by QR token
+ */
+export const RoutePulseBrainLabScanBody = zod.object({
+  token: zod.string(),
+  objectPath: zod.string(),
+  source: zod.enum(["phone", "batch"]),
+  pageIndex: zod.number().optional(),
+});
+
+/**
+ * The copier-batch intake path. The whole completed stack is scanned at the office MFP into ONE multi-page PDF and uploaded; the server rasterizes each page, decodes its QR server-side, resolves each token school-scoped to a (session, student), and files a work sample per matched page. Pages whose QR cannot be read are parked in the Unmatched tray for manual assignment.
+
+ * @summary Decode a multi-page scanned PDF server-side and fan pages out
+ */
+export const BatchPulseBrainLabScanBody = zod.object({
+  objectPath: zod.string(),
+  batchLabel: zod.string().optional(),
+});
+
+/**
+ * @summary List pending unmatched scans (the tray) for the active school
+ */
+export const ListPulseBrainLabUnmatchedScansResponseItem = zod
+  .object({
+    id: zod.number(),
+    objectKey: zod.string(),
+    source: zod.string(),
+    batchLabel: zod.string().nullish(),
+    pageIndex: zod.number().nullish(),
+    status: zod.string(),
+    createdAt: zod.string(),
+  })
+  .describe(
+    "A scanned page whose QR could not be decoded; awaiting one-tap manual assignment in the per-school tray.\n",
+  );
+export const ListPulseBrainLabUnmatchedScansResponse = zod.array(
+  ListPulseBrainLabUnmatchedScansResponseItem,
+);
+
+/**
+ * @summary Park a scanned page whose QR could not be decoded in the tray
+ */
+export const FilePulseBrainLabUnmatchedScanBody = zod.object({
+  objectPath: zod.string(),
+  source: zod.enum(["phone", "batch"]),
+  batchLabel: zod.string().optional(),
+  pageIndex: zod.number().optional(),
+});
+
+/**
+ * @summary Manually assign an unmatched scan to a (session, student)
+ */
+export const AssignPulseBrainLabUnmatchedScanParams = zod.object({
+  scanId: zod.coerce.number(),
+});
+
+export const AssignPulseBrainLabUnmatchedScanBody = zod.object({
+  sessionId: zod.number(),
+  studentId: zod.string(),
+});
+
+/**
+ * @summary Discard an unmatched scan from the tray
+ */
+export const DiscardPulseBrainLabUnmatchedScanParams = zod.object({
+  scanId: zod.coerce.number(),
+});
+
+/**
+ * @summary List filed work samples for a session
+ */
+export const ListPulseBrainLabWorkSamplesParams = zod.object({
+  sessionId: zod.coerce.number(),
+});
+
+export const ListPulseBrainLabWorkSamplesResponseItem = zod
+  .object({
+    id: zod.number(),
+    sessionId: zod.number(),
+    studentId: zod.string(),
+    localSisId: zod.string().nullable(),
+    firstName: zod.string().nullish(),
+    lastName: zod.string().nullish(),
+    objectKey: zod.string(),
+    pageIndex: zod.number().nullish(),
+    source: zod.string(),
+    shared: zod.boolean(),
+    score: zod.number().nullish(),
+    participationMark: zod
+      .union([zod.literal("check"), zod.literal("x"), zod.literal(null)])
+      .nullish(),
+    gradedAt: zod.string().nullish(),
+    createdAt: zod.string(),
+  })
+  .describe(
+    "A captured student work sample (the completed worksheet photo\/scan) filed to one (session, student). Staff-only until shared.\n",
+  );
+export const ListPulseBrainLabWorkSamplesResponse = zod.array(
+  ListPulseBrainLabWorkSamplesResponseItem,
+);
+
+/**
+ * @summary Delete a filed work sample
+ */
+export const DeletePulseBrainLabWorkSampleParams = zod.object({
+  sampleId: zod.coerce.number(),
+});
+
+/**
+ * @summary Configure grading (mode, max score, benchmark) for an assignment
+ */
+export const SetPulseBrainLabSessionGradingParams = zod.object({
+  sessionId: zod.coerce.number(),
+});
+
+export const SetPulseBrainLabSessionGradingBody = zod
+  .object({
+    gradeMode: zod
+      .union([
+        zod.literal("score"),
+        zod.literal("participation"),
+        zod.literal(null),
+      ])
+      .nullish(),
+    maxScore: zod.number().nullish(),
+    benchmarkCode: zod.string().nullish(),
+    benchmarkSubject: zod.string().nullish(),
+  })
+  .describe(
+    "Configure grading for one assignment (session). gradeMode null clears grading. maxScore is required when gradeMode is 'score'. Benchmark fields are optional; passing benchmarkCode + benchmarkSubject tags the assignment with an official Florida standard.\n",
+  );
+
+export const SetPulseBrainLabSessionGradingResponse = zod.object({
+  id: zod.number(),
+  groupId: zod.number(),
+  lessonKey: zod.string(),
+  lessonTitle: zod.string(),
+  sessionDate: zod.string(),
+  notes: zod.string().nullish(),
+  createdAt: zod.string(),
+  gradeMode: zod
+    .union([
+      zod.literal("score"),
+      zod.literal("participation"),
+      zod.literal(null),
+    ])
+    .nullish()
+    .describe("'score' | 'participation' | null (ungraded assignment)."),
+  maxScore: zod.number().nullish(),
+  benchmarkCode: zod.string().nullish(),
+  benchmarkSubject: zod.string().nullish(),
+  benchmarkLabel: zod.string().nullish(),
+  publishedAt: zod
+    .string()
+    .nullish()
+    .describe(
+      "ISO timestamp when published to families; null = draft (staff-only).",
+    ),
+  attendance: zod.array(
+    zod.object({
+      studentId: zod.string(),
+      localSisId: zod.string().nullable(),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      status: zod.enum(["present", "absent", "excused"]),
+    }),
+  ),
+});
+
+/**
+ * @summary Grade a work sample (score or participation mark)
+ */
+export const SetPulseBrainLabWorkSampleGradeParams = zod.object({
+  sampleId: zod.coerce.number(),
+});
+
+export const SetPulseBrainLabWorkSampleGradeBody = zod
+  .object({
+    score: zod.number().nullish(),
+    participationMark: zod
+      .union([zod.literal("check"), zod.literal("x"), zod.literal(null)])
+      .nullish(),
+  })
+  .describe(
+    "Grade one work sample. Provide score (score mode, 0..session.maxScore) OR participationMark (participation mode). Pass both null to clear the grade.\n",
+  );
+
+export const SetPulseBrainLabWorkSampleGradeResponse = zod
+  .object({
+    id: zod.number(),
+    sessionId: zod.number(),
+    studentId: zod.string(),
+    localSisId: zod.string().nullable(),
+    firstName: zod.string().nullish(),
+    lastName: zod.string().nullish(),
+    objectKey: zod.string(),
+    pageIndex: zod.number().nullish(),
+    source: zod.string(),
+    shared: zod.boolean(),
+    score: zod.number().nullish(),
+    participationMark: zod
+      .union([zod.literal("check"), zod.literal("x"), zod.literal(null)])
+      .nullish(),
+    gradedAt: zod.string().nullish(),
+    createdAt: zod.string(),
+  })
+  .describe(
+    "A captured student work sample (the completed worksheet photo\/scan) filed to one (session, student). Staff-only until shared.\n",
+  );
+
+/**
+ * @summary Toggle whether a filed work sample is visible to the family
+ */
+export const SetPulseBrainLabWorkSampleShareParams = zod.object({
+  sampleId: zod.coerce.number(),
+});
+
+export const SetPulseBrainLabWorkSampleShareBody = zod.object({
+  shared: zod.boolean(),
+});
+
+export const SetPulseBrainLabWorkSampleShareResponse = zod
+  .object({
+    id: zod.number(),
+    sessionId: zod.number(),
+    studentId: zod.string(),
+    localSisId: zod.string().nullable(),
+    firstName: zod.string().nullish(),
+    lastName: zod.string().nullish(),
+    objectKey: zod.string(),
+    pageIndex: zod.number().nullish(),
+    source: zod.string(),
+    shared: zod.boolean(),
+    score: zod.number().nullish(),
+    participationMark: zod
+      .union([zod.literal("check"), zod.literal("x"), zod.literal(null)])
+      .nullish(),
+    gradedAt: zod.string().nullish(),
+    createdAt: zod.string(),
+  })
+  .describe(
+    "A captured student work sample (the completed worksheet photo\/scan) filed to one (session, student). Staff-only until shared.\n",
+  );
+
+/**
+ * @summary The "Reinforce at Home" cards for one student — shared work samples grouped by lesson, each with the bilingual parent recall card and home follow-up transcripts. Staff view (any signed-in staff at the active school).
+
+ */
+export const ListPulseBrainLabHomeCardsParams = zod.object({
+  studentId: zod.coerce.string(),
+});
+
+export const ListPulseBrainLabHomeCardsResponseItem = zod
+  .object({
+    lessonKey: zod.string(),
+    lessonTitle: zod.string(),
+    skillArea: zod.string(),
+    brainIdea: zod.enum(["Spotlight", "Velcro", "Echo", "Rewire"]),
+    sessionId: zod.number().nullable(),
+    sessionDate: zod.string().nullable(),
+    parentReinforcement: zod.object({
+      summary: zod.object({
+        en: zod.string(),
+        es: zod.string(),
+      }),
+      brainIdea: zod.enum(["Spotlight", "Velcro", "Echo", "Rewire"]),
+      askYourChild: zod.array(
+        zod.object({
+          en: zod.string(),
+          es: zod.string(),
+        }),
+      ),
+      whyThisWorks: zod.object({
+        en: zod.string(),
+        es: zod.string(),
+      }),
+      tryTogether: zod.object({
+        en: zod.string(),
+        es: zod.string(),
+      }),
+    }),
+    workSamples: zod.array(
+      zod
+        .object({
+          id: zod.number(),
+          sessionId: zod.number(),
+          studentId: zod.string(),
+          localSisId: zod.string().nullable(),
+          firstName: zod.string().nullish(),
+          lastName: zod.string().nullish(),
+          objectKey: zod.string(),
+          pageIndex: zod.number().nullish(),
+          source: zod.string(),
+          shared: zod.boolean(),
+          score: zod.number().nullish(),
+          participationMark: zod
+            .union([zod.literal("check"), zod.literal("x"), zod.literal(null)])
+            .nullish(),
+          gradedAt: zod.string().nullish(),
+          createdAt: zod.string(),
+        })
+        .describe(
+          "A captured student work sample (the completed worksheet photo\/scan) filed to one (session, student). Staff-only until shared.\n",
+        ),
+    ),
+    homeResponses: zod.array(
+      zod
+        .object({
+          id: zod.number(),
+          lessonKey: zod.string(),
+          sessionId: zod.number().nullish(),
+          promptIndex: zod.number(),
+          transcript: zod.string(),
+          language: zod.enum(["en", "es"]),
+          createdAt: zod.string(),
+          updatedAt: zod.string(),
+        })
+        .describe(
+          'A parent-submitted \"Home Follow-Up\" transcript answering one askYourChild prompt. The family\'s own words (voice-to-text or typed); never staff text.\n',
+        ),
+    ),
+  })
+  .describe(
+    'One lesson\'s \"Reinforce at Home\" card for a student: the shared work sample(s), the bilingual parent recall content, and any home follow-up transcripts. Strictly learning \/ brain-science framing — never \"SEL\".\n',
+  );
+export const ListPulseBrainLabHomeCardsResponse = zod.array(
+  ListPulseBrainLabHomeCardsResponseItem,
+);

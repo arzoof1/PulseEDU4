@@ -31,9 +31,12 @@ interface Teacher {
 
 interface RosterStudent {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   gradeLevel: number | string | null;
+  photoObjectKey?: string | null;
+  photoConsent?: boolean;
 }
 
 interface RosterResponse {
@@ -90,6 +93,22 @@ export default function ClassPhotoDayPage({
   // Index into the filtered "needs photo" queue. We always render the
   // student at queue[cursor]; advancing skips already-done students.
   const [cursor, setCursor] = useState(0);
+
+  // ---------- Mode: class roster walk (default) vs single-student ----------
+  // Single-student mode swaps the teacher/period roster picker for a
+  // type-ahead student search, then feeds the chosen student into the
+  // exact same capture → preview → upload → save pipeline. No queue,
+  // no auto-advance — just update one student and (optionally) search
+  // the next one.
+  const [mode, setMode] = useState<"class" | "single">("class");
+  const [singleStudent, setSingleStudent] = useState<RosterStudent | null>(
+    null,
+  );
+  const [searchQ, setSearchQ] = useState("");
+  const [searchResults, setSearchResults] = useState<RosterStudent[]>([]);
+  const [searching, setSearching] = useState(false);
+  // studentId we just saved a photo for in single mode (success banner).
+  const [singleSavedFor, setSingleSavedFor] = useState<string | null>(null);
 
   // Camera state.
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -156,6 +175,39 @@ export default function ClassPhotoDayPage({
       cancelled = true;
     };
   }, [teacherId, period]);
+
+  // ---------- Single-student type-ahead search ----------
+  // Hits the shared GET /api/students?q= endpoint (school-scoped,
+  // case-insensitive prefix match on first/last name + localSisId).
+  // Debounced; pauses while a student is selected.
+  useEffect(() => {
+    if (mode !== "single") return;
+    if (singleStudent) return;
+    const q = searchQ.trim();
+    if (q.length < 2) {
+      setSearchResults([]);
+      setSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const r = await authFetch(`/api/students?q=${encodeURIComponent(q)}`);
+        if (!r.ok || cancelled) return;
+        const j = (await r.json()) as RosterStudent[];
+        if (!cancelled) setSearchResults(j.slice(0, 20));
+      } catch {
+        if (!cancelled) setSearchResults([]);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [searchQ, mode, singleStudent]);
 
   // ---------- Camera lifecycle ----------
   useEffect(() => {
@@ -290,11 +342,13 @@ export default function ClassPhotoDayPage({
       .length,
     [queue, status],
   );
-  const current = useMemo(() => {
+  const classCurrent = useMemo(() => {
     if (queue.length === 0) return null;
     if (remainingCount === 0) return null;
     return queue[cursor] ?? null;
   }, [queue, cursor, remainingCount]);
+  // In single mode the "current" student is whoever the search picked.
+  const current = mode === "single" ? singleStudent : classCurrent;
 
   // advanceFrom: pure helper — takes the *current* status map and finds
   // the next pending index after `fromIdx`, wrapping once. Pulled out so
@@ -360,17 +414,34 @@ export default function ClassPhotoDayPage({
         };
         throw new Error(j.error ?? "Could not save photo");
       }
-      // Build the fresh status map up-front and hand it to advanceFrom
-      // so the cursor jumps to the *next* pending student — never back
-      // to the one we just finished. (Reading `status` from the closure
-      // here would still be stale.)
-      const fresh: Record<string, RowStatus> = { ...status, [studentId]: "done" };
-      setStatus(fresh);
-      setPreviewBlob(null);
-      // Use the current cursor as the search origin. We compute it from
-      // the queue so a manual jump (clicking a chip) is respected.
-      const fromIdx = queue.findIndex((s) => s.studentId === studentId);
-      advanceFrom(fromIdx >= 0 ? fromIdx : cursor, fresh);
+      if (mode === "single") {
+        // No queue to advance — just confirm and let the user search
+        // the next student. Stamp the selected student's photoObjectKey
+        // so the card shows the fresh photo immediately.
+        setPreviewBlob(null);
+        closeCamera();
+        setSingleSavedFor(studentId);
+        setSingleStudent((s) =>
+          s && s.studentId === studentId
+            ? { ...s, photoObjectKey: objectPath, photoConsent: true }
+            : s,
+        );
+      } else {
+        // Build the fresh status map up-front and hand it to advanceFrom
+        // so the cursor jumps to the *next* pending student — never back
+        // to the one we just finished. (Reading `status` from the closure
+        // here would still be stale.)
+        const fresh: Record<string, RowStatus> = {
+          ...status,
+          [studentId]: "done",
+        };
+        setStatus(fresh);
+        setPreviewBlob(null);
+        // Use the current cursor as the search origin. We compute it from
+        // the queue so a manual jump (clicking a chip) is respected.
+        const fromIdx = queue.findIndex((s) => s.studentId === studentId);
+        advanceFrom(fromIdx >= 0 ? fromIdx : cursor, fresh);
+      }
     } catch (e) {
       setStatus((p) => ({ ...p, [studentId]: "failed" }));
       setErr(e instanceof Error ? e.message : "Upload failed");
@@ -406,6 +477,48 @@ export default function ClassPhotoDayPage({
     };
     setStatus(fresh);
     advanceFrom(cursor, fresh);
+  }
+
+  // ---------- Single-student helpers ----------
+  function switchMode(m: "class" | "single") {
+    if (m === mode) return;
+    closeCamera();
+    setPreviewBlob(null);
+    setErr(null);
+    setSingleSavedFor(null);
+    setMode(m);
+  }
+
+  function selectSingleStudent(s: RosterStudent) {
+    closeCamera();
+    setPreviewBlob(null);
+    setSingleSavedFor(null);
+    setErr(null);
+    setSingleStudent(s);
+    setSearchResults([]);
+    setSearchQ(`${s.firstName} ${s.lastName}`);
+  }
+
+  function clearSingleStudent() {
+    closeCamera();
+    setPreviewBlob(null);
+    setSingleSavedFor(null);
+    setSingleStudent(null);
+    setSearchQ("");
+    setSearchResults([]);
+  }
+
+  // Typing in the search box reverts to "no selection". If a student was
+  // selected with the camera open, the capture panel would unmount while
+  // the stream kept running — so tear the camera down on edit too.
+  function handleSearchInput(value: string) {
+    setSearchQ(value);
+    setSingleSavedFor(null);
+    if (singleStudent) {
+      setSingleStudent(null);
+      closeCamera();
+      setPreviewBlob(null);
+    }
   }
 
   // ---------- Render ----------
@@ -453,6 +566,11 @@ export default function ClassPhotoDayPage({
           <ul style={howtoListStyle}>
             <li>Pick the class, then tap a student to capture or retake.</li>
             <li>
+              Need just one student (new enrollment, replacement, makeup)?
+              Switch to <strong>Single Student</strong>, search by name or ID,
+              then capture or upload — same camera, same save.
+            </li>
+            <li>
               Saved photos appear on the student profile and anywhere avatars
               show (rosters, PBIS cards).
             </li>
@@ -478,61 +596,185 @@ export default function ClassPhotoDayPage({
           marginBottom: "0.75rem",
         }}
       >
-        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: "0.85rem", color: "#475569" }}>Teacher</span>
-          <select
-            value={teacherId ?? ""}
-            onChange={(e) => setTeacherId(Number(e.target.value) || null)}
-            disabled={!isCoreTeam && teachers.length <= 1}
-            style={{
-              padding: "0.35rem 0.5rem",
-              borderRadius: 6,
-              border: "1px solid #cbd5e1",
-              minWidth: 200,
-            }}
-          >
-            {teachers.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.displayName ?? `Teacher #${t.id}`}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: "0.85rem", color: "#475569" }}>Period</span>
-          <select
-            value={period ?? ""}
-            onChange={(e) => setPeriod(Number(e.target.value) || null)}
-            style={{
-              padding: "0.35rem 0.5rem",
-              borderRadius: 6,
-              border: "1px solid #cbd5e1",
-              minWidth: 100,
-            }}
-          >
-            <option value="">All periods</option>
-            {(roster?.availablePeriods ?? []).map((p) => (
-              <option key={p} value={p}>
-                Period {p}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div style={{ flex: 1 }} />
-        <div style={{ fontSize: "0.85rem", color: "#475569" }}>
-          {loading ? (
-            "Loading…"
-          ) : roster ? (
-            <>
-              <strong>{queue.length}</strong> students ·{" "}
-              <span style={{ color: "#16a34a" }}>{doneCount} done</span> ·{" "}
-              <span style={{ color: "#b45309" }}>
-                {skippedCount} skipped
-              </span>{" "}
-              · <strong>{remainingCount}</strong> left
-            </>
-          ) : null}
+        {/* Mode toggle: class roster walk vs single-student quick update */}
+        <div
+          style={{
+            display: "inline-flex",
+            border: "1px solid #cbd5e1",
+            borderRadius: 6,
+            overflow: "hidden",
+          }}
+        >
+          {(["class", "single"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => switchMode(m)}
+              disabled={uploading}
+              style={{
+                border: "none",
+                padding: "0.4rem 0.8rem",
+                fontSize: "0.85rem",
+                cursor: uploading ? "not-allowed" : "pointer",
+                fontWeight: mode === m ? 700 : 500,
+                background: mode === m ? "#0ea5e9" : "#fff",
+                color: mode === m ? "#fff" : "#475569",
+                opacity: uploading && mode !== m ? 0.5 : 1,
+              }}
+            >
+              {m === "class" ? "Class" : "Single Student"}
+            </button>
+          ))}
         </div>
+
+        {mode === "class" ? (
+          <>
+            <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: "0.85rem", color: "#475569" }}>
+                Teacher
+              </span>
+              <select
+                value={teacherId ?? ""}
+                onChange={(e) => setTeacherId(Number(e.target.value) || null)}
+                disabled={!isCoreTeam && teachers.length <= 1}
+                style={{
+                  padding: "0.35rem 0.5rem",
+                  borderRadius: 6,
+                  border: "1px solid #cbd5e1",
+                  minWidth: 200,
+                }}
+              >
+                {teachers.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.displayName ?? `Teacher #${t.id}`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: "0.85rem", color: "#475569" }}>
+                Period
+              </span>
+              <select
+                value={period ?? ""}
+                onChange={(e) => setPeriod(Number(e.target.value) || null)}
+                style={{
+                  padding: "0.35rem 0.5rem",
+                  borderRadius: 6,
+                  border: "1px solid #cbd5e1",
+                  minWidth: 100,
+                }}
+              >
+                <option value="">All periods</option>
+                {(roster?.availablePeriods ?? []).map((p) => (
+                  <option key={p} value={p}>
+                    Period {p}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div style={{ flex: 1 }} />
+            <div style={{ fontSize: "0.85rem", color: "#475569" }}>
+              {loading ? (
+                "Loading…"
+              ) : roster ? (
+                <>
+                  <strong>{queue.length}</strong> students ·{" "}
+                  <span style={{ color: "#16a34a" }}>{doneCount} done</span> ·{" "}
+                  <span style={{ color: "#b45309" }}>
+                    {skippedCount} skipped
+                  </span>{" "}
+                  · <strong>{remainingCount}</strong> left
+                </>
+              ) : null}
+            </div>
+          </>
+        ) : (
+          <div style={{ position: "relative", flex: 1, minWidth: 260 }}>
+            <input
+              value={searchQ}
+              onChange={(e) => handleSearchInput(e.target.value)}
+              placeholder="Search student by name or ID…"
+              autoComplete="off"
+              style={{
+                width: "100%",
+                padding: "0.4rem 0.6rem",
+                borderRadius: 6,
+                border: "1px solid #cbd5e1",
+                fontSize: "0.9rem",
+                boxSizing: "border-box",
+              }}
+            />
+            {!singleStudent && searchQ.trim().length >= 2 && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "calc(100% + 4px)",
+                  left: 0,
+                  right: 0,
+                  background: "#fff",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 8,
+                  boxShadow: "0 8px 24px rgba(15,23,42,0.12)",
+                  zIndex: 20,
+                  maxHeight: 280,
+                  overflowY: "auto",
+                }}
+              >
+                {searching && searchResults.length === 0 ? (
+                  <div
+                    style={{
+                      padding: "0.6rem 0.75rem",
+                      fontSize: "0.85rem",
+                      color: "#94a3b8",
+                    }}
+                  >
+                    Searching…
+                  </div>
+                ) : searchResults.length === 0 ? (
+                  <div
+                    style={{
+                      padding: "0.6rem 0.75rem",
+                      fontSize: "0.85rem",
+                      color: "#94a3b8",
+                    }}
+                  >
+                    No matching students.
+                  </div>
+                ) : (
+                  searchResults.map((s) => (
+                    <button
+                      key={s.studentId}
+                      type="button"
+                      onClick={() => selectSingleStudent(s)}
+                      style={{
+                        display: "block",
+                        width: "100%",
+                        textAlign: "left",
+                        border: "none",
+                        borderBottom: "1px solid #f1f5f9",
+                        background: "#fff",
+                        padding: "0.5rem 0.75rem",
+                        cursor: "pointer",
+                        fontSize: "0.85rem",
+                        color: "#0f172a",
+                      }}
+                    >
+                      <span style={{ fontWeight: 600 }}>
+                        {s.lastName}, {s.firstName}
+                      </span>
+                      <span style={{ color: "#64748b" }}>
+                        {" "}
+                        · ID {s.localSisId ?? "—"}
+                        {s.gradeLevel != null && ` · Grade ${s.gradeLevel}`}
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {err && (
@@ -548,6 +790,35 @@ export default function ClassPhotoDayPage({
           }}
         >
           {err}
+        </div>
+      )}
+
+      {mode === "single" && singleSavedFor && current && (
+        <div
+          style={{
+            background: "#f0fdf4",
+            border: "1px solid #bbf7d0",
+            color: "#166534",
+            padding: "0.5rem 0.75rem",
+            borderRadius: 6,
+            marginBottom: "0.75rem",
+            fontSize: "0.85rem",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
+          <span>
+            ✓ Photo saved for{" "}
+            <strong>
+              {current.firstName} {current.lastName}
+            </strong>
+            . Search above to update another student.
+          </span>
+          <button type="button" style={btn} onClick={clearSingleStudent}>
+            Search another
+          </button>
         </div>
       )}
 
@@ -649,8 +920,8 @@ export default function ClassPhotoDayPage({
                 <StudentPhoto
                   firstName={current.firstName}
                   lastName={current.lastName}
-                  photoObjectKey={null}
-                  photoConsent={true}
+                  photoObjectKey={current.photoObjectKey ?? null}
+                  photoConsent={current.photoConsent ?? true}
                   size={72}
                 />
               </div>
@@ -658,7 +929,7 @@ export default function ClassPhotoDayPage({
                 {current.firstName} {current.lastName}
               </div>
               <div style={{ color: "#64748b", fontSize: "0.8rem" }}>
-                ID {current.studentId}
+                ID {current.localSisId ?? "—"}
                 {current.gradeLevel != null && ` · Grade ${current.gradeLevel}`}
               </div>
             </div>
@@ -723,16 +994,31 @@ export default function ClassPhotoDayPage({
                 style={{ display: "none" }}
                 onChange={handleFilePicked}
               />
-              <button
-                type="button"
-                style={btnDanger}
-                onClick={handleSkip}
-                disabled={uploading}
-              >
-                Skip → next
-              </button>
+              {mode === "class" && (
+                <button
+                  type="button"
+                  style={btnDanger}
+                  onClick={handleSkip}
+                  disabled={uploading}
+                >
+                  Skip → next
+                </button>
+              )}
             </div>
           </div>
+        </div>
+      ) : mode === "single" ? (
+        <div
+          style={{
+            padding: "2rem",
+            textAlign: "center",
+            color: "#64748b",
+            background: "#f8fafc",
+            border: "1px solid #e2e8f0",
+            borderRadius: 8,
+          }}
+        >
+          Search for a student above to update their photo.
         </div>
       ) : roster && queue.length === 0 ? (
         <div
@@ -764,7 +1050,7 @@ export default function ClassPhotoDayPage({
       ) : null}
 
       {/* Roster strip — click any student to jump to them */}
-      {roster && queue.length > 0 && (
+      {mode === "class" && roster && queue.length > 0 && (
         <div style={{ marginTop: "1rem" }}>
           <div
             style={{

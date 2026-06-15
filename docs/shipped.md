@@ -3,6 +3,59 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- PulseDNA Studio — **Phase 1 (profile + AI drafting)**. A per-school saved
+  "communication profile" (PulseDNA) that schools upload (client-side parse of
+  .txt/.md/.pdf/.docx) and/or paste, edit/replace anytime, with an
+  enable/disable toggle; the AI uses it as background context. New **PulseDNA
+  Studio** (Profile + Create tabs) under the Family nav group, Core-Team gated
+  (`isCoreTeam` / `requireFamilyMessenger`) under the existing `FamilyComm`
+  feature flag. AI drafting via `@workspace/integrations-anthropic-ai`
+  (`anthropic.messages.create`, claude-sonnet-4-6 — same pattern as
+  helpAssistant.ts, no API key), rate-limited 12/min/staff and logged to
+  `pulse_dna_generations`. Tables `pulse_dna_profiles` (one-per-school unique
+  index) + `pulse_dna_generations` in `lib/db/src/schema/pulseDna.ts`; route
+  `routes/pulseDna.ts` (GET/PUT `/pulse-dna` atomic upsert on `school_id`,
+  PATCH `/pulse-dna/toggle`, POST `/pulse-dna/draft`). Phases 2–4 (in-app video
+  recording studio + teleprompter, ffmpeg transcode / object-storage video
+  attach / two-tier retention purge, and accessibility: captions, transcript
+  send, translation, readability, approval workflow) were **scoped but not
+  built** — deferred by user decision.
+
+- Pickup car-tag PDF — **landscape fold-over plain-paper sheet** + **legacy
+  letterless code upgrade**. (1) Tag PDF rewritten to an 8.5×11 LANDSCAPE
+  sheet, one tag/page: bottom panel upright + top panel rotated 180° around a
+  mid-page fold line ("FOLD HERE — drape over the hanger's top bar and tape")
+  so both halves read upright when folded over a kid's clothes-hanger bar and
+  taped (hang-tag stock was too expensive). Office reference strip unchanged;
+  caller interfaces unchanged. (2) Bulk **"Assign pickup codes"** now upgrades
+  LEGACY letterless rows (created before per-adult letters: active,
+  `letter IS NULL`, bare `pickup_number` like `1026`) IN PLACE — assigns the
+  student's base + next free A–H letter, rewrites the full code (reusing the
+  old bare number as the base when it's a valid free number, `1026 → 1026A`,
+  else mints fresh), and backfills a missing `adultKey` from the guardian
+  label so curb adult-lookup groups it. Runs before new issuance (no
+  duplicates), idempotent, soft-cap respected. Codes change → those tags must
+  be reprinted; surfaced via an `upgraded` count + a reprint warning in the
+  confirm dialog and result toast.
+
+- Tardy metrics — **Total tardies + lost-instruction minutes (YTD)**.
+  The staff Hall Passes "Tardy / Check-In History" tab now shows two
+  school-year-to-date summary tiles (Total Tardies, Lost Instruction
+  minutes) plus a per-row "Min Lost" column; the parent HeartBEAT
+  attendance section + PDF show the same two totals per-child. Window is
+  Aug-1 school-year-to-date (matches the parent `schoolYearBounds`).
+  Lost-instruction minutes = tardy check-in time (`tardies.createdAt`,
+  in the school's tz) − scheduled period start from the school's DEFAULT
+  active bell schedule, clamped to `[0, period length]` with a 90-min
+  fallback cap. New shared helper `artifacts/api-server/src/lib/
+  lostInstruction.ts`; `GET /api/tardies` enriches each row with
+  `lostMinutes` (null when the period isn't on the default schedule or no
+  default schedule exists — surfaced as a "not counted — no bell time"
+  note rather than a fake 0). `parentSnapshot.ts` computes per-student
+  `tardiesYtd` + `lostInstructionMinutesYtd`. Staff totals are computed
+  client-side from the enriched rows with an exclusive Aug-1→next-Aug-1
+  window. Per-school timezone threaded via `getSchoolTimezone`.
+
 - School Grade Estimated Calculator — **PM3 result-upload request**.
   When PM3 is selected from the window dropdown, the calculator surfaces a
   dedicated "PM3 result uploads" card requesting the Civics (Gr 7), Science

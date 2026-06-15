@@ -6,6 +6,7 @@ import VoiceTextarea from "./VoiceTextarea";
 
 interface StudentHit {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: string | null;
@@ -286,7 +287,7 @@ export default function NewCaseModal({ onClose, onCreated, initialPlayers }: Pro
                     >
                       {h.firstName} {h.lastName}{" "}
                       <span className="text-[11px]" style={{ color: C.inkSoft }}>
-                        · Gr {h.grade ?? "?"} · {h.studentId}
+                        · Gr {h.grade ?? "?"} · {h.localSisId ?? "—"}
                       </span>
                     </button>
                   ))}

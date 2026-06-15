@@ -42,6 +42,11 @@ interface PlanRow {
   tier: number;
   trackSchoolWideExpectations: boolean;
   tier3GoalSlots: number;
+  // Academic plans set fastSubject (ela|math) and meetingDays (CSV
+  // "mon".."fri"). For those, the form renders only the scheduled
+  // meeting days and hides the behavior-specific PRIDE + strategy grids.
+  fastSubject?: string | null;
+  meetingDays?: string | null;
   closedAt: string | null;
 }
 
@@ -130,6 +135,10 @@ export default function Tier3WeeklyForm({
   onCancel,
 }: Props) {
   const [plan, setPlan] = useState<PlanRow | null>(null);
+  // True once the plan probe has resolved (success or not). We hold the
+  // initial render until then so an academic plan never flashes the
+  // behavior grid before dispatching to the minutes form.
+  const [planResolved, setPlanResolved] = useState(false);
   const [goals, setGoals] = useState<GoalRow[]>([]);
   const [categories, setCategories] = useState<StrategyCategoryRow[]>([]);
   const [strategies, setStrategies] = useState<StrategyRow[]>([]);
@@ -202,6 +211,8 @@ export default function Tier3WeeklyForm({
                   interventionSubType: string | null;
                   trackSchoolWideExpectations: boolean;
                   tier3GoalSlots: number;
+                  fastSubject?: string | null;
+                  meetingDays?: string | null;
                   closedAt: string | null;
                 }
               | null;
@@ -213,6 +224,8 @@ export default function Tier3WeeklyForm({
         }
       } catch {
         /* non-fatal */
+      } finally {
+        if (!cancelled) setPlanResolved(true);
       }
       await reloadGoals(cancelled);
       try {
@@ -361,7 +374,23 @@ export default function Tier3WeeklyForm({
     return rows;
   }, [goals, plan, today, isCoreTeam]);
 
-  const showPride = plan?.trackSchoolWideExpectations !== false;
+  // Academic Tier 3 plans (fastSubject set) only meet on their configured
+  // meeting days, and skip the behavior-specific PRIDE + strategy grids.
+  const isAcademic = !!plan?.fastSubject;
+  const meetingDaySet = plan?.meetingDays
+    ? new Set(
+        plan.meetingDays
+          .split(",")
+          .map((d) => d.trim().toLowerCase())
+          .filter(Boolean),
+      )
+    : null;
+  const visibleDays: Day[] =
+    isAcademic && meetingDaySet
+      ? DAYS.filter((d) => meetingDaySet.has(d))
+      : [...DAYS];
+  const showPride =
+    !isAcademic && plan?.trackSchoolWideExpectations !== false;
   const visibleStrategies = strategies.filter((s) => s.active);
   const visibleCategories = categories.filter(
     (c) => c.active && visibleStrategies.some((s) => s.categoryId === c.id),
@@ -475,10 +504,12 @@ export default function Tier3WeeklyForm({
   const submit = () => persist("submit");
   const saveDraft = () => persist("draft");
 
-  // True iff every weekday has at least one goal scored OR is marked
-  // absent. Drives whether the "Submit" button is enabled.
+  // True iff every scheduled day has at least one goal scored OR is
+  // marked absent. Drives whether the "Submit" button is enabled. For
+  // academic Tier 3 plans only the configured meeting days count, so the
+  // week can't be completed until each scheduled meeting day is logged.
   const allDaysAccounted = useMemo(() => {
-    for (const d of DAYS) {
+    for (const d of visibleDays) {
       if (absentDays[d]) continue;
       let scoredAtLeastOneGoal = false;
       for (const slot of Object.values(goalScores)) {
@@ -490,7 +521,7 @@ export default function Tier3WeeklyForm({
       if (!scoredAtLeastOneGoal) return false;
     }
     return true;
-  }, [absentDays, goalScores]);
+  }, [absentDays, goalScores, visibleDays]);
 
   const buttonStyle = (active: boolean): React.CSSProperties => ({
     width: 28,
@@ -505,6 +536,32 @@ export default function Tier3WeeklyForm({
     cursor: "pointer",
     fontWeight: active ? 700 : 500,
   });
+
+  // Hold the first paint until the plan probe resolves so an academic
+  // plan dispatches straight to the minutes form (no behavior-grid flash).
+  if (!planResolved) {
+    return (
+      <div style={{ padding: "1rem", color: "#64748b", fontSize: "0.9rem" }}>
+        Loading plan…
+      </div>
+    );
+  }
+
+  // Academic Tier 3 plans use a minutes-based small-group model instead of
+  // the behavior per-day goal-scoring grid. Dispatch to the dedicated form.
+  if (isAcademic) {
+    return (
+      <Tier3AcademicMinutesForm
+        studentId={studentId}
+        studentName={studentName}
+        isCoreTeam={isCoreTeam}
+        initialWeekStartDate={weekStartDate}
+        fastSubject={plan?.fastSubject ?? null}
+        onSaved={onSaved}
+        onCancel={onCancel}
+      />
+    );
+  }
 
   return (
     <div style={{ display: "grid", gap: "1rem", maxWidth: 880 }}>
@@ -545,7 +602,7 @@ export default function Tier3WeeklyForm({
         >
           <colgroup>
             <col style={{ width: 220 }} />
-            {DAYS.map((d) => (
+            {visibleDays.map((d) => (
               <col key={d} />
             ))}
           </colgroup>
@@ -561,7 +618,7 @@ export default function Tier3WeeklyForm({
               >
                 Goal
               </th>
-              {DAYS.map((d, i) => (
+              {visibleDays.map((d, i) => (
                 <th
                   key={d}
                   style={{
@@ -569,7 +626,7 @@ export default function Tier3WeeklyForm({
                     borderBottom: "2px solid #cbd5e1",
                     borderLeft: "1px solid #cbd5e1",
                     borderRight:
-                      i === DAYS.length - 1 ? "1px solid #cbd5e1" : undefined,
+                      i === visibleDays.length - 1 ? "1px solid #cbd5e1" : undefined,
                     background: "#f8fafc",
                   }}
                 >
@@ -602,7 +659,7 @@ export default function Tier3WeeklyForm({
                   Won&rsquo;t count toward weekly %
                 </div>
               </td>
-              {DAYS.map((d, i) => (
+              {visibleDays.map((d, i) => (
                 <td
                   key={d}
                   style={{
@@ -610,7 +667,7 @@ export default function Tier3WeeklyForm({
                     borderBottom: "1px solid #e2e8f0",
                     borderLeft: "1px solid #e2e8f0",
                     borderRight:
-                      i === DAYS.length - 1
+                      i === visibleDays.length - 1
                         ? "1px solid #e2e8f0"
                         : undefined,
                     background: absentDays[d] ? "#fef3c7" : "#fafafa",
@@ -719,7 +776,7 @@ export default function Tier3WeeklyForm({
                       </div>
                     )}
                   </td>
-                  {DAYS.map((d, i) => {
+                  {visibleDays.map((d, i) => {
                     const isAbsent = absentDays[d];
                     // No goal text yet means there's nothing to score
                     // against — leave the buttons inert + greyed so it's
@@ -733,7 +790,7 @@ export default function Tier3WeeklyForm({
                           borderBottom: "1px solid #e2e8f0",
                           borderLeft: "1px solid #e2e8f0",
                           borderRight:
-                            i === DAYS.length - 1
+                            i === visibleDays.length - 1
                               ? "1px solid #e2e8f0"
                               : undefined,
                           verticalAlign: "middle",
@@ -829,7 +886,7 @@ export default function Tier3WeeklyForm({
                     {PRIDE_LEGEND.map((l) => l.label).join(" · ")}
                   </div>
                 </td>
-                {DAYS.map((d, i) => (
+                {visibleDays.map((d, i) => (
                   <td
                     key={d}
                     style={{
@@ -837,7 +894,7 @@ export default function Tier3WeeklyForm({
                       borderBottom: "1px solid #e2e8f0",
                       borderLeft: "1px solid #e2e8f0",
                       borderRight:
-                        i === DAYS.length - 1
+                        i === visibleDays.length - 1
                           ? "1px solid #e2e8f0"
                           : undefined,
                     }}
@@ -885,7 +942,7 @@ export default function Tier3WeeklyForm({
               >
                 Day comment
               </td>
-              {DAYS.map((d, i) => (
+              {visibleDays.map((d, i) => (
                 <td
                   key={d}
                   style={{
@@ -893,7 +950,7 @@ export default function Tier3WeeklyForm({
                     borderBottom: "1px solid #e2e8f0",
                     borderLeft: "1px solid #e2e8f0",
                     borderRight:
-                      i === DAYS.length - 1
+                      i === visibleDays.length - 1
                         ? "1px solid #e2e8f0"
                         : undefined,
                   }}
@@ -937,8 +994,8 @@ export default function Tier3WeeklyForm({
         />
       </label>
 
-      {/* Strategy checklist */}
-      {visibleCategories.length > 0 && (
+      {/* Strategy checklist — behavior plans only */}
+      {!isAcademic && visibleCategories.length > 0 && (
         <div>
           <div style={{ fontWeight: 600, marginBottom: "0.4rem" }}>
             Interventions Used This Week
@@ -966,7 +1023,7 @@ export default function Tier3WeeklyForm({
                         color: "#64748b",
                       }}
                     />
-                    {DAYS.map((d) => (
+                    {visibleDays.map((d) => (
                       <th
                         key={d}
                         style={{
@@ -989,7 +1046,7 @@ export default function Tier3WeeklyForm({
                         <td style={{ padding: "0.2rem 0.4rem", fontSize: "0.85rem" }}>
                           {s.name}
                         </td>
-                        {DAYS.map((d) => (
+                        {visibleDays.map((d) => (
                           <td
                             key={d}
                             style={{ padding: "0.2rem", textAlign: "center" }}
@@ -1105,6 +1162,666 @@ export default function Tier3WeeklyForm({
             : submittedAt
               ? "Re-submit"
               : "Submit week"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Academic Tier 3 — minutes-based small-group log
+// ---------------------------------------------------------------------------
+// Replaces the behavior per-day goal-scoring grid for academic plans
+// (fastSubject set). The model is "minutes of small-group time per week":
+//   - per visible day, a 5-minute-step minutes dropdown,
+//   - a running total toward the weekly target,
+//   - a week selector (met / owed / excused badges) to backfill prior weeks,
+//   - a needs-attention strip linking the still-owed weeks,
+//   - a release valve ("no group provided this week" -> excused).
+// All data flows through the same /api/tier3-records upsert + the dedicated
+// /api/tier3-academic-weeks status endpoint.
+
+const ACADEMIC_DAY_MAX = 240;
+const ACADEMIC_STEP = 5;
+
+interface AcademicWeekStatusRow {
+  weekStartDate: string;
+  minutes: number;
+  target: number;
+  released: boolean;
+  releaseReason: string | null;
+  releasedAt: string | null;
+  state: "met" | "owed" | "excused";
+}
+
+interface AcademicWeeksResponse {
+  studentId: string;
+  teacherStaffId: number;
+  minutesTarget: number;
+  academicAnyDay: boolean;
+  fastSubject: string | null;
+  visibleDays: Day[];
+  weeks: AcademicWeekStatusRow[];
+}
+
+function weekLabelClient(monday: string): string {
+  const d = new Date(`${monday}T00:00:00Z`);
+  const month = d.toLocaleDateString("en-US", {
+    month: "short",
+    timeZone: "UTC",
+  });
+  return `week of ${month} ${d.getUTCDate()}`;
+}
+
+const STATE_STYLE: Record<
+  "met" | "owed" | "excused",
+  { bg: string; fg: string; border: string; label: string }
+> = {
+  met: { bg: "#dcfce7", fg: "#166534", border: "#86efac", label: "Met" },
+  owed: { bg: "#fef3c7", fg: "#92400e", border: "#fcd34d", label: "Owed" },
+  excused: { bg: "#e2e8f0", fg: "#475569", border: "#cbd5e1", label: "Excused" },
+};
+
+function Tier3AcademicMinutesForm({
+  studentId,
+  studentName,
+  isCoreTeam: _isCoreTeam,
+  initialWeekStartDate,
+  fastSubject,
+  onSaved,
+  onCancel,
+}: {
+  studentId: string;
+  studentName: string;
+  isCoreTeam: boolean;
+  initialWeekStartDate: string;
+  fastSubject: string | null;
+  onSaved: () => void;
+  onCancel: () => void;
+}) {
+  const [activeWeek, setActiveWeek] = useState(initialWeekStartDate);
+  const [meta, setMeta] = useState<AcademicWeeksResponse | null>(null);
+  const [minutes, setMinutes] = useState<Record<Day, number>>({
+    mon: 0,
+    tue: 0,
+    wed: 0,
+    thu: 0,
+    fri: 0,
+  });
+  const [weeklyComment, setWeeklyComment] = useState("");
+  const [released, setReleased] = useState(false);
+  const [releaseReason, setReleaseReason] = useState<string | null>(null);
+  const [releasedAt, setReleasedAt] = useState<string | null>(null);
+  const [releaseDraft, setReleaseDraft] = useState("");
+  const [showReleaseInput, setShowReleaseInput] = useState(false);
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  const subjectLabel =
+    fastSubject === "ela" ? "ELA" : fastSubject === "math" ? "Math" : "Academic";
+  const target = meta?.minutesTarget ?? 30;
+  const visibleDays: Day[] = meta?.visibleDays ?? [...DAYS];
+  const todayMonday = useMemo(() => {
+    const t = todayLocalISO();
+    const d = new Date(`${t}T00:00:00Z`);
+    const dow = d.getUTCDay();
+    const shift = dow === 0 ? -6 : 1 - dow;
+    d.setUTCDate(d.getUTCDate() + shift);
+    return d.toISOString().slice(0, 10);
+  }, []);
+  const todayKey: Day | null = useMemo(() => {
+    const t = todayLocalISO();
+    const dow = new Date(`${t}T00:00:00Z`).getUTCDay();
+    const map: Record<number, Day | undefined> = {
+      1: "mon",
+      2: "tue",
+      3: "wed",
+      4: "thu",
+      5: "fri",
+    };
+    return map[dow] ?? null;
+  }, []);
+
+  // Load the week selector status (target / any-day / visible days / per-week
+  // met-owed-excused) once, and refresh after each save.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authFetch(
+          `/api/tier3-academic-weeks?studentId=${encodeURIComponent(
+            studentId,
+          )}&teacherStaffId=`,
+        );
+        if (res.ok && !cancelled) {
+          const data = (await res.json()) as AcademicWeeksResponse;
+          setMeta(data);
+        }
+      } catch {
+        /* non-fatal */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId, reloadKey]);
+
+  // Load the active week's record (per-day minutes + release state).
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      try {
+        const res = await authFetch(
+          `/api/tier3-records?studentId=${encodeURIComponent(
+            studentId,
+          )}&weekStartDate=${activeWeek}&teacherStaffId=`,
+        );
+        if (res.ok && !cancelled) {
+          const rows = (await res.json()) as Array<{
+            academicMinutes?: Record<string, number> | null;
+            weeklyComment?: string | null;
+            releasedNoIntervention?: boolean | null;
+            releaseReason?: string | null;
+            releasedAt?: string | null;
+          }>;
+          const r = rows[0] ?? null;
+          const am = (r?.academicMinutes ?? {}) as Record<string, number>;
+          setMinutes({
+            mon: Number(am.mon) || 0,
+            tue: Number(am.tue) || 0,
+            wed: Number(am.wed) || 0,
+            thu: Number(am.thu) || 0,
+            fri: Number(am.fri) || 0,
+          });
+          setWeeklyComment(r?.weeklyComment ?? "");
+          setReleased(Boolean(r?.releasedNoIntervention));
+          setReleaseReason(r?.releaseReason ?? null);
+          setReleasedAt(r?.releasedAt ?? null);
+          setShowReleaseInput(false);
+          setReleaseDraft("");
+        }
+      } catch {
+        /* non-fatal */
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId, activeWeek, reloadKey]);
+
+  const loggedTotal = useMemo(
+    () => visibleDays.reduce((sum, d) => sum + (minutes[d] || 0), 0),
+    [minutes, visibleDays],
+  );
+  const pct = target > 0 ? Math.min(100, (loggedTotal / target) * 100) : 0;
+  const weekState: "met" | "owed" | "excused" = released
+    ? "excused"
+    : loggedTotal >= target
+      ? "met"
+      : "owed";
+
+  const owedWeeks = (meta?.weeks ?? []).filter(
+    (w) => w.state === "owed" && w.weekStartDate !== activeWeek,
+  );
+
+  const minutesOptions = useMemo(() => {
+    const opts: number[] = [];
+    for (let m = 0; m <= ACADEMIC_DAY_MAX; m += ACADEMIC_STEP) opts.push(m);
+    return opts;
+  }, []);
+
+  async function saveWeek() {
+    setSaving(true);
+    setMsg(null);
+    try {
+      const minutesPayload: Record<string, number> = {};
+      for (const d of visibleDays) minutesPayload[d] = minutes[d] || 0;
+      const res = await authFetch("/api/tier3-records", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId,
+          weekStartDate: activeWeek,
+          weeklyComment,
+          academicMinutes: minutesPayload,
+          submitted: true,
+        }),
+      });
+      if (!res.ok) throw new Error((await res.text()) || "Save failed");
+      setMsg("Saved.");
+      setReloadKey((k) => k + 1);
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function applyRelease(release: boolean, reason: string) {
+    setSaving(true);
+    setMsg(null);
+    try {
+      const res = await authFetch("/api/tier3-records", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId,
+          weekStartDate: activeWeek,
+          releasedNoIntervention: release,
+          releaseReason: release ? reason : null,
+        }),
+      });
+      if (!res.ok) throw new Error((await res.text()) || "Save failed");
+      setMsg(release ? "Week marked excused." : "Release cleared.");
+      setReloadKey((k) => k + 1);
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div style={{ display: "grid", gap: "1rem", maxWidth: 720 }}>
+      <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>
+        Tier 3 {subjectLabel} — Small-group minutes for {studentName}
+      </div>
+
+      {/* Week selector */}
+      <div style={{ display: "grid", gap: 6 }}>
+        <label style={{ fontSize: "0.8rem", fontWeight: 600, color: "#475569" }}>
+          Week
+        </label>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {(meta?.weeks ?? []).map((w) => {
+            const active = w.weekStartDate === activeWeek;
+            const st = STATE_STYLE[w.state];
+            return (
+              <button
+                key={w.weekStartDate}
+                type="button"
+                onClick={() => setActiveWeek(w.weekStartDate)}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  gap: 2,
+                  padding: "5px 10px",
+                  borderRadius: 8,
+                  border: `2px solid ${active ? "#7e22ce" : st.border}`,
+                  background: active ? "#faf5ff" : st.bg,
+                  color: st.fg,
+                  cursor: "pointer",
+                  fontSize: "0.75rem",
+                  fontWeight: 600,
+                }}
+              >
+                <span>{weekLabelClient(w.weekStartDate)}</span>
+                <span style={{ fontSize: "0.68rem", fontWeight: 700 }}>
+                  {st.label}
+                  {w.state !== "excused"
+                    ? ` · ${w.minutes}/${w.target}m`
+                    : ""}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Needs-attention strip */}
+      {owedWeeks.length > 0 && (
+        <div
+          style={{
+            padding: "0.5rem 0.75rem",
+            background: "#fffbeb",
+            border: "1px solid #fcd34d",
+            borderRadius: 8,
+            fontSize: "0.82rem",
+            color: "#92400e",
+          }}
+        >
+          <strong>Still owed:</strong>{" "}
+          {owedWeeks.map((w, i) => (
+            <span key={w.weekStartDate}>
+              <button
+                type="button"
+                onClick={() => setActiveWeek(w.weekStartDate)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#b45309",
+                  textDecoration: "underline",
+                  cursor: "pointer",
+                  fontSize: "0.82rem",
+                  fontWeight: 600,
+                  padding: 0,
+                }}
+              >
+                {weekLabelClient(w.weekStartDate)}
+              </button>
+              {i < owedWeeks.length - 1 ? ", " : ""}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {loading ? (
+        <div style={{ color: "#64748b", fontSize: "0.9rem" }}>Loading week…</div>
+      ) : released ? (
+        <div
+          style={{
+            padding: "0.75rem 1rem",
+            background: "#f1f5f9",
+            border: "1px solid #cbd5e1",
+            borderRadius: 8,
+          }}
+        >
+          <div style={{ fontWeight: 600, color: "#475569" }}>
+            No group provided this week — excused.
+          </div>
+          {releaseReason && (
+            <div style={{ fontSize: "0.85rem", color: "#64748b", marginTop: 4 }}>
+              Reason: {releaseReason}
+            </div>
+          )}
+          {releasedAt && (
+            <div style={{ fontSize: "0.75rem", color: "#94a3b8", marginTop: 2 }}>
+              Released {new Date(releasedAt).toLocaleString()}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => applyRelease(false, "")}
+            disabled={saving}
+            style={{
+              marginTop: 8,
+              fontSize: "0.8rem",
+              padding: "0.3rem 0.7rem",
+              borderRadius: 6,
+              border: "1px solid #cbd5e1",
+              background: "white",
+              cursor: saving ? "not-allowed" : "pointer",
+            }}
+          >
+            Undo — log minutes instead
+          </button>
+        </div>
+      ) : (
+        <>
+          {/* Running total */}
+          <div style={{ display: "grid", gap: 4 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "baseline",
+              }}
+            >
+              <span style={{ fontWeight: 600 }}>
+                {loggedTotal} / {target} minutes
+              </span>
+              <span
+                style={{
+                  fontSize: "0.78rem",
+                  fontWeight: 700,
+                  color: STATE_STYLE[weekState].fg,
+                }}
+              >
+                {STATE_STYLE[weekState].label}
+              </span>
+            </div>
+            <div
+              style={{
+                height: 8,
+                borderRadius: 999,
+                background: "#e2e8f0",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  width: `${pct}%`,
+                  height: "100%",
+                  background: weekState === "met" ? "#22c55e" : "#a855f7",
+                  transition: "width 0.2s",
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Per-day minutes */}
+          <div style={{ display: "grid", gap: 8 }}>
+            {visibleDays.map((d) => {
+              const isToday = d === todayKey && activeWeek === todayMonday;
+              return (
+                <div
+                  key={d}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "0.4rem 0.6rem",
+                    borderRadius: 8,
+                    border: `1px solid ${isToday ? "#a855f7" : "#e2e8f0"}`,
+                    background: isToday ? "#faf5ff" : "white",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={(minutes[d] || 0) > 0}
+                    onChange={(e) =>
+                      setMinutes((prev) => ({
+                        ...prev,
+                        [d]: e.target.checked ? prev[d] || target : 0,
+                      }))
+                    }
+                  />
+                  <span
+                    style={{
+                      width: 44,
+                      fontWeight: 600,
+                      color: "#334155",
+                    }}
+                  >
+                    {DAY_LABELS[d]}
+                    {isToday ? " ·" : ""}
+                  </span>
+                  <select
+                    value={minutes[d] || 0}
+                    onChange={(e) =>
+                      setMinutes((prev) => ({
+                        ...prev,
+                        [d]: Number(e.target.value),
+                      }))
+                    }
+                    style={{
+                      padding: "0.3rem 0.5rem",
+                      borderRadius: 6,
+                      border: "1px solid #cbd5e1",
+                    }}
+                  >
+                    {minutesOptions.map((m) => (
+                      <option key={m} value={m}>
+                        {m} min
+                      </option>
+                    ))}
+                  </select>
+                  {isToday && (
+                    <span style={{ fontSize: "0.72rem", color: "#7e22ce" }}>
+                      today
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Weekly comment */}
+          <div style={{ display: "grid", gap: 4 }}>
+            <label
+              style={{ fontSize: "0.8rem", fontWeight: 600, color: "#475569" }}
+            >
+              Note (optional)
+            </label>
+            <textarea
+              value={weeklyComment}
+              onChange={(e) => setWeeklyComment(e.target.value)}
+              rows={2}
+              style={{
+                padding: "0.4rem 0.6rem",
+                borderRadius: 6,
+                border: "1px solid #cbd5e1",
+                resize: "vertical",
+                fontFamily: "inherit",
+              }}
+            />
+          </div>
+
+          {/* Release valve */}
+          {showReleaseInput ? (
+            <div
+              style={{
+                display: "grid",
+                gap: 6,
+                padding: "0.6rem 0.75rem",
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+                borderRadius: 8,
+              }}
+            >
+              <label style={{ fontSize: "0.8rem", fontWeight: 600 }}>
+                Mark this week “no group provided”
+              </label>
+              <input
+                value={releaseDraft}
+                onChange={(e) => setReleaseDraft(e.target.value)}
+                placeholder="Reason (e.g. testing week, group cancelled)…"
+                style={{
+                  padding: "0.35rem 0.5rem",
+                  borderRadius: 6,
+                  border: "1px solid #cbd5e1",
+                }}
+              />
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => applyRelease(true, releaseDraft.trim())}
+                  disabled={saving}
+                  style={{
+                    fontSize: "0.8rem",
+                    padding: "0.3rem 0.7rem",
+                    borderRadius: 6,
+                    border: "none",
+                    background: "#64748b",
+                    color: "white",
+                    cursor: saving ? "not-allowed" : "pointer",
+                  }}
+                >
+                  Confirm excused
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowReleaseInput(false);
+                    setReleaseDraft("");
+                  }}
+                  disabled={saving}
+                  style={{
+                    fontSize: "0.8rem",
+                    padding: "0.3rem 0.7rem",
+                    borderRadius: 6,
+                    border: "1px solid #cbd5e1",
+                    background: "white",
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowReleaseInput(true)}
+              style={{
+                justifySelf: "start",
+                fontSize: "0.78rem",
+                color: "#64748b",
+                background: "transparent",
+                border: "none",
+                textDecoration: "underline",
+                cursor: "pointer",
+                padding: 0,
+              }}
+            >
+              No group provided this week?
+            </button>
+          )}
+        </>
+      )}
+
+      {msg && (
+        <div
+          style={{
+            padding: "0.4rem 0.6rem",
+            background: msg === "Saved." ? "#f0fdf4" : "#fef2f2",
+            border: `1px solid ${msg === "Saved." ? "#bbf7d0" : "#fecaca"}`,
+            color: msg === "Saved." ? "#166534" : "#b91c1c",
+            borderRadius: 6,
+            fontSize: "0.9rem",
+          }}
+        >
+          {msg}
+        </div>
+      )}
+
+      {/* Actions */}
+      <div
+        style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}
+      >
+        <button type="button" onClick={onCancel} disabled={saving}>
+          Cancel
+        </button>
+        {!released && (
+          <button
+            type="button"
+            onClick={saveWeek}
+            disabled={saving || loading}
+            style={{
+              background: "white",
+              color: "#1e293b",
+              padding: "0.45rem 0.9rem",
+              borderRadius: 6,
+              border: "1px solid #cbd5e1",
+              cursor: saving || loading ? "not-allowed" : "pointer",
+              fontWeight: 500,
+            }}
+          >
+            {saving ? "Saving…" : "Save week"}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onSaved}
+          disabled={saving}
+          style={{
+            background: "#2563eb",
+            color: "white",
+            padding: "0.45rem 0.9rem",
+            borderRadius: 6,
+            border: "none",
+            cursor: saving ? "not-allowed" : "pointer",
+            fontWeight: 600,
+          }}
+        >
+          Done
         </button>
       </div>
     </div>

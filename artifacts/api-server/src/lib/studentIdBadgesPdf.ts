@@ -1,44 +1,49 @@
-// Per-student printable ID badges. Two physical sizes, both single-sided
-// (one badge = one page), visually consistent:
-//   - "lanyard": portrait 3.375" × 4.25" (standard lanyard ID).
-//   - "cr80":    landscape 3.375" × 2.125" (credit-card ID).
-// Each badge carries: square student photo (or initials fallback), house
-// color block + uploaded house logo (or initials disc fallback), house
-// name, school name, student name, "Grade N · Car Rider" line, QR (links
-// to kiosk sign-in), Code 128 barcode, and the two FL HB 383 crisis
-// hotlines (988 + Crisis Text Line 741741).
+// Per-student printable ID badge, single-sided (one badge = one page). The
+// per-school design chooses one of two CR80 orientations:
+//   • LANDSCAPE (legacy) — 3.375" × 2.125", a full-width house-color header
+//     (uploaded house logo or initials disc on the left, name/grade + school,
+//     dismissal-mode indicator on the right), photo, enlarged QR, then below
+//     a house band, a full-width Code 128 barcode, and the crisis strip.
+//   • PORTRAIT (lanyard) — 2.125" × 3.375", a lanyard slot + diagonal
+//     school-color corner ribbons, centered school name, photo + QR row,
+//     icon rows (dismissal / name+grade / teacher), a house emblem band,
+//     the barcode below it, and a navy crisis bar at the very bottom.
+// Both carry the two FL HB 383 crisis hotlines (988 + Crisis Text Line
+// 741741) printed on the front as Florida law requires. The QR and Code 128
+// always encode the Local SIS id (never the FLEID-style student_id).
 
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
 import bwipjs from "bwip-js";
 import { normalizeHex } from "./pdfColors";
 
-export type BadgeSize = "lanyard" | "cr80";
+// Landscape credit-card / CR80 — 3.375" × 2.125" at 72dpi.
+const CARD_W = 243;
+const CARD_H = 153;
 
-// Portrait lanyard ID — 3.375" × 4.25" at 72dpi
-const LANYARD_W = 243;
-const LANYARD_H = 306;
-// Landscape CR80 — 3.375" × 2.125" at 72dpi
-const CR80_W = 243;
-const CR80_H = 153;
-
-const PAGE_MARGIN = 10;
+const PAGE_MARGIN = 8;
 
 export interface StudentBadgeInput {
   studentId: string;
-  // District-level Local SIS ID (6-digit). The badge's barcode + QR still
-  // encode studentId (FLEID) so existing sign-in scanners keep working;
-  // localSisId is currently unused on the visible face but kept on the
-  // type so callers don't break.
+  // District-level Local SIS id (the human-facing id students scan/type at
+  // the kiosk). The visible "ID" line, the QR, and the Code128 barcode all
+  // encode this — the internal FLEID-style student_id never reaches a
+  // student. Falls back to student_id only if a row is missing its SIS id.
   localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: number | null;
-  // End-of-day dismissal mode. Rendered as a human label next to grade.
+  // Optional homeroom / primary teacher display name (e.g. "Ms. Johnson").
+  // Rendered as the teacher icon row on portrait badges only; the row is
+  // omitted when absent so the layout stays clean.
+  teacherName?: string | null;
+  // End-of-day dismissal mode. Rendered in the header (car icon for car
+  // riders, short text label otherwise).
   dismissalMode?: string | null;
   schoolName: string;
-  // QR points to: `${baseUrl}?signin=<studentId>` — the kiosk reads
-  // `?signin=…` and pre-fills the sign-in field.
+  // QR points to: `${baseUrl}?signin=<localSisId>` — the kiosk reads
+  // `?signin=…` and pre-fills the sign-in field with the same Local SIS id
+  // students type on the keypad.
   baseUrl: string;
   house?: {
     name: string;
@@ -54,26 +59,58 @@ export interface StudentBadgeInput {
   // square photo in the photo slot. Null/undefined = colored initials
   // disc fallback.
   photoBytes?: Buffer | null;
+  // Per-school card design. When omitted, the badge falls back to the
+  // legacy look (house-colored top band, no footer) so unconfigured
+  // schools render exactly as before.
+  design?: CardDesign | null;
 }
 
-// Human label for a stored dismissal_mode value. `car_rider` is rendered
-// as a small vector car icon instead of text (see drawCarIcon) because
-// the words wouldn't fit cleanly on the CR80 layout next to a Grade label.
-function dismissalLabel(mode: string | null | undefined): string | null {
-  if (!mode) return null;
-  switch (mode) {
-    case "car_rider": return null; // drawn as an icon, not text
-    case "walker": return "Walker";
-    case "bus": return "Bus";
-    case "aftercare": return "Aftercare";
-    case "parent_pickup_only": return "Parent Pickup";
-    default: return null;
-  }
+// Per-school Student ID card design. Resolved by the badge route from
+// school_branding and applied identically to every badge in a batch.
+export interface CardDesign {
+  // Physical orientation. 'landscape' = CR80 horizontal (legacy). 'portrait'
+  // = tall lanyard ID (corner ribbons, lanyard slot, icon rows, house emblem,
+  // navy crisis bar). All other design fields apply to both orientations.
+  orientation: "landscape" | "portrait";
+  // Top region (header + photo) background.
+  bgMode: "colors" | "image";
+  // 0-2 resolved hex colors. 0 = fall back to the student's house color
+  // (legacy look); 1 = solid; 2 = diagonal gradient.
+  bgColors: string[];
+  bgAngle: number;
+  // Uploaded top-background image bytes (mode='image'). PNG/JPEG/WebP.
+  bgImageBytes?: Buffer | null;
+  // Header + student-name text color.
+  headerTextMode: "auto" | "manual";
+  headerTextColor?: string | null;
+  // Optional house footer band.
+  showHouse: boolean;
+  houseBgMode: "house" | "white" | "custom";
+  houseBgColor?: string | null;
+  houseTextMode: "auto" | "manual";
+  houseTextColor?: string | null;
 }
 
-// Tiny side-profile car icon — body + roof + two wheels. Used in place of
-// the "Car Rider" text on student ID badges so the dismissal mode reads at
-// a glance without crowding the Grade label.
+// Legacy default used when a badge carries no design (preserves the
+// original house-colored full-width header band, no footer).
+const LEGACY_DESIGN: CardDesign = {
+  orientation: "landscape",
+  bgMode: "colors",
+  bgColors: [],
+  bgAngle: 135,
+  bgImageBytes: null,
+  headerTextMode: "auto",
+  headerTextColor: null,
+  showHouse: false,
+  houseBgMode: "house",
+  houseBgColor: null,
+  houseTextMode: "auto",
+  houseTextColor: null,
+};
+
+// Tiny side-profile car icon — body + roof + two wheels. Used inside the
+// white corner badge that flags car riders on the student photo (both
+// orientations).
 function drawCarIcon(
   doc: PDFKit.PDFDocument,
   x: number,
@@ -114,23 +151,55 @@ function drawCarIcon(
   doc.restore();
 }
 
+// Small circular "Car Rider" badge overlaid on the bottom-left corner of a
+// student photo: a white disc (thin slate border) with the car silhouette
+// inside, tinted to the school's primary top color so it pops off the photo.
+// Used in BOTH orientations and ONLY for car riders — other dismissal modes
+// show nothing (per product decision).
+function drawCarRiderCornerBadge(
+  doc: PDFKit.PDFDocument,
+  photoX: number,
+  photoBottomY: number,
+  carColor: string,
+): void {
+  const r = 11;
+  // Hug the inside of the photo's bottom-left corner.
+  const cx = photoX + r + 1.5;
+  const cy = photoBottomY - r - 1.5;
+  doc.save();
+  doc.fillColor("#ffffff").circle(cx, cy, r).fill();
+  doc.lineWidth(0.8).strokeColor("#cbd5e1").circle(cx, cy, r).stroke();
+  doc.restore();
+  const carW = r * 1.4;
+  drawCarIcon(doc, cx - carW / 2, cy - (carW * 0.55) / 2, carW, carColor);
+}
+
 export async function renderStudentBadgesPdf(
   badges: StudentBadgeInput[],
-  size: BadgeSize = "lanyard",
 ): Promise<Buffer> {
-  const [W, H] = size === "cr80" ? [CR80_W, CR80_H] : [LANYARD_W, LANYARD_H];
+  // Bottom margin intentionally small — the badge layout positions every
+  // element absolutely and the crisis hotline line sits close to the page
+  // edge. A larger bottom margin would push pdfkit to auto-page when text
+  // crosses (pageHeight - bottomMargin). These margins MUST be passed to
+  // every addPage() too: pdfkit applies its default 72pt margins to any
+  // page whose options object omits them, which silently shrinks the
+  // usable area and auto-paginates a single badge across several pages.
+  const margins = {
+    top: PAGE_MARGIN,
+    bottom: 2,
+    left: PAGE_MARGIN,
+    right: PAGE_MARGIN,
+  };
+  // Page size follows each badge's orientation (portrait swaps W/H). A batch
+  // shares one school design, so this is usually constant — but we size per
+  // badge defensively so a mixed list never clips.
+  const sizeFor = (b: StudentBadgeInput): [number, number] =>
+    (b.design ?? LEGACY_DESIGN).orientation === "portrait"
+      ? [CARD_H, CARD_W]
+      : [CARD_W, CARD_H];
   const doc = new PDFDocument({
-    size: [W, H],
-    // Bottom margin intentionally small — the badge layout positions
-    // every element absolutely and the crisis hotline lines sit almost
-    // flush against the page edge. A larger bottom margin would push
-    // pdfkit to auto-page when text crosses (pageHeight - bottomMargin).
-    margins: {
-      top: PAGE_MARGIN,
-      bottom: 2,
-      left: PAGE_MARGIN,
-      right: PAGE_MARGIN,
-    },
+    size: badges[0] ? sizeFor(badges[0]) : [CARD_W, CARD_H],
+    margins,
     info: { Title: "Student ID Badges" },
   });
 
@@ -141,12 +210,8 @@ export async function renderStudentBadgesPdf(
   });
 
   for (let i = 0; i < badges.length; i++) {
-    if (i > 0) doc.addPage({ size: [W, H] });
-    if (size === "cr80") {
-      await renderCr80Badge(doc, badges[i]);
-    } else {
-      await renderLanyardBadge(doc, badges[i]);
-    }
+    if (i > 0) doc.addPage({ size: sizeFor(badges[i]), margins });
+    await renderCardBadge(doc, badges[i]);
   }
 
   doc.end();
@@ -154,197 +219,40 @@ export async function renderStudentBadgesPdf(
 }
 
 // ---------------------------------------------------------------------------
-// Lanyard (portrait 243 × 306)
+// Credit-card / CR80 (landscape 243 × 153)
 //
-// Layout, top to bottom:
-//   [ house-color band, 56pt tall ]
-//     house logo (square, 32×32) at left, white if no upload
-//     "House Name"  in white on band
-//     "School Name" in faint white under house name
-//   [ square photo, 96×96, centered, framed in house color ]
-//   "First Last" (14pt)  · "Grade N · Car Rider" (9pt)
-//   QR (60×60, centered) → Code 128 barcode → crisis lines (988 / 741741)
+// Layout (design-driven):
+//   [ TOP region — school colors (solid / diagonal) OR uploaded image ]
+//     school name (auto-contrast or manual) at top-left
+//     square photo at left · student name + grade beside it
+//     enlarged QR on a WHITE plate at the right (always clean white)
+//     dismissal indicator (car icon / label) at top-right of the region
+//   [ WHITE region ]
+//     full-width Code 128 barcode
+//     optional house footer band (emblem + "HOUSE NAME")
+//     FL HB 383 crisis line (988 + 741741)
 // ---------------------------------------------------------------------------
-async function renderLanyardBadge(
+const TOP_H = 96;
+
+async function renderCardBadge(
   doc: PDFKit.PDFDocument,
   badge: StudentBadgeInput,
 ) {
-  const W = LANYARD_W;
-  const H = LANYARD_H;
-  const houseColor = badge.house ? normalizeHex(badge.house.color) : "#0f172a";
-
-  // Card outline
-  doc
-    .save()
-    .lineWidth(0.5)
-    .strokeColor("#cbd5e1")
-    .roundedRect(2, 2, W - 4, H - 4, 8)
-    .stroke()
-    .restore();
-
-  // Top color band
-  const bandH = 56;
-  doc
-    .save()
-    .fillColor(houseColor)
-    .roundedRect(2, 2, W - 4, bandH, 8)
-    .fill()
-    .restore();
-  // Square the bottom edge of the band so it butts cleanly against the
-  // photo area (the roundedRect rounds all corners; we paint a small
-  // rect over the bottom-rounded portion to flatten it).
-  doc
-    .save()
-    .fillColor(houseColor)
-    .rect(2, bandH - 6, W - 4, 8)
-    .fill()
-    .restore();
-
-  // House emblem (top-left on band) — uploaded logo if we have it,
-  // else white disc with first letter in house color.
-  const logoSize = 32;
-  const logoX = 10;
-  const logoY = (bandH - logoSize) / 2 + 2;
-  drawHouseEmblem(doc, badge, logoX, logoY, logoSize, houseColor);
-
-  // House name + school, stacked right of the emblem on the band.
-  const labelX = logoX + logoSize + 8;
-  const labelW = W - labelX - 8;
-  if (badge.house) {
-    doc
-      .fillColor("#ffffff")
-      .fontSize(13)
-      .text(`${badge.house.name} House`, labelX, 10, {
-        width: labelW,
-        ellipsis: true,
-        lineBreak: false,
-      });
-    doc
-      .fillColor("rgba(255,255,255,0.88)")
-      .fontSize(8.5)
-      .text(badge.schoolName, labelX, 28, {
-        width: labelW,
-        ellipsis: true,
-        height: 24,
-      });
+  const design = badge.design ?? LEGACY_DESIGN;
+  if (design.orientation === "portrait") {
+    await renderCardBadgePortrait(doc, badge);
   } else {
-    doc
-      .fillColor("#ffffff")
-      .fontSize(12)
-      .text("Student ID", labelX, 12, {
-        width: labelW,
-        lineBreak: false,
-      });
-    doc
-      .fillColor("rgba(255,255,255,0.88)")
-      .fontSize(8.5)
-      .text(badge.schoolName, labelX, 30, {
-        width: labelW,
-        ellipsis: true,
-        height: 22,
-      });
+    await renderCardBadgeLandscape(doc, badge);
   }
-
-  // Square photo slot (centered under the band) — sized to roughly double
-  // the area of the original 96pt slot. To make room, the QR/barcode block
-  // below tightens up (smaller QR, less padding) so the badge still fits
-  // the 306pt lanyard height with the FL HB 383 crisis lines intact.
-  const photoSize = 130;
-  const photoX = (W - photoSize) / 2;
-  const photoY = bandH + 8;
-  drawPhotoSlot(doc, badge, photoX, photoY, photoSize, houseColor);
-
-  // Name
-  const nameY = photoY + photoSize + 4;
-  doc
-    .fillColor("#111827")
-    .fontSize(14)
-    .text(`${badge.firstName} ${badge.lastName}`, PAGE_MARGIN, nameY, {
-      width: W - PAGE_MARGIN * 2,
-      align: "center",
-      ellipsis: true,
-      height: 18,
-    });
-
-  // Grade · Dismissal mode. Car riders get a small car icon to the right
-  // of the Grade text (the words "Car Rider" don't fit cleanly on a CR80
-  // badge so the lanyard mirrors the same convention for consistency).
-  const dLabel = dismissalLabel(badge.dismissalMode);
-  const isCarRider = badge.dismissalMode === "car_rider";
-  const gradeBits: string[] = [];
-  if (badge.grade !== null) gradeBits.push(`Grade ${badge.grade}`);
-  if (dLabel) gradeBits.push(dLabel);
-  const gradeY = nameY + 17;
-  if (gradeBits.length > 0 || isCarRider) {
-    const text = gradeBits.join(" · ");
-    doc.fillColor("#475569").fontSize(9);
-    const iconW = 18;
-    const iconH = iconW * 0.55;
-    const gap = text ? 4 : 0;
-    const textW = text ? doc.widthOfString(text) : 0;
-    const totalW = textW + (isCarRider ? gap + iconW : 0);
-    const startX = PAGE_MARGIN + (W - PAGE_MARGIN * 2 - totalW) / 2;
-    if (text) {
-      doc.text(text, startX, gradeY, { lineBreak: false });
-    }
-    if (isCarRider) {
-      drawCarIcon(doc, startX + textW + gap, gradeY + (9 - iconH) / 2, iconW, "#475569");
-    }
-  }
-
-  // QR + barcode + crisis lines, anchored to the bottom of the card so
-  // the layout stays stable as the photo / name area flex. Tightened in
-  // step with the larger photo above to keep the bottom crisis line on
-  // the card.
-  const qrSize = 44;
-  const qrX = (W - qrSize) / 2;
-  const qrY = nameY + 22;
-  const qrBuf = await renderQrBuffer(badge);
-  doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
-
-  const barcodePng = await renderBarcodeBuffer(badge.studentId);
-  const bcW = W - PAGE_MARGIN * 2 - 30;
-  const bcH = 14;
-  const bcX = (W - bcW) / 2;
-  const bcY = qrY + qrSize + 3;
-  doc.image(barcodePng, bcX, bcY, { width: bcW, height: bcH });
-
-  // Crisis hotlines — FL HB 383 (effective 2021-07-01) requires
-  // 988 + a text crisis line on student IDs grades 6-12.
-  const crisisY1 = bcY + bcH + 5;
-  doc
-    .fillColor("#b91c1c")
-    .fontSize(7)
-    .text("Crisis? Call or text 988", PAGE_MARGIN, crisisY1, {
-      width: W - PAGE_MARGIN * 2,
-      align: "center",
-      lineBreak: false,
-    });
-  doc
-    .fillColor("#475569")
-    .fontSize(7)
-    .text("Crisis Text Line: text HOME to 741741", PAGE_MARGIN, crisisY1 + 10, {
-      width: W - PAGE_MARGIN * 2,
-      align: "center",
-      lineBreak: false,
-    });
 }
 
-// ---------------------------------------------------------------------------
-// CR80 (landscape 243 × 153)
-//
-// Layout: full-card house-color background, with a white rounded "card"
-// inset on the RIGHT for QR + barcode + crisis lines. Left side carries
-// the house logo, house name, school name, square photo, student name,
-// and grade · dismissal — matching the user's mock visually but with all
-// content on a single side.
-// ---------------------------------------------------------------------------
-async function renderCr80Badge(
+async function renderCardBadgeLandscape(
   doc: PDFKit.PDFDocument,
   badge: StudentBadgeInput,
 ) {
-  const W = CR80_W;
-  const H = CR80_H;
+  const W = CARD_W;
+  const H = CARD_H;
+  const design = badge.design ?? LEGACY_DESIGN;
   const houseColor = badge.house ? normalizeHex(badge.house.color) : "#0f172a";
 
   // Card outline
@@ -356,146 +264,840 @@ async function renderCr80Badge(
     .stroke()
     .restore();
 
-  // Left house-color zone (≈ 60% of width)
-  const leftW = 148;
-  doc
-    .save()
-    .fillColor(houseColor)
-    .roundedRect(2, 2, leftW, H - 4, 6)
-    .fill()
-    .restore();
-  // Square the right edge of the band so it butts against the white
-  // right-hand zone cleanly.
-  doc
-    .save()
-    .fillColor(houseColor)
-    .rect(leftW - 4, 2, 6, H - 4)
-    .fill()
-    .restore();
+  // --- TOP region background -------------------------------------------
+  // Resolve the top colors: explicit design colors, else the student's
+  // house color (legacy/default look). Image mode draws the uploaded photo
+  // (cover) with a scrim so the header text stays legible.
+  const topColors =
+    design.bgColors.length > 0
+      ? design.bgColors.map((c) => normalizeHex(c))
+      : [houseColor];
+  const usingImage = design.bgMode === "image" && !!design.bgImageBytes;
 
-  // House emblem (top-left)
-  const logoSize = 28;
-  const logoX = 8;
-  const logoY = 8;
-  drawHouseEmblem(doc, badge, logoX, logoY, logoSize, houseColor);
-
-  // House name + school next to the emblem
-  const labelX = logoX + logoSize + 6;
-  const labelW = leftW - labelX - 4;
-  if (badge.house) {
-    doc
-      .fillColor("#ffffff")
-      .fontSize(9)
-      .text(`${badge.house.name} House`, labelX, logoY + 1, {
-        width: labelW,
-        ellipsis: true,
-        lineBreak: false,
+  // Clip to a rounded-top / square-bottom region, then paint.
+  doc.save();
+  roundedTopPath(doc, 2, 2, W - 4, TOP_H);
+  doc.clip();
+  if (usingImage) {
+    try {
+      doc.image(design.bgImageBytes as Buffer, 2, 2, {
+        width: W - 4,
+        height: TOP_H,
+        cover: [W - 4, TOP_H],
+        align: "center",
+        valign: "center",
       });
-    doc
-      .fillColor("rgba(255,255,255,0.88)")
-      .fontSize(7)
-      .text(badge.schoolName, labelX, logoY + 13, {
-        width: labelW,
-        ellipsis: true,
-        height: 18,
-      });
+    } catch {
+      doc.rect(2, 2, W - 4, TOP_H).fill(topColors[0] ?? houseColor);
+    }
+  } else if (topColors.length >= 2) {
+    const grad = doc.linearGradient(2, 2, W - 2, TOP_H);
+    grad.stop(0, topColors[0]!).stop(1, topColors[1]!);
+    doc.rect(2, 2, W - 4, TOP_H).fill(grad);
   } else {
-    doc
-      .fillColor("#ffffff")
-      .fontSize(9)
-      .text("Student ID", labelX, logoY + 1, {
-        width: labelW,
-        lineBreak: false,
-      });
-    doc
-      .fillColor("rgba(255,255,255,0.88)")
-      .fontSize(7)
-      .text(badge.schoolName, labelX, logoY + 13, {
-        width: labelW,
-        ellipsis: true,
-        height: 18,
-      });
+    doc.rect(2, 2, W - 4, TOP_H).fill(topColors[0] ?? houseColor);
+  }
+  doc.restore();
+
+  // Header / name text color: auto-contrast against the top-left of the
+  // region (where the text sits), or a manual override.
+  const autoTextColor = usingImage
+    ? "#ffffff"
+    : readableTextOn(topColors[0] ?? houseColor);
+  const headerText =
+    design.headerTextMode === "manual" && design.headerTextColor
+      ? normalizeHex(design.headerTextColor)
+      : autoTextColor;
+
+  // Scrim for legibility — only over the colored/image region, behind the
+  // text. Drawn before the photo & QR plate so those sit on top untouched.
+  if (usingImage) {
+    const scrimDark = headerText === "#ffffff" || isLight(headerText);
+    doc.save();
+    doc.fillOpacity(scrimDark ? 0.4 : 0.25);
+    doc.fillColor(scrimDark ? "#000000" : "#ffffff");
+    doc.rect(2, 2, W - 4, 30).fill();
+    doc.restore();
   }
 
-  // Square photo (left-bottom area of the band) — enlarged from 64 to
-  // 86pt so the photo area roughly doubles. Name + grade column to the
-  // right tightens to fit the remaining horizontal space in the band.
-  const photoSize = 86;
-  const photoX = 8;
-  const photoY = H - photoSize - 8;
+  // --- QR on a white plate (always clean white) ------------------------
+  const qrSize = 72;
+  const qrPad = 4;
+  const qrX = W - 8 - qrSize;
+  const qrY = 14;
+  doc
+    .save()
+    .fillColor("#ffffff")
+    .roundedRect(qrX - qrPad, qrY - qrPad, qrSize + qrPad * 2, qrSize + qrPad * 2, 5)
+    .fill()
+    .restore();
+  const qrBuf = await renderQrBuffer(badge);
+  doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
+  const plateLeft = qrX - qrPad;
+
+  // --- School name (top-left header) -----------------------------------
+  const headerX = 10;
+  const headerY = 8;
+  const headerW = Math.max(40, plateLeft - headerX - 6);
+  doc
+    .fillColor(headerText)
+    .fontSize(11)
+    .text(badge.schoolName, headerX, headerY, {
+      width: headerW,
+      ellipsis: true,
+      height: 14,
+      lineBreak: false,
+    });
+
+  // --- Square photo on the left ----------------------------------------
+  const photoSize = 58;
+  const photoX = 10;
+  const photoY = 32;
+  // Frame the photo in white when over a colored/image background so it
+  // never blends into the top region.
   drawPhotoSlot(doc, badge, photoX, photoY, photoSize, "#ffffff");
 
-  // Name + grade right of the photo, within the house-color zone
-  const txtX = photoX + photoSize + 6;
-  const txtW = leftW - txtX - 4;
-  doc
-    .fillColor("#ffffff")
-    .fontSize(10.5)
-    .text(`${badge.firstName} ${badge.lastName}`, txtX, photoY + 4, {
-      width: txtW,
-      ellipsis: true,
-      height: 28,
-    });
-  const dLabel = dismissalLabel(badge.dismissalMode);
-  const isCarRider = badge.dismissalMode === "car_rider";
-  const gradeBits: string[] = [];
-  if (badge.grade !== null) gradeBits.push(`Grade ${badge.grade}`);
-  if (dLabel) gradeBits.push(dLabel);
-  const gradeRowY = photoY + photoSize - 22;
-  if (gradeBits.length > 0 || isCarRider) {
-    const text = gradeBits.join(" · ");
-    doc.fillColor("rgba(255,255,255,0.92)").fontSize(8);
-    if (text) {
-      doc.text(text, txtX, gradeRowY, {
-        width: txtW,
-        ellipsis: true,
-        height: 12,
-        lineBreak: false,
-      });
-    }
-    if (isCarRider) {
-      const iconW = 16;
-      const iconH = iconW * 0.55;
-      const textW = text ? doc.widthOfString(text) : 0;
-      const iconX = txtX + textW + (text ? 4 : 0);
-      drawCarIcon(doc, iconX, gradeRowY + (8 - iconH) / 2, iconW, "#ffffff");
-    }
+  // Car-rider badge overlaid on the photo's bottom-left corner (car riders
+  // only; other dismissal modes show nothing). Car tinted to the school's
+  // primary top color.
+  if (badge.dismissalMode === "car_rider") {
+    drawCarRiderCornerBadge(
+      doc,
+      photoX,
+      photoY + photoSize,
+      topColors[0] ?? houseColor,
+    );
   }
 
-  // Right white zone: QR on top, barcode below, crisis lines underneath.
-  const rightX = leftW + 2;
-  const rightW = W - rightX - 4;
+  // --- Name + grade between the photo and the QR plate -----------------
+  const txtX = photoX + photoSize + 8;
+  const txtW = Math.max(36, plateLeft - txtX - 6);
+  const nameTop = photoY + 2;
+  const nameH = drawTwoLineName(
+    doc,
+    badge.firstName,
+    badge.lastName,
+    txtX,
+    nameTop,
+    txtW,
+    { firstFs: 14, lastFs: 12, color: headerText, lastBold: true },
+  );
+  // Grade marker — a bold number inside a white disc (instead of the old
+  // "Grade N" words). The disc keeps the digit legible over the colored
+  // header, and the number is tinted to the school's primary color (or
+  // slate when that color is light) so it pops.
+  if (badge.grade !== null) {
+    const gr = 9;
+    const gcx = txtX + gr;
+    const gcy = nameTop + nameH + 4 + gr;
+    const gradeInk = !isLight(topColors[0] ?? houseColor)
+      ? (topColors[0] ?? houseColor)
+      : "#0f172a";
+    doc
+      .save()
+      .fillColor("#ffffff")
+      .circle(gcx, gcy, gr)
+      .fill()
+      .lineWidth(0.8)
+      .strokeColor("#cbd5e1")
+      .circle(gcx, gcy, gr)
+      .stroke()
+      .restore();
+    doc
+      .fillColor(gradeInk)
+      .font("Helvetica-Bold")
+      .fontSize(12)
+      .text(String(badge.grade), gcx - gr, gcy - 6, {
+        width: gr * 2,
+        align: "center",
+        lineBreak: false,
+      });
+    doc.font("Helvetica");
+  }
 
-  const qrBuf = await renderQrBuffer(badge);
-  const qrSize = 64;
-  const qrX = rightX + (rightW - qrSize) / 2;
-  const qrY = 8;
-  doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
+  // --- WHITE region: barcode, optional house footer, crisis line -------
+  const showFooter = design.showHouse && !!badge.house;
 
-  const barcodePng = await renderBarcodeBuffer(badge.studentId);
-  const bcW = rightW - 4;
-  const bcH = 26;
-  const bcX = rightX + (rightW - bcW) / 2;
-  const bcY = qrY + qrSize + 3;
-  doc.image(barcodePng, bcX, bcY, { width: bcW, height: bcH });
+  // Stack the white region top-down: optional house footer band first
+  // (right below the top region), then the barcode BELOW the band, then the
+  // crisis line as the very bottom strip. The barcode sits low on the card
+  // so it lines up with cafeteria swipe readers.
+  let y = TOP_H + 4;
 
-  // Crisis hotlines — FL HB 383 mandate, see lanyard comment.
+  // Optional house footer band.
+  if (showFooter && badge.house) {
+    const footerH = 16;
+    const footerY = y;
+    const footerBg =
+      design.houseBgMode === "white"
+        ? "#ffffff"
+        : design.houseBgMode === "custom" && design.houseBgColor
+          ? normalizeHex(design.houseBgColor)
+          : houseColor;
+    const footerText =
+      design.houseTextMode === "manual" && design.houseTextColor
+        ? normalizeHex(design.houseTextColor)
+        : readableTextOn(footerBg);
+    // Band
+    doc
+      .save()
+      .fillColor(footerBg)
+      .roundedRect(PAGE_MARGIN, footerY, W - PAGE_MARGIN * 2, footerH, 4)
+      .fill();
+    if (footerBg === "#ffffff") {
+      doc
+        .lineWidth(0.5)
+        .strokeColor("#cbd5e1")
+        .roundedRect(PAGE_MARGIN, footerY, W - PAGE_MARGIN * 2, footerH, 4)
+        .stroke();
+    }
+    doc.restore();
+    // Small emblem at the left of the band.
+    const emSize = footerH - 4;
+    drawHouseEmblem(
+      doc,
+      badge,
+      PAGE_MARGIN + 3,
+      footerY + 2,
+      emSize,
+      footerBg === "#ffffff" ? houseColor : footerBg,
+    );
+    // House name, centered in the band.
+    doc
+      .fillColor(footerText)
+      .fontSize(9)
+      .text(
+        `HOUSE ${badge.house.name.toUpperCase()}`,
+        PAGE_MARGIN,
+        footerY + (footerH - 9) / 2,
+        { width: W - PAGE_MARGIN * 2, align: "center", lineBreak: false },
+      );
+    y = footerY + footerH + 4;
+  }
+
+  // Full-width Code 128 barcode, BELOW the house band. Encodes the local SIS
+  // id ONLY — the internal FLEID-style student_id must never reach a printed,
+  // student-facing surface. Skipped (not faked) when missing.
+  const bcH = 13;
+  if (badge.localSisId) {
+    const barcodePng = await renderBarcodeBuffer(badge.localSisId);
+    doc.image(barcodePng, PAGE_MARGIN, y, {
+      width: W - PAGE_MARGIN * 2,
+      height: bcH,
+    });
+    y += bcH + 3;
+  }
+
+  // Crisis hotlines — FL HB 383 (effective 2021-07-01) requires the 988
+  // lifeline + a crisis text line on student IDs grades 6-12, on the front.
+  // Pinned to the very bottom edge so it's always the last strip.
+  const crisisY = Math.max(y, H - 11);
   doc
     .fillColor("#b91c1c")
     .fontSize(6)
-    .text("Crisis? Call or text 988", rightX, bcY + bcH + 2, {
-      width: rightW,
-      align: "center",
-      lineBreak: false,
-    });
+    .text(
+      "Crisis? Call or text 988  ·  Crisis Text Line: text HOME to 741741",
+      PAGE_MARGIN,
+      crisisY,
+      {
+        width: W - PAGE_MARGIN * 2,
+        align: "center",
+        lineBreak: false,
+      },
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Portrait (tall lanyard ID — 153 × 243)
+//
+// Layout (design-driven, matches the lanyard-style reference):
+//   [ lanyard slot hole, centered at the very top ]
+//   [ diagonal school-color corner ribbons (colors mode) OR a top banner
+//     image (image mode) ]
+//   centered school name + divider diamond
+//   square-ish portrait photo (left, with a corner car-rider badge for car
+//     riders) · enlarged QR on a WHITE plate (right)
+//   icon rows: student name + grade · teacher (no dismissal row)
+//   optional house emblem + "HOUSE NAME" band
+//   tall full-width Code 128 barcode BELOW the band (cafeteria swipe)
+//   FL HB 383 crisis bar pinned to the very bottom
+// ---------------------------------------------------------------------------
+async function renderCardBadgePortrait(
+  doc: PDFKit.PDFDocument,
+  badge: StudentBadgeInput,
+) {
+  // Portrait swaps the landscape dimensions.
+  const W = CARD_H; // 153
+  const H = CARD_W; // 243
+  const design = badge.design ?? LEGACY_DESIGN;
+  const houseColor = badge.house ? normalizeHex(badge.house.color) : "#0f172a";
+  const M = PAGE_MARGIN;
+
+  // Resolve top colors (same precedence as landscape: design colors, else the
+  // student's house color). c0 = primary band/ink; c1 = accent ribbon.
+  const topColors =
+    design.bgColors.length > 0
+      ? design.bgColors.map((c) => normalizeHex(c))
+      : [houseColor];
+  const c0 = topColors[0] ?? houseColor;
+  const c1 = topColors[1] ?? c0;
+  const usingImage = design.bgMode === "image" && !!design.bgImageBytes;
+
+  // A dark ink derived from the school colors, used for icon discs, the grade
+  // ring, and the crisis bar so they read on white. Falls back to slate.
+  const ink = !isLight(c0) ? c0 : !isLight(c1) ? c1 : "#0f172a";
+
+  // Photo + QR geometry, declared up-front so the image-mode background can
+  // extend down to cover this row (mirrors the landscape layout).
+  const photoX = 12;
+  const photoY = 52;
+  const photoW = 60;
+  const photoH = 60;
+  const qrSize = 60;
+  const qrPad = 3;
+  const qrX = W - 12 - qrSize;
+  const qrY = 52;
+
+  // White card body + outline.
   doc
-    .fillColor("#475569")
-    .fontSize(6)
-    .text("Text HOME to 741741", rightX, bcY + bcH + 10, {
-      width: rightW,
-      align: "center",
+    .save()
+    .fillColor("#ffffff")
+    .roundedRect(2, 2, W - 4, H - 4, 6)
+    .fill()
+    .restore();
+
+  // Clip everything to the rounded card so ribbons / banner never spill past
+  // the rounded corners.
+  doc.save();
+  doc.roundedRect(2, 2, W - 4, H - 4, 6).clip();
+
+  if (usingImage) {
+    // Image mode: the uploaded background extends DOWN to cover the photo +
+    // QR row (mirrors the landscape layout), so the photo and QR plates sit
+    // on top of the image. A dark scrim is applied ONLY to the header band
+    // behind the white school name — the photo/QR area stays a clean image.
+    const imgH = photoY + photoH + 6 - 2; // through the bottom of the photo row
+    try {
+      doc.image(design.bgImageBytes as Buffer, 2, 2, {
+        width: W - 4,
+        height: imgH,
+        cover: [W - 4, imgH],
+        align: "center",
+        valign: "center",
+      });
+    } catch {
+      doc.rect(2, 2, W - 4, imgH).fill(c0);
+    }
+    doc.save();
+    doc.fillOpacity(0.4).fillColor("#000000").rect(2, 2, W - 4, 46).fill();
+    doc.restore();
+  } else {
+    // Colors mode: diagonal corner ribbons. c1 (accent) is the outer/larger
+    // triangle, c0 (primary) the inner one nearer the corner — so a 2-color
+    // school reads as a primary corner with an accent stripe outside it.
+    drawCornerRibbon(doc, "left", W, 56, c1);
+    drawCornerRibbon(doc, "left", W, 40, c0);
+    drawCornerRibbon(doc, "right", W, 56, c1);
+    drawCornerRibbon(doc, "right", W, 40, c0);
+  }
+  doc.restore();
+
+  // Lanyard slot — a rounded "punch" hole centered at the very top, drawn on
+  // top of the ribbons/banner.
+  const slotW = 34;
+  const slotH = 7;
+  doc
+    .save()
+    .fillColor("#ffffff")
+    .roundedRect(W / 2 - slotW / 2, 8, slotW, slotH, slotH / 2)
+    .fill()
+    .lineWidth(0.8)
+    .strokeColor("#94a3b8")
+    .roundedRect(W / 2 - slotW / 2, 8, slotW, slotH, slotH / 2)
+    .stroke()
+    .restore();
+
+  // School name — centered. Auto-contrast: white over an image banner, else
+  // a dark ink on the white body. Manual override honored.
+  const autoHeaderText = usingImage ? "#ffffff" : readableTextOn("#ffffff");
+  const headerText =
+    design.headerTextMode === "manual" && design.headerTextColor
+      ? normalizeHex(design.headerTextColor)
+      : autoHeaderText;
+  doc.fillColor(headerText).fontSize(13);
+  doc.text(fitText(doc, badge.schoolName.toUpperCase(), W - M * 2), M, 24, {
+    width: W - M * 2,
+    align: "center",
+    lineBreak: false,
+  });
+
+  // Divider with a center diamond (colors mode only — the banner already
+  // separates the header in image mode).
+  if (!usingImage) {
+    const dy = 45;
+    const dw = 44;
+    doc
+      .save()
+      .lineWidth(0.8)
+      .strokeColor(c1)
+      .moveTo(W / 2 - dw, dy)
+      .lineTo(W / 2 - 6, dy)
+      .moveTo(W / 2 + 6, dy)
+      .lineTo(W / 2 + dw, dy)
+      .stroke();
+    doc
+      .fillColor(c1)
+      .moveTo(W / 2, dy - 3)
+      .lineTo(W / 2 + 3, dy)
+      .lineTo(W / 2, dy + 3)
+      .lineTo(W / 2 - 3, dy)
+      .closePath()
+      .fill()
+      .restore();
+  }
+
+  // --- Photo (left) + QR plate (right) — drawn ON TOP of the image -----
+  // In image mode, frame the photo in white so it pops against the image
+  // background (matches the landscape card); in colors mode keep the original
+  // light tile so colors-mode prints are unchanged. The client preview mirrors
+  // this (white border only in image mode).
+  drawPhotoRect(
+    doc,
+    badge,
+    photoX,
+    photoY,
+    photoW,
+    photoH,
+    usingImage ? "#ffffff" : "#e2e8f0",
+  );
+
+  // Car-rider badge overlaid on the photo's bottom-left corner (car riders
+  // only; other dismissal modes show nothing). Car tinted to the school's
+  // primary top color.
+  if (badge.dismissalMode === "car_rider") {
+    drawCarRiderCornerBadge(doc, photoX, photoY + photoH, c0);
+  }
+
+  doc
+    .save()
+    .fillColor("#ffffff")
+    .lineWidth(0.5)
+    .strokeColor("#cbd5e1")
+    .roundedRect(qrX - qrPad, qrY - qrPad, qrSize + qrPad * 2, qrSize + qrPad * 2, 5)
+    .fillAndStroke()
+    .restore();
+  const qrBuf = await renderQrBuffer(badge);
+  doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
+
+  // --- Bottom-anchored elements (crisis bar, barcode, house band) ------
+  // Barcode is intentionally TALL here — the dismissal row was dropped (car
+  // riders now get a corner badge on the photo), so the reclaimed space goes
+  // to a taller barcode for more reliable cafeteria-reader scans.
+  const crisisBarH = 16;
+  const crisisBarY = H - 2 - crisisBarH;
+  const bcH = 22;
+  const bcY = crisisBarY - 4 - bcH;
+  const showFooter = design.showHouse && !!badge.house;
+  const bandH = 24;
+  const bandY = showFooter ? bcY - 4 - bandH : bcY;
+
+  // --- Icon rows fill the middle, between the photo/QR row and the band -
+  const rowsTop = Math.max(photoY + photoH, qrY + qrSize) + 8;
+  const rowsBottom = (showFooter ? bandY : bcY) - 6;
+
+  // Name + optional teacher only. The dismissal row was removed — car riders
+  // are flagged by the corner badge on the photo; other modes show nothing.
+  type IconRow = {
+    kind: "person" | "teacher";
+    text: string;
+    firstName?: string;
+    lastName?: string;
+    grade?: number | null;
+  };
+  const rows: IconRow[] = [];
+  rows.push({
+    kind: "person",
+    text: `${badge.firstName} ${badge.lastName}`.trim() || "Student",
+    firstName: (badge.firstName || "").trim() || "Student",
+    lastName: (badge.lastName || "").trim(),
+    grade: badge.grade,
+  });
+  if (badge.teacherName && badge.teacherName.trim()) {
+    rows.push({ kind: "teacher", text: `Teacher: ${badge.teacherName.trim()}` });
+  }
+
+  const slotCount = Math.max(rows.length, 1);
+  const slot = (rowsBottom - rowsTop) / slotCount;
+  const discR = Math.min(10, slot / 2 - 2);
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    const cy = rowsTop + slot * (i + 0.5);
+    const discCx = M + 6 + discR;
+    // Icon disc.
+    doc.save().fillColor(ink).circle(discCx, cy, discR).fill().restore();
+    if (row.kind === "teacher") {
+      drawTeacherIcon(doc, discCx, cy, discR, "#ffffff");
+    } else {
+      drawPersonIcon(doc, discCx, cy, discR, "#ffffff");
+    }
+    // Grade ring on the right (name row only).
+    let textRight = W - M - 4;
+    if (row.grade !== null && row.grade !== undefined) {
+      const gr = 10;
+      const gcx = W - M - gr;
+      doc
+        .save()
+        .lineWidth(1.2)
+        .strokeColor(ink)
+        .circle(gcx, cy, gr)
+        .stroke()
+        .restore();
+      doc
+        .fillColor(ink)
+        .fontSize(10)
+        .text(String(row.grade), gcx - gr, cy - 5, {
+          width: gr * 2,
+          align: "center",
+          lineBreak: false,
+        });
+      textRight = gcx - gr - 4;
+    }
+    // Row label. The student name draws on TWO lines (bold first name over a
+    // smaller last name) so long last names no longer truncate; other rows stay
+    // strictly single-line (fitText truncates to width).
+    const textX = discCx + discR + 7;
+    const labelW = Math.max(20, textRight - textX);
+    if (row.kind === "person" && (row.firstName || row.lastName)) {
+      const firstFs = row.grade !== null && row.grade !== undefined ? 11 : 10;
+      const lastFs = firstFs - 2;
+      const last = (row.lastName || "").trim();
+      const totalH = last ? firstFs + 1 + lastFs : firstFs;
+      drawTwoLineName(
+        doc,
+        (row.firstName || "").toUpperCase(),
+        last.toUpperCase(),
+        textX,
+        cy - totalH / 2,
+        labelW,
+        { firstFs, lastFs, color: "#1f2937" },
+      );
+    } else {
+      const labelFs = 9.5;
+      doc.fillColor("#1f2937").font("Helvetica").fontSize(labelFs);
+      doc.text(fitText(doc, row.text.toUpperCase(), labelW), textX, cy - 6, {
+        width: labelW,
+        lineBreak: false,
+      });
+    }
+    // Separator under the row (except the last).
+    if (i < rows.length - 1) {
+      doc
+        .save()
+        .lineWidth(0.4)
+        .strokeColor("#e2e8f0")
+        .moveTo(M + 2, rowsTop + slot * (i + 1))
+        .lineTo(W - M - 2, rowsTop + slot * (i + 1))
+        .stroke()
+        .restore();
+    }
+  }
+
+  // --- Optional house emblem + "HOUSE NAME" band -----------------------
+  if (showFooter && badge.house) {
+    const footerBg =
+      design.houseBgMode === "white"
+        ? "#ffffff"
+        : design.houseBgMode === "custom" && design.houseBgColor
+          ? normalizeHex(design.houseBgColor)
+          : houseColor;
+    const footerText =
+      design.houseTextMode === "manual" && design.houseTextColor
+        ? normalizeHex(design.houseTextColor)
+        : readableTextOn(footerBg);
+    doc
+      .save()
+      .fillColor(footerBg)
+      .roundedRect(M, bandY, W - M * 2, bandH, 4)
+      .fill();
+    if (footerBg === "#ffffff") {
+      doc
+        .lineWidth(0.5)
+        .strokeColor("#cbd5e1")
+        .roundedRect(M, bandY, W - M * 2, bandH, 4)
+        .stroke();
+    }
+    doc.restore();
+    const emSize = bandH - 6;
+    drawHouseEmblem(
+      doc,
+      badge,
+      M + 4,
+      bandY + 3,
+      emSize,
+      footerBg === "#ffffff" ? houseColor : footerBg,
+    );
+    const houseW = W - M * 2 - emSize - 12;
+    doc.fillColor(footerText).fontSize(11);
+    doc.text(
+      fitText(doc, `HOUSE ${badge.house.name.toUpperCase()}`, houseW),
+      M + emSize + 8,
+      bandY + (bandH - 11) / 2,
+      { width: houseW, align: "center", lineBreak: false },
+    );
+  }
+
+  // --- Full-width Code 128 barcode, BELOW the house band ---------------
+  // Encodes the local SIS id ONLY (never the FLEID-style student_id).
+  if (badge.localSisId) {
+    const barcodePng = await renderBarcodeBuffer(badge.localSisId);
+    doc.image(barcodePng, M, bcY, { width: W - M * 2, height: bcH });
+  }
+
+  // --- Crisis bar pinned to the very bottom (FL HB 383) ----------------
+  doc
+    .save()
+    .fillColor(ink)
+    .roundedRect(M, crisisBarY, W - M * 2, crisisBarH, 4)
+    .fill()
+    .restore();
+  drawChatIcon(doc, M + 8, crisisBarY + crisisBarH / 2, 5, "#ffffff");
+  // FL HB 383 hotline text. Must NEVER be truncated (it's legally required),
+  // so we shrink the font until it fits the narrow portrait bar on ONE line —
+  // a wrapped second line would spill below the page and add a blank page.
+  const crisisText = "Crisis? Call or text 988  ·  Text HOME to 741741";
+  const crisisAvailW = W - M * 2 - 16;
+  let crisisFs = 6;
+  doc.fillColor("#ffffff").fontSize(crisisFs);
+  while (crisisFs > 4 && doc.widthOfString(crisisText) > crisisAvailW) {
+    crisisFs -= 0.2;
+    doc.fontSize(crisisFs);
+  }
+  doc.text(
+    crisisText,
+    M + 14,
+    crisisBarY + crisisBarH / 2 - crisisFs * 0.6,
+    { width: crisisAvailW, align: "center", lineBreak: false },
+  );
+}
+
+// Truncate `text` with an ellipsis so it always fits on ONE line within
+// `maxW`. Measured with the doc's CURRENT font + size, so callers must set the
+// font size before calling. Keeping icon-row labels strictly single-line is
+// what prevents pdfkit from auto-flowing a wrapped label onto a second page.
+function fitText(
+  doc: PDFKit.PDFDocument,
+  text: string,
+  maxW: number,
+): string {
+  if (doc.widthOfString(text) <= maxW) return text;
+  let t = text;
+  while (t.length > 1 && doc.widthOfString(`${t}…`) > maxW) t = t.slice(0, -1);
+  return `${t}…`;
+}
+
+// Draw a student name on TWO lines — the first name (bold, larger) over the
+// last name (regular, smaller) directly below. Splitting the name this way
+// nearly doubles the horizontal room each part gets, so long last names stop
+// truncating the way a single "First Last" line did. Each line is still
+// independently width-fit (fitText) as a final safety net. Returns the total
+// height drawn so callers can position whatever sits beneath it. Always
+// restores the default Helvetica font so later renders are unaffected.
+function drawTwoLineName(
+  doc: PDFKit.PDFDocument,
+  firstName: string,
+  lastName: string,
+  x: number,
+  y: number,
+  maxW: number,
+  opts: {
+    firstFs: number;
+    lastFs: number;
+    color: string;
+    align?: "left" | "center";
+    lineGap?: number;
+    // When true, the last-name line is rendered bold too (default keeps the
+    // lighter regular weight). Used on the printed landscape badge where the
+    // whole name needs to read strongly from a distance.
+    lastBold?: boolean;
+  },
+): number {
+  const {
+    firstFs,
+    lastFs,
+    color,
+    align = "left",
+    lineGap = 1,
+    lastBold = false,
+  } = opts;
+  const first = (firstName || "").trim();
+  const last = (lastName || "").trim();
+  doc.fillColor(color);
+  let cursorY = y;
+  if (first) {
+    doc.font("Helvetica-Bold").fontSize(firstFs);
+    doc.text(fitText(doc, first, maxW), x, cursorY, {
+      width: maxW,
+      align,
       lineBreak: false,
     });
+    cursorY += firstFs + lineGap;
+  }
+  if (last) {
+    doc.font(lastBold ? "Helvetica-Bold" : "Helvetica").fontSize(lastFs);
+    doc.text(fitText(doc, last, maxW), x, cursorY, {
+      width: maxW,
+      align,
+      lineBreak: false,
+    });
+    cursorY += lastFs + lineGap;
+  }
+  doc.font("Helvetica");
+  return cursorY - y;
+}
+
+// One diagonal corner ribbon = a right triangle anchored in a top corner,
+// clipped to the card by the caller. Larger `size` first, smaller on top.
+function drawCornerRibbon(
+  doc: PDFKit.PDFDocument,
+  corner: "left" | "right",
+  W: number,
+  size: number,
+  color: string,
+): void {
+  doc.save().fillColor(color);
+  if (corner === "left") {
+    doc.moveTo(2, 2).lineTo(2 + size, 2).lineTo(2, 2 + size).closePath().fill();
+  } else {
+    doc
+      .moveTo(W - 2, 2)
+      .lineTo(W - 2 - size, 2)
+      .lineTo(W - 2, 2 + size)
+      .closePath()
+      .fill();
+  }
+  doc.restore();
+}
+
+// Small person glyph (head + shoulders) centered at (cx, cy) within a disc of
+// radius r. Used for the student-name and dismissal icon rows.
+function drawPersonIcon(
+  doc: PDFKit.PDFDocument,
+  cx: number,
+  cy: number,
+  r: number,
+  color: string,
+): void {
+  doc.save().fillColor(color);
+  const headR = r * 0.34;
+  const headCy = cy - r * 0.34;
+  doc.circle(cx, headCy, headR).fill();
+  // Shoulders — a rounded "hill" below the head.
+  const bw = r * 1.0;
+  const bh = r * 0.52;
+  const bx = cx - bw / 2;
+  const by = cy + r * 0.06;
+  doc.moveTo(bx, by + bh).lineTo(bx, by + bh * 0.5);
+  doc.quadraticCurveTo(bx, by, bx + bw / 2, by);
+  doc.quadraticCurveTo(bx + bw, by, bx + bw, by + bh * 0.5);
+  doc.lineTo(bx + bw, by + bh).closePath().fill();
+  doc.restore();
+}
+
+// Person + mortarboard cap — the teacher icon row.
+function drawTeacherIcon(
+  doc: PDFKit.PDFDocument,
+  cx: number,
+  cy: number,
+  r: number,
+  color: string,
+): void {
+  doc.save().fillColor(color);
+  const headR = r * 0.3;
+  const headCy = cy - r * 0.18;
+  doc.circle(cx, headCy, headR).fill();
+  // Mortarboard cap — a flat diamond above the head.
+  const cw = r * 0.95;
+  const capY = cy - r * 0.62;
+  doc
+    .moveTo(cx, capY - r * 0.16)
+    .lineTo(cx + cw, capY)
+    .lineTo(cx, capY + r * 0.16)
+    .lineTo(cx - cw, capY)
+    .closePath()
+    .fill();
+  // Shoulders.
+  const bw = r * 0.95;
+  const bh = r * 0.46;
+  const bx = cx - bw / 2;
+  const by = cy + r * 0.16;
+  doc.moveTo(bx, by + bh).lineTo(bx, by + bh * 0.5);
+  doc.quadraticCurveTo(bx, by, bx + bw / 2, by);
+  doc.quadraticCurveTo(bx + bw, by, bx + bw, by + bh * 0.5);
+  doc.lineTo(bx + bw, by + bh).closePath().fill();
+  doc.restore();
+}
+
+// Tiny speech-bubble glyph for the crisis bar.
+function drawChatIcon(
+  doc: PDFKit.PDFDocument,
+  cx: number,
+  cy: number,
+  r: number,
+  color: string,
+): void {
+  doc
+    .save()
+    .fillColor(color)
+    .roundedRect(cx - r, cy - r * 0.8, r * 2, r * 1.4, r * 0.4)
+    .fill();
+  // Little tail.
+  doc
+    .moveTo(cx - r * 0.5, cy + r * 0.5)
+    .lineTo(cx - r * 0.9, cy + r * 1.1)
+    .lineTo(cx - r * 0.05, cy + r * 0.55)
+    .closePath()
+    .fill()
+    .restore();
+}
+
+// Trace a rounded-top, square-bottom rectangle path (no fill/stroke) so the
+// caller can clip or fill the top region cleanly against the white body.
+function roundedTopPath(
+  doc: PDFKit.PDFDocument,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r = 6,
+): void {
+  doc
+    .moveTo(x + r, y)
+    .lineTo(x + w - r, y)
+    .quadraticCurveTo(x + w, y, x + w, y + r)
+    .lineTo(x + w, y + h)
+    .lineTo(x, y + h)
+    .lineTo(x, y + r)
+    .quadraticCurveTo(x, y, x + r, y)
+    .closePath();
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
+  if (!m) return { r: 15, g: 23, b: 42 };
+  const n = parseInt(m[1]!, 16);
+  return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff };
+}
+
+// Relative-luminance check — true when the color is light enough that dark
+// text reads better on top of it.
+function isLight(hex: string): boolean {
+  const { r, g, b } = hexToRgb(hex);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6;
+}
+
+// Pick black or white text for maximum contrast against a background color.
+function readableTextOn(hexBg: string): string {
+  return isLight(hexBg) ? "#111827" : "#ffffff";
 }
 
 // ---------------------------------------------------------------------------
@@ -562,22 +1164,38 @@ function drawPhotoSlot(
   size: number,
   frameColor: string,
 ): void {
+  drawPhotoRect(doc, badge, x, y, size, size, frameColor);
+}
+
+// Rectangular photo slot (square when w===h): rounded-rect-clipped photo when
+// present, otherwise a colored tile with student initials. `frameColor` is the
+// border of the photo (or the tile color when there's no photo). Portrait
+// badges pass a taller-than-wide rect for a classic ID portrait crop.
+function drawPhotoRect(
+  doc: PDFKit.PDFDocument,
+  badge: StudentBadgeInput,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  frameColor: string,
+): void {
   if (badge.photoBytes) {
     // Border tile in the frame color.
     doc
       .save()
       .lineWidth(2)
       .strokeColor(frameColor)
-      .roundedRect(x - 1, y - 1, size + 2, size + 2, 5)
+      .roundedRect(x - 1, y - 1, w + 2, h + 2, 5)
       .stroke()
       .restore();
     try {
       doc.save();
-      doc.roundedRect(x, y, size, size, 4).clip();
+      doc.roundedRect(x, y, w, h, 4).clip();
       doc.image(badge.photoBytes, x, y, {
-        width: size,
-        height: size,
-        cover: [size, size],
+        width: w,
+        height: h,
+        cover: [w, h],
         align: "center",
         valign: "center",
       });
@@ -588,22 +1206,23 @@ function drawPhotoSlot(
       // Corrupt image — fall through to initials.
     }
   }
-  // Initials fallback — square rounded tile in the frame color (white
-  // outline if frame is white).
+  // Initials fallback — rounded tile in the frame color (white outline if
+  // frame is white).
   const bgColor = frameColor === "#ffffff" ? "#e2e8f0" : frameColor;
   doc
     .save()
     .fillColor(bgColor)
-    .roundedRect(x, y, size, size, 4)
+    .roundedRect(x, y, w, h, 4)
     .fill()
     .restore();
   const initials = computeInitials(badge);
   const textColor = frameColor === "#ffffff" ? "#475569" : "#ffffff";
+  const fs = Math.round(Math.min(w, h) * 0.42);
   doc
     .fillColor(textColor)
-    .fontSize(Math.round(size * 0.42))
-    .text(initials, x, y + size / 2 - Math.round(size * 0.22), {
-      width: size,
+    .fontSize(fs)
+    .text(initials, x, y + h / 2 - Math.round(fs * 0.55), {
+      width: w,
       align: "center",
       lineBreak: false,
     });
@@ -617,21 +1236,23 @@ function computeInitials(badge: StudentBadgeInput): string {
 }
 
 async function renderQrBuffer(badge: StudentBadgeInput): Promise<Buffer> {
-  const qrUrl = `${badge.baseUrl}?signin=${encodeURIComponent(badge.studentId)}`;
+  // Encode local_sis_id ONLY — the kiosk resolves `?signin=` by local_sis_id,
+  // and the internal FLEID-style student_id must never reach a printed QR.
+  const qrUrl = `${badge.baseUrl}?signin=${encodeURIComponent(badge.localSisId ?? "")}`;
   const qrDataUrl = await QRCode.toDataURL(qrUrl, {
     margin: 1,
-    width: 200,
+    width: 280,
     errorCorrectionLevel: "M",
   });
   return Buffer.from(qrDataUrl.split(",")[1], "base64");
 }
 
-async function renderBarcodeBuffer(studentId: string): Promise<Buffer> {
+async function renderBarcodeBuffer(localSisId: string): Promise<Buffer> {
   return bwipjs.toBuffer({
     bcid: "code128",
-    text: studentId,
-    scale: 2,
-    height: 12,
+    text: localSisId,
+    scale: 3,
+    height: 16,
     includetext: false,
     paddingwidth: 4,
     paddingheight: 4,

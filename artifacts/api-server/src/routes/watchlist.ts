@@ -5769,6 +5769,7 @@ router.post(
     const roster = await db
       .select({
         studentId: studentsTable.studentId,
+        localSisId: studentsTable.localSisId,
         firstName: studentsTable.firstName,
         lastName: studentsTable.lastName,
         grade: studentsTable.grade,

@@ -12,7 +12,7 @@ type Alert = {
 type ApiResponse = {
   thresholds: {
     quietTeacherDays: number;
-    invisibleStudentDays: number;
+    invisibleStudentDaysByTier: { tier1: number; tier2: number; tier3: number };
     reasonImbalancePct: number;
     coldPeriodMultiple: number;
   };
@@ -64,8 +64,9 @@ function buildAlerts(d: ApiResponse): Alert[] {
     out.push({
       key: "invisible-students",
       severity: "alert",
-      headline: `${d.invisibleStudents.count} of ${d.invisibleStudents.total} students have 0 points in the last ${d.thresholds.invisibleStudentDays} school days`,
-      detail: "These students may be flying under the radar for recognition.",
+      headline: `${d.invisibleStudents.count} of ${d.invisibleStudents.total} students have 0 points in their tier window (${d.thresholds.invisibleStudentDaysByTier.tier1}/${d.thresholds.invisibleStudentDaysByTier.tier2}/${d.thresholds.invisibleStudentDaysByTier.tier3} school days for Tier 1/2/3)`,
+      detail:
+        "These students may be flying under the radar for recognition. Students with an active MTSS plan surface faster (Tier 2/3 use a tighter window).",
       sample:
         d.invisibleStudents.sampleNames.length > 0
           ? [

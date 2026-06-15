@@ -196,7 +196,7 @@ router.get(
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
-      `inline; filename="overall-report-${studentId}.pdf"`,
+      `inline; filename="overall-report-${(student.localSisId ?? "student").replace(/[^A-Za-z0-9_-]/g, "")}.pdf"`,
     );
     doc.pipe(res);
 
@@ -226,7 +226,7 @@ router.get(
       .fontSize(10)
       .fillColor("#666")
       .text(
-        `Student ID ${student.studentId}  ·  Grade ${student.grade ?? "—"}  ·  Generated ${new Date().toLocaleString()}`,
+        `Student ID ${student.localSisId ?? "—"}  ·  Grade ${student.grade ?? "—"}  ·  Generated ${new Date().toLocaleString()}`,
       )
       .fillColor("black");
 

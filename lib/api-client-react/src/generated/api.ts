@@ -5,18 +5,48 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
+  MutationFunction,
   QueryFunction,
   QueryKey,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
 
-import type { HealthStatus } from "./api.schemas";
+import type {
+  AddPulseBrainLabMembersInput,
+  ApiError,
+  AssignPulseBrainLabUnmatchedScanInput,
+  BatchPulseBrainLabScanInput,
+  CreatePulseBrainLabGroupInput,
+  CreatePulseBrainLabSessionInput,
+  FilePulseBrainLabUnmatchedScanInput,
+  HealthStatus,
+  ListPulseBrainLabLessonsParams,
+  PulseBrainLabBatchScanResult,
+  PulseBrainLabGroup,
+  PulseBrainLabGroupDetail,
+  PulseBrainLabHomeCard,
+  PulseBrainLabLesson,
+  PulseBrainLabLessonSummary,
+  PulseBrainLabParentCard,
+  PulseBrainLabSession,
+  PulseBrainLabSessionDetail,
+  PulseBrainLabUnmatchedScan,
+  PulseBrainLabWorkSample,
+  RoutePulseBrainLabScanInput,
+  SetPulseBrainLabAttendanceInput,
+  SetPulseBrainLabSessionGradingInput,
+  SetPulseBrainLabWorkSampleGradeInput,
+  SetPulseBrainLabWorkSampleShareInput,
+  UpdatePulseBrainLabGroupInput,
+} from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
-import type { ErrorType } from "../custom-fetch";
+import type { ErrorType, BodyType } from "../custom-fetch";
 
 type AwaitedInput<T> = PromiseLike<T> | T;
 
@@ -92,6 +122,2647 @@ export function useHealthCheck<
   request?: SecondParameter<typeof customFetch>;
 }): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getHealthCheckQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Lightweight catalog of the curated PulseBrainLab lessons (global reference, identical for every school). Optionally filter by grade band.
+
+ * @summary List PulseBrainLab lessons
+ */
+export const getListPulseBrainLabLessonsUrl = (
+  params?: ListPulseBrainLabLessonsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/pulse-brain-lab/lessons?${stringifiedParams}`
+    : `/api/pulse-brain-lab/lessons`;
+};
+
+export const listPulseBrainLabLessons = async (
+  params?: ListPulseBrainLabLessonsParams,
+  options?: RequestInit,
+): Promise<PulseBrainLabLessonSummary[]> => {
+  return customFetch<PulseBrainLabLessonSummary[]>(
+    getListPulseBrainLabLessonsUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListPulseBrainLabLessonsQueryKey = (
+  params?: ListPulseBrainLabLessonsParams,
+) => {
+  return [`/api/pulse-brain-lab/lessons`, ...(params ? [params] : [])] as const;
+};
+
+export const getListPulseBrainLabLessonsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPulseBrainLabLessons>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListPulseBrainLabLessonsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPulseBrainLabLessons>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListPulseBrainLabLessonsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listPulseBrainLabLessons>>
+  > = ({ signal }) =>
+    listPulseBrainLabLessons(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPulseBrainLabLessons>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListPulseBrainLabLessonsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPulseBrainLabLessons>>
+>;
+export type ListPulseBrainLabLessonsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List PulseBrainLab lessons
+ */
+
+export function useListPulseBrainLabLessons<
+  TData = Awaited<ReturnType<typeof listPulseBrainLabLessons>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListPulseBrainLabLessonsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPulseBrainLabLessons>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListPulseBrainLabLessonsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Full lesson object including bilingual parent card and student worksheet.
+ * @summary Get a single PulseBrainLab lesson
+ */
+export const getGetPulseBrainLabLessonUrl = (lessonKey: string) => {
+  return `/api/pulse-brain-lab/lessons/${lessonKey}`;
+};
+
+export const getPulseBrainLabLesson = async (
+  lessonKey: string,
+  options?: RequestInit,
+): Promise<PulseBrainLabLesson> => {
+  return customFetch<PulseBrainLabLesson>(
+    getGetPulseBrainLabLessonUrl(lessonKey),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetPulseBrainLabLessonQueryKey = (lessonKey: string) => {
+  return [`/api/pulse-brain-lab/lessons/${lessonKey}`] as const;
+};
+
+export const getGetPulseBrainLabLessonQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPulseBrainLabLesson>>,
+  TError = ErrorType<ApiError>,
+>(
+  lessonKey: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPulseBrainLabLesson>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetPulseBrainLabLessonQueryKey(lessonKey);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPulseBrainLabLesson>>
+  > = ({ signal }) =>
+    getPulseBrainLabLesson(lessonKey, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!lessonKey,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPulseBrainLabLesson>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPulseBrainLabLessonQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPulseBrainLabLesson>>
+>;
+export type GetPulseBrainLabLessonQueryError = ErrorType<ApiError>;
+
+/**
+ * @summary Get a single PulseBrainLab lesson
+ */
+
+export function useGetPulseBrainLabLesson<
+  TData = Awaited<ReturnType<typeof getPulseBrainLabLesson>>,
+  TError = ErrorType<ApiError>,
+>(
+  lessonKey: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPulseBrainLabLesson>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPulseBrainLabLessonQueryOptions(
+    lessonKey,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * The four-part parent recall card resolved to one language. Strictly learning / brain-science framing — never "SEL". Core Team gated. `lang` is a path segment (not a query param) to keep the generated client free of the orval path+query `*Params` name collision.
+
+ * @summary Parent "Reinforce at Home" recall card (single language)
+ */
+export const getGetPulseBrainLabParentCardUrl = (
+  lessonKey: string,
+  lang: "en" | "es",
+) => {
+  return `/api/pulse-brain-lab/lessons/${lessonKey}/parent-card/${lang}`;
+};
+
+export const getPulseBrainLabParentCard = async (
+  lessonKey: string,
+  lang: "en" | "es",
+  options?: RequestInit,
+): Promise<PulseBrainLabParentCard> => {
+  return customFetch<PulseBrainLabParentCard>(
+    getGetPulseBrainLabParentCardUrl(lessonKey, lang),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetPulseBrainLabParentCardQueryKey = (
+  lessonKey: string,
+  lang: "en" | "es",
+) => {
+  return [
+    `/api/pulse-brain-lab/lessons/${lessonKey}/parent-card/${lang}`,
+  ] as const;
+};
+
+export const getGetPulseBrainLabParentCardQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPulseBrainLabParentCard>>,
+  TError = ErrorType<ApiError>,
+>(
+  lessonKey: string,
+  lang: "en" | "es",
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPulseBrainLabParentCard>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetPulseBrainLabParentCardQueryKey(lessonKey, lang);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPulseBrainLabParentCard>>
+  > = ({ signal }) =>
+    getPulseBrainLabParentCard(lessonKey, lang, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!(lessonKey && lang),
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPulseBrainLabParentCard>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPulseBrainLabParentCardQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPulseBrainLabParentCard>>
+>;
+export type GetPulseBrainLabParentCardQueryError = ErrorType<ApiError>;
+
+/**
+ * @summary Parent "Reinforce at Home" recall card (single language)
+ */
+
+export function useGetPulseBrainLabParentCard<
+  TData = Awaited<ReturnType<typeof getPulseBrainLabParentCard>>,
+  TError = ErrorType<ApiError>,
+>(
+  lessonKey: string,
+  lang: "en" | "es",
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPulseBrainLabParentCard>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPulseBrainLabParentCardQueryOptions(
+    lessonKey,
+    lang,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary List PulseBrainLab groups for the active school
+ */
+export const getListPulseBrainLabGroupsUrl = () => {
+  return `/api/pulse-brain-lab/groups`;
+};
+
+export const listPulseBrainLabGroups = async (
+  options?: RequestInit,
+): Promise<PulseBrainLabGroup[]> => {
+  return customFetch<PulseBrainLabGroup[]>(getListPulseBrainLabGroupsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListPulseBrainLabGroupsQueryKey = () => {
+  return [`/api/pulse-brain-lab/groups`] as const;
+};
+
+export const getListPulseBrainLabGroupsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPulseBrainLabGroups>>,
+  TError = ErrorType<ApiError>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listPulseBrainLabGroups>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListPulseBrainLabGroupsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listPulseBrainLabGroups>>
+  > = ({ signal }) => listPulseBrainLabGroups({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPulseBrainLabGroups>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListPulseBrainLabGroupsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPulseBrainLabGroups>>
+>;
+export type ListPulseBrainLabGroupsQueryError = ErrorType<ApiError>;
+
+/**
+ * @summary List PulseBrainLab groups for the active school
+ */
+
+export function useListPulseBrainLabGroups<
+  TData = Awaited<ReturnType<typeof listPulseBrainLabGroups>>,
+  TError = ErrorType<ApiError>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listPulseBrainLabGroups>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListPulseBrainLabGroupsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create a PulseBrainLab group
+ */
+export const getCreatePulseBrainLabGroupUrl = () => {
+  return `/api/pulse-brain-lab/groups`;
+};
+
+export const createPulseBrainLabGroup = async (
+  createPulseBrainLabGroupInput: CreatePulseBrainLabGroupInput,
+  options?: RequestInit,
+): Promise<PulseBrainLabGroupDetail> => {
+  return customFetch<PulseBrainLabGroupDetail>(
+    getCreatePulseBrainLabGroupUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(createPulseBrainLabGroupInput),
+    },
+  );
+};
+
+export const getCreatePulseBrainLabGroupMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createPulseBrainLabGroup>>,
+    TError,
+    { data: BodyType<CreatePulseBrainLabGroupInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createPulseBrainLabGroup>>,
+  TError,
+  { data: BodyType<CreatePulseBrainLabGroupInput> },
+  TContext
+> => {
+  const mutationKey = ["createPulseBrainLabGroup"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createPulseBrainLabGroup>>,
+    { data: BodyType<CreatePulseBrainLabGroupInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createPulseBrainLabGroup(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreatePulseBrainLabGroupMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createPulseBrainLabGroup>>
+>;
+export type CreatePulseBrainLabGroupMutationBody =
+  BodyType<CreatePulseBrainLabGroupInput>;
+export type CreatePulseBrainLabGroupMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Create a PulseBrainLab group
+ */
+export const useCreatePulseBrainLabGroup = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createPulseBrainLabGroup>>,
+    TError,
+    { data: BodyType<CreatePulseBrainLabGroupInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createPulseBrainLabGroup>>,
+  TError,
+  { data: BodyType<CreatePulseBrainLabGroupInput> },
+  TContext
+> => {
+  return useMutation(getCreatePulseBrainLabGroupMutationOptions(options));
+};
+
+/**
+ * @summary Get a group with members
+ */
+export const getGetPulseBrainLabGroupUrl = (groupId: number) => {
+  return `/api/pulse-brain-lab/groups/${groupId}`;
+};
+
+export const getPulseBrainLabGroup = async (
+  groupId: number,
+  options?: RequestInit,
+): Promise<PulseBrainLabGroupDetail> => {
+  return customFetch<PulseBrainLabGroupDetail>(
+    getGetPulseBrainLabGroupUrl(groupId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetPulseBrainLabGroupQueryKey = (groupId: number) => {
+  return [`/api/pulse-brain-lab/groups/${groupId}`] as const;
+};
+
+export const getGetPulseBrainLabGroupQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPulseBrainLabGroup>>,
+  TError = ErrorType<ApiError>,
+>(
+  groupId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPulseBrainLabGroup>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetPulseBrainLabGroupQueryKey(groupId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPulseBrainLabGroup>>
+  > = ({ signal }) =>
+    getPulseBrainLabGroup(groupId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!groupId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPulseBrainLabGroup>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPulseBrainLabGroupQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPulseBrainLabGroup>>
+>;
+export type GetPulseBrainLabGroupQueryError = ErrorType<ApiError>;
+
+/**
+ * @summary Get a group with members
+ */
+
+export function useGetPulseBrainLabGroup<
+  TData = Awaited<ReturnType<typeof getPulseBrainLabGroup>>,
+  TError = ErrorType<ApiError>,
+>(
+  groupId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPulseBrainLabGroup>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPulseBrainLabGroupQueryOptions(groupId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Update a group
+ */
+export const getUpdatePulseBrainLabGroupUrl = (groupId: number) => {
+  return `/api/pulse-brain-lab/groups/${groupId}`;
+};
+
+export const updatePulseBrainLabGroup = async (
+  groupId: number,
+  updatePulseBrainLabGroupInput: UpdatePulseBrainLabGroupInput,
+  options?: RequestInit,
+): Promise<PulseBrainLabGroupDetail> => {
+  return customFetch<PulseBrainLabGroupDetail>(
+    getUpdatePulseBrainLabGroupUrl(groupId),
+    {
+      ...options,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(updatePulseBrainLabGroupInput),
+    },
+  );
+};
+
+export const getUpdatePulseBrainLabGroupMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updatePulseBrainLabGroup>>,
+    TError,
+    { groupId: number; data: BodyType<UpdatePulseBrainLabGroupInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updatePulseBrainLabGroup>>,
+  TError,
+  { groupId: number; data: BodyType<UpdatePulseBrainLabGroupInput> },
+  TContext
+> => {
+  const mutationKey = ["updatePulseBrainLabGroup"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updatePulseBrainLabGroup>>,
+    { groupId: number; data: BodyType<UpdatePulseBrainLabGroupInput> }
+  > = (props) => {
+    const { groupId, data } = props ?? {};
+
+    return updatePulseBrainLabGroup(groupId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdatePulseBrainLabGroupMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updatePulseBrainLabGroup>>
+>;
+export type UpdatePulseBrainLabGroupMutationBody =
+  BodyType<UpdatePulseBrainLabGroupInput>;
+export type UpdatePulseBrainLabGroupMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Update a group
+ */
+export const useUpdatePulseBrainLabGroup = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updatePulseBrainLabGroup>>,
+    TError,
+    { groupId: number; data: BodyType<UpdatePulseBrainLabGroupInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updatePulseBrainLabGroup>>,
+  TError,
+  { groupId: number; data: BodyType<UpdatePulseBrainLabGroupInput> },
+  TContext
+> => {
+  return useMutation(getUpdatePulseBrainLabGroupMutationOptions(options));
+};
+
+/**
+ * @summary Delete a group
+ */
+export const getDeletePulseBrainLabGroupUrl = (groupId: number) => {
+  return `/api/pulse-brain-lab/groups/${groupId}`;
+};
+
+export const deletePulseBrainLabGroup = async (
+  groupId: number,
+  options?: RequestInit,
+): Promise<void> => {
+  return customFetch<void>(getDeletePulseBrainLabGroupUrl(groupId), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeletePulseBrainLabGroupMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deletePulseBrainLabGroup>>,
+    TError,
+    { groupId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deletePulseBrainLabGroup>>,
+  TError,
+  { groupId: number },
+  TContext
+> => {
+  const mutationKey = ["deletePulseBrainLabGroup"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deletePulseBrainLabGroup>>,
+    { groupId: number }
+  > = (props) => {
+    const { groupId } = props ?? {};
+
+    return deletePulseBrainLabGroup(groupId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeletePulseBrainLabGroupMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deletePulseBrainLabGroup>>
+>;
+
+export type DeletePulseBrainLabGroupMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Delete a group
+ */
+export const useDeletePulseBrainLabGroup = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deletePulseBrainLabGroup>>,
+    TError,
+    { groupId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deletePulseBrainLabGroup>>,
+  TError,
+  { groupId: number },
+  TContext
+> => {
+  return useMutation(getDeletePulseBrainLabGroupMutationOptions(options));
+};
+
+/**
+ * @summary Add members to a group
+ */
+export const getAddPulseBrainLabGroupMembersUrl = (groupId: number) => {
+  return `/api/pulse-brain-lab/groups/${groupId}/members`;
+};
+
+export const addPulseBrainLabGroupMembers = async (
+  groupId: number,
+  addPulseBrainLabMembersInput: AddPulseBrainLabMembersInput,
+  options?: RequestInit,
+): Promise<PulseBrainLabGroupDetail> => {
+  return customFetch<PulseBrainLabGroupDetail>(
+    getAddPulseBrainLabGroupMembersUrl(groupId),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(addPulseBrainLabMembersInput),
+    },
+  );
+};
+
+export const getAddPulseBrainLabGroupMembersMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof addPulseBrainLabGroupMembers>>,
+    TError,
+    { groupId: number; data: BodyType<AddPulseBrainLabMembersInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof addPulseBrainLabGroupMembers>>,
+  TError,
+  { groupId: number; data: BodyType<AddPulseBrainLabMembersInput> },
+  TContext
+> => {
+  const mutationKey = ["addPulseBrainLabGroupMembers"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof addPulseBrainLabGroupMembers>>,
+    { groupId: number; data: BodyType<AddPulseBrainLabMembersInput> }
+  > = (props) => {
+    const { groupId, data } = props ?? {};
+
+    return addPulseBrainLabGroupMembers(groupId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AddPulseBrainLabGroupMembersMutationResult = NonNullable<
+  Awaited<ReturnType<typeof addPulseBrainLabGroupMembers>>
+>;
+export type AddPulseBrainLabGroupMembersMutationBody =
+  BodyType<AddPulseBrainLabMembersInput>;
+export type AddPulseBrainLabGroupMembersMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Add members to a group
+ */
+export const useAddPulseBrainLabGroupMembers = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof addPulseBrainLabGroupMembers>>,
+    TError,
+    { groupId: number; data: BodyType<AddPulseBrainLabMembersInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof addPulseBrainLabGroupMembers>>,
+  TError,
+  { groupId: number; data: BodyType<AddPulseBrainLabMembersInput> },
+  TContext
+> => {
+  return useMutation(getAddPulseBrainLabGroupMembersMutationOptions(options));
+};
+
+/**
+ * @summary Remove a member from a group
+ */
+export const getRemovePulseBrainLabGroupMemberUrl = (
+  groupId: number,
+  studentId: string,
+) => {
+  return `/api/pulse-brain-lab/groups/${groupId}/members/${studentId}`;
+};
+
+export const removePulseBrainLabGroupMember = async (
+  groupId: number,
+  studentId: string,
+  options?: RequestInit,
+): Promise<PulseBrainLabGroupDetail> => {
+  return customFetch<PulseBrainLabGroupDetail>(
+    getRemovePulseBrainLabGroupMemberUrl(groupId, studentId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getRemovePulseBrainLabGroupMemberMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof removePulseBrainLabGroupMember>>,
+    TError,
+    { groupId: number; studentId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof removePulseBrainLabGroupMember>>,
+  TError,
+  { groupId: number; studentId: string },
+  TContext
+> => {
+  const mutationKey = ["removePulseBrainLabGroupMember"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof removePulseBrainLabGroupMember>>,
+    { groupId: number; studentId: string }
+  > = (props) => {
+    const { groupId, studentId } = props ?? {};
+
+    return removePulseBrainLabGroupMember(groupId, studentId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RemovePulseBrainLabGroupMemberMutationResult = NonNullable<
+  Awaited<ReturnType<typeof removePulseBrainLabGroupMember>>
+>;
+
+export type RemovePulseBrainLabGroupMemberMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Remove a member from a group
+ */
+export const useRemovePulseBrainLabGroupMember = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof removePulseBrainLabGroupMember>>,
+    TError,
+    { groupId: number; studentId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof removePulseBrainLabGroupMember>>,
+  TError,
+  { groupId: number; studentId: string },
+  TContext
+> => {
+  return useMutation(getRemovePulseBrainLabGroupMemberMutationOptions(options));
+};
+
+/**
+ * @summary List sessions delivered to a group
+ */
+export const getListPulseBrainLabSessionsUrl = (groupId: number) => {
+  return `/api/pulse-brain-lab/groups/${groupId}/sessions`;
+};
+
+export const listPulseBrainLabSessions = async (
+  groupId: number,
+  options?: RequestInit,
+): Promise<PulseBrainLabSession[]> => {
+  return customFetch<PulseBrainLabSession[]>(
+    getListPulseBrainLabSessionsUrl(groupId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListPulseBrainLabSessionsQueryKey = (groupId: number) => {
+  return [`/api/pulse-brain-lab/groups/${groupId}/sessions`] as const;
+};
+
+export const getListPulseBrainLabSessionsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPulseBrainLabSessions>>,
+  TError = ErrorType<ApiError>,
+>(
+  groupId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPulseBrainLabSessions>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListPulseBrainLabSessionsQueryKey(groupId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listPulseBrainLabSessions>>
+  > = ({ signal }) =>
+    listPulseBrainLabSessions(groupId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!groupId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPulseBrainLabSessions>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListPulseBrainLabSessionsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPulseBrainLabSessions>>
+>;
+export type ListPulseBrainLabSessionsQueryError = ErrorType<ApiError>;
+
+/**
+ * @summary List sessions delivered to a group
+ */
+
+export function useListPulseBrainLabSessions<
+  TData = Awaited<ReturnType<typeof listPulseBrainLabSessions>>,
+  TError = ErrorType<ApiError>,
+>(
+  groupId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPulseBrainLabSessions>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListPulseBrainLabSessionsQueryOptions(
+    groupId,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Deliver a lesson to a group (create a session)
+ */
+export const getCreatePulseBrainLabSessionUrl = (groupId: number) => {
+  return `/api/pulse-brain-lab/groups/${groupId}/sessions`;
+};
+
+export const createPulseBrainLabSession = async (
+  groupId: number,
+  createPulseBrainLabSessionInput: CreatePulseBrainLabSessionInput,
+  options?: RequestInit,
+): Promise<PulseBrainLabSessionDetail> => {
+  return customFetch<PulseBrainLabSessionDetail>(
+    getCreatePulseBrainLabSessionUrl(groupId),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(createPulseBrainLabSessionInput),
+    },
+  );
+};
+
+export const getCreatePulseBrainLabSessionMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createPulseBrainLabSession>>,
+    TError,
+    { groupId: number; data: BodyType<CreatePulseBrainLabSessionInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createPulseBrainLabSession>>,
+  TError,
+  { groupId: number; data: BodyType<CreatePulseBrainLabSessionInput> },
+  TContext
+> => {
+  const mutationKey = ["createPulseBrainLabSession"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createPulseBrainLabSession>>,
+    { groupId: number; data: BodyType<CreatePulseBrainLabSessionInput> }
+  > = (props) => {
+    const { groupId, data } = props ?? {};
+
+    return createPulseBrainLabSession(groupId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreatePulseBrainLabSessionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createPulseBrainLabSession>>
+>;
+export type CreatePulseBrainLabSessionMutationBody =
+  BodyType<CreatePulseBrainLabSessionInput>;
+export type CreatePulseBrainLabSessionMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Deliver a lesson to a group (create a session)
+ */
+export const useCreatePulseBrainLabSession = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createPulseBrainLabSession>>,
+    TError,
+    { groupId: number; data: BodyType<CreatePulseBrainLabSessionInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createPulseBrainLabSession>>,
+  TError,
+  { groupId: number; data: BodyType<CreatePulseBrainLabSessionInput> },
+  TContext
+> => {
+  return useMutation(getCreatePulseBrainLabSessionMutationOptions(options));
+};
+
+/**
+ * @summary Get a session with attendance
+ */
+export const getGetPulseBrainLabSessionUrl = (sessionId: number) => {
+  return `/api/pulse-brain-lab/sessions/${sessionId}`;
+};
+
+export const getPulseBrainLabSession = async (
+  sessionId: number,
+  options?: RequestInit,
+): Promise<PulseBrainLabSessionDetail> => {
+  return customFetch<PulseBrainLabSessionDetail>(
+    getGetPulseBrainLabSessionUrl(sessionId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetPulseBrainLabSessionQueryKey = (sessionId: number) => {
+  return [`/api/pulse-brain-lab/sessions/${sessionId}`] as const;
+};
+
+export const getGetPulseBrainLabSessionQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPulseBrainLabSession>>,
+  TError = ErrorType<ApiError>,
+>(
+  sessionId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPulseBrainLabSession>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetPulseBrainLabSessionQueryKey(sessionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPulseBrainLabSession>>
+  > = ({ signal }) =>
+    getPulseBrainLabSession(sessionId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!sessionId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPulseBrainLabSession>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPulseBrainLabSessionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPulseBrainLabSession>>
+>;
+export type GetPulseBrainLabSessionQueryError = ErrorType<ApiError>;
+
+/**
+ * @summary Get a session with attendance
+ */
+
+export function useGetPulseBrainLabSession<
+  TData = Awaited<ReturnType<typeof getPulseBrainLabSession>>,
+  TError = ErrorType<ApiError>,
+>(
+  sessionId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPulseBrainLabSession>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPulseBrainLabSessionQueryOptions(
+    sessionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Delete a session
+ */
+export const getDeletePulseBrainLabSessionUrl = (sessionId: number) => {
+  return `/api/pulse-brain-lab/sessions/${sessionId}`;
+};
+
+export const deletePulseBrainLabSession = async (
+  sessionId: number,
+  options?: RequestInit,
+): Promise<void> => {
+  return customFetch<void>(getDeletePulseBrainLabSessionUrl(sessionId), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeletePulseBrainLabSessionMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deletePulseBrainLabSession>>,
+    TError,
+    { sessionId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deletePulseBrainLabSession>>,
+  TError,
+  { sessionId: number },
+  TContext
+> => {
+  const mutationKey = ["deletePulseBrainLabSession"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deletePulseBrainLabSession>>,
+    { sessionId: number }
+  > = (props) => {
+    const { sessionId } = props ?? {};
+
+    return deletePulseBrainLabSession(sessionId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeletePulseBrainLabSessionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deletePulseBrainLabSession>>
+>;
+
+export type DeletePulseBrainLabSessionMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Delete a session
+ */
+export const useDeletePulseBrainLabSession = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deletePulseBrainLabSession>>,
+    TError,
+    { sessionId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deletePulseBrainLabSession>>,
+  TError,
+  { sessionId: number },
+  TContext
+> => {
+  return useMutation(getDeletePulseBrainLabSessionMutationOptions(options));
+};
+
+/**
+ * @summary Publish a session to families
+ */
+export const getPublishPulseBrainLabSessionUrl = (sessionId: number) => {
+  return `/api/pulse-brain-lab/sessions/${sessionId}/publish`;
+};
+
+export const publishPulseBrainLabSession = async (
+  sessionId: number,
+  options?: RequestInit,
+): Promise<PulseBrainLabSessionDetail> => {
+  return customFetch<PulseBrainLabSessionDetail>(
+    getPublishPulseBrainLabSessionUrl(sessionId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getPublishPulseBrainLabSessionMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof publishPulseBrainLabSession>>,
+    TError,
+    { sessionId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof publishPulseBrainLabSession>>,
+  TError,
+  { sessionId: number },
+  TContext
+> => {
+  const mutationKey = ["publishPulseBrainLabSession"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof publishPulseBrainLabSession>>,
+    { sessionId: number }
+  > = (props) => {
+    const { sessionId } = props ?? {};
+
+    return publishPulseBrainLabSession(sessionId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type PublishPulseBrainLabSessionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof publishPulseBrainLabSession>>
+>;
+
+export type PublishPulseBrainLabSessionMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Publish a session to families
+ */
+export const usePublishPulseBrainLabSession = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof publishPulseBrainLabSession>>,
+    TError,
+    { sessionId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof publishPulseBrainLabSession>>,
+  TError,
+  { sessionId: number },
+  TContext
+> => {
+  return useMutation(getPublishPulseBrainLabSessionMutationOptions(options));
+};
+
+/**
+ * @summary Retract a session from families (back to draft)
+ */
+export const getUnpublishPulseBrainLabSessionUrl = (sessionId: number) => {
+  return `/api/pulse-brain-lab/sessions/${sessionId}/unpublish`;
+};
+
+export const unpublishPulseBrainLabSession = async (
+  sessionId: number,
+  options?: RequestInit,
+): Promise<PulseBrainLabSessionDetail> => {
+  return customFetch<PulseBrainLabSessionDetail>(
+    getUnpublishPulseBrainLabSessionUrl(sessionId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getUnpublishPulseBrainLabSessionMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof unpublishPulseBrainLabSession>>,
+    TError,
+    { sessionId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof unpublishPulseBrainLabSession>>,
+  TError,
+  { sessionId: number },
+  TContext
+> => {
+  const mutationKey = ["unpublishPulseBrainLabSession"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof unpublishPulseBrainLabSession>>,
+    { sessionId: number }
+  > = (props) => {
+    const { sessionId } = props ?? {};
+
+    return unpublishPulseBrainLabSession(sessionId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UnpublishPulseBrainLabSessionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof unpublishPulseBrainLabSession>>
+>;
+
+export type UnpublishPulseBrainLabSessionMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Retract a session from families (back to draft)
+ */
+export const useUnpublishPulseBrainLabSession = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof unpublishPulseBrainLabSession>>,
+    TError,
+    { sessionId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof unpublishPulseBrainLabSession>>,
+  TError,
+  { sessionId: number },
+  TContext
+> => {
+  return useMutation(getUnpublishPulseBrainLabSessionMutationOptions(options));
+};
+
+/**
+ * @summary Set per-member attendance for a session
+ */
+export const getSetPulseBrainLabAttendanceUrl = (sessionId: number) => {
+  return `/api/pulse-brain-lab/sessions/${sessionId}/attendance`;
+};
+
+export const setPulseBrainLabAttendance = async (
+  sessionId: number,
+  setPulseBrainLabAttendanceInput: SetPulseBrainLabAttendanceInput,
+  options?: RequestInit,
+): Promise<PulseBrainLabSessionDetail> => {
+  return customFetch<PulseBrainLabSessionDetail>(
+    getSetPulseBrainLabAttendanceUrl(sessionId),
+    {
+      ...options,
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(setPulseBrainLabAttendanceInput),
+    },
+  );
+};
+
+export const getSetPulseBrainLabAttendanceMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setPulseBrainLabAttendance>>,
+    TError,
+    { sessionId: number; data: BodyType<SetPulseBrainLabAttendanceInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setPulseBrainLabAttendance>>,
+  TError,
+  { sessionId: number; data: BodyType<SetPulseBrainLabAttendanceInput> },
+  TContext
+> => {
+  const mutationKey = ["setPulseBrainLabAttendance"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setPulseBrainLabAttendance>>,
+    { sessionId: number; data: BodyType<SetPulseBrainLabAttendanceInput> }
+  > = (props) => {
+    const { sessionId, data } = props ?? {};
+
+    return setPulseBrainLabAttendance(sessionId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SetPulseBrainLabAttendanceMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setPulseBrainLabAttendance>>
+>;
+export type SetPulseBrainLabAttendanceMutationBody =
+  BodyType<SetPulseBrainLabAttendanceInput>;
+export type SetPulseBrainLabAttendanceMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Set per-member attendance for a session
+ */
+export const useSetPulseBrainLabAttendance = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setPulseBrainLabAttendance>>,
+    TError,
+    { sessionId: number; data: BodyType<SetPulseBrainLabAttendanceInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof setPulseBrainLabAttendance>>,
+  TError,
+  { sessionId: number; data: BodyType<SetPulseBrainLabAttendanceInput> },
+  TContext
+> => {
+  return useMutation(getSetPulseBrainLabAttendanceMutationOptions(options));
+};
+
+/**
+ * The "routing brain" shared by both intake paths. The phone path decodes the QR live in the browser; the copier-batch path rasterizes each PDF page in the browser and decodes its QR. Either way the opaque base62 token is POSTed here, resolved server-side to exactly one (school, session, student), and the uploaded object is bound to the school and filed as a work sample.
+
+ * @summary File a scanned work sample to its (session, student) by QR token
+ */
+export const getRoutePulseBrainLabScanUrl = () => {
+  return `/api/pulse-brain-lab/scan/route`;
+};
+
+export const routePulseBrainLabScan = async (
+  routePulseBrainLabScanInput: RoutePulseBrainLabScanInput,
+  options?: RequestInit,
+): Promise<PulseBrainLabWorkSample> => {
+  return customFetch<PulseBrainLabWorkSample>(getRoutePulseBrainLabScanUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(routePulseBrainLabScanInput),
+  });
+};
+
+export const getRoutePulseBrainLabScanMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof routePulseBrainLabScan>>,
+    TError,
+    { data: BodyType<RoutePulseBrainLabScanInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof routePulseBrainLabScan>>,
+  TError,
+  { data: BodyType<RoutePulseBrainLabScanInput> },
+  TContext
+> => {
+  const mutationKey = ["routePulseBrainLabScan"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof routePulseBrainLabScan>>,
+    { data: BodyType<RoutePulseBrainLabScanInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return routePulseBrainLabScan(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RoutePulseBrainLabScanMutationResult = NonNullable<
+  Awaited<ReturnType<typeof routePulseBrainLabScan>>
+>;
+export type RoutePulseBrainLabScanMutationBody =
+  BodyType<RoutePulseBrainLabScanInput>;
+export type RoutePulseBrainLabScanMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary File a scanned work sample to its (session, student) by QR token
+ */
+export const useRoutePulseBrainLabScan = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof routePulseBrainLabScan>>,
+    TError,
+    { data: BodyType<RoutePulseBrainLabScanInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof routePulseBrainLabScan>>,
+  TError,
+  { data: BodyType<RoutePulseBrainLabScanInput> },
+  TContext
+> => {
+  return useMutation(getRoutePulseBrainLabScanMutationOptions(options));
+};
+
+/**
+ * The copier-batch intake path. The whole completed stack is scanned at the office MFP into ONE multi-page PDF and uploaded; the server rasterizes each page, decodes its QR server-side, resolves each token school-scoped to a (session, student), and files a work sample per matched page. Pages whose QR cannot be read are parked in the Unmatched tray for manual assignment.
+
+ * @summary Decode a multi-page scanned PDF server-side and fan pages out
+ */
+export const getBatchPulseBrainLabScanUrl = () => {
+  return `/api/pulse-brain-lab/scan/batch`;
+};
+
+export const batchPulseBrainLabScan = async (
+  batchPulseBrainLabScanInput: BatchPulseBrainLabScanInput,
+  options?: RequestInit,
+): Promise<PulseBrainLabBatchScanResult> => {
+  return customFetch<PulseBrainLabBatchScanResult>(
+    getBatchPulseBrainLabScanUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(batchPulseBrainLabScanInput),
+    },
+  );
+};
+
+export const getBatchPulseBrainLabScanMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof batchPulseBrainLabScan>>,
+    TError,
+    { data: BodyType<BatchPulseBrainLabScanInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof batchPulseBrainLabScan>>,
+  TError,
+  { data: BodyType<BatchPulseBrainLabScanInput> },
+  TContext
+> => {
+  const mutationKey = ["batchPulseBrainLabScan"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof batchPulseBrainLabScan>>,
+    { data: BodyType<BatchPulseBrainLabScanInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return batchPulseBrainLabScan(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type BatchPulseBrainLabScanMutationResult = NonNullable<
+  Awaited<ReturnType<typeof batchPulseBrainLabScan>>
+>;
+export type BatchPulseBrainLabScanMutationBody =
+  BodyType<BatchPulseBrainLabScanInput>;
+export type BatchPulseBrainLabScanMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Decode a multi-page scanned PDF server-side and fan pages out
+ */
+export const useBatchPulseBrainLabScan = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof batchPulseBrainLabScan>>,
+    TError,
+    { data: BodyType<BatchPulseBrainLabScanInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof batchPulseBrainLabScan>>,
+  TError,
+  { data: BodyType<BatchPulseBrainLabScanInput> },
+  TContext
+> => {
+  return useMutation(getBatchPulseBrainLabScanMutationOptions(options));
+};
+
+/**
+ * @summary List pending unmatched scans (the tray) for the active school
+ */
+export const getListPulseBrainLabUnmatchedScansUrl = () => {
+  return `/api/pulse-brain-lab/scan/unmatched`;
+};
+
+export const listPulseBrainLabUnmatchedScans = async (
+  options?: RequestInit,
+): Promise<PulseBrainLabUnmatchedScan[]> => {
+  return customFetch<PulseBrainLabUnmatchedScan[]>(
+    getListPulseBrainLabUnmatchedScansUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListPulseBrainLabUnmatchedScansQueryKey = () => {
+  return [`/api/pulse-brain-lab/scan/unmatched`] as const;
+};
+
+export const getListPulseBrainLabUnmatchedScansQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPulseBrainLabUnmatchedScans>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listPulseBrainLabUnmatchedScans>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListPulseBrainLabUnmatchedScansQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listPulseBrainLabUnmatchedScans>>
+  > = ({ signal }) =>
+    listPulseBrainLabUnmatchedScans({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPulseBrainLabUnmatchedScans>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListPulseBrainLabUnmatchedScansQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPulseBrainLabUnmatchedScans>>
+>;
+export type ListPulseBrainLabUnmatchedScansQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List pending unmatched scans (the tray) for the active school
+ */
+
+export function useListPulseBrainLabUnmatchedScans<
+  TData = Awaited<ReturnType<typeof listPulseBrainLabUnmatchedScans>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listPulseBrainLabUnmatchedScans>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListPulseBrainLabUnmatchedScansQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Park a scanned page whose QR could not be decoded in the tray
+ */
+export const getFilePulseBrainLabUnmatchedScanUrl = () => {
+  return `/api/pulse-brain-lab/scan/unmatched`;
+};
+
+export const filePulseBrainLabUnmatchedScan = async (
+  filePulseBrainLabUnmatchedScanInput: FilePulseBrainLabUnmatchedScanInput,
+  options?: RequestInit,
+): Promise<PulseBrainLabUnmatchedScan> => {
+  return customFetch<PulseBrainLabUnmatchedScan>(
+    getFilePulseBrainLabUnmatchedScanUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(filePulseBrainLabUnmatchedScanInput),
+    },
+  );
+};
+
+export const getFilePulseBrainLabUnmatchedScanMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof filePulseBrainLabUnmatchedScan>>,
+    TError,
+    { data: BodyType<FilePulseBrainLabUnmatchedScanInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof filePulseBrainLabUnmatchedScan>>,
+  TError,
+  { data: BodyType<FilePulseBrainLabUnmatchedScanInput> },
+  TContext
+> => {
+  const mutationKey = ["filePulseBrainLabUnmatchedScan"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof filePulseBrainLabUnmatchedScan>>,
+    { data: BodyType<FilePulseBrainLabUnmatchedScanInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return filePulseBrainLabUnmatchedScan(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type FilePulseBrainLabUnmatchedScanMutationResult = NonNullable<
+  Awaited<ReturnType<typeof filePulseBrainLabUnmatchedScan>>
+>;
+export type FilePulseBrainLabUnmatchedScanMutationBody =
+  BodyType<FilePulseBrainLabUnmatchedScanInput>;
+export type FilePulseBrainLabUnmatchedScanMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Park a scanned page whose QR could not be decoded in the tray
+ */
+export const useFilePulseBrainLabUnmatchedScan = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof filePulseBrainLabUnmatchedScan>>,
+    TError,
+    { data: BodyType<FilePulseBrainLabUnmatchedScanInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof filePulseBrainLabUnmatchedScan>>,
+  TError,
+  { data: BodyType<FilePulseBrainLabUnmatchedScanInput> },
+  TContext
+> => {
+  return useMutation(getFilePulseBrainLabUnmatchedScanMutationOptions(options));
+};
+
+/**
+ * @summary Manually assign an unmatched scan to a (session, student)
+ */
+export const getAssignPulseBrainLabUnmatchedScanUrl = (scanId: number) => {
+  return `/api/pulse-brain-lab/scan/unmatched/${scanId}/assign`;
+};
+
+export const assignPulseBrainLabUnmatchedScan = async (
+  scanId: number,
+  assignPulseBrainLabUnmatchedScanInput: AssignPulseBrainLabUnmatchedScanInput,
+  options?: RequestInit,
+): Promise<PulseBrainLabWorkSample> => {
+  return customFetch<PulseBrainLabWorkSample>(
+    getAssignPulseBrainLabUnmatchedScanUrl(scanId),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(assignPulseBrainLabUnmatchedScanInput),
+    },
+  );
+};
+
+export const getAssignPulseBrainLabUnmatchedScanMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof assignPulseBrainLabUnmatchedScan>>,
+    TError,
+    { scanId: number; data: BodyType<AssignPulseBrainLabUnmatchedScanInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof assignPulseBrainLabUnmatchedScan>>,
+  TError,
+  { scanId: number; data: BodyType<AssignPulseBrainLabUnmatchedScanInput> },
+  TContext
+> => {
+  const mutationKey = ["assignPulseBrainLabUnmatchedScan"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof assignPulseBrainLabUnmatchedScan>>,
+    { scanId: number; data: BodyType<AssignPulseBrainLabUnmatchedScanInput> }
+  > = (props) => {
+    const { scanId, data } = props ?? {};
+
+    return assignPulseBrainLabUnmatchedScan(scanId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AssignPulseBrainLabUnmatchedScanMutationResult = NonNullable<
+  Awaited<ReturnType<typeof assignPulseBrainLabUnmatchedScan>>
+>;
+export type AssignPulseBrainLabUnmatchedScanMutationBody =
+  BodyType<AssignPulseBrainLabUnmatchedScanInput>;
+export type AssignPulseBrainLabUnmatchedScanMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Manually assign an unmatched scan to a (session, student)
+ */
+export const useAssignPulseBrainLabUnmatchedScan = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof assignPulseBrainLabUnmatchedScan>>,
+    TError,
+    { scanId: number; data: BodyType<AssignPulseBrainLabUnmatchedScanInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof assignPulseBrainLabUnmatchedScan>>,
+  TError,
+  { scanId: number; data: BodyType<AssignPulseBrainLabUnmatchedScanInput> },
+  TContext
+> => {
+  return useMutation(
+    getAssignPulseBrainLabUnmatchedScanMutationOptions(options),
+  );
+};
+
+/**
+ * @summary Discard an unmatched scan from the tray
+ */
+export const getDiscardPulseBrainLabUnmatchedScanUrl = (scanId: number) => {
+  return `/api/pulse-brain-lab/scan/unmatched/${scanId}/discard`;
+};
+
+export const discardPulseBrainLabUnmatchedScan = async (
+  scanId: number,
+  options?: RequestInit,
+): Promise<void> => {
+  return customFetch<void>(getDiscardPulseBrainLabUnmatchedScanUrl(scanId), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getDiscardPulseBrainLabUnmatchedScanMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof discardPulseBrainLabUnmatchedScan>>,
+    TError,
+    { scanId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof discardPulseBrainLabUnmatchedScan>>,
+  TError,
+  { scanId: number },
+  TContext
+> => {
+  const mutationKey = ["discardPulseBrainLabUnmatchedScan"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof discardPulseBrainLabUnmatchedScan>>,
+    { scanId: number }
+  > = (props) => {
+    const { scanId } = props ?? {};
+
+    return discardPulseBrainLabUnmatchedScan(scanId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DiscardPulseBrainLabUnmatchedScanMutationResult = NonNullable<
+  Awaited<ReturnType<typeof discardPulseBrainLabUnmatchedScan>>
+>;
+
+export type DiscardPulseBrainLabUnmatchedScanMutationError =
+  ErrorType<ApiError>;
+
+/**
+ * @summary Discard an unmatched scan from the tray
+ */
+export const useDiscardPulseBrainLabUnmatchedScan = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof discardPulseBrainLabUnmatchedScan>>,
+    TError,
+    { scanId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof discardPulseBrainLabUnmatchedScan>>,
+  TError,
+  { scanId: number },
+  TContext
+> => {
+  return useMutation(
+    getDiscardPulseBrainLabUnmatchedScanMutationOptions(options),
+  );
+};
+
+/**
+ * @summary List filed work samples for a session
+ */
+export const getListPulseBrainLabWorkSamplesUrl = (sessionId: number) => {
+  return `/api/pulse-brain-lab/sessions/${sessionId}/work-samples`;
+};
+
+export const listPulseBrainLabWorkSamples = async (
+  sessionId: number,
+  options?: RequestInit,
+): Promise<PulseBrainLabWorkSample[]> => {
+  return customFetch<PulseBrainLabWorkSample[]>(
+    getListPulseBrainLabWorkSamplesUrl(sessionId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListPulseBrainLabWorkSamplesQueryKey = (sessionId: number) => {
+  return [`/api/pulse-brain-lab/sessions/${sessionId}/work-samples`] as const;
+};
+
+export const getListPulseBrainLabWorkSamplesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPulseBrainLabWorkSamples>>,
+  TError = ErrorType<ApiError>,
+>(
+  sessionId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPulseBrainLabWorkSamples>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListPulseBrainLabWorkSamplesQueryKey(sessionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listPulseBrainLabWorkSamples>>
+  > = ({ signal }) =>
+    listPulseBrainLabWorkSamples(sessionId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!sessionId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPulseBrainLabWorkSamples>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListPulseBrainLabWorkSamplesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPulseBrainLabWorkSamples>>
+>;
+export type ListPulseBrainLabWorkSamplesQueryError = ErrorType<ApiError>;
+
+/**
+ * @summary List filed work samples for a session
+ */
+
+export function useListPulseBrainLabWorkSamples<
+  TData = Awaited<ReturnType<typeof listPulseBrainLabWorkSamples>>,
+  TError = ErrorType<ApiError>,
+>(
+  sessionId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPulseBrainLabWorkSamples>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListPulseBrainLabWorkSamplesQueryOptions(
+    sessionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Delete a filed work sample
+ */
+export const getDeletePulseBrainLabWorkSampleUrl = (sampleId: number) => {
+  return `/api/pulse-brain-lab/work-samples/${sampleId}`;
+};
+
+export const deletePulseBrainLabWorkSample = async (
+  sampleId: number,
+  options?: RequestInit,
+): Promise<void> => {
+  return customFetch<void>(getDeletePulseBrainLabWorkSampleUrl(sampleId), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeletePulseBrainLabWorkSampleMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deletePulseBrainLabWorkSample>>,
+    TError,
+    { sampleId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deletePulseBrainLabWorkSample>>,
+  TError,
+  { sampleId: number },
+  TContext
+> => {
+  const mutationKey = ["deletePulseBrainLabWorkSample"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deletePulseBrainLabWorkSample>>,
+    { sampleId: number }
+  > = (props) => {
+    const { sampleId } = props ?? {};
+
+    return deletePulseBrainLabWorkSample(sampleId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeletePulseBrainLabWorkSampleMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deletePulseBrainLabWorkSample>>
+>;
+
+export type DeletePulseBrainLabWorkSampleMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Delete a filed work sample
+ */
+export const useDeletePulseBrainLabWorkSample = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deletePulseBrainLabWorkSample>>,
+    TError,
+    { sampleId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deletePulseBrainLabWorkSample>>,
+  TError,
+  { sampleId: number },
+  TContext
+> => {
+  return useMutation(getDeletePulseBrainLabWorkSampleMutationOptions(options));
+};
+
+/**
+ * @summary Configure grading (mode, max score, benchmark) for an assignment
+ */
+export const getSetPulseBrainLabSessionGradingUrl = (sessionId: number) => {
+  return `/api/pulse-brain-lab/sessions/${sessionId}/grading`;
+};
+
+export const setPulseBrainLabSessionGrading = async (
+  sessionId: number,
+  setPulseBrainLabSessionGradingInput: SetPulseBrainLabSessionGradingInput,
+  options?: RequestInit,
+): Promise<PulseBrainLabSessionDetail> => {
+  return customFetch<PulseBrainLabSessionDetail>(
+    getSetPulseBrainLabSessionGradingUrl(sessionId),
+    {
+      ...options,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(setPulseBrainLabSessionGradingInput),
+    },
+  );
+};
+
+export const getSetPulseBrainLabSessionGradingMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setPulseBrainLabSessionGrading>>,
+    TError,
+    { sessionId: number; data: BodyType<SetPulseBrainLabSessionGradingInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setPulseBrainLabSessionGrading>>,
+  TError,
+  { sessionId: number; data: BodyType<SetPulseBrainLabSessionGradingInput> },
+  TContext
+> => {
+  const mutationKey = ["setPulseBrainLabSessionGrading"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setPulseBrainLabSessionGrading>>,
+    { sessionId: number; data: BodyType<SetPulseBrainLabSessionGradingInput> }
+  > = (props) => {
+    const { sessionId, data } = props ?? {};
+
+    return setPulseBrainLabSessionGrading(sessionId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SetPulseBrainLabSessionGradingMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setPulseBrainLabSessionGrading>>
+>;
+export type SetPulseBrainLabSessionGradingMutationBody =
+  BodyType<SetPulseBrainLabSessionGradingInput>;
+export type SetPulseBrainLabSessionGradingMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Configure grading (mode, max score, benchmark) for an assignment
+ */
+export const useSetPulseBrainLabSessionGrading = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setPulseBrainLabSessionGrading>>,
+    TError,
+    { sessionId: number; data: BodyType<SetPulseBrainLabSessionGradingInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof setPulseBrainLabSessionGrading>>,
+  TError,
+  { sessionId: number; data: BodyType<SetPulseBrainLabSessionGradingInput> },
+  TContext
+> => {
+  return useMutation(getSetPulseBrainLabSessionGradingMutationOptions(options));
+};
+
+/**
+ * @summary Grade a work sample (score or participation mark)
+ */
+export const getSetPulseBrainLabWorkSampleGradeUrl = (sampleId: number) => {
+  return `/api/pulse-brain-lab/work-samples/${sampleId}/grade`;
+};
+
+export const setPulseBrainLabWorkSampleGrade = async (
+  sampleId: number,
+  setPulseBrainLabWorkSampleGradeInput: SetPulseBrainLabWorkSampleGradeInput,
+  options?: RequestInit,
+): Promise<PulseBrainLabWorkSample> => {
+  return customFetch<PulseBrainLabWorkSample>(
+    getSetPulseBrainLabWorkSampleGradeUrl(sampleId),
+    {
+      ...options,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(setPulseBrainLabWorkSampleGradeInput),
+    },
+  );
+};
+
+export const getSetPulseBrainLabWorkSampleGradeMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setPulseBrainLabWorkSampleGrade>>,
+    TError,
+    { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleGradeInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setPulseBrainLabWorkSampleGrade>>,
+  TError,
+  { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleGradeInput> },
+  TContext
+> => {
+  const mutationKey = ["setPulseBrainLabWorkSampleGrade"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setPulseBrainLabWorkSampleGrade>>,
+    { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleGradeInput> }
+  > = (props) => {
+    const { sampleId, data } = props ?? {};
+
+    return setPulseBrainLabWorkSampleGrade(sampleId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SetPulseBrainLabWorkSampleGradeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setPulseBrainLabWorkSampleGrade>>
+>;
+export type SetPulseBrainLabWorkSampleGradeMutationBody =
+  BodyType<SetPulseBrainLabWorkSampleGradeInput>;
+export type SetPulseBrainLabWorkSampleGradeMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Grade a work sample (score or participation mark)
+ */
+export const useSetPulseBrainLabWorkSampleGrade = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setPulseBrainLabWorkSampleGrade>>,
+    TError,
+    { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleGradeInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof setPulseBrainLabWorkSampleGrade>>,
+  TError,
+  { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleGradeInput> },
+  TContext
+> => {
+  return useMutation(
+    getSetPulseBrainLabWorkSampleGradeMutationOptions(options),
+  );
+};
+
+/**
+ * @summary Toggle whether a filed work sample is visible to the family
+ */
+export const getSetPulseBrainLabWorkSampleShareUrl = (sampleId: number) => {
+  return `/api/pulse-brain-lab/work-samples/${sampleId}/share`;
+};
+
+export const setPulseBrainLabWorkSampleShare = async (
+  sampleId: number,
+  setPulseBrainLabWorkSampleShareInput: SetPulseBrainLabWorkSampleShareInput,
+  options?: RequestInit,
+): Promise<PulseBrainLabWorkSample> => {
+  return customFetch<PulseBrainLabWorkSample>(
+    getSetPulseBrainLabWorkSampleShareUrl(sampleId),
+    {
+      ...options,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(setPulseBrainLabWorkSampleShareInput),
+    },
+  );
+};
+
+export const getSetPulseBrainLabWorkSampleShareMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setPulseBrainLabWorkSampleShare>>,
+    TError,
+    { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleShareInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setPulseBrainLabWorkSampleShare>>,
+  TError,
+  { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleShareInput> },
+  TContext
+> => {
+  const mutationKey = ["setPulseBrainLabWorkSampleShare"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setPulseBrainLabWorkSampleShare>>,
+    { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleShareInput> }
+  > = (props) => {
+    const { sampleId, data } = props ?? {};
+
+    return setPulseBrainLabWorkSampleShare(sampleId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SetPulseBrainLabWorkSampleShareMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setPulseBrainLabWorkSampleShare>>
+>;
+export type SetPulseBrainLabWorkSampleShareMutationBody =
+  BodyType<SetPulseBrainLabWorkSampleShareInput>;
+export type SetPulseBrainLabWorkSampleShareMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Toggle whether a filed work sample is visible to the family
+ */
+export const useSetPulseBrainLabWorkSampleShare = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setPulseBrainLabWorkSampleShare>>,
+    TError,
+    { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleShareInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof setPulseBrainLabWorkSampleShare>>,
+  TError,
+  { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleShareInput> },
+  TContext
+> => {
+  return useMutation(
+    getSetPulseBrainLabWorkSampleShareMutationOptions(options),
+  );
+};
+
+/**
+ * @summary The "Reinforce at Home" cards for one student — shared work samples grouped by lesson, each with the bilingual parent recall card and home follow-up transcripts. Staff view (any signed-in staff at the active school).
+
+ */
+export const getListPulseBrainLabHomeCardsUrl = (studentId: string) => {
+  return `/api/pulse-brain-lab/students/${studentId}/home-cards`;
+};
+
+export const listPulseBrainLabHomeCards = async (
+  studentId: string,
+  options?: RequestInit,
+): Promise<PulseBrainLabHomeCard[]> => {
+  return customFetch<PulseBrainLabHomeCard[]>(
+    getListPulseBrainLabHomeCardsUrl(studentId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListPulseBrainLabHomeCardsQueryKey = (studentId: string) => {
+  return [`/api/pulse-brain-lab/students/${studentId}/home-cards`] as const;
+};
+
+export const getListPulseBrainLabHomeCardsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPulseBrainLabHomeCards>>,
+  TError = ErrorType<ApiError>,
+>(
+  studentId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPulseBrainLabHomeCards>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListPulseBrainLabHomeCardsQueryKey(studentId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listPulseBrainLabHomeCards>>
+  > = ({ signal }) =>
+    listPulseBrainLabHomeCards(studentId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!studentId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPulseBrainLabHomeCards>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListPulseBrainLabHomeCardsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPulseBrainLabHomeCards>>
+>;
+export type ListPulseBrainLabHomeCardsQueryError = ErrorType<ApiError>;
+
+/**
+ * @summary The "Reinforce at Home" cards for one student — shared work samples grouped by lesson, each with the bilingual parent recall card and home follow-up transcripts. Staff view (any signed-in staff at the active school).
+
+ */
+
+export function useListPulseBrainLabHomeCards<
+  TData = Awaited<ReturnType<typeof listPulseBrainLabHomeCards>>,
+  TError = ErrorType<ApiError>,
+>(
+  studentId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPulseBrainLabHomeCards>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListPulseBrainLabHomeCardsQueryOptions(
+    studentId,
+    options,
+  );
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

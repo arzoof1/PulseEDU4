@@ -185,6 +185,7 @@ router.get("/polarity-pairs", async (req, res) => {
   const students = await db
     .select({
       studentId: studentsTable.studentId,
+      localSisId: studentsTable.localSisId,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
     })
@@ -202,9 +203,11 @@ router.get("/polarity-pairs", async (req, res) => {
       return {
         id: r.id,
         studentIdA: r.studentIdA,
+        studentLocalSisIdA: a?.localSisId ?? null,
         studentAFirstName: a?.firstName ?? null,
         studentALastName: a?.lastName ?? null,
         studentIdB: r.studentIdB,
+        studentLocalSisIdB: b?.localSisId ?? null,
         studentBFirstName: b?.firstName ?? null,
         studentBLastName: b?.lastName ?? null,
         note: r.note,

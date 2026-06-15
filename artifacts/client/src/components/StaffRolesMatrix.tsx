@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
+import StudentPhoto from "./StudentPhoto";
 
 type BoolKey = string;
 
@@ -31,6 +32,10 @@ const DEPARTMENTS = [
   "Other",
 ] as const;
 
+// Courtesy titles shown to students on the hall-pass kiosk as the teacher of
+// record for a person's default room (e.g. "Mr. Hayes — Room 204").
+const STAFF_TITLES = ["Mr.", "Mrs.", "Ms.", "Mx.", "Dr.", "Coach"] as const;
+
 type HouseOption = {
   id: number;
   name: string;
@@ -38,6 +43,16 @@ type HouseOption = {
   iconKey: string | null;
   studentCount: number;
   staffCount: number;
+};
+
+// Destination locations a staff member can be assigned to "receive" for
+// one-way hall passes. Drives the "Heading to me" scope on the staff app.
+type LocationOption = {
+  id: number;
+  name: string;
+  kind: string;
+  isDestination: boolean;
+  active: boolean;
 };
 
 interface Props {
@@ -76,6 +91,7 @@ const PAGES: { key: BoolKey; label: string; group: string }[] = [
   { group: "Admin", key: "capManageDisplays", label: "Manage Displays" },
   { group: "Admin", key: "capManageDismissal", label: "Set Dismissal Mode" },
   { group: "Admin", key: "capTourNotify", label: "Tour Alerts" },
+  { group: "Admin", key: "capManageEsign", label: "e-Sign Documents" },
 ];
 
 const TEACHER_BASELINE: BoolKey[] = [
@@ -186,6 +202,23 @@ const ROLE_PRESETS: {
       "capSupportNotes",
     ],
   },
+  // Core Team: a FULL Core Team member. The flag itself grants every Core
+  // Team power server-side (read/write all teachers' Tier 2/3 intervention
+  // data, goal editing, completion reports, strategy catalog, plus the gates
+  // that compose isCoreTeam()). The capability bundle below just lights up the
+  // matching pages so the member can actually reach those surfaces.
+  {
+    flag: "isCoreTeam",
+    label: "Core Team",
+    capabilities: [
+      "capStudentActivity",
+      "capInterventionLog",
+      "capInterventionManage",
+      "capSupportNotes",
+      "capPulloutsVerify",
+      "capReports",
+    ],
+  },
   {
     flag: "isSocialWorker",
     label: "School Social Worker",
@@ -268,12 +301,23 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
   // Recomputed locally on every patchStaff so the counts update without
   // a server round-trip.
   const [houses, setHouses] = useState<HouseOption[]>([]);
+  // Receiving-location coverage for one-way hall passes.
+  const [locations, setLocations] = useState<LocationOption[]>([]);
+  const [receivedByStaff, setReceivedByStaff] = useState<
+    Record<number, number[]>
+  >({});
+  const [coverageTarget, setCoverageTarget] = useState<StaffRow | null>(null);
+  const [coverageSaving, setCoverageSaving] = useState(false);
   const [filter, setFilter] = useState("");
+  const [staffScope, setStaffScope] = useState<
+    "current" | "historical" | "all"
+  >("current");
   const [savingId, setSavingId] = useState<number | null>(null);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
   const [showAddStaff, setShowAddStaff] = useState(false);
   const [showAddRole, setShowAddRole] = useState(false);
+  const [accessTarget, setAccessTarget] = useState<StaffRow | null>(null);
   const [pwResetTarget, setPwResetTarget] = useState<StaffRow | null>(null);
   const [pwResetValue, setPwResetValue] = useState("");
   const [pwResetBusy, setPwResetBusy] = useState(false);
@@ -363,7 +407,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
 
   async function refresh() {
     try {
-      const [s, r, h] = await Promise.all([
+      const [s, r, h, loc, cov] = await Promise.all([
         authFetch("/api/admin/staff").then((res) =>
           res.ok ? res.json() : Promise.reject(res.statusText),
         ),
@@ -373,12 +417,27 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
         authFetch("/api/houses/with-staff-counts").then((res) =>
           res.ok ? res.json() : { houses: [] },
         ),
+        authFetch("/api/locations").then((res) => (res.ok ? res.json() : [])),
+        authFetch("/api/staff-received-locations").then((res) =>
+          res.ok ? res.json() : [],
+        ),
       ]);
       setStaff(s);
       setCustomRoles(r);
       setHouses(
         (h?.houses ?? []) as HouseOption[],
       );
+      setLocations((Array.isArray(loc) ? loc : []) as LocationOption[]);
+      const covMap: Record<number, number[]> = {};
+      for (const row of (Array.isArray(cov) ? cov : []) as {
+        staffId: number;
+        locationIds: number[];
+      }[]) {
+        covMap[row.staffId] = Array.isArray(row.locationIds)
+          ? row.locationIds
+          : [];
+      }
+      setReceivedByStaff(covMap);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -414,14 +473,17 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
   }, []);
 
   const filtered = useMemo(() => {
+    let rows = staff;
+    if (staffScope === "current") rows = rows.filter((s) => s.active);
+    else if (staffScope === "historical") rows = rows.filter((s) => !s.active);
     const q = filter.trim().toLowerCase();
-    if (!q) return staff;
-    return staff.filter(
+    if (!q) return rows;
+    return rows.filter(
       (s) =>
         s.displayName.toLowerCase().includes(q) ||
         s.email.toLowerCase().includes(q),
     );
-  }, [filter, staff]);
+  }, [filter, staff, staffScope]);
 
   async function patchStaff(
     id: number,
@@ -453,11 +515,60 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
     }
   }
 
+  function setStaffPhoto(id: number, key: string | null) {
+    setStaff((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, photoObjectKey: key } : s)),
+    );
+  }
+
+  // Persist a staff member's receiving-location coverage. The server
+  // replaces the full set, so we send the complete desired array.
+  async function saveReceivedLocations(staffId: number, locationIds: number[]) {
+    setCoverageSaving(true);
+    setError("");
+    try {
+      const res = await authFetch("/api/staff-received-locations", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ staffId, locationIds }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `Save failed (${res.status})`);
+      }
+      const j = (await res.json().catch(() => ({}))) as {
+        locationIds?: number[];
+      };
+      setReceivedByStaff((prev) => ({
+        ...prev,
+        [staffId]: Array.isArray(j.locationIds) ? j.locationIds : locationIds,
+      }));
+      setCoverageTarget(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCoverageSaving(false);
+    }
+  }
+
+  // Destination locations available for receiving assignment — active and
+  // flagged as a destination. Restroom kinds are excluded (round-trip passes
+  // never get a destination check-in).
+  const assignableLocations = useMemo<LocationOption[]>(
+    () =>
+      locations
+        .filter((l) => l.active && l.isDestination && l.kind !== "restroom")
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [locations],
+  );
+
   async function exportCsv() {
     setExporting(true);
     setError("");
     try {
-      const res = await authFetch("/api/admin/staff/export.csv");
+      const res = await authFetch(
+        `/api/admin/staff/export.csv?status=${staffScope}`,
+      );
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || `Export failed (${res.status})`);
@@ -468,7 +579,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `staff-roster-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.download = `staff-roster-${staffScope}-${new Date().toISOString().slice(0, 10)}.csv`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -478,26 +589,6 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
     } finally {
       setExporting(false);
     }
-  }
-
-  function applyPreset(staffId: number, capabilities: BoolKey[]) {
-    const body: Record<string, boolean> = {};
-    for (const cap of PAGES.map((p) => p.key)) {
-      body[cap] = capabilities.includes(cap);
-    }
-    patchStaff(staffId, body);
-  }
-
-  function applyCustomRole(staffId: number, role: CustomRole) {
-    const body: Record<string, boolean> = {};
-    for (const cap of PAGES.map((p) => p.key)) {
-      body[cap] = role.capabilities.includes(cap);
-    }
-    patchStaff(staffId, body);
-  }
-
-  function applyTeacherBaseline(staffId: number) {
-    applyPreset(staffId, TEACHER_BASELINE);
   }
 
   return (
@@ -514,19 +605,20 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
         <div>
           <h2 style={{ margin: 0 }}>Staff &amp; Roles</h2>
           <p style={{ color: "var(--text-subtle)", margin: "4px 0 0" }}>
-            Toggle any cell to grant or revoke that page for that user. Click a
-            role label to apply its preset bundle.
+            Find a person, then click <strong>Edit access</strong> to set their
+            role and which pages they can use — one clean checklist, grouped by
+            area.
           </p>
           <HowToUseHelp title="How to use Staff &amp; Roles">
             <HowToSection title="What this page is">
-              The permissions matrix for every staff member at this
-              school. Rows are people, columns are pages/features,
-              and a green check means that person can access it.
+              The staff directory for this school. Each person has a
+              role and a set of pages they can open. Click{" "}
+              <strong>Edit access</strong> on a row to change them.
             </HowToSection>
-            <HowToSection title="Two ways to grant access">
+            <HowToSection title="How access works">
               <ul style={howtoListStyle}>
-                <li><strong>Cell click</strong> — toggles a single page for one person. Use for one-off exceptions (e.g., "give the librarian access to the display playlist").</li>
-                <li><strong>Role label click</strong> — applies that role's preset bundle (e.g., "Counselor" turns on guidance + safety-plan editor + parent-access).</li>
+                <li><strong>Pick a role</strong> — fills in a starter set of pages for that job (e.g., "School Counselor").</li>
+                <li><strong>Fine-tune pages</strong> — check or uncheck individual pages, grouped into Daily, Manage, and Administration. Use "Select all" to grant a whole group at once.</li>
               </ul>
             </HowToSection>
             <RoleSection for={["admin", "districtAdmin", "superUser"]} title="Adding new staff">
@@ -537,6 +629,19 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
           </HowToUseHelp>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
+          <select
+            value={staffScope}
+            onChange={(e) =>
+              setStaffScope(
+                e.target.value as "current" | "historical" | "all",
+              )
+            }
+            title="Filter by employment status. Historical staff are retired/inactive accounts kept for the student history tied to them."
+          >
+            <option value="current">Current staff</option>
+            <option value="historical">Historical staff</option>
+            <option value="all">All staff</option>
+          </select>
           <input
             type="search"
             placeholder="Search name or email…"
@@ -585,7 +690,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
             borderCollapse: "separate",
             borderSpacing: 0,
             fontSize: 13,
-            minWidth: 1200,
+            minWidth: 980,
           }}
         >
           <thead>
@@ -604,13 +709,13 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
               <th
                 style={{
                   ...stickyTh,
-                  left: 220,
                   zIndex: 4,
-                  minWidth: 360,
+                  minWidth: 260,
                   textAlign: "left",
                 }}
+                title="The person's role and which pages they can use. Click Edit access to change."
               >
-                Role presets
+                Access
               </th>
               <th
                 style={{
@@ -622,6 +727,17 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                 title="Pre-fills the origin room when this user creates a hall pass."
               >
                 Default room
+              </th>
+              <th
+                style={{
+                  ...stickyTh,
+                  zIndex: 4,
+                  minWidth: 200,
+                  textAlign: "left",
+                }}
+                title="Destinations this person 'receives' for one-way hall passes. Students heading to these locations appear under 'Heading to me' in Out Right Now, where staff can check them in. (Their default room is always covered automatically.)"
+              >
+                Receiving locations
               </th>
               <th
                 style={{
@@ -645,28 +761,21 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
               >
                 Department
               </th>
-              {PAGES.map((p) => (
-                <th
-                  key={p.key}
-                  style={{
-                    ...stickyTh,
-                    minWidth: 90,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    color: "var(--text-subtle)",
-                  }}
-                  title={p.group + " · " + p.label}
-                >
-                  <div style={{ writingMode: "vertical-rl", transform: "rotate(180deg)", padding: "8px 4px" }}>
-                    {p.label}
-                  </div>
-                </th>
-              ))}
+              <th
+                style={{
+                  ...stickyTh,
+                  zIndex: 4,
+                  minWidth: 130,
+                  textAlign: "left",
+                }}
+                title="Courtesy title (Mr./Mrs./Ms./…). Shown to students on the hall-pass kiosk as the teacher of record for this person's default room, e.g. 'Mr. Hayes — Room 204'."
+              >
+                Title
+              </th>
             </tr>
           </thead>
           <tbody>
             {filtered.map((s) => {
-              const isSelf = s.id === currentUser.id;
               const isSaving = savingId === s.id;
               return (
                 <tr
@@ -684,9 +793,25 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                       minWidth: 220,
                     }}
                   >
-                    <div style={{ fontWeight: 600 }}>{s.displayName}</div>
-                    <div style={{ fontSize: 11, color: "var(--text-subtle)" }}>
-                      {s.email}
+                    <div
+                      style={{ display: "flex", gap: 8, alignItems: "flex-start" }}
+                    >
+                      <StaffPhotoControl
+                        staffId={s.id}
+                        displayName={s.displayName}
+                        photoObjectKey={
+                          (s.photoObjectKey as string | null | undefined) ?? null
+                        }
+                        onChange={(key) => setStaffPhoto(s.id, key)}
+                      />
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600 }}>{s.displayName}</div>
+                        <div
+                          style={{ fontSize: 11, color: "var(--text-subtle)" }}
+                        >
+                          {s.email}
+                        </div>
+                      </div>
                     </div>
                     {canResetPasswords &&
                       // Self-reset uses the user-pill "Change password" flow
@@ -731,71 +856,13 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                   <td
                     style={{
                       ...stickyTd,
-                      left: 220,
-                      zIndex: 2,
-                      minWidth: 360,
+                      minWidth: 260,
                     }}
                   >
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                      <button
-                        type="button"
-                        className="ghost"
-                        style={pillStyle(false)}
-                        title="Set to teacher baseline"
-                        onClick={() => applyTeacherBaseline(s.id)}
-                      >
-                        Teacher
-                      </button>
-                      {ROLE_PRESETS.map((r) => {
-                        const active = Boolean(s[r.flag]);
-                        const disabled =
-                          (r.flag === "isSuperUser" &&
-                            !currentUser.isSuperUser) ||
-                          (r.flag === "isDistrictAdmin" &&
-                            !currentUser.isSuperUser) ||
-                          (r.flag === "isAdmin" &&
-                            !currentUser.isSuperUser &&
-                            !currentUser.isAdmin) ||
-                          (isSelf &&
-                            (r.flag === "isSuperUser" ||
-                              r.flag === "isDistrictAdmin" ||
-                              r.flag === "isAdmin") &&
-                            active);
-                        return (
-                          <button
-                            key={r.flag}
-                            type="button"
-                            disabled={disabled}
-                            style={pillStyle(active)}
-                            title={
-                              active
-                                ? `Remove role + clear preset capabilities`
-                                : `Apply role + preset capabilities`
-                            }
-                            onClick={() => {
-                              const newVal = !active;
-                              patchStaff(s.id, { [r.flag]: newVal });
-                              if (newVal) {
-                                applyPreset(s.id, r.capabilities);
-                              }
-                            }}
-                          >
-                            {r.label}
-                          </button>
-                        );
-                      })}
-                      {customRoles.map((r) => (
-                        <button
-                          key={r.key}
-                          type="button"
-                          style={pillStyle(false)}
-                          title="Apply custom role preset"
-                          onClick={() => applyCustomRole(s.id, r)}
-                        >
-                          {r.label}
-                        </button>
-                      ))}
-                    </div>
+                    <AccessSummaryCell
+                      staff={s}
+                      onEdit={() => setAccessTarget(s)}
+                    />
                   </td>
                   <td
                     style={{
@@ -812,6 +879,19 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                           defaultRoom: next.trim() === "" ? null : next.trim(),
                         })
                       }
+                    />
+                  </td>
+                  <td
+                    style={{
+                      padding: "4px 6px",
+                      borderBottom: "1px solid #f1f5f9",
+                      minWidth: 200,
+                    }}
+                  >
+                    <ReceivingLocationsCell
+                      assignedIds={receivedByStaff[s.id] ?? []}
+                      locations={assignableLocations}
+                      onEdit={() => setCoverageTarget(s)}
                     />
                   </td>
                   <td
@@ -856,34 +936,42 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                       ))}
                     </select>
                   </td>
-                  {PAGES.map((p) => {
-                    const checked = Boolean(s[p.key]);
-                    return (
-                      <td
-                        key={p.key}
-                        style={{
-                          textAlign: "center",
-                          padding: "4px 6px",
-                          borderBottom: "1px solid #f1f5f9",
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(e) =>
-                            patchStaff(s.id, { [p.key]: e.target.checked })
-                          }
-                        />
-                      </td>
-                    );
-                  })}
+                  <td
+                    style={{
+                      padding: "4px 6px",
+                      borderBottom: "1px solid #f1f5f9",
+                      minWidth: 130,
+                    }}
+                  >
+                    <select
+                      value={(s["title"] as string | null) ?? ""}
+                      disabled={isSaving}
+                      onChange={(e) =>
+                        patchStaff(s.id, {
+                          title: e.target.value === "" ? null : e.target.value,
+                        })
+                      }
+                      style={{ width: "100%" }}
+                    >
+                      <option value="">—</option>
+                      {STAFF_TITLES.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
                 </tr>
               );
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={PAGES.length + 5} style={{ padding: 16 }}>
-                  No staff match.
+                <td colSpan={7} style={{ padding: 16 }}>
+                  {staffScope === "current"
+                    ? "No current staff match."
+                    : staffScope === "historical"
+                      ? "No historical (retired) staff match."
+                      : "No staff match."}
                 </td>
               </tr>
             )}
@@ -1058,6 +1146,553 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
           }}
         />
       )}
+
+      {accessTarget && (
+        <StaffAccessModal
+          staff={accessTarget}
+          customRoles={customRoles}
+          currentUser={currentUser}
+          saving={savingId === accessTarget.id}
+          onClose={() => setAccessTarget(null)}
+          onSave={(b) => {
+            patchStaff(accessTarget.id, b);
+            setAccessTarget(null);
+          }}
+        />
+      )}
+      {coverageTarget && (
+        <ReceivingLocationsModal
+          staff={coverageTarget}
+          locations={assignableLocations}
+          assignedIds={receivedByStaff[coverageTarget.id] ?? []}
+          defaultRoom={
+            (coverageTarget["defaultRoom"] as string | null) ?? null
+          }
+          saving={coverageSaving}
+          onClose={() => setCoverageTarget(null)}
+          onSave={(ids) => saveReceivedLocations(coverageTarget.id, ids)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ReceivingLocationsCell({
+  assignedIds,
+  locations,
+  onEdit,
+}: {
+  assignedIds: number[];
+  locations: LocationOption[];
+  onEdit: () => void;
+}) {
+  const byId = useMemo(() => {
+    const m = new Map<number, LocationOption>();
+    for (const l of locations) m.set(l.id, l);
+    return m;
+  }, [locations]);
+  const names = assignedIds
+    .map((id) => byId.get(id)?.name)
+    .filter((n): n is string => Boolean(n))
+    .sort((a, b) => a.localeCompare(b));
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+        {names.length > 0 ? (
+          names.map((name) => (
+            <span key={name} style={{ ...pillStyle(true), cursor: "default" }}>
+              {name}
+            </span>
+          ))
+        ) : (
+          <span style={{ fontSize: 11, color: "var(--text-subtle)" }}>
+            None assigned
+          </span>
+        )}
+      </div>
+      <div>
+        <button
+          type="button"
+          className="ghost"
+          onClick={onEdit}
+          style={{ fontSize: 12, padding: "2px 10px" }}
+        >
+          Edit locations
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ReceivingLocationsModal({
+  staff,
+  locations,
+  assignedIds,
+  defaultRoom,
+  saving,
+  onClose,
+  onSave,
+}: {
+  staff: StaffRow;
+  locations: LocationOption[];
+  assignedIds: number[];
+  defaultRoom: string | null;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (ids: number[]) => void;
+}) {
+  const [selected, setSelected] = useState<Set<number>>(
+    () => new Set(assignedIds),
+  );
+  const toggle = (id: number) =>
+    setSelected((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  return (
+    <div className="cp-overlay" onClick={onClose}>
+      <div
+        className="cp-card"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Receiving locations for ${staff.displayName}`}
+      >
+        <div className="cp-header">
+          <div className="cp-title">
+            Receiving locations · {staff.displayName}
+          </div>
+          <button
+            type="button"
+            className="cp-close"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div className="tdp-body">
+          <p className="tdp-intro">
+            Pick the destinations this person checks students in for. Students
+            on a one-way pass to these locations show up under{" "}
+            <strong>Heading to me</strong> in Out Right Now.
+            {defaultRoom ? (
+              <>
+                {" "}
+                Their default room (<strong>{defaultRoom}</strong>) is always
+                covered automatically.
+              </>
+            ) : null}{" "}
+            Nothing changes until you click Save.
+          </p>
+          <div className="tdp-scroll">
+            {locations.length === 0 ? (
+              <div style={{ padding: 12, color: "var(--text-subtle)" }}>
+                No destination locations are set up yet. Add them under Manage
+                Locations.
+              </div>
+            ) : (
+              <ul className="cp-list">
+                {locations.map((l) => (
+                  <li key={l.id}>
+                    <label
+                      className="cp-list-item"
+                      style={{ cursor: "pointer" }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected.has(l.id)}
+                        onChange={() => toggle(l.id)}
+                        style={{ marginRight: "0.6rem" }}
+                      />
+                      <span className="cp-list-text">
+                        <strong>{l.name}</strong>
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            fontSize: 11,
+                            color: "var(--text-subtle)",
+                          }}
+                        >
+                          {l.kind}
+                        </span>
+                      </span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+        <div className="tdp-footer">
+          <span className="tdp-count" style={{ marginRight: "auto" }}>
+            {selected.size} location{selected.size === 1 ? "" : "s"} selected
+          </span>
+          <button
+            type="button"
+            className="cp-send"
+            onClick={() => onSave(Array.from(selected))}
+            disabled={saving}
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AccessSummaryCell({
+  staff,
+  onEdit,
+}: {
+  staff: StaffRow;
+  onEdit: () => void;
+}) {
+  const roles = ROLE_PRESETS.filter((r) => Boolean(staff[r.flag])).map(
+    (r) => r.label,
+  );
+  const capCount = PAGES.filter((p) => Boolean(staff[p.key])).length;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+        {roles.length > 0 ? (
+          roles.map((label) => (
+            <span key={label} style={{ ...pillStyle(true), cursor: "default" }}>
+              {label}
+            </span>
+          ))
+        ) : (
+          <span
+            style={{ ...pillStyle(capCount > 0), cursor: "default" }}
+          >
+            {capCount > 0 ? "Teacher" : "No role"}
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 11, color: "var(--text-subtle)" }}>
+        {capCount} of {PAGES.length} pages
+      </div>
+      <div>
+        <button
+          type="button"
+          className="ghost"
+          onClick={onEdit}
+          style={{ fontSize: 12, padding: "2px 10px" }}
+        >
+          Edit access
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const PAGE_GROUPS: { key: string; label: string }[] = [
+  { key: "Daily", label: "Daily tools" },
+  { key: "Manage", label: "Manage & oversight" },
+  { key: "Admin", label: "Administration" },
+];
+
+function StaffAccessModal({
+  staff,
+  customRoles,
+  currentUser,
+  saving,
+  onClose,
+  onSave,
+}: {
+  staff: StaffRow;
+  customRoles: CustomRole[];
+  currentUser: Props["currentUser"];
+  saving: boolean;
+  onClose: () => void;
+  onSave: (body: Record<string, boolean>) => void;
+}) {
+  const isSelf = staff.id === currentUser.id;
+  const canManageSensitiveCaps =
+    Boolean(currentUser.isSuperUser) || Boolean(currentUser.isAdmin);
+
+  const [caps, setCaps] = useState<Set<BoolKey>>(
+    () => new Set(PAGES.filter((p) => Boolean(staff[p.key])).map((p) => p.key)),
+  );
+  const [roleFlags, setRoleFlags] = useState<Record<string, boolean>>(() => {
+    const m: Record<string, boolean> = {};
+    for (const r of ROLE_PRESETS) m[r.flag] = Boolean(staff[r.flag]);
+    return m;
+  });
+
+  function canSetRole(flag: BoolKey): boolean {
+    if (flag === "isSuperUser" || flag === "isDistrictAdmin")
+      return Boolean(currentUser.isSuperUser);
+    if (flag === "isAdmin")
+      return Boolean(currentUser.isSuperUser) || Boolean(currentUser.isAdmin);
+    return true;
+  }
+  function selfLockedHighRole(flag: BoolKey): boolean {
+    return (
+      isSelf &&
+      Boolean(roleFlags[flag]) &&
+      (flag === "isSuperUser" ||
+        flag === "isDistrictAdmin" ||
+        flag === "isAdmin")
+    );
+  }
+  function roleLocked(flag: BoolKey): boolean {
+    return !canSetRole(flag) || selfLockedHighRole(flag);
+  }
+  // The two escalation caps are admin/super-only on the server — sending
+  // them as a non-admin (even unchanged) is rejected outright. The server
+  // also returns 409 if you revoke them on your OWN account, which (because
+  // we batch the save) would sink every other change in the request. Lock
+  // both cases so the modal never builds a body the server rejects.
+  function capLockReason(key: BoolKey): string | undefined {
+    if (key === "capStaffRoles" || key === "capManageRoles") {
+      if (!canManageSensitiveCaps)
+        return "Only an Admin or SuperUser can change this page.";
+      if (isSelf && Boolean(staff[key]))
+        return "You can't remove your own role-management access.";
+    }
+    return undefined;
+  }
+  function capLocked(key: BoolKey): boolean {
+    return capLockReason(key) !== undefined;
+  }
+
+  const toggleCap = (key: BoolKey) => {
+    if (capLocked(key)) return;
+    setCaps((prev) => {
+      const n = new Set(prev);
+      if (n.has(key)) n.delete(key);
+      else n.add(key);
+      return n;
+    });
+  };
+
+  const mergeCaps = (keys: BoolKey[]) =>
+    setCaps((prev) => {
+      const n = new Set(prev);
+      for (const k of keys) if (!capLocked(k)) n.add(k);
+      return n;
+    });
+
+  const toggleRole = (flag: BoolKey, capabilities: BoolKey[]) => {
+    if (roleLocked(flag)) return;
+    const nextOn = !roleFlags[flag];
+    if (nextOn) mergeCaps(capabilities);
+    setRoleFlags((prev) => ({ ...prev, [flag]: nextOn }));
+  };
+
+  const editableGroupKeys = (group: string) =>
+    PAGES.filter((p) => p.group === group && !capLocked(p.key)).map(
+      (p) => p.key,
+    );
+  const groupAllChecked = (group: string) => {
+    const ks = editableGroupKeys(group);
+    return ks.length > 0 && ks.every((k) => caps.has(k));
+  };
+  const setGroup = (group: string, on: boolean) =>
+    setCaps((prev) => {
+      const n = new Set(prev);
+      for (const k of editableGroupKeys(group)) {
+        if (on) n.add(k);
+        else n.delete(k);
+      }
+      return n;
+    });
+
+  function handleSave() {
+    const body: Record<string, boolean> = {};
+    for (const p of PAGES) {
+      if (capLocked(p.key)) continue;
+      body[p.key] = caps.has(p.key);
+    }
+    for (const r of ROLE_PRESETS) {
+      if (canSetRole(r.flag)) body[r.flag] = Boolean(roleFlags[r.flag]);
+    }
+    onSave(body);
+  }
+
+  return (
+    <div className="cp-overlay" onClick={onClose}>
+      <div
+        className="cp-card"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Access for ${staff.displayName}`}
+      >
+        <div className="cp-header">
+          <div className="cp-title">Access · {staff.displayName}</div>
+          <button
+            type="button"
+            className="cp-close"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div className="tdp-body">
+          <p className="tdp-intro">
+            Pick a role to grant a starter set of pages, then check or uncheck
+            individual pages below. Nothing changes until you click Save.
+          </p>
+          <div className="tdp-scroll">
+            <div className="cp-group-label">Roles</div>
+            <ul className="cp-list">
+              {ROLE_PRESETS.map((r) => {
+                const on = Boolean(roleFlags[r.flag]);
+                const locked = roleLocked(r.flag);
+                return (
+                  <li key={r.flag}>
+                    <label
+                      className="cp-list-item"
+                      style={{
+                        cursor: locked ? "not-allowed" : "pointer",
+                        opacity: locked ? 0.5 : 1,
+                      }}
+                      title={
+                        !canSetRole(r.flag)
+                          ? "You don't have permission to change this role."
+                          : selfLockedHighRole(r.flag)
+                            ? "You can't remove your own admin role."
+                            : undefined
+                      }
+                    >
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        disabled={locked}
+                        onChange={() => toggleRole(r.flag, r.capabilities)}
+                        style={{ marginRight: "0.6rem" }}
+                      />
+                      <span className="cp-list-text">
+                        <strong>{r.label}</strong>
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            fontSize: 11,
+                            color: "var(--text-subtle)",
+                          }}
+                        >
+                          {r.capabilities.length} page
+                          {r.capabilities.length === 1 ? "" : "s"}
+                        </span>
+                      </span>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+
+            {customRoles.length > 0 && (
+              <>
+                <div className="cp-group-label">Custom roles</div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 6,
+                    padding: "4px 0 8px",
+                  }}
+                >
+                  {customRoles.map((r) => (
+                    <button
+                      key={r.key}
+                      type="button"
+                      className="ghost"
+                      style={{ fontSize: 12 }}
+                      title="Add this custom role's pages to the selection"
+                      onClick={() => mergeCaps(r.capabilities)}
+                    >
+                      + {r.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {PAGE_GROUPS.map((g) => {
+              const pages = PAGES.filter((p) => p.group === g.key);
+              if (pages.length === 0) return null;
+              return (
+                <div key={g.key}>
+                  <div
+                    className="cp-group-label"
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
+                    <span>{g.label}</span>
+                    <label
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 500,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={groupAllChecked(g.key)}
+                        onChange={(e) => setGroup(g.key, e.target.checked)}
+                      />
+                      Select all
+                    </label>
+                  </div>
+                  <ul className="cp-list">
+                    {pages.map((p) => {
+                      const locked = capLocked(p.key);
+                      return (
+                        <li key={p.key}>
+                          <label
+                            className="cp-list-item"
+                            style={{
+                              cursor: locked ? "not-allowed" : "pointer",
+                              opacity: locked ? 0.5 : 1,
+                            }}
+                            title={capLockReason(p.key)}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={caps.has(p.key)}
+                              disabled={locked}
+                              onChange={() => toggleCap(p.key)}
+                              style={{ marginRight: "0.6rem" }}
+                            />
+                            <span className="cp-list-text">
+                              <strong>{p.label}</strong>
+                            </span>
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="tdp-footer">
+          <span className="tdp-count" style={{ marginRight: "auto" }}>
+            {caps.size} of {PAGES.length} pages selected
+          </span>
+          <button
+            type="button"
+            className="cp-send"
+            onClick={handleSave}
+            disabled={saving}
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1069,6 +1704,14 @@ const stickyTh: React.CSSProperties = {
   borderBottom: "1px solid #cbd5e1",
   padding: "6px 8px",
   zIndex: 3,
+  // `.pulse-table thead th` paints its text with a gradient via
+  // `background-clip: text; color: transparent`. The opaque sticky
+  // background above overrides that gradient, which would clip the
+  // text to a near-white solid and render the headers invisible.
+  // Restore a solid, visible header color and normal background clipping.
+  color: "#4f46e5",
+  WebkitBackgroundClip: "border-box",
+  backgroundClip: "border-box",
 };
 const stickyTd: React.CSSProperties = {
   position: "sticky",
@@ -1459,6 +2102,158 @@ function DefaultRoomCell({
           if (dirty) onSave(draft);
         }}
       />
+    </div>
+  );
+}
+
+// Square teacher avatar + upload/remove controls, shown in the Staff &
+// Roles name cell. The uploaded photo feeds both this avatar and the
+// teacher ID badge PDF. Upload pipeline mirrors the student-photo flow:
+//   1) POST /api/storage/uploads/request-url
+//   2) PUT  uploadURL  (file body)
+//   3) POST /api/staff/:staffId/photo  { objectPath }
+// No photo-consent toggle for staff (admins manage their own roster).
+function StaffPhotoControl({
+  staffId,
+  displayName,
+  photoObjectKey,
+  onChange,
+}: {
+  staffId: number;
+  displayName: string;
+  photoObjectKey: string | null;
+  onChange: (key: string | null) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const parts = displayName.trim().split(/\s+/);
+  const firstName = parts[0] ?? "";
+  const lastName = parts.length > 1 ? parts.slice(1).join(" ") : "";
+
+  async function upload(file: File) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const reqRes = await authFetch("/api/storage/uploads/request-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: file.name || `staff-${staffId}.jpg`,
+          size: file.size,
+          contentType: file.type || "image/jpeg",
+        }),
+      });
+      if (!reqRes.ok) throw new Error("Could not start upload");
+      const { uploadURL, objectPath } = (await reqRes.json()) as {
+        uploadURL: string;
+        objectPath: string;
+      };
+      const putRes = await fetch(uploadURL, {
+        method: "PUT",
+        headers: { "Content-Type": file.type || "image/jpeg" },
+        body: file,
+      });
+      if (!putRes.ok) throw new Error("Upload failed");
+      const saveRes = await authFetch(`/api/staff/${staffId}/photo`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ objectPath }),
+      });
+      if (!saveRes.ok) {
+        const j = (await saveRes.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(j.error ?? "Could not save photo");
+      }
+      const j = (await saveRes.json().catch(() => ({}))) as {
+        photoObjectKey?: string;
+      };
+      onChange(j.photoObjectKey ?? objectPath);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm(`Remove ${displayName}'s photo?`)) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authFetch(`/api/staff/${staffId}/photo`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error ?? "Could not remove photo");
+      }
+      onChange(null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 4,
+      }}
+    >
+      <StudentPhoto
+        firstName={firstName}
+        lastName={lastName}
+        photoObjectKey={photoObjectKey}
+        photoConsent={true}
+        size={44}
+        style={{ borderRadius: 8 }}
+      />
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void upload(f);
+        }}
+      />
+      <div style={{ display: "flex", gap: 4 }}>
+        <button
+          type="button"
+          className="ghost"
+          disabled={busy}
+          onClick={() => inputRef.current?.click()}
+          style={{ fontSize: 10, padding: "1px 5px" }}
+          title="Upload a photo for this teacher's ID badge"
+        >
+          {busy ? "…" : photoObjectKey ? "Replace" : "Photo"}
+        </button>
+        {photoObjectKey && (
+          <button
+            type="button"
+            className="ghost"
+            disabled={busy}
+            onClick={() => void remove()}
+            style={{ fontSize: 10, padding: "1px 5px" }}
+          >
+            Remove
+          </button>
+        )}
+      </div>
+      {err && (
+        <div style={{ fontSize: 10, color: "#b91c1c", maxWidth: 80 }}>
+          {err}
+        </div>
+      )}
     </div>
   );
 }

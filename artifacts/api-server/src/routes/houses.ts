@@ -14,6 +14,7 @@ import {
   studentHouseChangesTable,
   studentHouseSortJobsTable,
   parentStudentsTable,
+  attendanceCheckinsTable,
 } from "@workspace/db";
 import { eq, and, gte, isNull, inArray, sql, desc } from "drizzle-orm";
 import { verifyAuthToken } from "../lib/authToken.js";
@@ -109,7 +110,11 @@ router.get("/houses", async (req, res) => {
           };
         }
 
-        const [allRows, weekRows] = await Promise.all([
+        // On-Time Attendance points live in a SEPARATE ledger
+        // (attendance_checkins) that counts toward house standings but is
+        // never part of the Invisible-Student calc. Sum it alongside the
+        // PBIS entries — both all-time and within the standings window.
+        const [allRows, weekRows, attAll, attWeek] = await Promise.all([
           db
             .select({
               points: sql<number>`COALESCE(SUM(${pbisEntriesTable.points}), 0)::int`,
@@ -138,6 +143,29 @@ router.get("/houses", async (req, res) => {
               ),
             )
             .groupBy(pbisEntriesTable.polarity),
+          db
+            .select({
+              points: sql<number>`COALESCE(SUM(${attendanceCheckinsTable.points}), 0)::int`,
+            })
+            .from(attendanceCheckinsTable)
+            .where(
+              and(
+                eq(attendanceCheckinsTable.schoolId, schoolId),
+                inArray(attendanceCheckinsTable.studentId, studentIds),
+              ),
+            ),
+          db
+            .select({
+              points: sql<number>`COALESCE(SUM(${attendanceCheckinsTable.points}), 0)::int`,
+            })
+            .from(attendanceCheckinsTable)
+            .where(
+              and(
+                eq(attendanceCheckinsTable.schoolId, schoolId),
+                inArray(attendanceCheckinsTable.studentId, studentIds),
+                gte(attendanceCheckinsTable.createdAt, since),
+              ),
+            ),
         ]);
 
         let positiveCount = 0;
@@ -152,6 +180,9 @@ router.get("/houses", async (req, res) => {
             weekPoints -= Math.abs(w.points);
           }
         }
+        const attAllPoints = attAll[0]?.points ?? 0;
+        const attWeekPoints = attWeek[0]?.points ?? 0;
+        weekPoints += attWeekPoints;
 
         return {
           id: h.id,
@@ -161,7 +192,7 @@ router.get("/houses", async (req, res) => {
           iconKey: h.iconKey,
           iconObjectKey: h.iconObjectKey,
           memberCount: memberCountByHouse.get(h.id) ?? studentIds.length,
-          totalPoints: allRows[0]?.points ?? 0,
+          totalPoints: (allRows[0]?.points ?? 0) + attAllPoints,
           weekPoints,
           positiveCount,
           negativeCount,
@@ -680,6 +711,7 @@ router.post("/houses/sort/preview", requireHouseAdmin(), async (req, res) => {
           .select({
             id: studentsTable.id,
             studentId: studentsTable.studentId,
+            localSisId: studentsTable.localSisId,
             firstName: studentsTable.firstName,
             lastName: studentsTable.lastName,
             houseId: studentsTable.houseId,
@@ -1177,6 +1209,7 @@ router.get("/houses/changes", requireHouseAdmin(), async (req, res) => {
           .select({
             id: studentsTable.id,
             studentId: studentsTable.studentId,
+            localSisId: studentsTable.localSisId,
             firstName: studentsTable.firstName,
             lastName: studentsTable.lastName,
           })

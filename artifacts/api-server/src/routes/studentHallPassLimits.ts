@@ -206,6 +206,7 @@ router.get(
         createdByStaffId: studentHallPassLimitsTable.createdByStaffId,
         createdByName: studentHallPassLimitsTable.createdByName,
         createdAt: studentHallPassLimitsTable.createdAt,
+        localSisId: studentsTable.localSisId,
         firstName: studentsTable.firstName,
         lastName: studentsTable.lastName,
       })

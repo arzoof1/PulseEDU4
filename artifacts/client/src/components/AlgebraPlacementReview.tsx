@@ -9,8 +9,27 @@
 // Server contract: see artifacts/api-server/src/routes/algebraPlacement.ts.
 // Multi-tenant via req.schoolId — no cross-school view exists.
 
-import { useCallback, useEffect, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type CSSProperties,
+  type ReactElement,
+} from "react";
 import { authFetch } from "../lib/authToken";
+
+// Column-header cells stay pinned to the top of the (vertically scrollable)
+// table wrapper so the roster's headers (Student, NSO, AR, Placement, …)
+// remain readable while scrolling a long cohort. Each cell carries its own
+// background + z-index so body rows scroll cleanly underneath.
+const thStyle: CSSProperties = {
+  padding: 6,
+  position: "sticky",
+  top: 0,
+  background: "var(--surface-2, #f1f5f9)",
+  textAlign: "left",
+  zIndex: 1,
+};
 
 interface TrajectoryPoint {
   schoolYear: string;
@@ -197,7 +216,21 @@ export default function AlgebraPlacementReview({
   };
 
   return (
-    <div style={{ padding: "1rem 1.25rem" }}>
+    <div
+      style={{
+        padding: "1rem 1.25rem",
+        boxSizing: "border-box",
+        // Fill the visible app-main region (viewport minus the sticky
+        // app-header and app-main's own vertical padding) and lay the page
+        // out as a flex column. This makes the table wrapper below a real,
+        // self-contained scroll container so its sticky <th> headers pin
+        // correctly — the window itself no longer scrolls the page away.
+        height: "calc(100vh - 64px - 3rem)",
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+      }}
+    >
       <div
         style={{
           display: "flex",
@@ -284,39 +317,45 @@ export default function AlgebraPlacementReview({
       )}
 
       {data && data.rows.length > 0 && (
-        <div style={{ overflowX: "auto" }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
           <table
             style={{
               width: "100%",
-              borderCollapse: "collapse",
+              borderCollapse: "separate",
+              borderSpacing: 0,
               fontSize: 13,
+              // The global `table { overflow: hidden }` rule (index.css) makes
+              // the table its OWN sticky scroll-container, so sticky <th> pins
+              // to the table (which scrolls away) instead of the wrapper below.
+              // Override to visible so the headers pin to the scroll wrapper.
+              overflow: "visible",
             }}
           >
             <thead>
               <tr style={{ textAlign: "left", background: "var(--surface-2, #f1f5f9)" }}>
-                <th style={{ padding: 6 }}>SIS ID</th>
-                <th style={{ padding: 6 }}>Student</th>
+                <th style={thStyle}>SIS ID</th>
+                <th style={thStyle}>Student</th>
                 <th
-                  style={{ padding: 6 }}
+                  style={thStyle}
                   title="Each chip is the student's FAST Math PM3 score for that school year. Color = FAST level (L1 red · L2 orange · L3 green · L4 blue · L5 purple)."
                 >
                   PM3 scores (oldest → newest)
                 </th>
                 <th
-                  style={{ padding: 6 }}
+                  style={thStyle}
                   title="Number Sense & Operations — current-year PM3 strand mastery"
                 >
                   NSO
                 </th>
                 <th
-                  style={{ padding: 6 }}
+                  style={thStyle}
                   title="Algebraic Reasoning — current-year PM3 strand mastery (sort key)"
                 >
                   AR ↓
                 </th>
-                <th style={{ padding: 6 }}>Placement</th>
-                <th style={{ padding: 6 }}>Override</th>
-                {data.canSaveOverride && <th style={{ padding: 6 }}></th>}
+                <th style={thStyle}>Placement</th>
+                <th style={thStyle}>Override</th>
+                {data.canSaveOverride && <th style={thStyle}></th>}
               </tr>
             </thead>
             <tbody>

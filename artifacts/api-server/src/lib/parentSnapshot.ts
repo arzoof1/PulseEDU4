@@ -18,6 +18,7 @@ import {
   studentAccommodationsTable,
   schoolAccommodationsTable,
   schoolHeartbeatSettingsTable,
+  schoolSettingsTable,
   parentHeartbeatPrefsTable,
   studentFastScoresTable,
   interventionEntriesTable,
@@ -30,9 +31,21 @@ import {
   bellSchedulePeriodsTable,
   benchmarkReteachLogTable,
   housesTable,
+  attendanceCheckinsTable,
 } from "@workspace/db";
 import { and, eq, desc, isNull, sql, gte, lt } from "drizzle-orm";
-import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./schoolYear.js";
+import {
+  schoolYearLabelFor,
+  DEFAULT_SCHOOL_TZ,
+  getSchoolTimezone,
+} from "./schoolYear.js";
+import { loadRestroomDestinationNames } from "./oneWayPass.js";
+import {
+  loadDefaultPeriodWindows,
+  tardyLostMinutes,
+  hallPassLostMinutes,
+  periodLengthMinutes,
+} from "./lostInstruction.js";
 
 // Returns the YYYY-MM-DD bounds of the current school year. The cutover
 // is Aug 1 — anything before that rolls back to the previous Aug 1 so a
@@ -51,6 +64,7 @@ export interface ParentSnapshot {
   student: {
     id: number;
     studentId: string;
+    localSisId: string | null;
     firstName: string;
     lastName: string;
     grade: number;
@@ -71,6 +85,9 @@ export interface ParentSnapshot {
     iss: boolean;
     mtss: boolean;
     oss: boolean;
+    // Learning at Home — academic work-sample cards. Gated solely by the
+    // per-school admin feature toggle (super && admin), no parent pref.
+    academicEvidence: boolean;
     // Reteach activity rollup. Gated by BOTH the school-wide
     // `showReteach` flag AND per-student
     // `students.reteach_logs_parent_visible`. Teacher notes /
@@ -103,7 +120,24 @@ export interface ParentSnapshot {
       status: string;
       createdAt: string;
       endedAt: string | null;
+      arrivedAt?: string | null;
+      endedBy?: string | null;
+      // True for one-way (non-restroom) passes. Restroom passes are
+      // round-trip; the client must not show them an "in route" state.
+      oneWay: boolean;
     }>;
+  };
+  // School-year-to-date "Lost Instructional Time" summary, surfaced at the
+  // TOP of the parent portal. Three contributors, each with a count and the
+  // minutes of instruction lost, plus a grand total. Pieces whose parent
+  // section is hidden are zeroed (and excluded from `totalMinutes`). See the
+  // computation block for the definitions — note ABSENCES are kiosk-derived
+  // (class periods with no door-kiosk check-in), not official SIS attendance.
+  lostInstruction: {
+    hallPasses: { count: number; minutes: number };
+    tardies: { count: number; minutes: number };
+    absences: { count: number; minutes: number };
+    totalMinutes: number;
   };
   attendance: {
     tardiesThisWeek: number;
@@ -133,6 +167,19 @@ export interface ParentSnapshot {
       longestYtd: number;
       pctYtd: number | null;
       countedPeriods: number;
+    } | null;
+    // Kiosk On-Time Attendance ledger (attendance_checkins), YTD. Distinct
+    // from the tardy-derived `onTimeStreak` above: this counts only the
+    // door-kiosk check-ins logged this school year. `ratePct` is on-time
+    // arrivals (pre-bell) / total check-ins, null when the student has no
+    // check-ins yet. `lotteryWins` counts Tardy-Lottery bonus rows. The
+    // whole block is `null` when the school has zero check-ins logged for
+    // the student so the surface hides cleanly.
+    onTimeArrivals: {
+      checkinCount: number;
+      onTimeCount: number;
+      ratePct: number | null;
+      lotteryWins: number;
     } | null;
     recent: Array<{
       id: number;
@@ -284,7 +331,7 @@ export async function buildParentSnapshot(
 
   // School + parent visibility prefs in parallel; gate() enforces the
   // contract: schoolEnabled AND parentPref !== false.
-  const [settingsRow, prefsRow] = await Promise.all([
+  const [settingsRow, prefsRow, featureRow] = await Promise.all([
     db
       .select()
       .from(schoolHeartbeatSettingsTable)
@@ -299,6 +346,14 @@ export async function buildParentSnapshot(
           eq(parentHeartbeatPrefsTable.studentId, studentId),
         ),
       )
+      .then((rows) => rows[0]),
+    db
+      .select({
+        admin: schoolSettingsTable.featureAcademicEvidence,
+        sup: schoolSettingsTable.superFeatureAcademicEvidence,
+      })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, student.schoolId))
       .then((rows) => rows[0]),
   ]);
   const gate = (
@@ -324,6 +379,9 @@ export async function buildParentSnapshot(
     iss: gate(settingsRow?.showIss, false, prefsRow?.showIss),
     mtss: gate(settingsRow?.showMtss, false, prefsRow?.showMtss),
     oss: gate(settingsRow?.showOss, false, prefsRow?.showOss),
+    // Admin feature toggle only (super && admin); defaults ON when no row.
+    academicEvidence:
+      (featureRow?.admin ?? true) && (featureRow?.sup ?? true),
     // Reteach requires school flag AND parent pref AND per-student
     // opt-in. Per-student flag defaults FALSE so a school flipping
     // showReteach on doesn't accidentally expose students whose
@@ -404,6 +462,13 @@ export async function buildParentSnapshot(
         .orderBy(desc(hallPassesTable.createdAt))
         .limit(50)
     : [];
+  // Restroom passes are round-trip ("I'm back" at origin) and never get a
+  // one-way "in route → checked in" lifecycle, so the parent UI must not
+  // mislabel an active restroom pass as "in route". `oneWay` is the flag.
+  const restroomNames =
+    hpRows.length > 0
+      ? await loadRestroomDestinationNames(student.schoolId)
+      : new Set<string>();
   const hpThisWeekCount = hpRows.filter((r) =>
     isWithinDays(r.createdAt, 7),
   ).length;
@@ -600,6 +665,167 @@ export async function buildParentSnapshot(
       };
     }
   }
+
+  // ----- Kiosk On-Time Attendance ledger (attendance_checkins) -----
+  // YTD door-kiosk check-ins. Separate from `onTimeStreak` (tardy-derived).
+  // Gated on the attendance section flag. `ratePct` = pre-bell arrivals /
+  // total check-ins. The whole block is null when no check-ins exist.
+  let onTimeArrivals: ParentSnapshot["attendance"]["onTimeArrivals"] = null;
+  if (sectionsAvailable.attendance) {
+    const { startIso: caStartIso, endExclusiveIso: caEndIso } =
+      schoolYearBounds();
+    const caRows = await db
+      .select({
+        kind: attendanceCheckinsTable.kind,
+        postBell: attendanceCheckinsTable.postBell,
+      })
+      .from(attendanceCheckinsTable)
+      .where(
+        and(
+          eq(attendanceCheckinsTable.schoolId, student.schoolId),
+          eq(attendanceCheckinsTable.studentId, student.studentId),
+          gte(attendanceCheckinsTable.day, caStartIso),
+          lt(attendanceCheckinsTable.day, caEndIso),
+        ),
+      );
+    if (caRows.length > 0) {
+      const checkins = caRows.filter((r) => r.kind === "checkin");
+      const checkinCount = checkins.length;
+      const onTimeCount = checkins.filter((r) => !r.postBell).length;
+      const lotteryWins = caRows.filter((r) => r.kind === "lottery").length;
+      onTimeArrivals = {
+        checkinCount,
+        onTimeCount,
+        ratePct:
+          checkinCount > 0
+            ? Math.round((onTimeCount / checkinCount) * 100)
+            : null,
+        lotteryWins,
+      };
+    }
+  }
+
+  // ----- Lost Instructional Time (top-of-portal SY-to-date summary) -----
+  // Three contributors, all school-year-to-date, per child. Each piece is
+  // gated on its parent section toggle so a hidden section never leaks a
+  // count/minutes into this summary or its grand total.
+  //  • Hall passes — minutes out of class (return − checkout, capped).
+  //  • Tardies     — lateness minutes (check-in − scheduled period start).
+  //  • Absences    — KIOSK-DERIVED: class periods the student never scanned
+  //    into at a door kiosk. "Expected" periods are the (day, period) slots
+  //    where the attendance module actually ran for the school (some student
+  //    checked in) AND the period is on the default bell schedule; each is
+  //    valued by that period's length. This is an estimate, NOT official SIS
+  //    attendance — it over-counts when kiosks aren't run every period.
+  let hpLostCount = 0;
+  let hpLostMinutes = 0;
+  if (sectionsAvailable.hallPasses) {
+    const syPasses = await db
+      .select({
+        createdAt: hallPassesTable.createdAt,
+        endedAt: hallPassesTable.endedAt,
+      })
+      .from(hallPassesTable)
+      .where(
+        and(
+          eq(hallPassesTable.schoolId, student.schoolId),
+          eq(hallPassesTable.studentId, student.studentId),
+          gte(hallPassesTable.createdAt, syStartIso),
+          lt(hallPassesTable.createdAt, syEndIso),
+        ),
+      );
+    hpLostCount = syPasses.length;
+    for (const p of syPasses) {
+      const m = hallPassLostMinutes(p.createdAt, p.endedAt);
+      if (m != null) hpLostMinutes += m;
+    }
+  }
+
+  let tardiesYtd = 0;
+  let lostInstructionMinutesYtd = 0;
+  let absenceCount = 0;
+  let absenceMinutes = 0;
+  if (sectionsAvailable.attendance) {
+    const windows = await loadDefaultPeriodWindows(student.schoolId);
+
+    // Tardies — count works even with no bell schedule; minutes need it.
+    const syTardyRows = await db
+      .select({
+        createdAt: tardiesTable.createdAt,
+        period: tardiesTable.period,
+      })
+      .from(tardiesTable)
+      .where(
+        and(
+          eq(tardiesTable.schoolId, student.schoolId),
+          eq(tardiesTable.studentId, student.studentId),
+          eq(tardiesTable.entryType, "tardy"),
+          gte(tardiesTable.createdAt, syStartIso),
+          lt(tardiesTable.createdAt, syEndIso),
+        ),
+      );
+    tardiesYtd = syTardyRows.length;
+    if (syTardyRows.length > 0 && windows.size > 0) {
+      const tz = await getSchoolTimezone(student.schoolId);
+      for (const t of syTardyRows) {
+        const lm = tardyLostMinutes(windows, t.period, t.createdAt, tz);
+        if (lm != null) lostInstructionMinutesYtd += lm;
+      }
+    }
+
+    // Absences — only computable once a bell schedule exists (to value the
+    // missed minutes) AND the attendance module has actually run this SY.
+    if (windows.size > 0) {
+      const operatingSlots = await db
+        .selectDistinct({
+          day: attendanceCheckinsTable.day,
+          periodNumber: attendanceCheckinsTable.periodNumber,
+        })
+        .from(attendanceCheckinsTable)
+        .where(
+          and(
+            eq(attendanceCheckinsTable.schoolId, student.schoolId),
+            eq(attendanceCheckinsTable.kind, "checkin"),
+            gte(attendanceCheckinsTable.day, syStartIso),
+            lt(attendanceCheckinsTable.day, syEndIso),
+          ),
+        );
+      if (operatingSlots.length > 0) {
+        const studentSlots = await db
+          .selectDistinct({
+            day: attendanceCheckinsTable.day,
+            periodNumber: attendanceCheckinsTable.periodNumber,
+          })
+          .from(attendanceCheckinsTable)
+          .where(
+            and(
+              eq(attendanceCheckinsTable.schoolId, student.schoolId),
+              eq(attendanceCheckinsTable.studentId, student.studentId),
+              eq(attendanceCheckinsTable.kind, "checkin"),
+              gte(attendanceCheckinsTable.day, syStartIso),
+              lt(attendanceCheckinsTable.day, syEndIso),
+            ),
+          );
+        const present = new Set(
+          studentSlots.map((r) => `${r.day}|${r.periodNumber}`),
+        );
+        for (const slot of operatingSlots) {
+          const w = windows.get(slot.periodNumber);
+          if (!w) continue; // off-schedule / non-instructional period
+          if (present.has(`${slot.day}|${slot.periodNumber}`)) continue;
+          absenceCount += 1;
+          absenceMinutes += periodLengthMinutes(w);
+        }
+      }
+    }
+  }
+
+  const lostInstruction = {
+    hallPasses: { count: hpLostCount, minutes: hpLostMinutes },
+    tardies: { count: tardiesYtd, minutes: lostInstructionMinutesYtd },
+    absences: { count: absenceCount, minutes: absenceMinutes },
+    totalMinutes: hpLostMinutes + lostInstructionMinutesYtd + absenceMinutes,
+  };
 
   // ----- Accommodations -----
   let accommodations: Array<{ id: number; name: string; category: string }> = [];
@@ -886,6 +1112,7 @@ export async function buildParentSnapshot(
       student: {
         id: student.id,
         studentId: student.studentId,
+        localSisId: student.localSisId ?? null,
         firstName: student.firstName,
         lastName: student.lastName,
         grade: student.grade,
@@ -917,13 +1144,18 @@ export async function buildParentSnapshot(
           status: r.status,
           createdAt: r.createdAt,
           endedAt: r.endedAt,
+          arrivedAt: r.arrivedAt,
+          endedBy: r.endedBy,
+          oneWay: !restroomNames.has(r.destination),
         })),
       },
+      lostInstruction,
       attendance: {
         tardiesThisWeek: tardyThisWeek,
         checkInsThisWeek: checkInThisWeek,
         pct: attendancePct,
         onTimeStreak,
+        onTimeArrivals,
         recent: tardyRows.slice(0, 10).map((r) => ({
           id: r.id,
           entryType: r.entryType,

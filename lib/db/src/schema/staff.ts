@@ -43,6 +43,13 @@ export const staffTable = pgTable("staff", {
   authTokenVersion: integer("auth_token_version").notNull().default(0),
   displayName: text("display_name").notNull(),
 
+  // Optional courtesy title / honorific (e.g. "Mr.", "Mrs.", "Ms.", "Dr.",
+  // "Coach"). Set by an admin on Staff & Roles. Surfaced where students see
+  // a teacher of record — currently the hall-pass kiosk destination list,
+  // which reads "Mr. Hayes — Room 204". Nullable; falls back to the plain
+  // name when blank. Stored as short free text (the API caps the length).
+  title: text("title"),
+
   // ---- Role flags (legacy gates + labels/presets) ----
   isSuperUser: boolean("is_super_user").notNull().default(false),
   // District Admin tier: sits between SuperUser (cross-school within
@@ -96,6 +103,16 @@ export const staffTable = pgTable("staff", {
   isSro: boolean("is_sro").notNull().default(false),
   // Guardian / hall monitor / security aide. Same as teacher today.
   isGuardian: boolean("is_guardian").notNull().default(false),
+
+  // Core Team membership — an explicit, admin-assignable flag that makes a
+  // staff member a FULL Core Team member everywhere. ORed into isCoreTeam()
+  // in lib/coreTeam.ts alongside the role-derived members (Admin / Behavior
+  // Specialist / MTSS Coordinator / School Psychologist / District Admin /
+  // SuperUser), so toggling it grants every Core Team power: read/write of
+  // every teacher's Tier 2/3 intervention data, goal editing, completion
+  // reports, the strategy catalog, plus the downstream gates that compose
+  // isCoreTeam() (safety plans, pickup, tours, tickets, etc.).
+  isCoreTeam: boolean("is_core_team").notNull().default(false),
 
   // ---- Per-page capability flags ----
   // Pages everyone uses by default — defaulted true so new staff land with
@@ -171,6 +188,13 @@ export const staffTable = pgTable("staff", {
   // the lead pipeline without granting the rest of the admin surface.
   capTourNotify: boolean("cap_tour_notify").notNull().default(false),
 
+  // Document e-Signing — grants access to the e-Sign manager (upload a
+  // PDF/image, share a signing link, collect the signed copy). Office-side
+  // tool assignable to a registrar or confidential secretary without the
+  // rest of the admin surface. Admins / SuperUser get it implicitly via the
+  // route gate (admin OR this flag). Documents are private to the creator.
+  capManageEsign: boolean("cap_manage_esign").notNull().default(false),
+
   // Comp Time (FLSA compensatory time) per-staff capabilities. Mirrors
   // the AST gate above so the role-management UI can sit them side by
   // side under "Time Tracking."
@@ -207,6 +231,13 @@ export const staffTable = pgTable("staff", {
   // on the kiosk activation card and any future "your house" UX. Nullable
   // so existing staff rows and non-house schools stay valid.
   houseId: integer("house_id"),
+
+  // Optional staff photo for ID badges + staff-facing avatars. Bytes go
+  // through the same school-scoped /api/storage/* pipeline as student
+  // photos (bindObjectToSchool records the resulting object key here).
+  // Nullable — falls back to an initials bubble. Admin-managed (no
+  // per-staff consent toggle; these are professional staff photos).
+  photoObjectKey: text("photo_object_key"),
 
   // Staff Directory phone numbers, surfaced in the Finder ("Where is
   // this teacher right now?") and on student-finder schedule rows.

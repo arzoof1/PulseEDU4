@@ -33,6 +33,7 @@ interface RowEntry {
   id: number;
   createdAt: string;
   studentId: string;
+  localSisId: string | null;
   firstName: string | null;
   lastName: string | null;
   grade: number | null;
@@ -181,7 +182,7 @@ export default function ReteachActivityPage({ onBack }: Props): ReactElement {
     if (!list) return;
     const header = [
       "date",
-      "student_id",
+      "local_sis_id",
       "first_name",
       "last_name",
       "grade",
@@ -199,7 +200,7 @@ export default function ReteachActivityPage({ onBack }: Props): ReactElement {
       lines.push(
         [
           fmtDate(r.createdAt),
-          r.studentId,
+          r.localSisId ?? "",
           r.firstName ?? "",
           r.lastName ?? "",
           r.grade ?? "",

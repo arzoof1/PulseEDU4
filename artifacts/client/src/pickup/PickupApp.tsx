@@ -2,6 +2,12 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { authFetch } from "../lib/authToken";
 import StudentPhoto from "../components/StudentPhoto";
 
+// Safe alphabet for adult letters — no look/sound-alike glyphs (no I, O, etc.)
+// so a code read off a tag and typed at the curb can't be confused. Mirrors
+// SAFE_LETTERS on the server (routes/pickup.ts). A–H covers the soft cap of
+// 8 authorized adults per student.
+const SAFE_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"];
+
 // =============================================================================
 // PickupApp — standalone mini-app for the Parent Pick-Up Module
 //
@@ -258,6 +264,11 @@ function CurbKeypadPage({ me }: { me: Me }) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [overrideText, setOverrideText] = useState("");
   const [queue, setQueue] = useState<QueueEntry[]>([]);
+  // Which authorized kids to send out. Auto-selected (all non-restricted)
+  // when a code resolves; for a single kid this means a one-tap confirm, and
+  // for 2+ the office can untick a sibling who isn't in the car. Restricted
+  // kids start UNticked (greyed) and only an admin override can add them.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
 
   const refreshQueue = useCallback(async () => {
     try {
@@ -320,11 +331,35 @@ function CurbKeypadPage({ me }: { me: Me }) {
     return [hit.primary, ...hit.siblings];
   }, [hit]);
 
-  const hasRestricted = allCandidates.some((c) => c.restricted);
+  // When a code resolves, auto-tick the non-restricted kids. Single kid →
+  // already confirmed; 2+ → office can untick whoever isn't in the car.
+  useEffect(() => {
+    setSelected(
+      new Set(
+        allCandidates.filter((c) => !c.restricted).map((c) => c.authorizationId),
+      ),
+    );
+  }, [allCandidates]);
+
+  const toggleSelected = (authId: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(authId)) next.delete(authId);
+      else next.add(authId);
+      return next;
+    });
+  };
+
+  const selectedCandidates = allCandidates.filter((c) =>
+    selected.has(c.authorizationId),
+  );
+  const multi = allCandidates.length > 1;
+  // Override is only needed when a RESTRICTED kid is actually ticked.
+  const hasRestricted = selectedCandidates.some((c) => c.restricted);
 
   const addToLine = async () => {
-    if (!hit || allCandidates.length === 0) return;
-    const ids = allCandidates.map((c) => c.authorizationId);
+    if (!hit || selectedCandidates.length === 0) return;
+    const ids = selectedCandidates.map((c) => c.authorizationId);
     setBusy(true);
     setErrorMsg(null);
     try {
@@ -379,6 +414,16 @@ function CurbKeypadPage({ me }: { me: Me }) {
               ),
             )}
           </div>
+          {/* Adult letter row. A family reads the FULL code off their tag
+              (e.g. 1001C); the letter picks which authorized adult is at the
+              curb, then the lookup pulls that adult's whole car of kids. */}
+          <div style={letterRow}>
+            {SAFE_LETTERS.map((L) => (
+              <button key={L} onClick={() => tap(L)} style={keyLetter}>
+                {L}
+              </button>
+            ))}
+          </div>
           <button
             onClick={lookup}
             disabled={!pad || busy}
@@ -402,58 +447,104 @@ function CurbKeypadPage({ me }: { me: Me }) {
                 #{hit.authorization.pickupNumber} ·{" "}
                 {hit.authorization.guardianLabel}
               </div>
-              {allCandidates.map((c) => (
+              {multi && (
                 <div
-                  key={c.authorizationId}
                   style={{
-                    ...studentCard,
-                    borderColor: c.restricted ? "#dc2626" : "#e5e7eb",
-                    background: c.restricted ? "#fef2f2" : "#fff",
+                    fontSize: 13,
+                    color: "#6b7280",
+                    margin: "0 0 8px",
                   }}
                 >
-                  {/* Photo verification — the staffer at the curb
-                      visually matches the face on screen to the
-                      student walking out. Sized big (72px) on this
-                      card because it's THE moment-of-truth check;
-                      no other place in the app needs the photo
-                      this prominent. */}
+                  Tap to pick which kids are in the car.
+                </div>
+              )}
+              {allCandidates.map((c) => {
+                const isSel = selected.has(c.authorizationId);
+                return (
                   <div
+                    key={c.authorizationId}
+                    onClick={() => toggleSelected(c.authorizationId)}
                     style={{
-                      display: "flex",
-                      gap: 14,
-                      alignItems: "center",
+                      ...studentCard,
+                      cursor: "pointer",
+                      borderColor: c.restricted
+                        ? "#dc2626"
+                        : isSel
+                          ? "#2563eb"
+                          : "#e5e7eb",
+                      borderWidth: isSel ? 2 : 1,
+                      background: c.restricted
+                        ? "#fef2f2"
+                        : isSel
+                          ? "#eff6ff"
+                          : "#fff",
+                      // Greyed when not selected (e.g. a restricted kid the
+                      // office hasn't overridden, or a sibling not in the car).
+                      opacity: isSel ? 1 : 0.55,
                     }}
                   >
-                    <StudentPhoto
-                      firstName={c.firstName}
-                      lastName={c.lastName}
-                      photoObjectKey={c.photoObjectKey}
-                      photoConsent={c.photoConsent}
-                      size={72}
-                    />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 600 }}>
-                        {c.firstName} {c.lastName}
+                    {/* Photo verification — the staffer at the curb
+                        visually matches the face on screen to the
+                        student walking out. Sized big (72px) on this
+                        card because it's THE moment-of-truth check;
+                        no other place in the app needs the photo
+                        this prominent. */}
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 14,
+                        alignItems: "center",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: 24,
+                          height: 24,
+                          borderRadius: 6,
+                          border: `2px solid ${isSel ? "#2563eb" : "#cbd5e1"}`,
+                          background: isSel ? "#2563eb" : "#fff",
+                          color: "#fff",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: 16,
+                          flexShrink: 0,
+                        }}
+                        aria-hidden
+                      >
+                        {isSel ? "✓" : ""}
                       </div>
-                      <div style={{ color: "#6b7280", fontSize: 13 }}>
-                        Grade {c.grade} · ID {c.localSisId ?? "—"}
-                      </div>
-                      {c.restricted && (
-                        <div
-                          style={{
-                            color: "#dc2626",
-                            marginTop: 6,
-                            fontWeight: 600,
-                          }}
-                        >
-                          RESTRICTED — guardian not authorized for this
-                          student
+                      <StudentPhoto
+                        firstName={c.firstName}
+                        lastName={c.lastName}
+                        photoObjectKey={c.photoObjectKey}
+                        photoConsent={c.photoConsent}
+                        size={72}
+                      />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600 }}>
+                          {c.firstName} {c.lastName}
                         </div>
-                      )}
+                        <div style={{ color: "#6b7280", fontSize: 13 }}>
+                          Grade {c.grade} · ID {c.localSisId ?? "—"}
+                        </div>
+                        {c.restricted && (
+                          <div
+                            style={{
+                              color: "#dc2626",
+                              marginTop: 6,
+                              fontWeight: 600,
+                            }}
+                          >
+                            RESTRICTED — guardian not authorized for this
+                            student
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               {hasRestricted && (
                 <div style={overrideBox}>
                   <div style={{ fontWeight: 600, color: "#7f1d1d" }}>
@@ -476,18 +567,23 @@ function CurbKeypadPage({ me }: { me: Me }) {
                 onClick={addToLine}
                 disabled={
                   busy ||
+                  selectedCandidates.length === 0 ||
                   (hasRestricted && overrideText.trim().length < 5) ||
                   (hasRestricted && !isAdmin(me))
                 }
                 style={{ ...primaryBtn, marginTop: 12 }}
               >
-                {hasRestricted ? "Override + add to line" : "Add to line"}
+                {selectedCandidates.length === 0
+                  ? "Pick at least one student"
+                  : hasRestricted
+                    ? `Override + add ${selectedCandidates.length} to line`
+                    : `Add ${selectedCandidates.length} to line`}
               </button>
             </div>
           ) : (
             <div style={{ color: "#6b7280" }}>
-              Type a pickup number and tap Look up. The car's authorized
-              siblings will be added together.
+              Type a pickup code (number + adult letter) and tap Look up. The
+              car's authorized siblings will be added together.
             </div>
           )}
         </div>
@@ -512,7 +608,14 @@ function CurbKeypadPage({ me }: { me: Me }) {
               </tr>
             </thead>
             <tbody>
-              {queue.map((q) => (
+              {[...queue]
+                .sort(
+                  (a, b) =>
+                    new Date(b.addedAt).getTime() -
+                      new Date(a.addedAt).getTime() ||
+                    b.position - a.position,
+                )
+                .map((q) => (
                 <tr key={q.studentDbId}>
                   <td style={td}>{q.position}</td>
                   <td style={td}>
@@ -1497,6 +1600,20 @@ const keyAlt: React.CSSProperties = {
   fontSize: 16,
   background: "#f9fafb",
 };
+const letterRow: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(8, 1fr)",
+  gap: 6,
+  marginTop: 8,
+};
+const keyLetter: React.CSSProperties = {
+  fontSize: 18,
+  padding: "12px 0",
+  borderRadius: 8,
+  border: "1px solid #d1d5db",
+  background: "#f9fafb",
+  cursor: "pointer",
+};
 const primaryBtn: React.CSSProperties = {
   width: "100%",
   marginTop: 12,
@@ -1667,6 +1784,7 @@ function TeacherQueuePage({ me }: { me: Me }) {
     entry: TeacherQueueEntry;
     expiresAt: number;
   } | null>(null);
+  const [undoing, setUndoing] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [err, setErr] = useState<string | null>(null);
 
@@ -1805,11 +1923,29 @@ function TeacherQueuePage({ me }: { me: Me }) {
   }, [now, undoFor]);
 
   const visibleEntries = useMemo(() => {
-    if (showMineOnly && viewScope === "all_students") {
-      return entries.filter((e) => e.isOnMyRoster);
-    }
-    return entries;
+    const base =
+      showMineOnly && viewScope === "all_students"
+        ? entries.filter((e) => e.isOnMyRoster)
+        : entries;
+    // Newest arrivals first: sort a copy descending by arrival time so the
+    // most-recently-added car sits at the top of the teacher's list.
+    return [...base].sort(
+      (a, b) =>
+        new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime(),
+    );
   }, [entries, showMineOnly, viewScope]);
+
+  // Pull a human-readable message out of an error response. The API
+  // returns `{ error: "..." }`; never show the user the raw JSON blob.
+  const readError = async (r: Response, fallback: string) => {
+    try {
+      const data = await r.clone().json();
+      if (data && typeof data.error === "string") return data.error;
+    } catch {
+      // not JSON — fall through
+    }
+    return fallback;
+  };
 
   const release = async (entry: TeacherQueueEntry) => {
     setErr(null);
@@ -1823,7 +1959,7 @@ function TeacherQueuePage({ me }: { me: Me }) {
       }),
     });
     if (!r.ok) {
-      setErr(await r.text());
+      setErr(await readError(r, "Couldn't release this student. Please try again."));
       return;
     }
     setUndoFor({ entry, expiresAt: Date.now() + 10_000 });
@@ -1831,19 +1967,29 @@ function TeacherQueuePage({ me }: { me: Me }) {
   };
 
   const undo = async () => {
-    if (!undoFor) return;
+    if (!undoFor || undoing) return;
+    setUndoing(true);
     setErr(null);
-    const r = await authFetch("/api/pickup/queue/release-undo", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ studentDbId: undoFor.entry.studentDbId }),
-    });
-    if (!r.ok) {
-      setErr(await r.text());
-      return;
+    try {
+      const r = await authFetch("/api/pickup/queue/release-undo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentDbId: undoFor.entry.studentDbId }),
+      });
+      // The undo is idempotent server-side, so a 2xx (including
+      // "already undone") simply clears the toast. Only a genuine
+      // conflict — the student was already picked up — surfaces a message.
+      if (!r.ok) {
+        setErr(await readError(r, "Couldn't undo the release."));
+        setUndoFor(null);
+        void reload();
+        return;
+      }
+      setUndoFor(null);
+      void reload();
+    } finally {
+      setUndoing(false);
     }
-    setUndoFor(null);
-    void reload();
   };
 
   return (
@@ -1863,7 +2009,7 @@ function TeacherQueuePage({ me }: { me: Me }) {
         </div>
       </div>
       <p style={{ color: "#6b7280", marginTop: 0, fontSize: 13 }}>
-        Newest arrivals at the bottom. A blue left border means the student
+        Newest arrivals at the top. A blue left border means the student
         is on your class roster. Press Release when the student walks out;
         you have 10 seconds to undo.
       </p>
@@ -2113,6 +2259,7 @@ function TeacherQueuePage({ me }: { me: Me }) {
           <button
             type="button"
             onClick={() => void undo()}
+            disabled={undoing}
             style={{
               padding: "4px 12px",
               borderRadius: 999,
@@ -2120,10 +2267,11 @@ function TeacherQueuePage({ me }: { me: Me }) {
               background: "#f59e0b",
               color: "#111827",
               fontWeight: 700,
-              cursor: "pointer",
+              cursor: undoing ? "default" : "pointer",
+              opacity: undoing ? 0.6 : 1,
             }}
           >
-            Undo
+            {undoing ? "Undoing…" : "Undo"}
           </button>
         </div>
       )}

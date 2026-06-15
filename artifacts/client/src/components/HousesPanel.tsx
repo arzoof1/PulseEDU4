@@ -37,6 +37,7 @@ type PreviewResp = {
   students?: Array<{
     id: number;
     studentId: string;
+    localSisId?: string | null;
     firstName: string;
     lastName: string;
   }>;
@@ -108,6 +109,7 @@ type ChangesResp = {
   students: Array<{
     id: number;
     studentId: string;
+    localSisId?: string | null;
     firstName: string;
     lastName: string;
   }>;
@@ -950,7 +952,7 @@ function SortTab({
                           >
                             <td style={{ padding: "4px 8px" }}>
                               {stu
-                                ? `${stu.lastName}, ${stu.firstName} (${stu.studentId})`
+                                ? `${stu.lastName}, ${stu.firstName} (${stu.localSisId ?? "—"})`
                                 : `#${m.studentDbId}`}
                             </td>
                             <td
@@ -1049,7 +1051,12 @@ function AuditTab(): React.ReactElement {
         staff: new Map<number, string>(),
         student: new Map<
           number,
-          { studentId: string; firstName: string; lastName: string }
+          {
+            studentId: string;
+            localSisId?: string | null;
+            firstName: string;
+            lastName: string;
+          }
         >(),
       };
     }
@@ -1061,6 +1068,7 @@ function AuditTab(): React.ReactElement {
           s.id,
           {
             studentId: s.studentId,
+            localSisId: s.localSisId ?? null,
             firstName: s.firstName,
             lastName: s.lastName,
           },
@@ -1222,7 +1230,7 @@ function AuditTab(): React.ReactElement {
                   </td>
                   <td style={{ padding: "6px 8px" }}>
                     {stu
-                      ? `${stu.firstName} ${stu.lastName} (${stu.studentId})`
+                      ? `${stu.firstName} ${stu.lastName} (${stu.localSisId ?? "—"})`
                       : `#${r.studentDbId}`}
                   </td>
                   <td style={{ padding: "6px 8px" }}>
