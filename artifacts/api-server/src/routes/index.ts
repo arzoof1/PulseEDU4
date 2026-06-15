@@ -107,6 +107,7 @@ import parentTicketsRouter from "./parentTickets";
 import schoolGradeRouter from "./schoolGrade";
 import parentMessagesRouter from "./parentMessages";
 import pulseDnaRouter from "./pulseDna";
+import standardsBookRouter from "./standardsBook";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -286,5 +287,6 @@ router.use(ticketingRouter);
 router.use(schoolGradeRouter);
 router.use(parentMessagesRouter);
 router.use(pulseDnaRouter);
+router.use(standardsBookRouter);
 
 export default router;
