@@ -4,10 +4,11 @@
 // tenant (published state reference data), so the dataset is committed and
 // served once for all schools.
 //
-// Today only ELA is loaded (parsed from the FLDOE ELA standards PDF). Math
-// uses the same pipeline and will be added as another committed dataset.
+// ELA and Math are both loaded (parsed from the FLDOE standards PDFs) using the
+// same pipeline; each subject is a committed dataset served once for all schools.
 import { Router, type IRouter } from "express";
 import elaStandardsBook from "../data/elaStandardsBook.json" with { type: "json" };
+import mathStandardsBook from "../data/mathStandardsBook.json" with { type: "json" };
 
 const router: IRouter = Router();
 
@@ -28,6 +29,7 @@ type StandardsBook = {
 
 const BOOKS: Record<string, StandardsBook> = {
   ela: elaStandardsBook as StandardsBook,
+  math: mathStandardsBook as StandardsBook,
 };
 
 // GET /api/standards-book?subject=ela — full book payload (pages + benchmark

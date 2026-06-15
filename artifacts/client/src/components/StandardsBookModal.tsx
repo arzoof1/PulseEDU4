@@ -13,10 +13,16 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactElement,
 } from "react";
+import * as pdfjsLib from "pdfjs-dist";
+import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import mathPdfUrl from "../assets/standards/mathbeststandards.pdf?url";
 import { authFetch } from "../lib/authToken";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 interface BenchmarkEntry {
   code: string;
@@ -40,37 +46,97 @@ interface StandardsBook {
   benchmarks: BenchmarkEntry[];
 }
 
+type Subject = "ela" | "math";
+
 interface Props {
   open: boolean;
   onClose: () => void;
+  subject?: Subject;
 }
 
-const STRAND_LABELS: Record<string, string> = {
-  F: "Foundational Skills",
-  R: "Reading",
-  C: "Communication",
-  V: "Vocabulary",
+const STRAND_LABELS: Record<Subject, Record<string, string>> = {
+  ela: {
+    F: "Foundational Skills",
+    R: "Reading",
+    C: "Communication",
+    V: "Vocabulary",
+  },
+  math: {
+    NSO: "Number Sense & Operations",
+    FR: "Fractions",
+    AR: "Algebraic Reasoning",
+    M: "Measurement",
+    GR: "Geometric Reasoning",
+    DP: "Data Analysis & Probability",
+    F: "Functions",
+    C: "Calculus",
+    T: "Trigonometry",
+    LT: "Logic & Discrete Theory",
+    FL: "Financial Literacy",
+    MTR: "Mathematical Thinking & Reasoning",
+  },
+};
+
+const SUBJECT_META: Record<Subject, { heading: string; sub: string }> = {
+  ela: {
+    heading: "ELA B.E.S.T. Standards",
+    sub: "Florida ELA standards reference",
+  },
+  math: {
+    heading: "Math B.E.S.T. Standards",
+    sub: "Florida math standards reference",
+  },
+};
+
+// The original-page (PDF) image is only offered where equations matter (math).
+const SUBJECT_PDF_URL: Partial<Record<Subject, string>> = {
+  math: mathPdfUrl,
 };
 
 function gradeRank(g: string): number {
   const s = g.toUpperCase();
   if (s === "K") return -1;
+  if (s === "K12") return 1000;
+  if (s === "912") return 1001;
   const n = Number(s);
-  return Number.isFinite(n) ? n : 1000 + (Number(s.replace(/\D/g, "")) || 0);
+  return Number.isFinite(n) ? n : 2000 + (Number(s.replace(/\D/g, "")) || 0);
 }
 
 function gradeLabel(g: string): string {
   const s = g.toUpperCase();
   if (s === "K") return "K";
+  if (s === "K12") return "K–12";
+  if (s === "912") return "Grades 9–12";
   if (/^\d+$/.test(s)) return `Grade ${s}`;
   return `Grades ${s}`;
 }
 
-// Module-level cache so reopening the modal doesn't refetch the 1.2MB body.
-let bookCache: StandardsBook | null = null;
+// Module-level caches (per subject) so reopening the modal doesn't refetch the
+// large book body or re-parse the PDF.
+const bookCache: Partial<Record<Subject, StandardsBook>> = {};
+const pdfDocCache: Partial<Record<Subject, Promise<pdfjsLib.PDFDocumentProxy>>> =
+  {};
 
-export default function StandardsBookModal({ open, onClose }: Props) {
-  const [book, setBook] = useState<StandardsBook | null>(bookCache);
+function getPdfDoc(subject: Subject, url: string) {
+  let doc = pdfDocCache[subject];
+  if (!doc) {
+    doc = pdfjsLib.getDocument({ url }).promise;
+    pdfDocCache[subject] = doc;
+  }
+  return doc;
+}
+
+export default function StandardsBookModal({
+  open,
+  onClose,
+  subject = "ela",
+}: Props) {
+  const strandLabels = STRAND_LABELS[subject];
+  const meta = SUBJECT_META[subject];
+  const pdfUrl = SUBJECT_PDF_URL[subject];
+  const [book, setBook] = useState<StandardsBook | null>(
+    bookCache[subject] ?? null,
+  );
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -82,30 +148,92 @@ export default function StandardsBookModal({ open, onClose }: Props) {
   const [openPage, setOpenPage] = useState<number | null>(null);
   // Term to highlight in the reader pane (a code or the search query).
   const [highlight, setHighlight] = useState<string>("");
+  // Hybrid view: show the exact original PDF page image (math equations) vs text.
+  const [showOriginal, setShowOriginal] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [pdfRendering, setPdfRendering] = useState(false);
+  const [pdfErr, setPdfErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    if (bookCache) {
-      setBook(bookCache);
+    const cached = bookCache[subject];
+    if (cached) {
+      setBook(cached);
       return;
     }
     setLoading(true);
     setErr(null);
     try {
-      const res = await authFetch("/api/standards-book?subject=ela");
+      const res = await authFetch(
+        `/api/standards-book?subject=${encodeURIComponent(subject)}`,
+      );
       if (!res.ok) throw new Error(`Failed to load (${res.status})`);
       const json = (await res.json()) as StandardsBook;
-      bookCache = json;
+      bookCache[subject] = json;
       setBook(json);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Failed to load");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [subject]);
 
   useEffect(() => {
     if (open) void load();
   }, [open, load]);
+
+  // Keep the in-state book in sync if the subject changes while mounted.
+  useEffect(() => {
+    setBook(bookCache[subject] ?? null);
+  }, [subject]);
+
+  // Render the original PDF page to a canvas when the reader switches to the
+  // "original page" view. Errors are surfaced (never swallowed) per the e-sign
+  // pdfjs precedent; the render is started only after the canvas has mounted.
+  useEffect(() => {
+    if (!showOriginal || openPage == null || !pdfUrl) return;
+    let cancelled = false;
+    let task: ReturnType<pdfjsLib.PDFPageProxy["render"]> | null = null;
+    (async () => {
+      setPdfErr(null);
+      setPdfRendering(true);
+      try {
+        const doc = await getPdfDoc(subject, pdfUrl);
+        if (cancelled) return;
+        const page = await doc.getPage(openPage);
+        if (cancelled) return;
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const containerWidth = canvas.parentElement?.clientWidth ?? 800;
+        const base = page.getViewport({ scale: 1 });
+        const scale = Math.min(2, Math.max(0.6, containerWidth / base.width));
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const viewport = page.getViewport({ scale });
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        canvas.width = Math.floor(viewport.width * dpr);
+        canvas.height = Math.floor(viewport.height * dpr);
+        canvas.style.width = `${Math.floor(viewport.width)}px`;
+        canvas.style.height = `${Math.floor(viewport.height)}px`;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        task = page.render({ canvasContext: ctx, viewport });
+        await task.promise;
+      } catch (e) {
+        if (!cancelled && (e as { name?: string })?.name !== "RenderingCancelledException") {
+          setPdfErr(e instanceof Error ? e.message : "Could not render page");
+        }
+      } finally {
+        if (!cancelled) setPdfRendering(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      try {
+        task?.cancel();
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [showOriginal, openPage, pdfUrl, subject]);
 
   // Close on Escape.
   useEffect(() => {
@@ -183,6 +311,8 @@ export default function StandardsBookModal({ open, onClose }: Props) {
   const openReader = (page: number | null, term: string) => {
     if (page == null) return;
     setHighlight(term);
+    setShowOriginal(false);
+    setPdfErr(null);
     setOpenPage(page);
   };
 
@@ -226,13 +356,9 @@ export default function StandardsBookModal({ open, onClose }: Props) {
           }}
         >
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>
-              ELA B.E.S.T. Standards
-            </div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>{meta.heading}</div>
             <div style={{ fontSize: 11, opacity: 0.8 }}>
-              {book
-                ? `${book.title} · ${book.pageCount} pages`
-                : "Florida ELA standards reference"}
+              {book ? `${book.title} · ${book.pageCount} pages` : meta.sub}
             </div>
           </div>
           <button
@@ -292,7 +418,10 @@ export default function StandardsBookModal({ open, onClose }: Props) {
               placeholder={
                 mode === "browse"
                   ? "Filter by code or keyword…"
-                  : "Search all 220 pages…"
+                  : `Search all ${book?.pageCount ?? ""} pages…`.replace(
+                      "  ",
+                      " ",
+                    )
               }
               style={{
                 flex: 1,
@@ -325,7 +454,7 @@ export default function StandardsBookModal({ open, onClose }: Props) {
                   <option value="">All strands</option>
                   {strands.map((s) => (
                     <option key={s} value={s}>
-                      {STRAND_LABELS[s] ?? s}
+                      {strandLabels[s] ?? s}
                     </option>
                   ))}
                 </select>
@@ -351,35 +480,93 @@ export default function StandardsBookModal({ open, onClose }: Props) {
           {/* Reader pane */}
           {!loading && !err && openPage != null && (
             <div>
-              <button
-                onClick={() => setOpenPage(null)}
+              <div
                 style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
                   marginBottom: 12,
-                  padding: "4px 10px",
-                  fontSize: 12,
-                  border: "1px solid #cbd5e1",
-                  borderRadius: 6,
-                  background: "white",
-                  cursor: "pointer",
+                  flexWrap: "wrap",
                 }}
               >
-                ← Back to {mode === "browse" ? "standards" : "results"}
-              </button>
+                <button
+                  onClick={() => setOpenPage(null)}
+                  style={{
+                    padding: "4px 10px",
+                    fontSize: 12,
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 6,
+                    background: "white",
+                    cursor: "pointer",
+                  }}
+                >
+                  ← Back to {mode === "browse" ? "standards" : "results"}
+                </button>
+                {pdfUrl && (
+                  <button
+                    onClick={() => setShowOriginal((v) => !v)}
+                    title="Math equations and notation render exactly as printed"
+                    style={{
+                      padding: "4px 10px",
+                      fontSize: 12,
+                      border: "1px solid #1e3a8a",
+                      borderRadius: 6,
+                      background: showOriginal ? "#1e3a8a" : "white",
+                      color: showOriginal ? "white" : "#1e3a8a",
+                      cursor: "pointer",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {showOriginal ? "View as text" : "View original page"}
+                  </button>
+                )}
+              </div>
               <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
                 Page {openPage} of {book?.pageCount}
               </div>
-              <div
-                style={{
-                  whiteSpace: "pre-wrap",
-                  fontSize: 13.5,
-                  lineHeight: 1.55,
-                  color: "#1f2937",
-                  fontFamily:
-                    "ui-serif, Georgia, Cambria, 'Times New Roman', serif",
-                }}
-              >
-                <Highlighted text={pageText} term={highlight} />
-              </div>
+              {showOriginal && pdfUrl ? (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                  }}
+                >
+                  {pdfRendering && (
+                    <div style={{ color: "#6b7280", fontSize: 13, marginBottom: 8 }}>
+                      Rendering page…
+                    </div>
+                  )}
+                  {pdfErr && (
+                    <div style={{ color: "#b91c1c", fontSize: 13, marginBottom: 8 }}>
+                      Could not render the original page ({pdfErr}). Use “View as
+                      text” instead.
+                    </div>
+                  )}
+                  <canvas
+                    ref={canvasRef}
+                    style={{
+                      maxWidth: "100%",
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 6,
+                      boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
+                    }}
+                  />
+                </div>
+              ) : (
+                <div
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    fontSize: 13.5,
+                    lineHeight: 1.55,
+                    color: "#1f2937",
+                    fontFamily:
+                      "ui-serif, Georgia, Cambria, 'Times New Roman', serif",
+                  }}
+                >
+                  <Highlighted text={pageText} term={highlight} />
+                </div>
+              )}
             </div>
           )}
 
@@ -416,7 +603,7 @@ export default function StandardsBookModal({ open, onClose }: Props) {
                     </span>
                     {b.strand && (
                       <span style={{ fontSize: 10, color: "#475569", background: "#f1f5f9", borderRadius: 4, padding: "1px 6px" }}>
-                        {STRAND_LABELS[b.strand.toUpperCase()] ?? b.strand}
+                        {strandLabels[b.strand.toUpperCase()] ?? b.strand}
                       </span>
                     )}
                   </div>

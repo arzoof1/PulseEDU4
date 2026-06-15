@@ -441,7 +441,7 @@ export default function TeacherInstructionLogTab({
         <button onClick={downloadCsv} style={{ padding: "4px 10px" }}>
           Export CSV
         </button>
-        {subject === "ela" && (
+        {(subject === "ela" || subject === "math") && (
           <button
             onClick={() => setStandardsBookOpen(true)}
             style={{
@@ -454,7 +454,7 @@ export default function TeacherInstructionLogTab({
               fontWeight: 600,
             }}
           >
-            ELA BEST Standards
+            {subject === "math" ? "FAST BIG M GUIDE" : "ELA BEST Standards"}
           </button>
         )}
         {loading && <span style={{ fontSize: 12, color: "#6b7280" }}>Loading…</span>}
@@ -463,6 +463,7 @@ export default function TeacherInstructionLogTab({
       <StandardsBookModal
         open={standardsBookOpen}
         onClose={() => setStandardsBookOpen(false)}
+        subject={subject === "math" ? "math" : "ela"}
       />
 
       {/* Add form — owner only */}
