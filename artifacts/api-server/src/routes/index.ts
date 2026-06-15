@@ -110,6 +110,7 @@ import pulseDnaRouter from "./pulseDna";
 import standardsBookRouter from "./standardsBook";
 import pulseBrainLabRouter from "./pulseBrainLab";
 import pulseBrainLabDeliveryRouter from "./pulseBrainLabDelivery";
+import pulseBrainLabParentRouter from "./pulseBrainLabParent";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -292,5 +293,6 @@ router.use(pulseDnaRouter);
 router.use(standardsBookRouter);
 router.use(pulseBrainLabRouter);
 router.use(pulseBrainLabDeliveryRouter);
+router.use(pulseBrainLabParentRouter);
 
 export default router;

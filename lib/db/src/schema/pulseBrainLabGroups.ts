@@ -239,5 +239,59 @@ export type PulseBrainLabWorksheetTokenRow =
   typeof pulseBrainLabWorksheetTokensTable.$inferSelect;
 export type PulseBrainLabWorkSampleRow =
   typeof pulseBrainLabWorkSamplesTable.$inferSelect;
+// Parent-submitted "Home Follow-Up" — a TRANSCRIPT of the parent recalling the
+// lesson with their child (voice-to-text or typed). Strictly the family's own
+// words; never staff-authored. One row per (student, lesson, prompt) so the
+// parent can edit a single prompt's answer (upsert on that triple). studentId
+// here is the canonical students.student_id (FLEID text FK) — NEVER rendered;
+// surfaces JOIN to local_sis_id. createdByParentId attributes it to the parent
+// portal account that submitted it. language is the language the prompt was
+// shown in ('en' | 'es').
+export const pulseBrainLabHomeResponsesTable = pgTable(
+  "pulse_brain_lab_home_responses",
+  {
+    id: serial("id").primaryKey(),
+    schoolId: integer("school_id").notNull(),
+    studentId: text("student_id").notNull(),
+    lessonKey: text("lesson_key").notNull(),
+    // Optional anchor to the specific delivered session this reinforces.
+    sessionId: integer("session_id"),
+    // Which askYourChild prompt this answers (0-based index into the lesson's
+    // parentReinforcement.askYourChild array, which has no stable IDs).
+    promptIndex: integer("prompt_index").notNull(),
+    transcript: text("transcript").notNull(),
+    language: text("language").notNull().default("en"),
+    createdByParentId: integer("created_by_parent_id"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    studentIdx: index("pulse_brain_lab_home_responses_student_idx").on(
+      t.schoolId,
+      t.studentId,
+    ),
+    lessonIdx: index("pulse_brain_lab_home_responses_lesson_idx").on(
+      t.schoolId,
+      t.studentId,
+      t.lessonKey,
+    ),
+    // school_id leads the unique key because student_id (FLEID) is NOT
+    // globally unique — two schools could otherwise collide on the same
+    // (student_id, lesson_key, prompt_index) and overwrite each other.
+    promptUnique: uniqueIndex("pulse_brain_lab_home_responses_prompt_unique").on(
+      t.schoolId,
+      t.studentId,
+      t.lessonKey,
+      t.promptIndex,
+    ),
+  }),
+);
+
 export type PulseBrainLabUnmatchedScanRow =
   typeof pulseBrainLabUnmatchedScansTable.$inferSelect;
+export type PulseBrainLabHomeResponseRow =
+  typeof pulseBrainLabHomeResponsesTable.$inferSelect;

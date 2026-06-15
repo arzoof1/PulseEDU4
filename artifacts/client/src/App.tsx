@@ -102,6 +102,7 @@ import PbisPointsHub, {
   SchoolWidePbisAdminView,
   SchoolStoreView,
 } from "./components/PbisPointsHub";
+import PulseBrainLabHub from "./components/pulseBrainLab/PulseBrainLabHub";
 import TenancyPanel from "./components/TenancyPanel";
 import LogoGeneratorPage from "./components/LogoGeneratorPage";
 import SchoolPlansAdminPage from "./components/SchoolPlansAdminPage";
@@ -4933,6 +4934,7 @@ function App() {
     | "issDashboard"
     | "behaviorReview"
     | "behaviorSpecialist"
+    | "pulseBrainLab"
     | "hallPassMgmt"
     | "mtssCoordinator"
     | "mtssTemplates"
@@ -9309,6 +9311,9 @@ function App() {
   const behaviorSpecNavSections: NavSection[] = [
     { key: "behaviorSpecialist", label: "Behavior Specialist", icon: IconClipboard },
   ];
+  const pulseBrainLabNavSections: NavSection[] = [
+    { key: "pulseBrainLab", label: "PulseBrainLab", icon: IconClipboard },
+  ];
   const mtssCoordNavSections: NavSection[] = [
     { key: "mtssCoordinator", label: "MTSS Coordinator", icon: IconClipboard },
   ];
@@ -10626,6 +10631,8 @@ function App() {
                     out of Behavior Support to avoid duplication. */}
                 {isBehaviorSpec &&
                   behaviorSpecNavSections.map(renderNavItem)}
+                {isBehaviorSpec &&
+                  pulseBrainLabNavSections.map(renderNavItem)}
                 {(isAdmin ||
                   Boolean(authUser?.isSuperUser) ||
                   Boolean(authUser?.isDistrictAdmin) ||
@@ -16291,6 +16298,7 @@ function App() {
       </>)}
 
       {activeSection === "pbis" && <PbisPointsHub />}
+      {activeSection === "pulseBrainLab" && isBehaviorSpec && <PulseBrainLabHub />}
 
       {activeSection === "houseRankings" && (
         // House Rankings is part of the PBIS surface and its nav entry is

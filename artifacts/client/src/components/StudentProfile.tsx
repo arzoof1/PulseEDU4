@@ -20,6 +20,7 @@ import {
 } from "recharts";
 import { authFetch } from "../lib/authToken";
 import ChangeHouseModal from "./ChangeHouseModal";
+import StudentHomeCards from "./pulseBrainLab/StudentHomeCards";
 
 type WindowKey = "3" | "7" | "15" | "30" | "custom";
 
@@ -2857,6 +2858,7 @@ export default function StudentProfile({
             {isAdmin && (
               <ReteachParentVisibilityToggle studentId={studentId} />
             )}
+            {canChangeHouse && <StudentHomeCards studentId={studentId} />}
             {canEditSafetyPlan && (
               <div style={{ marginTop: "0.6rem" }}>
                 <RetentionManager

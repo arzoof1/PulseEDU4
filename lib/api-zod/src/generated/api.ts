@@ -484,3 +484,112 @@ export const ListPulseBrainLabWorkSamplesResponse = zod.array(
 export const DeletePulseBrainLabWorkSampleParams = zod.object({
   sampleId: zod.coerce.number(),
 });
+
+/**
+ * @summary Toggle whether a filed work sample is visible to the family
+ */
+export const SetPulseBrainLabWorkSampleShareParams = zod.object({
+  sampleId: zod.coerce.number(),
+});
+
+export const SetPulseBrainLabWorkSampleShareBody = zod.object({
+  shared: zod.boolean(),
+});
+
+export const SetPulseBrainLabWorkSampleShareResponse = zod
+  .object({
+    id: zod.number(),
+    sessionId: zod.number(),
+    studentId: zod.string(),
+    localSisId: zod.string().nullable(),
+    firstName: zod.string().nullish(),
+    lastName: zod.string().nullish(),
+    objectKey: zod.string(),
+    pageIndex: zod.number().nullish(),
+    source: zod.string(),
+    shared: zod.boolean(),
+    createdAt: zod.string(),
+  })
+  .describe(
+    "A captured student work sample (the completed worksheet photo\/scan) filed to one (session, student). Staff-only until shared.\n",
+  );
+
+/**
+ * @summary The "Reinforce at Home" cards for one student — shared work samples grouped by lesson, each with the bilingual parent recall card and home follow-up transcripts. Staff view (any signed-in staff at the active school).
+
+ */
+export const ListPulseBrainLabHomeCardsParams = zod.object({
+  studentId: zod.coerce.string(),
+});
+
+export const ListPulseBrainLabHomeCardsResponseItem = zod
+  .object({
+    lessonKey: zod.string(),
+    lessonTitle: zod.string(),
+    skillArea: zod.string(),
+    brainIdea: zod.enum(["Spotlight", "Velcro", "Echo", "Rewire"]),
+    sessionId: zod.number().nullable(),
+    sessionDate: zod.string().nullable(),
+    parentReinforcement: zod.object({
+      summary: zod.object({
+        en: zod.string(),
+        es: zod.string(),
+      }),
+      brainIdea: zod.enum(["Spotlight", "Velcro", "Echo", "Rewire"]),
+      askYourChild: zod.array(
+        zod.object({
+          en: zod.string(),
+          es: zod.string(),
+        }),
+      ),
+      whyThisWorks: zod.object({
+        en: zod.string(),
+        es: zod.string(),
+      }),
+      tryTogether: zod.object({
+        en: zod.string(),
+        es: zod.string(),
+      }),
+    }),
+    workSamples: zod.array(
+      zod
+        .object({
+          id: zod.number(),
+          sessionId: zod.number(),
+          studentId: zod.string(),
+          localSisId: zod.string().nullable(),
+          firstName: zod.string().nullish(),
+          lastName: zod.string().nullish(),
+          objectKey: zod.string(),
+          pageIndex: zod.number().nullish(),
+          source: zod.string(),
+          shared: zod.boolean(),
+          createdAt: zod.string(),
+        })
+        .describe(
+          "A captured student work sample (the completed worksheet photo\/scan) filed to one (session, student). Staff-only until shared.\n",
+        ),
+    ),
+    homeResponses: zod.array(
+      zod
+        .object({
+          id: zod.number(),
+          lessonKey: zod.string(),
+          sessionId: zod.number().nullish(),
+          promptIndex: zod.number(),
+          transcript: zod.string(),
+          language: zod.enum(["en", "es"]),
+          createdAt: zod.string(),
+          updatedAt: zod.string(),
+        })
+        .describe(
+          'A parent-submitted \"Home Follow-Up\" transcript answering one askYourChild prompt. The family\'s own words (voice-to-text or typed); never staff text.\n',
+        ),
+    ),
+  })
+  .describe(
+    'One lesson\'s \"Reinforce at Home\" card for a student: the shared work sample(s), the bilingual parent recall content, and any home follow-up transcripts. Strictly learning \/ brain-science framing — never \"SEL\".\n',
+  );
+export const ListPulseBrainLabHomeCardsResponse = zod.array(
+  ListPulseBrainLabHomeCardsResponseItem,
+);

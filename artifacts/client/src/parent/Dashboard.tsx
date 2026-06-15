@@ -37,6 +37,7 @@ import { Ticket } from "lucide-react";
 import { parentFetch, setParentToken, navigate, type ParentMe } from "./api";
 import FamilyMessages from "./FamilyMessages";
 import ParentTabBar, { type ParentTab } from "./ParentTabBar";
+import ReinforceAtHomeSection from "./ReinforceAtHomeSection";
 
 interface Snapshot {
   parent: { displayName: string; email: string };
@@ -625,6 +626,11 @@ function HomeTab({ snapshot }: { snapshot: Snapshot }) {
           the section renders only when the student actually has tickets, so
           it stays invisible until a school issues them. */}
       <TicketsSection studentId={snapshot.student.id} />
+
+      {/* Reinforce at Home — PulseBrainLab family card. Self-contained;
+          renders only when the school has shared a Brain Lab work sample
+          for this child, so it stays invisible otherwise. */}
+      <ReinforceAtHomeSection studentId={snapshot.student.id} />
 
       {/* House affiliation tile — shows the student's PBIS house, its
           custom logo (or letter-bubble fallback), and the current

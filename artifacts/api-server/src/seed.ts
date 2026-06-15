@@ -769,6 +769,40 @@ export async function ensurePulseBrainLabGroupsSchema() {
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_unmatched_scans_school_status_idx ON pulse_brain_lab_unmatched_scans (school_id, status)`,
   );
+
+  // Parent "Home Follow-Up" transcripts (voice-to-text or typed). One row per
+  // (student, lesson, prompt) so a parent can edit a single answer (upsert).
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pulse_brain_lab_home_responses (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      lesson_key TEXT NOT NULL,
+      session_id INTEGER,
+      prompt_index INTEGER NOT NULL,
+      transcript TEXT NOT NULL,
+      language TEXT NOT NULL DEFAULT 'en',
+      created_by_parent_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_home_responses_student_idx ON pulse_brain_lab_home_responses (school_id, student_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pulse_brain_lab_home_responses_lesson_idx ON pulse_brain_lab_home_responses (school_id, student_id, lesson_key)`,
+  );
+  // school_id MUST lead the unique key: student_id (FLEID) is not globally
+  // unique, so without it two schools could collide on the same
+  // (student_id, lesson_key, prompt_index) and overwrite each other. Drop any
+  // earlier school-less index before recreating the correct one.
+  await db.execute(
+    sql`DROP INDEX IF EXISTS pulse_brain_lab_home_responses_prompt_unique`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS pulse_brain_lab_home_responses_prompt_unique ON pulse_brain_lab_home_responses (school_id, student_id, lesson_key, prompt_index)`,
+  );
 }
 
 export async function seedPulseBrainLabLessons() {

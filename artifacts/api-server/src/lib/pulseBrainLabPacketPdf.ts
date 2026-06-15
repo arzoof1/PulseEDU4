@@ -1,0 +1,276 @@
+// PulseBrainLab EVIDENCE PACKET PDF — a family-facing one-pager that combines
+// the "Reinforce at Home" recall card for a delivered lesson with the child's
+// own work sample image and any Home Follow-Up the family recorded. The BS
+// shares this with the home; the parent can also download it from the portal.
+//
+// HARD CONSTRAINTS:
+//  - Bilingual: the caller picks the language; CASEL / "SEL" framing never
+//    appears — strictly learning / brain-science wording.
+//  - The only student ID that may appear is local_sis_id — NEVER the FLEID.
+//  - Image samples (phone capture) are embedded directly. Scanned-PDF samples
+//    can't be rasterized here (no PNG encoder available), so they render as a
+//    "worksheet on file" note instead of a broken image.
+import PDFDocument from "pdfkit";
+import type { PulseBrainLabParentReinforcement } from "../data/pulseBrainLab/index.js";
+
+const MARGIN = 54;
+const INK = "#0f172a";
+const MUTED = "#475569";
+const ACCENT = "#4338ca";
+const RULE = "#cbd5e1";
+const SOFT = "#eef2ff";
+
+export type PacketLanguage = "en" | "es";
+
+export interface PacketWorkSampleImage {
+  /** Decoded image bytes (PNG/JPEG). Null when the sample is a scanned PDF. */
+  imageBytes: Buffer | null;
+  source: string;
+  createdAtLabel: string;
+}
+
+export interface PacketHomeResponse {
+  promptIndex: number;
+  transcript: string;
+}
+
+export interface PacketPdfInput {
+  language: PacketLanguage;
+  lessonTitle: string;
+  skillArea: string;
+  /** Display name of the child (first + last). */
+  studentName: string;
+  /** local_sis_id ONLY — never the FLEID. */
+  localSisId: string | null;
+  sessionDateLabel: string | null;
+  parentReinforcement: PulseBrainLabParentReinforcement;
+  workSamples: PacketWorkSampleImage[];
+  homeResponses: PacketHomeResponse[];
+}
+
+const STR: Record<
+  PacketLanguage,
+  {
+    title: string;
+    forStudent: string;
+    session: string;
+    whatWePracticed: string;
+    askYourChild: string;
+    whyThisWorks: string;
+    tryTogether: string;
+    workSample: string;
+    sampleOnFile: string;
+    homeFollowUp: string;
+    answerTo: string;
+    noWorkSample: string;
+  }
+> = {
+  en: {
+    title: "Reinforce at Home",
+    forStudent: "For",
+    session: "Lesson date",
+    whatWePracticed: "What we practiced",
+    askYourChild: "Ask your child",
+    whyThisWorks: "Why this works",
+    tryTogether: "Try this together",
+    workSample: "Your child's work",
+    sampleOnFile: "A scanned worksheet is on file at school.",
+    homeFollowUp: "Home Follow-Up",
+    answerTo: "Answer to",
+    noWorkSample: "No work sample shared yet.",
+  },
+  es: {
+    title: "Refuerza en casa",
+    forStudent: "Para",
+    session: "Fecha de la lección",
+    whatWePracticed: "Lo que practicamos",
+    askYourChild: "Pregúntele a su hijo/a",
+    whyThisWorks: "Por qué funciona",
+    tryTogether: "Hagan esto juntos",
+    workSample: "El trabajo de su hijo/a",
+    sampleOnFile: "Hay una hoja escaneada archivada en la escuela.",
+    homeFollowUp: "Seguimiento en casa",
+    answerTo: "Respuesta a",
+    noWorkSample: "Aún no se ha compartido una muestra de trabajo.",
+  },
+};
+
+function sectionHeading(
+  doc: PDFKit.PDFDocument,
+  text: string,
+  contentWidth: number,
+): void {
+  if (doc.y > doc.page.height - 120) doc.addPage();
+  doc.moveDown(0.6);
+  doc
+    .fillColor(ACCENT)
+    .font("Helvetica-Bold")
+    .fontSize(12)
+    .text(text.toUpperCase(), MARGIN, doc.y, { width: contentWidth });
+  doc
+    .moveTo(MARGIN, doc.y + 2)
+    .lineTo(MARGIN + contentWidth, doc.y + 2)
+    .strokeColor(RULE)
+    .lineWidth(1)
+    .stroke();
+  doc.moveDown(0.4);
+}
+
+export async function renderPulseBrainLabPacketPdf(
+  input: PacketPdfInput,
+): Promise<Buffer> {
+  const t = STR[input.language];
+  const pr = input.parentReinforcement;
+  const lang = input.language;
+
+  const doc = new PDFDocument({ size: "LETTER", margin: MARGIN });
+  const contentWidth = doc.page.width - MARGIN * 2;
+  const chunks: Buffer[] = [];
+
+  const done = new Promise<Buffer>((resolve, reject) => {
+    doc.on("data", (c: Buffer) => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+  });
+
+  // Header band.
+  doc.rect(0, 0, doc.page.width, 96).fill(SOFT);
+  doc
+    .fillColor(ACCENT)
+    .font("Helvetica-Bold")
+    .fontSize(22)
+    .text(t.title, MARGIN, 28, { width: contentWidth });
+  doc
+    .fillColor(INK)
+    .font("Helvetica-Bold")
+    .fontSize(13)
+    .text(input.lessonTitle, MARGIN, 58, { width: contentWidth });
+  doc
+    .fillColor(MUTED)
+    .font("Helvetica")
+    .fontSize(10)
+    .text(input.skillArea, MARGIN, 76, { width: contentWidth });
+
+  doc.y = 112;
+
+  // Who / when line.
+  const idSuffix = input.localSisId ? ` (${input.localSisId})` : "";
+  doc
+    .fillColor(INK)
+    .font("Helvetica-Bold")
+    .fontSize(11)
+    .text(`${t.forStudent}: ${input.studentName}${idSuffix}`, MARGIN, doc.y, {
+      width: contentWidth,
+    });
+  if (input.sessionDateLabel) {
+    doc
+      .fillColor(MUTED)
+      .font("Helvetica")
+      .fontSize(10)
+      .text(`${t.session}: ${input.sessionDateLabel}`, MARGIN, doc.y, {
+        width: contentWidth,
+      });
+  }
+
+  // What we practiced.
+  sectionHeading(doc, t.whatWePracticed, contentWidth);
+  doc
+    .fillColor(INK)
+    .font("Helvetica")
+    .fontSize(11)
+    .text(pr.summary[lang], MARGIN, doc.y, { width: contentWidth });
+
+  // Ask your child (the retrieval prompts).
+  sectionHeading(doc, t.askYourChild, contentWidth);
+  pr.askYourChild.forEach((q, i) => {
+    doc
+      .fillColor(INK)
+      .font("Helvetica")
+      .fontSize(11)
+      .text(`${i + 1}. ${q[lang]}`, MARGIN, doc.y, { width: contentWidth });
+    doc.moveDown(0.2);
+  });
+
+  // Why this works.
+  sectionHeading(doc, t.whyThisWorks, contentWidth);
+  doc
+    .fillColor(MUTED)
+    .font("Helvetica-Oblique")
+    .fontSize(11)
+    .text(pr.whyThisWorks[lang], MARGIN, doc.y, { width: contentWidth });
+
+  // Try together.
+  sectionHeading(doc, t.tryTogether, contentWidth);
+  doc
+    .fillColor(INK)
+    .font("Helvetica")
+    .fontSize(11)
+    .text(pr.tryTogether[lang], MARGIN, doc.y, { width: contentWidth });
+
+  // Work sample image(s).
+  sectionHeading(doc, t.workSample, contentWidth);
+  if (input.workSamples.length === 0) {
+    doc
+      .fillColor(MUTED)
+      .font("Helvetica-Oblique")
+      .fontSize(10)
+      .text(t.noWorkSample, MARGIN, doc.y, { width: contentWidth });
+  } else {
+    for (const sample of input.workSamples) {
+      if (sample.imageBytes) {
+        if (doc.y > doc.page.height - 260) doc.addPage();
+        try {
+          doc.image(sample.imageBytes, MARGIN, doc.y, {
+            fit: [contentWidth, 320],
+            align: "center",
+          });
+          doc.moveDown(0.5);
+          doc.y += 8;
+        } catch {
+          // Unsupported/corrupt image bytes — degrade to the on-file note.
+          doc
+            .fillColor(MUTED)
+            .font("Helvetica-Oblique")
+            .fontSize(10)
+            .text(t.sampleOnFile, MARGIN, doc.y, { width: contentWidth });
+        }
+      } else {
+        doc
+          .fillColor(MUTED)
+          .font("Helvetica-Oblique")
+          .fontSize(10)
+          .text(t.sampleOnFile, MARGIN, doc.y, { width: contentWidth });
+        doc.moveDown(0.3);
+      }
+    }
+  }
+
+  // Home Follow-Up transcripts.
+  if (input.homeResponses.length > 0) {
+    sectionHeading(doc, t.homeFollowUp, contentWidth);
+    const sorted = [...input.homeResponses].sort(
+      (a, b) => a.promptIndex - b.promptIndex,
+    );
+    for (const r of sorted) {
+      const promptText = pr.askYourChild[r.promptIndex]?.[lang];
+      if (promptText) {
+        doc
+          .fillColor(MUTED)
+          .font("Helvetica-Bold")
+          .fontSize(9)
+          .text(`${t.answerTo}: ${promptText}`, MARGIN, doc.y, {
+            width: contentWidth,
+          });
+      }
+      doc
+        .fillColor(INK)
+        .font("Helvetica")
+        .fontSize(11)
+        .text(r.transcript, MARGIN, doc.y, { width: contentWidth });
+      doc.moveDown(0.5);
+    }
+  }
+
+  doc.end();
+  return done;
+}

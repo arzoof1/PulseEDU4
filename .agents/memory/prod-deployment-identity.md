@@ -8,8 +8,8 @@ this Replit workspace's build, and it uses a **different database**.
 
 Evidence (gathered while recovering a locked-out SuperUser):
 
-- Same exact correct password: dev (localhost:80, this repo) login returns
-  **200 OK**; live site returns **401**.
+- The same known-good SuperUser credential (localhost:80, this repo) login returns
+  **200 OK**; live site returns **401** for the identical credential.
 - Live site response headers include the full **Helmet** set
   (`x-dns-prefetch-control`, `x-download-options`, `x-permitted-cross-domain-policies`,
   `origin-agent-cluster`, a strict `content-security-policy`) and `Server: nginx/1.28.3 (Ubuntu)`.

@@ -29,6 +29,7 @@ import type {
   PulseBrainLabBatchScanResult,
   PulseBrainLabGroup,
   PulseBrainLabGroupDetail,
+  PulseBrainLabHomeCard,
   PulseBrainLabLesson,
   PulseBrainLabLessonSummary,
   PulseBrainLabParentCard,
@@ -38,6 +39,7 @@ import type {
   PulseBrainLabWorkSample,
   RoutePulseBrainLabScanInput,
   SetPulseBrainLabAttendanceInput,
+  SetPulseBrainLabWorkSampleShareInput,
   UpdatePulseBrainLabGroupInput,
 } from "./api.schemas";
 
@@ -2218,3 +2220,193 @@ export const useDeletePulseBrainLabWorkSample = <
 > => {
   return useMutation(getDeletePulseBrainLabWorkSampleMutationOptions(options));
 };
+
+/**
+ * @summary Toggle whether a filed work sample is visible to the family
+ */
+export const getSetPulseBrainLabWorkSampleShareUrl = (sampleId: number) => {
+  return `/api/pulse-brain-lab/work-samples/${sampleId}/share`;
+};
+
+export const setPulseBrainLabWorkSampleShare = async (
+  sampleId: number,
+  setPulseBrainLabWorkSampleShareInput: SetPulseBrainLabWorkSampleShareInput,
+  options?: RequestInit,
+): Promise<PulseBrainLabWorkSample> => {
+  return customFetch<PulseBrainLabWorkSample>(
+    getSetPulseBrainLabWorkSampleShareUrl(sampleId),
+    {
+      ...options,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(setPulseBrainLabWorkSampleShareInput),
+    },
+  );
+};
+
+export const getSetPulseBrainLabWorkSampleShareMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setPulseBrainLabWorkSampleShare>>,
+    TError,
+    { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleShareInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setPulseBrainLabWorkSampleShare>>,
+  TError,
+  { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleShareInput> },
+  TContext
+> => {
+  const mutationKey = ["setPulseBrainLabWorkSampleShare"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setPulseBrainLabWorkSampleShare>>,
+    { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleShareInput> }
+  > = (props) => {
+    const { sampleId, data } = props ?? {};
+
+    return setPulseBrainLabWorkSampleShare(sampleId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SetPulseBrainLabWorkSampleShareMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setPulseBrainLabWorkSampleShare>>
+>;
+export type SetPulseBrainLabWorkSampleShareMutationBody =
+  BodyType<SetPulseBrainLabWorkSampleShareInput>;
+export type SetPulseBrainLabWorkSampleShareMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Toggle whether a filed work sample is visible to the family
+ */
+export const useSetPulseBrainLabWorkSampleShare = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setPulseBrainLabWorkSampleShare>>,
+    TError,
+    { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleShareInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof setPulseBrainLabWorkSampleShare>>,
+  TError,
+  { sampleId: number; data: BodyType<SetPulseBrainLabWorkSampleShareInput> },
+  TContext
+> => {
+  return useMutation(
+    getSetPulseBrainLabWorkSampleShareMutationOptions(options),
+  );
+};
+
+/**
+ * @summary The "Reinforce at Home" cards for one student — shared work samples grouped by lesson, each with the bilingual parent recall card and home follow-up transcripts. Staff view (any signed-in staff at the active school).
+
+ */
+export const getListPulseBrainLabHomeCardsUrl = (studentId: string) => {
+  return `/api/pulse-brain-lab/students/${studentId}/home-cards`;
+};
+
+export const listPulseBrainLabHomeCards = async (
+  studentId: string,
+  options?: RequestInit,
+): Promise<PulseBrainLabHomeCard[]> => {
+  return customFetch<PulseBrainLabHomeCard[]>(
+    getListPulseBrainLabHomeCardsUrl(studentId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListPulseBrainLabHomeCardsQueryKey = (studentId: string) => {
+  return [`/api/pulse-brain-lab/students/${studentId}/home-cards`] as const;
+};
+
+export const getListPulseBrainLabHomeCardsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPulseBrainLabHomeCards>>,
+  TError = ErrorType<ApiError>,
+>(
+  studentId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPulseBrainLabHomeCards>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListPulseBrainLabHomeCardsQueryKey(studentId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listPulseBrainLabHomeCards>>
+  > = ({ signal }) =>
+    listPulseBrainLabHomeCards(studentId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!studentId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPulseBrainLabHomeCards>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListPulseBrainLabHomeCardsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPulseBrainLabHomeCards>>
+>;
+export type ListPulseBrainLabHomeCardsQueryError = ErrorType<ApiError>;
+
+/**
+ * @summary The "Reinforce at Home" cards for one student — shared work samples grouped by lesson, each with the bilingual parent recall card and home follow-up transcripts. Staff view (any signed-in staff at the active school).
+
+ */
+
+export function useListPulseBrainLabHomeCards<
+  TData = Awaited<ReturnType<typeof listPulseBrainLabHomeCards>>,
+  TError = ErrorType<ApiError>,
+>(
+  studentId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPulseBrainLabHomeCards>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListPulseBrainLabHomeCardsQueryOptions(
+    studentId,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}

@@ -313,6 +313,52 @@ export interface PulseBrainLabBatchScanResult {
   unmatched: PulseBrainLabUnmatchedScan[];
 }
 
+export interface SetPulseBrainLabWorkSampleShareInput {
+  shared: boolean;
+}
+
+export type PulseBrainLabHomeResponseLanguage =
+  (typeof PulseBrainLabHomeResponseLanguage)[keyof typeof PulseBrainLabHomeResponseLanguage];
+
+export const PulseBrainLabHomeResponseLanguage = {
+  en: "en",
+  es: "es",
+} as const;
+
+/**
+ * A parent-submitted "Home Follow-Up" transcript answering one askYourChild prompt. The family's own words (voice-to-text or typed); never staff text.
+
+ */
+export interface PulseBrainLabHomeResponse {
+  id: number;
+  lessonKey: string;
+  /** @nullable */
+  sessionId?: number | null;
+  promptIndex: number;
+  transcript: string;
+  language: PulseBrainLabHomeResponseLanguage;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * One lesson's "Reinforce at Home" card for a student: the shared work sample(s), the bilingual parent recall content, and any home follow-up transcripts. Strictly learning / brain-science framing — never "SEL".
+
+ */
+export interface PulseBrainLabHomeCard {
+  lessonKey: string;
+  lessonTitle: string;
+  skillArea: string;
+  brainIdea: PulseBrainLabBrainModelTag;
+  /** @nullable */
+  sessionId: number | null;
+  /** @nullable */
+  sessionDate: string | null;
+  parentReinforcement: PulseBrainLabParentReinforcement;
+  workSamples: PulseBrainLabWorkSample[];
+  homeResponses: PulseBrainLabHomeResponse[];
+}
+
 export type ListPulseBrainLabLessonsParams = {
   gradeBand?: PulseBrainLabGradeBand;
 };

@@ -656,6 +656,71 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/work-samples/{sampleId}/share:
+    patch:
+      operationId: setPulseBrainLabWorkSampleShare
+      tags: [pulseBrainLabDelivery]
+      summary: Toggle whether a filed work sample is visible to the family
+      parameters:
+        - name: sampleId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetPulseBrainLabWorkSampleShareInput"
+      responses:
+        "200":
+          description: Updated work sample
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabWorkSample"
+        "400":
+          description: Invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/students/{studentId}/home-cards:
+    get:
+      operationId: listPulseBrainLabHomeCards
+      tags: [pulseBrainLabDelivery]
+      summary: >
+        The "Reinforce at Home" cards for one student — shared work samples grouped
+        by lesson, each with the bilingual parent recall card and home follow-up
+        transcripts. Staff view (any signed-in staff at the active school).
+      parameters:
+        - name: studentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Home cards
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PulseBrainLabHomeCard"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
 components:
   schemas:
     HealthStatus:
@@ -1141,3 +1206,79 @@ components:
           items:
             $ref: "#/components/schemas/PulseBrainLabUnmatchedScan"
       required: [pageCount, matchedCount, unmatchedCount, matched, unmatched]
+    SetPulseBrainLabWorkSampleShareInput:
+      type: object
+      properties:
+        shared:
+          type: boolean
+      required: [shared]
+    PulseBrainLabHomeResponse:
+      type: object
+      description: >
+        A parent-submitted "Home Follow-Up" transcript answering one askYourChild
+        prompt. The family's own words (voice-to-text or typed); never staff text.
+      properties:
+        id:
+          type: integer
+        lessonKey:
+          type: string
+        sessionId:
+          type: ["integer", "null"]
+        promptIndex:
+          type: integer
+        transcript:
+          type: string
+        language:
+          type: string
+          enum: [en, es]
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - lessonKey
+        - promptIndex
+        - transcript
+        - language
+        - createdAt
+        - updatedAt
+    PulseBrainLabHomeCard:
+      type: object
+      description: >
+        One lesson's "Reinforce at Home" card for a student: the shared work
+        sample(s), the bilingual parent recall content, and any home follow-up
+        transcripts. Strictly learning / brain-science framing — never "SEL".
+      properties:
+        lessonKey:
+          type: string
+        lessonTitle:
+          type: string
+        skillArea:
+          type: string
+        brainIdea:
+          $ref: "#/components/schemas/PulseBrainLabBrainModelTag"
+        sessionId:
+          type: ["integer", "null"]
+        sessionDate:
+          type: ["string", "null"]
+        parentReinforcement:
+          $ref: "#/components/schemas/PulseBrainLabParentReinforcement"
+        workSamples:
+          type: array
+          items:
+            $ref: "#/components/schemas/PulseBrainLabWorkSample"
+        homeResponses:
+          type: array
+          items:
+            $ref: "#/components/schemas/PulseBrainLabHomeResponse"
+      required:
+        - lessonKey
+        - lessonTitle
+        - skillArea
+        - brainIdea
+        - sessionId
+        - sessionDate
+        - parentReinforcement
+        - workSamples
+        - homeResponses

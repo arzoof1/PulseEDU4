@@ -608,7 +608,14 @@ function CurbKeypadPage({ me }: { me: Me }) {
               </tr>
             </thead>
             <tbody>
-              {queue.map((q) => (
+              {[...queue]
+                .sort(
+                  (a, b) =>
+                    new Date(b.addedAt).getTime() -
+                      new Date(a.addedAt).getTime() ||
+                    b.position - a.position,
+                )
+                .map((q) => (
                 <tr key={q.studentDbId}>
                   <td style={td}>{q.position}</td>
                   <td style={td}>

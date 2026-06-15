@@ -19,6 +19,7 @@ import {
   pulseBrainLabWorksheetTokensTable,
   pulseBrainLabWorkSamplesTable,
   pulseBrainLabUnmatchedScansTable,
+  pulseBrainLabHomeResponsesTable,
   studentsTable,
   staffTable,
 } from "@workspace/db";
@@ -40,8 +41,14 @@ import {
   BatchPulseBrainLabScanBody,
   FilePulseBrainLabUnmatchedScanBody,
   AssignPulseBrainLabUnmatchedScanBody,
+  SetPulseBrainLabWorkSampleShareBody,
 } from "@workspace/api-zod";
 import { bindObjectToSchool, readStoredObject } from "./storage.js";
+import { buildHomeCards } from "../lib/pulseBrainLabHomeCards.js";
+import {
+  renderPulseBrainLabPacketPdf,
+  type PacketWorkSampleImage,
+} from "../lib/pulseBrainLabPacketPdf.js";
 import { decodeWorksheetPdf } from "../lib/scanDecode.js";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
@@ -1494,5 +1501,154 @@ router.delete("/pulse-brain-lab/work-samples/:sampleId", async (req, res) => {
   }
   res.status(204).end();
 });
+
+// PATCH /api/pulse-brain-lab/work-samples/:sampleId/share — toggle whether a
+// filed work sample is visible to the family on the "Reinforce at Home" card.
+// The share flag is the SINGLE gate that exposes a delivered lesson to the home.
+router.patch(
+  "/pulse-brain-lab/work-samples/:sampleId/share",
+  async (req, res) => {
+    const staff = await loadCoreTeamStaff(req, res);
+    if (!staff) return;
+    const schoolId = requireSchool(req, res);
+    if (schoolId == null) return;
+    const sampleId = Number(req.params.sampleId);
+    if (!Number.isInteger(sampleId)) {
+      res.status(400).json({ error: "Invalid sample id" });
+      return;
+    }
+    const parsed = SetPulseBrainLabWorkSampleShareBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid request" });
+      return;
+    }
+    const updated = await db
+      .update(pulseBrainLabWorkSamplesTable)
+      .set({ shared: parsed.data.shared })
+      .where(
+        and(
+          eq(pulseBrainLabWorkSamplesTable.id, sampleId),
+          eq(pulseBrainLabWorkSamplesTable.schoolId, schoolId),
+        ),
+      )
+      .returning({ id: pulseBrainLabWorkSamplesTable.id });
+    if (updated.length === 0) {
+      res.status(404).json({ error: "Work sample not found" });
+      return;
+    }
+    const [sample] = await loadWorkSamples(
+      schoolId,
+      eq(pulseBrainLabWorkSamplesTable.id, sampleId),
+    );
+    res.json(sample);
+  },
+);
+
+// GET /api/pulse-brain-lab/students/:studentId/home-cards — the staff preview of
+// exactly what a family sees on the "Reinforce at Home" surface for one student.
+// :studentId is the canonical student_id (FLEID FK) — never rendered; the cards
+// carry localSisId for display.
+router.get(
+  "/pulse-brain-lab/students/:studentId/home-cards",
+  async (req, res) => {
+    const staff = await loadCoreTeamStaff(req, res);
+    if (!staff) return;
+    const schoolId = requireSchool(req, res);
+    if (schoolId == null) return;
+    const studentId = String(req.params.studentId);
+    if (!studentId) {
+      res.status(400).json({ error: "Invalid student id" });
+      return;
+    }
+    const cards = await buildHomeCards(schoolId, studentId);
+    res.json(cards);
+  },
+);
+
+// GET /api/pulse-brain-lab/students/:studentId/packet.pdf?lessonKey=&lang= — the
+// downloadable evidence packet: the bilingual recall card + the child's shared
+// work sample image + any Home Follow-Up the family recorded for that lesson.
+router.get(
+  "/pulse-brain-lab/students/:studentId/packet.pdf",
+  async (req, res) => {
+    const staff = await loadCoreTeamStaff(req, res);
+    if (!staff) return;
+    const schoolId = requireSchool(req, res);
+    if (schoolId == null) return;
+    const studentId = String(req.params.studentId);
+    const lessonKey = String(req.query.lessonKey ?? "");
+    if (!studentId || !lessonKey) {
+      res.status(400).json({ error: "Missing studentId or lessonKey" });
+      return;
+    }
+    const lang = parseLang(req.query.lang);
+    const cards = await buildHomeCards(schoolId, studentId);
+    const card = cards.find((c) => c.lessonKey === lessonKey);
+    if (!card) {
+      res.status(404).json({ error: "No shared evidence for that lesson" });
+      return;
+    }
+    const pdf = await buildPacketPdf(card, lang);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="reinforce-at-home-${lessonKey}.pdf"`,
+    );
+    res.end(pdf);
+  },
+);
+
+// Shared packet builder used by both the staff route above and the parent route.
+// Resolves each shared sample's stored object to image bytes when it is a phone
+// photo (PNG/JPEG magic bytes); scanned-PDF samples render as an on-file note.
+export async function buildPacketPdf(
+  card: Awaited<ReturnType<typeof buildHomeCards>>[number],
+  lang: WorksheetLanguage,
+): Promise<Buffer> {
+  const sampleImages: PacketWorkSampleImage[] = [];
+  for (const s of card.workSamples) {
+    let imageBytes: Buffer | null = null;
+    try {
+      const buf = await readStoredObject(s.objectKey);
+      if (buf && isEmbeddableImage(buf)) imageBytes = buf;
+    } catch {
+      imageBytes = null;
+    }
+    sampleImages.push({
+      imageBytes,
+      source: s.source,
+      createdAtLabel: s.createdAt.slice(0, 10),
+    });
+  }
+  const first = card.workSamples[0];
+  const studentName = first
+    ? [first.firstName, first.lastName].filter(Boolean).join(" ").trim()
+    : "";
+  const localSisId = first?.localSisId ?? null;
+  return renderPulseBrainLabPacketPdf({
+    language: lang,
+    lessonTitle: card.lessonTitle,
+    skillArea: card.skillArea,
+    studentName: studentName || (localSisId ?? ""),
+    localSisId,
+    sessionDateLabel: card.sessionDate,
+    parentReinforcement: card.parentReinforcement,
+    workSamples: sampleImages,
+    homeResponses: card.homeResponses.map((r) => ({
+      promptIndex: r.promptIndex,
+      transcript: r.transcript,
+    })),
+  });
+}
+
+// PNG (\x89PNG) or JPEG (\xFF\xD8\xFF) — the formats pdfkit's doc.image accepts.
+// Scanned-PDF samples (%PDF) need rasterizing we can't do without a PNG encoder.
+function isEmbeddableImage(buf: Buffer): boolean {
+  if (buf.length < 4) return false;
+  const isPng =
+    buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
+  const isJpeg = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+  return isPng || isJpeg;
+}
 
 export default router;
