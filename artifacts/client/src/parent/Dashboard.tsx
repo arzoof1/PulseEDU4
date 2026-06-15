@@ -627,11 +627,6 @@ function HomeTab({ snapshot }: { snapshot: Snapshot }) {
           it stays invisible until a school issues them. */}
       <TicketsSection studentId={snapshot.student.id} />
 
-      {/* Reinforce at Home — PulseBrainLab family card. Self-contained;
-          renders only when the school has shared a Brain Lab work sample
-          for this child, so it stays invisible otherwise. */}
-      <ReinforceAtHomeSection studentId={snapshot.student.id} />
-
       {/* House affiliation tile — shows the student's PBIS house, its
           custom logo (or letter-bubble fallback), and the current
           school-wide house total. Same number families see on the
@@ -877,11 +872,22 @@ function BehaviorTab({ snapshot }: { snapshot: Snapshot }) {
     sec.oss;
   if (!hasAny) {
     return (
-      <TabEmpty text="Nothing to show here yet. Recognition, attendance, and hall-pass updates will appear on this tab." />
+      <div className="space-y-6">
+        {/* Reinforce at Home — PulseBrainLab family card. Self-gating: renders
+            only when the child belongs to a Brain Lab small group, so it stays
+            invisible otherwise even when no other behavior sections are on. */}
+        <ReinforceAtHomeSection studentId={snapshot.student.id} />
+        <TabEmpty text="Nothing to show here yet. Recognition, attendance, and hall-pass updates will appear on this tab." />
+      </div>
     );
   }
   return (
     <div className="space-y-6">
+      {/* Reinforce at Home — PulseBrainLab family card. Self-gating: renders
+          only when the child belongs to a Brain Lab small group, so it stays
+          invisible otherwise. */}
+      <ReinforceAtHomeSection studentId={snapshot.student.id} />
+
       {/* Recognition */}
       {sec.recognition && (
         <Section

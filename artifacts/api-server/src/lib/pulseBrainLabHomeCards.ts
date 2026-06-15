@@ -1,7 +1,13 @@
-// Builds the "Reinforce at Home" cards for a single student: shared work
-// samples grouped by the lesson that was delivered, each carrying the bilingual
-// parent recall content (from the global lesson catalog) and any parent-
-// submitted Home Follow-Up transcripts.
+// Builds the "Reinforce at Home" cards for a single student: the work samples
+// grouped by the lesson that was delivered, each carrying the bilingual parent
+// recall content + student worksheet (from the global lesson catalog) and any
+// parent-submitted Home Follow-Up transcripts.
+//
+// VISIBILITY GATE: a family sees PulseBrainLab content ONLY when a Core Team
+// member has added the student to a PulseBrainLab small group (the Groups-tab
+// creator). No group membership = no cards. For a grouped student, EVERY
+// delivered + recorded work sample shows — the per-sample `shared` toggle is a
+// staff annotation and no longer gates family visibility.
 //
 // FLEID boundary: callers pass the canonical students.student_id (FLEID text
 // FK). The staff projection returns the raw work-sample rows (studentId is a
@@ -12,6 +18,7 @@ import {
   pulseBrainLabWorkSamplesTable,
   pulseBrainLabSessionsTable,
   pulseBrainLabHomeResponsesTable,
+  pulseBrainLabGroupMembersTable,
   studentsTable,
 } from "@workspace/db";
 import { and, eq, desc } from "drizzle-orm";
@@ -19,6 +26,7 @@ import { PULSE_BRAIN_LAB_LESSONS } from "../data/pulseBrainLab/index.js";
 import type {
   PulseBrainLabLesson,
   PulseBrainLabParentReinforcement,
+  PulseBrainLabStudentWorksheet,
 } from "../data/pulseBrainLab/index.js";
 
 export interface HomeCardWorkSample {
@@ -65,6 +73,9 @@ export interface HomeCard {
   sessionId: number | null;
   sessionDate: string | null;
   parentReinforcement: PulseBrainLabParentReinforcement;
+  // The bilingual completable worksheet for this lesson (the activity the child
+  // did). Lets the family read the lesson and see what the worksheet asked.
+  studentWorksheet: PulseBrainLabStudentWorksheet;
   workSamples: HomeCardWorkSample[];
   homeResponses: HomeCardHomeResponse[];
 }
@@ -73,13 +84,29 @@ function findLesson(lessonKey: string): PulseBrainLabLesson | null {
   return PULSE_BRAIN_LAB_LESSONS.find((l) => l.id === lessonKey) ?? null;
 }
 
-// Load the "Reinforce at Home" cards for a student. Only SHARED work samples
-// drive a card — that share toggle is the single gate that exposes a lesson to
-// the family. Cards are ordered most-recent session first.
+// Load the "Reinforce at Home" cards for a student. GATE: the family sees cards
+// ONLY when the student belongs to at least one PulseBrainLab small group (added
+// by a Core Team member via the Groups-tab creator). For a grouped student every
+// recorded work sample drives a card — the per-sample `shared` toggle no longer
+// gates family visibility. Cards are ordered most-recent session first.
 export async function buildHomeCards(
   schoolId: number,
   studentId: string,
 ): Promise<HomeCard[]> {
+  // Group-membership gate. No group = no family card, even if stray work samples
+  // exist for the student.
+  const membership = await db
+    .select({ id: pulseBrainLabGroupMembersTable.id })
+    .from(pulseBrainLabGroupMembersTable)
+    .where(
+      and(
+        eq(pulseBrainLabGroupMembersTable.schoolId, schoolId),
+        eq(pulseBrainLabGroupMembersTable.studentId, studentId),
+      ),
+    )
+    .limit(1);
+  if (membership.length === 0) return [];
+
   const sampleRows = await db
     .select({
       id: pulseBrainLabWorkSamplesTable.id,
@@ -121,7 +148,6 @@ export async function buildHomeCards(
       and(
         eq(pulseBrainLabWorkSamplesTable.schoolId, schoolId),
         eq(pulseBrainLabWorkSamplesTable.studentId, studentId),
-        eq(pulseBrainLabWorkSamplesTable.shared, true),
       ),
     )
     .orderBy(desc(pulseBrainLabWorkSamplesTable.createdAt));
@@ -179,6 +205,7 @@ export async function buildHomeCards(
         sessionId: row.sessionId,
         sessionDate: row.sessionDate,
         parentReinforcement: lesson.parentReinforcement,
+        studentWorksheet: lesson.studentWorksheet,
         workSamples: [],
         homeResponses: (responsesByLesson.get(row.lessonKey) ?? []).sort(
           (a, b) => a.promptIndex - b.promptIndex,

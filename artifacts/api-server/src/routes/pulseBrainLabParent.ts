@@ -18,10 +18,13 @@ import {
   parentStudentsTable,
   studentsTable,
   pulseBrainLabHomeResponsesTable,
+  pulseBrainLabWorkSamplesTable,
+  pulseBrainLabGroupMembersTable,
 } from "@workspace/db";
 import { verifyParentAuthToken } from "../lib/authToken.js";
 import { buildHomeCards } from "../lib/pulseBrainLabHomeCards.js";
 import { buildPacketPdf } from "./pulseBrainLabDelivery.js";
+import { streamObjectToResponse } from "./storage.js";
 import type { WorksheetLanguage } from "../lib/pulseBrainLabWorksheetPdf.js";
 
 const router: IRouter = Router();
@@ -109,6 +112,14 @@ function sanitizeCard(card: Awaited<ReturnType<typeof buildHomeCards>>[number]) 
       benchmarkCode: s.benchmarkCode,
       benchmarkLabel: s.benchmarkLabel,
     }));
+  // Family-safe per-sample refs so the family can VIEW the worksheet their child
+  // completed. Only the serial id + page index leave the server (the route that
+  // streams the image re-checks parent ownership); the FLEID and the raw object
+  // key never go to the client.
+  const workSamples = card.workSamples.map((s) => ({
+    id: s.id,
+    pageIndex: s.pageIndex,
+  }));
   return {
     lessonKey: card.lessonKey,
     lessonTitle: card.lessonTitle,
@@ -117,7 +128,10 @@ function sanitizeCard(card: Awaited<ReturnType<typeof buildHomeCards>>[number]) 
     sessionId: card.sessionId,
     sessionDate: card.sessionDate,
     parentReinforcement: card.parentReinforcement,
+    // The bilingual worksheet (the activity) so the family can read the lesson.
+    studentWorksheet: card.studentWorksheet,
     workSampleCount: card.workSamples.length,
+    workSamples,
     grades,
     homeResponses: card.homeResponses.map((r) => ({
       id: r.id,
@@ -273,6 +287,65 @@ router.get("/parent/brain-lab/packet.pdf", async (req, res) => {
     `attachment; filename="reinforce-at-home-${lessonKey}.pdf"`,
   );
   res.end(pdf);
+});
+
+// GET /api/parent/brain-lab/work-sample/:sampleId/image?studentId= — stream the
+// completed-worksheet image so the family can VIEW the work their child did. The
+// sampleId alone is not trusted: we resolve the parent-owned student, then fetch
+// the work sample only when it belongs to that exact (school, student) — so a
+// parent can never read another family's sample by guessing an id. The raw
+// object key never leaves the server; ownership is verified before streaming.
+router.get("/parent/brain-lab/work-sample/:sampleId/image", async (req, res) => {
+  const pid = req.parentId;
+  if (!pid) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  const sampleId = Number(req.params.sampleId);
+  const studentIdInt = Number(req.query.studentId);
+  if (!Number.isInteger(sampleId) || !Number.isInteger(studentIdInt)) {
+    res.status(400).json({ error: "sampleId and studentId are required" });
+    return;
+  }
+  const owned = await resolveOwnedStudent(pid, studentIdInt);
+  if (!owned) {
+    res.status(403).json({ error: "Not your student" });
+    return;
+  }
+  // Same visibility gate as /cards: a family may only reach Brain Lab content
+  // (including a sample image) when the child belongs to a Brain Lab group. No
+  // group → behave as if the sample doesn't exist, so a known/guessed sample id
+  // can't bypass the "no group = no family Brain Lab content" rule.
+  const [member] = await db
+    .select({ id: pulseBrainLabGroupMembersTable.id })
+    .from(pulseBrainLabGroupMembersTable)
+    .where(
+      and(
+        eq(pulseBrainLabGroupMembersTable.schoolId, owned.schoolId),
+        eq(pulseBrainLabGroupMembersTable.studentId, owned.fleid),
+      ),
+    )
+    .limit(1);
+  if (!member) {
+    res.status(404).json({ error: "Sample not found" });
+    return;
+  }
+  const [sample] = await db
+    .select({ objectKey: pulseBrainLabWorkSamplesTable.objectKey })
+    .from(pulseBrainLabWorkSamplesTable)
+    .where(
+      and(
+        eq(pulseBrainLabWorkSamplesTable.id, sampleId),
+        eq(pulseBrainLabWorkSamplesTable.schoolId, owned.schoolId),
+        eq(pulseBrainLabWorkSamplesTable.studentId, owned.fleid),
+      ),
+    );
+  if (!sample) {
+    res.status(404).json({ error: "Sample not found" });
+    return;
+  }
+  const ok = await streamObjectToResponse(sample.objectKey, res);
+  if (!ok) res.status(404).json({ error: "Sample not found" });
 });
 
 export default router;

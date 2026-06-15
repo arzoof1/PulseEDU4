@@ -27,6 +27,29 @@ export interface ParentReinforcement {
   tryTogether: LocalizedText;
 }
 
+export type WorksheetResponseType = "write" | "draw" | "checklist";
+
+export interface ParentWorksheetPrompt {
+  id: string;
+  text: LocalizedText;
+  responseType: WorksheetResponseType;
+}
+
+// The bilingual worksheet (the activity the child did) so the family can read
+// the lesson alongside the photo of the completed sheet.
+export interface ParentStudentWorksheet {
+  intro: LocalizedText;
+  prompts: ParentWorksheetPrompt[];
+}
+
+// Family-safe reference to a completed work-sample image. Only the serial id and
+// page index cross the wire; the image bytes come from the authed image route
+// (which re-checks parent ownership). No FLEID, no object key.
+export interface ParentWorkSampleRef {
+  id: number;
+  pageIndex: number;
+}
+
 // Grade/benchmark shown to the family — one entry per SHARED, graded sample
 // (the server gates this in sanitizeCard). Grading is per assignment (session),
 // so a multi-session lesson card can carry several entries.
@@ -48,7 +71,9 @@ export interface ParentHomeCard {
   sessionId: number | null;
   sessionDate: string | null;
   parentReinforcement: ParentReinforcement;
+  studentWorksheet: ParentStudentWorksheet;
   workSampleCount: number;
+  workSamples: ParentWorkSampleRef[];
   grades: ParentHomeGrade[];
   homeResponses: ParentHomeResponse[];
 }
@@ -66,6 +91,27 @@ export async function fetchParentHomeCards(
     throw new Error(msg);
   }
   return (await res.json()) as ParentHomeCard[];
+}
+
+// Fetch a completed work-sample image as an object URL. The session cookie is
+// blocked in the Replit preview iframe, so a plain <img src> can't authenticate;
+// we pull the bytes via parentFetch (Bearer token) and synthesize a blob URL.
+// Caller is responsible for URL.revokeObjectURL when the image unmounts.
+export async function fetchParentWorkSampleImage(
+  studentId: number,
+  sampleId: number,
+): Promise<string> {
+  const res = await parentFetch(
+    `/api/parent/brain-lab/work-sample/${sampleId}/image?studentId=${studentId}`,
+  );
+  if (!res.ok) {
+    const msg =
+      (await res.json().catch(() => null))?.error ??
+      `Could not load the worksheet image (${res.status})`;
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
 }
 
 export async function submitParentHomeResponse(input: {

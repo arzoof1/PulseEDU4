@@ -1,18 +1,28 @@
 import { useEffect, useState } from "react";
-import { Brain, Download, CheckCircle2 } from "lucide-react";
+import {
+  Brain,
+  Download,
+  CheckCircle2,
+  BookOpen,
+  ChevronDown,
+} from "lucide-react";
 import DictateButton from "../components/DictateButton";
 import {
   fetchParentHomeCards,
   submitParentHomeResponse,
   downloadParentPacket,
+  fetchParentWorkSampleImage,
   type ParentHomeCard,
+  type ParentWorkSampleRef,
 } from "./brainLab";
 
-// Family-facing "Reinforce at Home" surface on the parent Home tab. Renders only
-// when the school has shared a Brain Lab work sample for this child. Each lesson
-// card shows the bilingual recall content, lets the family record a voice-to-text
-// "Home Follow-Up" per prompt, and downloads the evidence packet. studentId is
-// the integer students.id the portal uses; the FLEID never reaches the client.
+// Family-facing "Reinforce at Home" surface on the parent Behavior tab. Renders
+// only when the child belongs to a Brain Lab small group (the server gates this).
+// Each lesson card shows the bilingual recall content, an expandable "Read the
+// lesson" view (the bilingual worksheet + the photo of the sheet the child
+// completed), lets the family record a voice-to-text "Home Follow-Up" per prompt,
+// and downloads the evidence packet. studentId is the integer students.id the
+// portal uses; the FLEID never reaches the client.
 export default function ReinforceAtHomeSection({
   studentId,
 }: {
@@ -116,8 +126,10 @@ function HomeCard({
   t: (en: string, es: string) => string;
 }) {
   const pr = card.parentReinforcement;
+  const ws = card.studentWorksheet;
   const [downloading, setDownloading] = useState(false);
   const [dlError, setDlError] = useState("");
+  const [showLesson, setShowLesson] = useState(false);
 
   async function handleDownload() {
     if (downloading) return;
@@ -209,6 +221,65 @@ function HomeCard({
         <p className="mt-1 text-sm text-slate-700">{pr.tryTogether[lang]}</p>
       </div>
 
+      <div className="mt-3">
+        <button
+          type="button"
+          onClick={() => setShowLesson((v) => !v)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700"
+          aria-expanded={showLesson}
+        >
+          <BookOpen className="h-3.5 w-3.5" />
+          {showLesson
+            ? t("Hide the lesson", "Ocultar la lección")
+            : t("Read the lesson", "Leer la lección")}
+          <ChevronDown
+            className={`h-3.5 w-3.5 transition-transform ${
+              showLesson ? "rotate-180" : ""
+            }`}
+          />
+        </button>
+
+        {showLesson && (
+          <div className="mt-2 space-y-3 rounded-lg border border-slate-200 bg-white p-3">
+            <p className="text-sm text-slate-700">{ws.intro[lang]}</p>
+
+            {ws.prompts.length > 0 && (
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-indigo-700">
+                  {t("What the worksheet asked", "Lo que pedía la hoja")}
+                </div>
+                <ol className="mt-1 list-decimal space-y-1 pl-5 text-sm text-slate-700">
+                  {ws.prompts.map((p) => (
+                    <li key={p.id}>{p.text[lang]}</li>
+                  ))}
+                </ol>
+              </div>
+            )}
+
+            {card.workSamples.length > 0 && (
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-indigo-700">
+                  {t(
+                    "What your child completed",
+                    "Lo que completó su hijo/a",
+                  )}
+                </div>
+                <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {card.workSamples.map((s) => (
+                    <WorkSampleImage
+                      key={s.id}
+                      studentId={studentId}
+                      sample={s}
+                      t={t}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="mt-3 space-y-3">
         <div className="text-xs font-semibold uppercase tracking-wide text-indigo-700">
           {t("Ask your child", "Pregúntele a su hijo/a")}
@@ -232,6 +303,72 @@ function HomeCard({
 
       {dlError && <div className="mt-2 text-xs text-red-600">{dlError}</div>}
     </div>
+  );
+}
+
+// One completed work-sample photo. The image is authed, so we pull the bytes via
+// parentFetch into a blob URL (a plain <img src> can't carry the Bearer token in
+// the preview iframe) and revoke the URL on unmount.
+function WorkSampleImage({
+  studentId,
+  sample,
+  t,
+}: {
+  studentId: number;
+  sample: ParentWorkSampleRef;
+  t: (en: string, es: string) => string;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    let created: string | null = null;
+    setUrl(null);
+    setErr("");
+    fetchParentWorkSampleImage(studentId, sample.id)
+      .then((u) => {
+        if (alive) {
+          created = u;
+          setUrl(u);
+        } else {
+          URL.revokeObjectURL(u);
+        }
+      })
+      .catch((e) => {
+        if (alive) setErr(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      alive = false;
+      if (created) URL.revokeObjectURL(created);
+    };
+  }, [studentId, sample.id]);
+
+  if (err) {
+    return (
+      <div className="flex h-40 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 p-3 text-center text-xs text-slate-500">
+        {t("Could not load this photo.", "No se pudo cargar esta foto.")}
+      </div>
+    );
+  }
+  if (!url) {
+    return (
+      <div className="flex h-40 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-xs text-slate-400">
+        {t("Loading…", "Cargando…")}
+      </div>
+    );
+  }
+  return (
+    <a href={url} target="_blank" rel="noreferrer" className="block">
+      <img
+        src={url}
+        alt={t(
+          "Worksheet your child completed",
+          "Hoja que completó su hijo/a",
+        )}
+        className="w-full rounded-lg border border-slate-200 object-contain"
+      />
+    </a>
   );
 }
 
