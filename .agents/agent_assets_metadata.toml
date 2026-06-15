@@ -324,3 +324,27 @@ id = "wf09xdLWBbNqwfVNouKZV"
 uri = "file://attached_assets/tag-proof-clean.pdf"
 type = "pdf"
 title = "Fold-over hanger tag — production output"
+
+[[outputs]]
+id = "M41xDf60MJjMzc9omcSz6"
+uri = "file://docs/demo/district-demo-script.md"
+type = "text"
+title = "District Demo — Presenter Script"
+
+[[outputs]]
+id = "ijZNXe8_L3QIX2pgIfkNe"
+uri = "file://docs/demo/district-demo-shot-list.md"
+type = "text"
+title = "District Demo — Screenshot Shot List"
+
+[[outputs]]
+id = "loP-R0sok56TmXwnapHnw"
+uri = "file://docs/demo/district-demo-readiness-checklist.md"
+type = "text"
+title = "District Demo — Readiness Checklist"
+
+[[outputs]]
+id = "WwfUShvAWCTZ2XvO0HkMx"
+uri = "file://docs/demo/README.md"
+type = "text"
+title = "Demo Kit — Index / README"
