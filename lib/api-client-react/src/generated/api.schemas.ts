@@ -224,6 +224,11 @@ export interface PulseBrainLabSessionDetail {
   benchmarkSubject?: string | null;
   /** @nullable */
   benchmarkLabel?: string | null;
+  /**
+   * ISO timestamp when published to families; null = draft (staff-only).
+   * @nullable
+   */
+  publishedAt?: string | null;
   attendance: PulseBrainLabAttendanceEntry[];
 }
 

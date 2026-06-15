@@ -8,6 +8,9 @@ import {
   fetchSession,
   setAttendance,
   deleteSession,
+  publishSession,
+  unpublishSession,
+  fetchParentCard,
   downloadPdf,
   worksheetsPdfUrl,
   worksheetReprintUrl,
@@ -17,7 +20,13 @@ import {
   setSessionGrading,
   setWorkSampleGrade,
   fetchBenchmarks,
+  fetchSessionHomeResponses,
+  studentReportPdfUrl,
+  workSampleImageUrl,
+  fetchObjectUrl,
   type BenchmarkHit,
+  type SessionHomeResponses,
+  type HomeResponseRecord,
 } from "./data";
 import {
   ModalShell,
@@ -63,6 +72,23 @@ const T: Record<
     check: string;
     cross: string;
     sharedNote: string;
+    published: string;
+    draft: string;
+    publishedHint: string;
+    draftHint: string;
+    publish: string;
+    unpublish: string;
+    publishing: string;
+    familyPreview: string;
+    hidePreview: string;
+    previewEmpty: string;
+    previewLoading: string;
+    homeFollowUp: string;
+    familiesResponded: string;
+    responsesWord: string;
+    noResponses: string;
+    promptLabel: string;
+    printReport: string;
   }
 > = {
   en: {
@@ -87,6 +113,24 @@ const T: Record<
     check: "✓ Met",
     cross: "✗ Not yet",
     sharedNote: "Grades show to families only on shared samples.",
+    published: "Published to families",
+    draft: "Draft — staff only",
+    publishedHint:
+      "Families in this group can see these cards on Reinforce at Home.",
+    draftHint: "Not visible to families yet. Preview, then publish when ready.",
+    publish: "Publish to families",
+    unpublish: "Unpublish",
+    publishing: "Working…",
+    familyPreview: "Family preview",
+    hidePreview: "Hide preview",
+    previewEmpty: "No family card to preview for this lesson yet.",
+    previewLoading: "Loading preview…",
+    homeFollowUp: "Home Follow-Up from families",
+    familiesResponded: "families responded",
+    responsesWord: "responses",
+    noResponses: "No family responses yet.",
+    promptLabel: "Answer to",
+    printReport: "Print intervention report",
   },
   es: {
     grading: "Calificación",
@@ -111,8 +155,64 @@ const T: Record<
     cross: "✗ Aún no",
     sharedNote:
       "Las calificaciones se muestran a las familias solo en muestras compartidas.",
+    published: "Publicado para las familias",
+    draft: "Borrador — solo personal",
+    publishedHint:
+      "Las familias de este grupo pueden ver estas tarjetas en Refuerzo en Casa.",
+    draftHint:
+      "Aún no es visible para las familias. Vea la vista previa y publique cuando esté listo.",
+    publish: "Publicar para las familias",
+    unpublish: "Despublicar",
+    publishing: "Procesando…",
+    familyPreview: "Vista previa para familias",
+    hidePreview: "Ocultar vista previa",
+    previewEmpty: "Aún no hay tarjeta para mostrar de esta lección.",
+    previewLoading: "Cargando vista previa…",
+    homeFollowUp: "Seguimiento en casa de las familias",
+    familiesResponded: "familias respondieron",
+    responsesWord: "respuestas",
+    noResponses: "Aún no hay respuestas de las familias.",
+    promptLabel: "Respuesta a",
+    printReport: "Imprimir informe de intervención",
   },
 };
+
+// Collapse the flat per-(student,prompt) transcript list into ONE family card
+// per student, with that family's answers ordered by prompt. Keeps the viewer
+// reading as one Home Follow-Up activity instead of N separate rows.
+function groupResponsesByStudent(records: HomeResponseRecord[]): {
+  studentId: string;
+  studentName: string | null;
+  localSisId: string | null;
+  answers: { promptIndex: number; transcript: string }[];
+}[] {
+  const byStudent = new Map<
+    string,
+    {
+      studentId: string;
+      studentName: string | null;
+      localSisId: string | null;
+      answers: { promptIndex: number; transcript: string }[];
+    }
+  >();
+  for (const r of records) {
+    let fam = byStudent.get(r.studentId);
+    if (!fam) {
+      fam = {
+        studentId: r.studentId,
+        studentName: r.studentName,
+        localSisId: r.localSisId,
+        answers: [],
+      };
+      byStudent.set(r.studentId, fam);
+    }
+    fam.answers.push({ promptIndex: r.promptIndex, transcript: r.transcript });
+  }
+  const out = [...byStudent.values()];
+  for (const fam of out)
+    fam.answers.sort((a, b) => a.promptIndex - b.promptIndex);
+  return out;
+}
 
 export default function SessionDetailModal({
   sessionId,
@@ -134,12 +234,54 @@ export default function SessionDetailModal({
   const [lang, setLang] = useState<"en" | "es">("en");
   const [pdfBusy, setPdfBusy] = useState(false);
   const [samples, setSamples] = useState<PulseBrainLabWorkSample[]>([]);
+  const [publishing, setPublishing] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState<{
+    title: string;
+    body: string;
+  } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [responses, setResponses] = useState<SessionHomeResponses | null>(null);
+  const [preview, setPreview] = useState<{
+    objectUrl: string;
+    contentType: string;
+    name: string;
+  } | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+
+  const openSamplePreview = async (sampleId: number, name: string) => {
+    setError(null);
+    setPreviewBusy(true);
+    try {
+      const { objectUrl, contentType } = await fetchObjectUrl(
+        workSampleImageUrl(sampleId),
+      );
+      setPreview({ objectUrl, contentType, name });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPreviewBusy(false);
+    }
+  };
+
+  const closeSamplePreview = () => {
+    if (preview) URL.revokeObjectURL(preview.objectUrl);
+    setPreview(null);
+  };
 
   const reloadSamples = () => {
     fetchWorkSamples(sessionId)
       .then(setSamples)
       .catch(() => {
         /* non-fatal: attendance still usable without samples */
+      });
+  };
+
+  const reloadResponses = () => {
+    fetchSessionHomeResponses(sessionId)
+      .then(setResponses)
+      .catch(() => {
+        /* non-fatal: the viewer just stays empty */
       });
   };
 
@@ -156,6 +298,11 @@ export default function SessionDetailModal({
       )
       .finally(() => setLoading(false));
     reloadSamples();
+    reloadResponses();
+    // Parents can record Home Follow-Up at any time while this modal is open;
+    // poll so new transcripts surface without a manual refresh.
+    const id = setInterval(reloadResponses, 15_000);
+    return () => clearInterval(id);
   }, [sessionId]);
 
   const saveAttendance = async () => {
@@ -188,6 +335,50 @@ export default function SessionDetailModal({
     }
   };
 
+  const togglePublish = async () => {
+    if (!session) return;
+    setPublishing(true);
+    setError(null);
+    try {
+      const updated = session.publishedAt
+        ? await unpublishSession(sessionId)
+        : await publishSession(sessionId);
+      setSession(updated);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  const togglePreview = async () => {
+    if (showPreview) {
+      setShowPreview(false);
+      return;
+    }
+    setShowPreview(true);
+    if (!session) return;
+    setPreviewLoading(true);
+    try {
+      const card = await fetchParentCard(session.lessonKey, lang);
+      const parts: string[] = [];
+      if (card.summary) parts.push(card.summary);
+      if (card.askYourChild.length)
+        parts.push("• " + card.askYourChild.join("\n• "));
+      if (card.tryTogether) parts.push(card.tryTogether);
+      if (card.whyThisWorks) parts.push(card.whyThisWorks);
+      setPreviewHtml({
+        title: card.lessonTitle,
+        body: parts.join("\n\n"),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setPreviewHtml(null);
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
   const printAll = async () => {
     setPdfBusy(true);
     setError(null);
@@ -216,6 +407,7 @@ export default function SessionDetailModal({
   };
 
   return (
+    <>
     <ModalShell
       title={session ? session.lessonTitle : "Session"}
       onClose={onClose}
@@ -232,6 +424,126 @@ export default function SessionDetailModal({
             {session.sessionDate}
             {session.notes ? ` · ${session.notes}` : ""}
           </div>
+
+          {(() => {
+            const isPub = !!session.publishedAt;
+            return (
+              <div
+                style={{
+                  marginTop: "0.85rem",
+                  border: `1px solid ${isPub ? "#bbf7d0" : "#fed7aa"}`,
+                  background: isPub ? "#f0fdf4" : "#fff7ed",
+                  borderRadius: "0.6rem",
+                  padding: "0.7rem 0.8rem",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "0.6rem",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div>
+                    <div
+                      style={{
+                        fontWeight: 700,
+                        fontSize: "0.9rem",
+                        color: isPub ? "#15803d" : "#9a3412",
+                      }}
+                    >
+                      {isPub ? `🟢 ${T[lang].published}` : `🟠 ${T[lang].draft}`}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "0.8rem",
+                        color: "#475569",
+                        marginTop: "0.15rem",
+                      }}
+                    >
+                      {isPub ? T[lang].publishedHint : T[lang].draftHint}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: "0.4rem" }}>
+                    <button
+                      type="button"
+                      onClick={togglePreview}
+                      style={{
+                        ...secondaryBtnStyle,
+                        padding: "0.4rem 0.7rem",
+                        fontSize: "0.82rem",
+                      }}
+                    >
+                      {showPreview ? T[lang].hidePreview : T[lang].familyPreview}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={togglePublish}
+                      disabled={publishing}
+                      style={{
+                        ...(isPub ? secondaryBtnStyle : primaryBtnStyle),
+                        padding: "0.4rem 0.8rem",
+                        fontSize: "0.82rem",
+                      }}
+                    >
+                      {publishing
+                        ? T[lang].publishing
+                        : isPub
+                          ? T[lang].unpublish
+                          : T[lang].publish}
+                    </button>
+                  </div>
+                </div>
+
+                {showPreview && (
+                  <div
+                    style={{
+                      marginTop: "0.7rem",
+                      background: "#ffffff",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: "0.55rem",
+                      padding: "0.75rem 0.85rem",
+                    }}
+                  >
+                    {previewLoading ? (
+                      <div style={{ color: "#64748b", fontSize: "0.85rem" }}>
+                        {T[lang].previewLoading}
+                      </div>
+                    ) : previewHtml ? (
+                      <>
+                        <div
+                          style={{
+                            fontWeight: 700,
+                            fontSize: "0.92rem",
+                            color: "#0f172a",
+                            marginBottom: "0.4rem",
+                          }}
+                        >
+                          {previewHtml.title}
+                        </div>
+                        <div
+                          style={{
+                            whiteSpace: "pre-wrap",
+                            fontSize: "0.85rem",
+                            color: "#334155",
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          {previewHtml.body}
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ color: "#64748b", fontSize: "0.85rem" }}>
+                        {T[lang].previewEmpty}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           <GradingSection
             session={session}
@@ -390,6 +702,31 @@ export default function SessionDetailModal({
                 <span
                   style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}
                 >
+                  <button
+                    type="button"
+                    disabled={previewBusy}
+                    onClick={() =>
+                      openSamplePreview(
+                        s.id,
+                        s.lastName && s.firstName
+                          ? `${s.lastName}, ${s.firstName}`
+                          : "Work sample",
+                      )
+                    }
+                    title="Preview the exact image families receive"
+                    style={{
+                      border: "1px solid #cbd5e1",
+                      background: "#fff",
+                      color: "#475569",
+                      fontSize: "0.78rem",
+                      borderRadius: 999,
+                      padding: "0.2rem 0.6rem",
+                      cursor: "pointer",
+                      opacity: previewBusy ? 0.6 : 1,
+                    }}
+                  >
+                    Preview
+                  </button>
                   {session.gradeMode && (
                     <SampleGradeControl
                       sample={s}
@@ -461,6 +798,103 @@ export default function SessionDetailModal({
           <div
             style={{
               display: "flex",
+              alignItems: "baseline",
+              gap: "0.6rem",
+              flexWrap: "wrap",
+              margin: "1.5rem 0 0.6rem",
+            }}
+          >
+            <h3 style={{ margin: 0, fontSize: "0.95rem" }}>
+              {T[lang].homeFollowUp}
+            </h3>
+            {responses && (
+              <span style={{ color: "#64748b", fontSize: "0.82rem" }}>
+                {responses.respondedStudents} / {responses.totalGroupMembers}{" "}
+                {T[lang].familiesResponded} · {responses.totalResponses}{" "}
+                {T[lang].responsesWord}
+              </span>
+            )}
+          </div>
+          <div style={{ display: "grid", gap: "0.4rem" }}>
+            {(!responses || responses.records.length === 0) && (
+              <div style={{ color: "#94a3b8", fontSize: "0.88rem" }}>
+                {T[lang].noResponses}
+              </div>
+            )}
+            {groupResponsesByStudent(responses?.records ?? []).map((fam) => (
+              <div
+                key={fam.studentId}
+                style={{
+                  background: "#f8fafc",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 8,
+                  padding: "0.5rem 0.65rem",
+                  fontSize: "0.88rem",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "0.6rem",
+                  }}
+                >
+                  <span>
+                    <strong>{fam.studentName || "Student"}</strong>{" "}
+                    <span style={{ color: "#94a3b8" }}>
+                      ({fam.localSisId ?? "—"})
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    disabled={pdfBusy}
+                    onClick={async () => {
+                      setError(null);
+                      setPdfBusy(true);
+                      try {
+                        await downloadPdf(
+                          studentReportPdfUrl(fam.studentId, lang),
+                          `intervention-report-${fam.localSisId ?? "student"}.pdf`,
+                        );
+                      } catch (e) {
+                        setError(e instanceof Error ? e.message : String(e));
+                      } finally {
+                        setPdfBusy(false);
+                      }
+                    }}
+                    style={{
+                      ...secondaryBtnStyle,
+                      fontSize: "0.76rem",
+                      padding: "0.2rem 0.55rem",
+                      opacity: pdfBusy ? 0.6 : 1,
+                    }}
+                  >
+                    {T[lang].printReport}
+                  </button>
+                </div>
+                <div style={{ display: "grid", gap: "0.35rem", marginTop: "0.4rem" }}>
+                  {fam.answers.map((a) => (
+                    <div key={a.promptIndex}>
+                      <div
+                        style={{
+                          color: "#64748b",
+                          fontSize: "0.76rem",
+                        }}
+                      >
+                        {T[lang].promptLabel} #{a.promptIndex + 1}
+                      </div>
+                      <div style={{ whiteSpace: "pre-wrap" }}>{a.transcript}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div
+            style={{
+              display: "flex",
               justifyContent: "flex-end",
               alignItems: "center",
               gap: "0.75rem",
@@ -484,6 +918,39 @@ export default function SessionDetailModal({
         </>
       )}
     </ModalShell>
+    {preview && (
+      <ModalShell title={preview.name} onClose={closeSamplePreview}>
+        {preview.contentType === "application/pdf" ? (
+          <iframe
+            title={preview.name}
+            src={preview.objectUrl}
+            style={{
+              width: "100%",
+              height: "70vh",
+              border: "1px solid #e2e8f0",
+              borderRadius: 8,
+            }}
+          />
+        ) : preview.contentType.startsWith("image/") ? (
+          <img
+            alt={preview.name}
+            src={preview.objectUrl}
+            style={{
+              maxWidth: "100%",
+              maxHeight: "70vh",
+              display: "block",
+              margin: "0 auto",
+              borderRadius: 8,
+            }}
+          />
+        ) : (
+          <div style={{ color: "#64748b" }}>
+            This sample can't be previewed in the browser.
+          </div>
+        )}
+      </ModalShell>
+    )}
+    </>
   );
 }
 

@@ -9,6 +9,8 @@ import {
   addMembers,
   removeMember,
   fetchSessions,
+  downloadPdf,
+  studentReportPdfUrl,
   type StudentHit,
 } from "./data";
 import StudentSearchInput from "./StudentSearchInput";
@@ -151,14 +153,37 @@ export default function GroupDetailPanel({
                     ({m.localSisId ?? "—"})
                   </span>
                 </span>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => onRemoveMember(m.studentId)}
-                  style={removeBtnStyle}
-                >
-                  Remove
-                </button>
+                <span style={{ display: "flex", gap: "0.4rem" }}>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={async () => {
+                      setError(null);
+                      setBusy(true);
+                      try {
+                        await downloadPdf(
+                          studentReportPdfUrl(m.studentId, "en"),
+                          `intervention-report-${m.localSisId ?? "student"}.pdf`,
+                        );
+                      } catch (e) {
+                        setError(e instanceof Error ? e.message : String(e));
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                    style={removeBtnStyle}
+                  >
+                    Report
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onRemoveMember(m.studentId)}
+                    style={removeBtnStyle}
+                  >
+                    Remove
+                  </button>
+                </span>
               </div>
             ))}
           </div>

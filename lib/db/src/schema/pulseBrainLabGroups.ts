@@ -93,6 +93,11 @@ export const pulseBrainLabSessionsTable = pgTable(
     benchmarkCode: text("benchmark_code"),
     benchmarkSubject: text("benchmark_subject"),
     benchmarkLabel: text("benchmark_label"),
+    // Explicit publish-to-family gate. null = draft (staff-only); a timestamp =
+    // visible to families on the "Reinforce at Home" surface (group membership is
+    // still the OUTER gate — see buildHomeCards). The per-sample `shared` flag is
+    // a staff annotation and no longer controls family visibility.
+    publishedAt: timestamp("published_at", { withTimezone: true }),
     createdByStaffId: integer("created_by_staff_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

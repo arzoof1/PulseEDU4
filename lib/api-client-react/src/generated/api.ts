@@ -1422,6 +1422,180 @@ export const useDeletePulseBrainLabSession = <
 };
 
 /**
+ * @summary Publish a session to families
+ */
+export const getPublishPulseBrainLabSessionUrl = (sessionId: number) => {
+  return `/api/pulse-brain-lab/sessions/${sessionId}/publish`;
+};
+
+export const publishPulseBrainLabSession = async (
+  sessionId: number,
+  options?: RequestInit,
+): Promise<PulseBrainLabSessionDetail> => {
+  return customFetch<PulseBrainLabSessionDetail>(
+    getPublishPulseBrainLabSessionUrl(sessionId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getPublishPulseBrainLabSessionMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof publishPulseBrainLabSession>>,
+    TError,
+    { sessionId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof publishPulseBrainLabSession>>,
+  TError,
+  { sessionId: number },
+  TContext
+> => {
+  const mutationKey = ["publishPulseBrainLabSession"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof publishPulseBrainLabSession>>,
+    { sessionId: number }
+  > = (props) => {
+    const { sessionId } = props ?? {};
+
+    return publishPulseBrainLabSession(sessionId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type PublishPulseBrainLabSessionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof publishPulseBrainLabSession>>
+>;
+
+export type PublishPulseBrainLabSessionMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Publish a session to families
+ */
+export const usePublishPulseBrainLabSession = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof publishPulseBrainLabSession>>,
+    TError,
+    { sessionId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof publishPulseBrainLabSession>>,
+  TError,
+  { sessionId: number },
+  TContext
+> => {
+  return useMutation(getPublishPulseBrainLabSessionMutationOptions(options));
+};
+
+/**
+ * @summary Retract a session from families (back to draft)
+ */
+export const getUnpublishPulseBrainLabSessionUrl = (sessionId: number) => {
+  return `/api/pulse-brain-lab/sessions/${sessionId}/unpublish`;
+};
+
+export const unpublishPulseBrainLabSession = async (
+  sessionId: number,
+  options?: RequestInit,
+): Promise<PulseBrainLabSessionDetail> => {
+  return customFetch<PulseBrainLabSessionDetail>(
+    getUnpublishPulseBrainLabSessionUrl(sessionId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getUnpublishPulseBrainLabSessionMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof unpublishPulseBrainLabSession>>,
+    TError,
+    { sessionId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof unpublishPulseBrainLabSession>>,
+  TError,
+  { sessionId: number },
+  TContext
+> => {
+  const mutationKey = ["unpublishPulseBrainLabSession"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof unpublishPulseBrainLabSession>>,
+    { sessionId: number }
+  > = (props) => {
+    const { sessionId } = props ?? {};
+
+    return unpublishPulseBrainLabSession(sessionId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UnpublishPulseBrainLabSessionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof unpublishPulseBrainLabSession>>
+>;
+
+export type UnpublishPulseBrainLabSessionMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Retract a session from families (back to draft)
+ */
+export const useUnpublishPulseBrainLabSession = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof unpublishPulseBrainLabSession>>,
+    TError,
+    { sessionId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof unpublishPulseBrainLabSession>>,
+  TError,
+  { sessionId: number },
+  TContext
+> => {
+  return useMutation(getUnpublishPulseBrainLabSessionMutationOptions(options));
+};
+
+/**
  * @summary Set per-member attendance for a session
  */
 export const getSetPulseBrainLabAttendanceUrl = (sessionId: number) => {

@@ -395,6 +395,54 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/sessions/{sessionId}/publish:
+    post:
+      operationId: publishPulseBrainLabSession
+      tags: [pulseBrainLabDelivery]
+      summary: Publish a session to families
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Session detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabSessionDetail"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /pulse-brain-lab/sessions/{sessionId}/unpublish:
+    post:
+      operationId: unpublishPulseBrainLabSession
+      tags: [pulseBrainLabDelivery]
+      summary: Retract a session from families (back to draft)
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Session detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PulseBrainLabSessionDetail"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /pulse-brain-lab/sessions/{sessionId}/attendance:
     put:
       operationId: setPulseBrainLabAttendance
@@ -1117,6 +1165,9 @@ components:
           type: ["string", "null"]
         benchmarkLabel:
           type: ["string", "null"]
+        publishedAt:
+          type: ["string", "null"]
+          description: "ISO timestamp when published to families; null = draft (staff-only)."
         attendance:
           type: array
           items:

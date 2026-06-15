@@ -702,6 +702,10 @@ export async function ensurePulseBrainLabGroupsSchema() {
   await db.execute(
     sql`ALTER TABLE pulse_brain_lab_sessions ADD COLUMN IF NOT EXISTS benchmark_label TEXT`,
   );
+  // Explicit publish-to-family gate (null = draft, timestamp = published).
+  await db.execute(
+    sql`ALTER TABLE pulse_brain_lab_sessions ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ`,
+  );
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS pulse_brain_lab_session_attendance (

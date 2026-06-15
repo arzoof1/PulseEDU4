@@ -82,6 +82,25 @@ export async function downloadPdf(
   setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
 }
 
+// Fetch an authed binary asset and return both an object URL (for inline
+// <img>/<iframe> preview) and its content type. Caller MUST revokeObjectURL
+// when done. Bearer token rides through authFetch (cookies are blocked in the
+// preview iframe), which a bare <img src> could not carry.
+export async function fetchObjectUrl(
+  url: string,
+): Promise<{ objectUrl: string; contentType: string }> {
+  const res = await authFetch(url);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `Preview failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  return {
+    objectUrl: URL.createObjectURL(blob),
+    contentType: res.headers.get("Content-Type") ?? blob.type ?? "",
+  };
+}
+
 // ---- Groups ----
 
 export async function fetchGroups(): Promise<PulseBrainLabGroup[]> {
@@ -176,6 +195,26 @@ export async function deleteSession(sessionId: number): Promise<void> {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(body.error ?? `Delete failed (${res.status})`);
   }
+}
+
+export async function publishSession(
+  sessionId: number,
+): Promise<PulseBrainLabSessionDetail> {
+  return asJson(
+    await authFetch(`${BASE}/sessions/${sessionId}/publish`, {
+      method: "POST",
+    }),
+  );
+}
+
+export async function unpublishSession(
+  sessionId: number,
+): Promise<PulseBrainLabSessionDetail> {
+  return asJson(
+    await authFetch(`${BASE}/sessions/${sessionId}/unpublish`, {
+      method: "POST",
+    }),
+  );
 }
 
 export async function setAttendance(
@@ -343,6 +382,52 @@ export function homePacketPdfUrl(
   return `${BASE}/students/${encodeURIComponent(
     studentId,
   )}/packet.pdf?lessonKey=${encodeURIComponent(lessonKey)}&lang=${lang}`;
+}
+
+// Official printable per-student intervention report (every shared lesson,
+// DRAFT + published). :studentId is the FLEID FK — the join key, never shown;
+// the report renders local_sis_id only. Stream via downloadPdf (blob download,
+// never window.open in the preview iframe).
+export function studentReportPdfUrl(
+  studentId: string,
+  lang: "en" | "es",
+): string {
+  return `${BASE}/students/${encodeURIComponent(studentId)}/report.pdf?lang=${lang}`;
+}
+
+// Staff-only preview of the exact image/PDF bytes a family would receive for a
+// work sample — used to eyeball scan/photo quality before sharing.
+export function workSampleImageUrl(sampleId: number): string {
+  return `${BASE}/work-samples/${sampleId}/image`;
+}
+
+// ---- Home Follow-Up (staff viewer of family transcripts) ----
+
+// One parent-recorded transcript. studentId is the FLEID FK (key only, never
+// shown); the UI renders studentName + localSisId.
+export interface HomeResponseRecord {
+  studentId: string;
+  studentName: string;
+  localSisId: string | null;
+  promptIndex: number;
+  transcript: string;
+  language: string;
+  updatedAt: string;
+}
+
+export interface SessionHomeResponses {
+  respondedStudents: number;
+  totalGroupMembers: number;
+  totalResponses: number;
+  records: HomeResponseRecord[];
+}
+
+export async function fetchSessionHomeResponses(
+  sessionId: number,
+): Promise<SessionHomeResponses> {
+  return asJson(
+    await authFetch(`${BASE}/sessions/${sessionId}/home-responses`),
+  );
 }
 
 // Toggle whether a filed work sample is visible to the family on the

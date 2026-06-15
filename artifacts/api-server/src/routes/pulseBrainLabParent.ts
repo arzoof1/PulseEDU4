@@ -11,7 +11,7 @@
 //    safe shape; the only id that may appear is local_sis_id.
 //  - Bilingual: the family picks EN/ES. CASEL / "SEL" framing never appears.
 import { Router, type IRouter } from "express";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNotNull } from "drizzle-orm";
 import { z } from "zod/v4";
 import {
   db,
@@ -20,6 +20,7 @@ import {
   pulseBrainLabHomeResponsesTable,
   pulseBrainLabWorkSamplesTable,
   pulseBrainLabGroupMembersTable,
+  pulseBrainLabSessionsTable,
 } from "@workspace/db";
 import { verifyParentAuthToken } from "../lib/authToken.js";
 import { buildHomeCards } from "../lib/pulseBrainLabHomeCards.js";
@@ -330,14 +331,23 @@ router.get("/parent/brain-lab/work-sample/:sampleId/image", async (req, res) => 
     res.status(404).json({ error: "Sample not found" });
     return;
   }
+  // Publish gate: a sample image is only visible to families when its session is
+  // published (publishedAt IS NOT NULL). Join the session so a known/guessed
+  // sample id for a DRAFT session can't bypass the family-visibility contract —
+  // this MUST stay aligned with buildHomeCards (cards/packet) which hide drafts.
   const [sample] = await db
     .select({ objectKey: pulseBrainLabWorkSamplesTable.objectKey })
     .from(pulseBrainLabWorkSamplesTable)
+    .innerJoin(
+      pulseBrainLabSessionsTable,
+      eq(pulseBrainLabWorkSamplesTable.sessionId, pulseBrainLabSessionsTable.id),
+    )
     .where(
       and(
         eq(pulseBrainLabWorkSamplesTable.id, sampleId),
         eq(pulseBrainLabWorkSamplesTable.schoolId, owned.schoolId),
         eq(pulseBrainLabWorkSamplesTable.studentId, owned.fleid),
+        isNotNull(pulseBrainLabSessionsTable.publishedAt),
       ),
     );
   if (!sample) {

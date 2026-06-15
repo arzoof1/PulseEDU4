@@ -80,6 +80,9 @@ const STR: Record<
     benchmark: string;
     markMet: string;
     markNotYet: string;
+    reportTitle: string;
+    generated: string;
+    lessonsCount: string;
   }
 > = {
   en: {
@@ -99,6 +102,9 @@ const STR: Record<
     benchmark: "Florida benchmark",
     markMet: "Met",
     markNotYet: "Not yet",
+    reportTitle: "Intervention Report",
+    generated: "Generated",
+    lessonsCount: "lessons",
   },
   es: {
     title: "Refuerza en casa",
@@ -117,6 +123,9 @@ const STR: Record<
     benchmark: "Estándar de Florida",
     markMet: "Logrado",
     markNotYet: "Aún no",
+    reportTitle: "Informe de intervención",
+    generated: "Generado",
+    lessonsCount: "lecciones",
   },
 };
 
@@ -141,61 +150,17 @@ function sectionHeading(
   doc.moveDown(0.4);
 }
 
-export async function renderPulseBrainLabPacketPdf(
+// Render one lesson's content (grades → home follow-up) into an existing doc,
+// starting at the current doc.y. Shared by the single-lesson family packet and
+// the multi-lesson staff intervention report so both stay pixel-identical.
+function renderLessonBody(
+  doc: PDFKit.PDFDocument,
   input: PacketPdfInput,
-): Promise<Buffer> {
+  contentWidth: number,
+): void {
   const t = STR[input.language];
   const pr = input.parentReinforcement;
   const lang = input.language;
-
-  const doc = new PDFDocument({ size: "LETTER", margin: MARGIN });
-  const contentWidth = doc.page.width - MARGIN * 2;
-  const chunks: Buffer[] = [];
-
-  const done = new Promise<Buffer>((resolve, reject) => {
-    doc.on("data", (c: Buffer) => chunks.push(c));
-    doc.on("end", () => resolve(Buffer.concat(chunks)));
-    doc.on("error", reject);
-  });
-
-  // Header band.
-  doc.rect(0, 0, doc.page.width, 96).fill(SOFT);
-  doc
-    .fillColor(ACCENT)
-    .font("Helvetica-Bold")
-    .fontSize(22)
-    .text(t.title, MARGIN, 28, { width: contentWidth });
-  doc
-    .fillColor(INK)
-    .font("Helvetica-Bold")
-    .fontSize(13)
-    .text(input.lessonTitle, MARGIN, 58, { width: contentWidth });
-  doc
-    .fillColor(MUTED)
-    .font("Helvetica")
-    .fontSize(10)
-    .text(input.skillArea, MARGIN, 76, { width: contentWidth });
-
-  doc.y = 112;
-
-  // Who / when line.
-  const idSuffix = input.localSisId ? ` (${input.localSisId})` : "";
-  doc
-    .fillColor(INK)
-    .font("Helvetica-Bold")
-    .fontSize(11)
-    .text(`${t.forStudent}: ${input.studentName}${idSuffix}`, MARGIN, doc.y, {
-      width: contentWidth,
-    });
-  if (input.sessionDateLabel) {
-    doc
-      .fillColor(MUTED)
-      .font("Helvetica")
-      .fontSize(10)
-      .text(`${t.session}: ${input.sessionDateLabel}`, MARGIN, doc.y, {
-        width: contentWidth,
-      });
-  }
 
   // Grade / benchmark — one block per shared, graded sample. Grading is per
   // assignment (session), so a multi-session lesson packet can carry several.
@@ -337,6 +302,159 @@ export async function renderPulseBrainLabPacketPdf(
       doc.moveDown(0.5);
     }
   }
+}
+
+export async function renderPulseBrainLabPacketPdf(
+  input: PacketPdfInput,
+): Promise<Buffer> {
+  const t = STR[input.language];
+
+  const doc = new PDFDocument({ size: "LETTER", margin: MARGIN });
+  const contentWidth = doc.page.width - MARGIN * 2;
+  const chunks: Buffer[] = [];
+
+  const done = new Promise<Buffer>((resolve, reject) => {
+    doc.on("data", (c: Buffer) => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+  });
+
+  // Header band.
+  doc.rect(0, 0, doc.page.width, 96).fill(SOFT);
+  doc
+    .fillColor(ACCENT)
+    .font("Helvetica-Bold")
+    .fontSize(22)
+    .text(t.title, MARGIN, 28, { width: contentWidth });
+  doc
+    .fillColor(INK)
+    .font("Helvetica-Bold")
+    .fontSize(13)
+    .text(input.lessonTitle, MARGIN, 58, { width: contentWidth });
+  doc
+    .fillColor(MUTED)
+    .font("Helvetica")
+    .fontSize(10)
+    .text(input.skillArea, MARGIN, 76, { width: contentWidth });
+
+  doc.y = 112;
+
+  // Who / when line.
+  const idSuffix = input.localSisId ? ` (${input.localSisId})` : "";
+  doc
+    .fillColor(INK)
+    .font("Helvetica-Bold")
+    .fontSize(11)
+    .text(`${t.forStudent}: ${input.studentName}${idSuffix}`, MARGIN, doc.y, {
+      width: contentWidth,
+    });
+  if (input.sessionDateLabel) {
+    doc
+      .fillColor(MUTED)
+      .font("Helvetica")
+      .fontSize(10)
+      .text(`${t.session}: ${input.sessionDateLabel}`, MARGIN, doc.y, {
+        width: contentWidth,
+      });
+  }
+
+  renderLessonBody(doc, input, contentWidth);
+
+  doc.end();
+  return done;
+}
+
+// Multi-lesson per-student intervention report (staff-facing). Reuses the exact
+// per-lesson body renderer so a printed report matches the family packet, but
+// fronts it with a cover header and paginates one lesson per page. Includes
+// DRAFT and published lessons (the caller — a staff route — decides scope). The
+// only student ID shown is local_sis_id, never the FLEID.
+export interface StudentReportPdfInput {
+  language: PacketLanguage;
+  /** Display name of the child (first + last). */
+  studentName: string;
+  /** local_sis_id ONLY — never the FLEID. */
+  localSisId: string | null;
+  /** Human date the report was generated (YYYY-MM-DD). */
+  generatedLabel: string;
+  /** One entry per lesson card, newest first. */
+  lessons: PacketPdfInput[];
+}
+
+export async function renderPulseBrainLabStudentReportPdf(
+  input: StudentReportPdfInput,
+): Promise<Buffer> {
+  const t = STR[input.language];
+
+  const doc = new PDFDocument({ size: "LETTER", margin: MARGIN });
+  const contentWidth = doc.page.width - MARGIN * 2;
+  const chunks: Buffer[] = [];
+
+  const done = new Promise<Buffer>((resolve, reject) => {
+    doc.on("data", (c: Buffer) => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+  });
+
+  // Cover header band.
+  doc.rect(0, 0, doc.page.width, 110).fill(SOFT);
+  doc
+    .fillColor(ACCENT)
+    .font("Helvetica-Bold")
+    .fontSize(22)
+    .text(t.reportTitle, MARGIN, 26, { width: contentWidth });
+  const idSuffix = input.localSisId ? ` (${input.localSisId})` : "";
+  doc
+    .fillColor(INK)
+    .font("Helvetica-Bold")
+    .fontSize(14)
+    .text(`${input.studentName}${idSuffix}`, MARGIN, 58, {
+      width: contentWidth,
+    });
+  doc
+    .fillColor(MUTED)
+    .font("Helvetica")
+    .fontSize(10)
+    .text(
+      `${t.generated}: ${input.generatedLabel}  ·  ${input.lessons.length} ${t.lessonsCount}`,
+      MARGIN,
+      82,
+      { width: contentWidth },
+    );
+  doc.y = 128;
+
+  if (input.lessons.length === 0) {
+    doc
+      .fillColor(MUTED)
+      .font("Helvetica-Oblique")
+      .fontSize(11)
+      .text(t.noWorkSample, MARGIN, doc.y, { width: contentWidth });
+  }
+
+  input.lessons.forEach((lesson, i) => {
+    if (i > 0) doc.addPage();
+    else doc.moveDown(0.4);
+    doc
+      .fillColor(INK)
+      .font("Helvetica-Bold")
+      .fontSize(15)
+      .text(lesson.lessonTitle, MARGIN, doc.y, { width: contentWidth });
+    doc
+      .fillColor(MUTED)
+      .font("Helvetica")
+      .fontSize(10)
+      .text(lesson.skillArea, MARGIN, doc.y, { width: contentWidth });
+    if (lesson.sessionDateLabel) {
+      doc
+        .fillColor(MUTED)
+        .font("Helvetica")
+        .fontSize(10)
+        .text(`${t.session}: ${lesson.sessionDateLabel}`, MARGIN, doc.y, {
+          width: contentWidth,
+        });
+    }
+    renderLessonBody(doc, lesson, contentWidth);
+  });
 
   doc.end();
   return done;

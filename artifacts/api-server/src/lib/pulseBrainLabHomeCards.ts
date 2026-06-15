@@ -72,6 +72,11 @@ export interface HomeCard {
   brainIdea: PulseBrainLabLesson["brainModelTag"];
   sessionId: number | null;
   sessionDate: string | null;
+  // Publish-to-family status of the card's anchor (most-recent) session. Parents
+  // only ever receive published cards; the staff preview surfaces drafts too so a
+  // Behavior Specialist can see exactly what WILL go home before publishing.
+  published: boolean;
+  publishedAt: string | null;
   parentReinforcement: PulseBrainLabParentReinforcement;
   // The bilingual completable worksheet for this lesson (the activity the child
   // did). Lets the family read the lesson and see what the worksheet asked.
@@ -92,7 +97,9 @@ function findLesson(lessonKey: string): PulseBrainLabLesson | null {
 export async function buildHomeCards(
   schoolId: number,
   studentId: string,
+  opts: { includeUnpublished?: boolean } = {},
 ): Promise<HomeCard[]> {
+  const includeUnpublished = opts.includeUnpublished ?? false;
   // Group-membership gate. No group = no family card, even if stray work samples
   // exist for the student.
   const membership = await db
@@ -119,6 +126,7 @@ export async function buildHomeCards(
       createdAt: pulseBrainLabWorkSamplesTable.createdAt,
       lessonKey: pulseBrainLabSessionsTable.lessonKey,
       sessionDate: pulseBrainLabSessionsTable.sessionDate,
+      publishedAt: pulseBrainLabSessionsTable.publishedAt,
       gradeMode: pulseBrainLabSessionsTable.gradeMode,
       maxScore: pulseBrainLabSessionsTable.maxScore,
       benchmarkCode: pulseBrainLabSessionsTable.benchmarkCode,
@@ -193,6 +201,10 @@ export async function buildHomeCards(
   for (const row of sampleRows) {
     const lesson = findLesson(row.lessonKey);
     if (!lesson) continue; // lesson de-listed from catalog — skip the card.
+    const published = row.publishedAt != null;
+    // Publish gate: families only ever see samples whose session is published.
+    // Staff preview (includeUnpublished) sees drafts too, flagged as not-published.
+    if (!includeUnpublished && !published) continue;
     let card = cards.get(row.lessonKey);
     if (!card) {
       card = {
@@ -200,10 +212,12 @@ export async function buildHomeCards(
         lessonTitle: lesson.title,
         skillArea: lesson.skillArea,
         brainIdea: lesson.brainModelTag,
-        // sampleRows is newest-first, so the first sample we see for a lesson
-        // is the most recent — use it as the card's session anchor.
+        // sampleRows is newest-first, so the first (included) sample we see for a
+        // lesson is the most recent — use it as the card's session anchor.
         sessionId: row.sessionId,
         sessionDate: row.sessionDate,
+        published,
+        publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
         parentReinforcement: lesson.parentReinforcement,
         studentWorksheet: lesson.studentWorksheet,
         workSamples: [],

@@ -130,6 +130,38 @@ function HomeCard({
   const [downloading, setDownloading] = useState(false);
   const [dlError, setDlError] = useState("");
   const [showLesson, setShowLesson] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  // "New" indicator + collapse. The whole card stays closed until the family
+  // taps it open — a purposeful "review" action that keeps the screen calm when
+  // several subjects each push work home. A per-card signature of the latest
+  // activity (session date + sample/grade/response counts) is stored in
+  // localStorage when the family opens it; if the live signature differs, the
+  // card shows a "New" badge until they open it again.
+  const signature = `${card.sessionDate ?? ""}|${card.workSamples.length}|${card.grades.length}|${card.homeResponses.length}`;
+  const seenKey = `pulseed.rah.seen.${studentId}.${card.lessonKey}`;
+  const [isNew, setIsNew] = useState(() => {
+    try {
+      return localStorage.getItem(seenKey) !== signature;
+    } catch {
+      return true;
+    }
+  });
+
+  function handleToggle() {
+    setOpen((v) => {
+      const next = !v;
+      if (next && isNew) {
+        setIsNew(false);
+        try {
+          localStorage.setItem(seenKey, signature);
+        } catch {
+          // best-effort; private mode may block storage
+        }
+      }
+      return next;
+    });
+  }
 
   async function handleDownload() {
     if (downloading) return;
@@ -145,27 +177,54 @@ function HomeCard({
   }
 
   return (
-    <div className="rounded-xl border border-slate-200 p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="font-semibold text-slate-900">{card.lessonTitle}</div>
+    <div className="rounded-xl border border-slate-200">
+      <button
+        type="button"
+        onClick={handleToggle}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-3 p-4 text-left"
+      >
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="truncate font-semibold text-slate-900">
+              {card.lessonTitle}
+            </span>
+            {isNew && (
+              <span className="inline-flex shrink-0 items-center rounded-full bg-rose-500 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+                {t("New", "Nuevo")}
+              </span>
+            )}
+          </div>
           <div className="text-xs text-slate-500">
             {card.skillArea}
             {card.sessionDate ? ` · ${card.sessionDate}` : ""}
+            {card.workSamples.length > 0
+              ? ` · ${card.workSamples.length} ${t("work sample(s)", "muestra(s)")}`
+              : ""}
           </div>
         </div>
-        <button
-          type="button"
-          onClick={handleDownload}
-          disabled={downloading}
-          className="inline-flex items-center gap-1 rounded-lg border border-indigo-300 bg-indigo-50 px-2.5 py-1.5 text-xs font-medium text-indigo-700 disabled:opacity-50"
-        >
-          <Download className="h-3.5 w-3.5" />
-          {downloading
-            ? t("Preparing…", "Preparando…")
-            : t("Packet", "Paquete")}
-        </button>
-      </div>
+        <ChevronDown
+          className={`h-5 w-5 shrink-0 text-slate-400 transition-transform ${
+            open ? "rotate-180" : ""
+          }`}
+        />
+      </button>
+
+      {open && (
+        <div className="border-t border-slate-100 p-4 pt-3">
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={handleDownload}
+              disabled={downloading}
+              className="inline-flex items-center gap-1 rounded-lg border border-indigo-300 bg-indigo-50 px-2.5 py-1.5 text-xs font-medium text-indigo-700 disabled:opacity-50"
+            >
+              <Download className="h-3.5 w-3.5" />
+              {downloading
+                ? t("Preparing…", "Preparando…")
+                : t("Packet", "Paquete")}
+            </button>
+          </div>
 
       {card.grades.length > 0 && (
         <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
@@ -301,7 +360,11 @@ function HomeCard({
         })}
       </div>
 
-      {dlError && <div className="mt-2 text-xs text-red-600">{dlError}</div>}
+          {dlError && (
+            <div className="mt-2 text-xs text-red-600">{dlError}</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

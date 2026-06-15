@@ -338,6 +338,12 @@ export const GetPulseBrainLabSessionResponse = zod.object({
   benchmarkCode: zod.string().nullish(),
   benchmarkSubject: zod.string().nullish(),
   benchmarkLabel: zod.string().nullish(),
+  publishedAt: zod
+    .string()
+    .nullish()
+    .describe(
+      "ISO timestamp when published to families; null = draft (staff-only).",
+    ),
   attendance: zod.array(
     zod.object({
       studentId: zod.string(),
@@ -354,6 +360,94 @@ export const GetPulseBrainLabSessionResponse = zod.object({
  */
 export const DeletePulseBrainLabSessionParams = zod.object({
   sessionId: zod.coerce.number(),
+});
+
+/**
+ * @summary Publish a session to families
+ */
+export const PublishPulseBrainLabSessionParams = zod.object({
+  sessionId: zod.coerce.number(),
+});
+
+export const PublishPulseBrainLabSessionResponse = zod.object({
+  id: zod.number(),
+  groupId: zod.number(),
+  lessonKey: zod.string(),
+  lessonTitle: zod.string(),
+  sessionDate: zod.string(),
+  notes: zod.string().nullish(),
+  createdAt: zod.string(),
+  gradeMode: zod
+    .union([
+      zod.literal("score"),
+      zod.literal("participation"),
+      zod.literal(null),
+    ])
+    .nullish()
+    .describe("'score' | 'participation' | null (ungraded assignment)."),
+  maxScore: zod.number().nullish(),
+  benchmarkCode: zod.string().nullish(),
+  benchmarkSubject: zod.string().nullish(),
+  benchmarkLabel: zod.string().nullish(),
+  publishedAt: zod
+    .string()
+    .nullish()
+    .describe(
+      "ISO timestamp when published to families; null = draft (staff-only).",
+    ),
+  attendance: zod.array(
+    zod.object({
+      studentId: zod.string(),
+      localSisId: zod.string().nullable(),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      status: zod.enum(["present", "absent", "excused"]),
+    }),
+  ),
+});
+
+/**
+ * @summary Retract a session from families (back to draft)
+ */
+export const UnpublishPulseBrainLabSessionParams = zod.object({
+  sessionId: zod.coerce.number(),
+});
+
+export const UnpublishPulseBrainLabSessionResponse = zod.object({
+  id: zod.number(),
+  groupId: zod.number(),
+  lessonKey: zod.string(),
+  lessonTitle: zod.string(),
+  sessionDate: zod.string(),
+  notes: zod.string().nullish(),
+  createdAt: zod.string(),
+  gradeMode: zod
+    .union([
+      zod.literal("score"),
+      zod.literal("participation"),
+      zod.literal(null),
+    ])
+    .nullish()
+    .describe("'score' | 'participation' | null (ungraded assignment)."),
+  maxScore: zod.number().nullish(),
+  benchmarkCode: zod.string().nullish(),
+  benchmarkSubject: zod.string().nullish(),
+  benchmarkLabel: zod.string().nullish(),
+  publishedAt: zod
+    .string()
+    .nullish()
+    .describe(
+      "ISO timestamp when published to families; null = draft (staff-only).",
+    ),
+  attendance: zod.array(
+    zod.object({
+      studentId: zod.string(),
+      localSisId: zod.string().nullable(),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      status: zod.enum(["present", "absent", "excused"]),
+    }),
+  ),
 });
 
 /**
@@ -392,6 +486,12 @@ export const SetPulseBrainLabAttendanceResponse = zod.object({
   benchmarkCode: zod.string().nullish(),
   benchmarkSubject: zod.string().nullish(),
   benchmarkLabel: zod.string().nullish(),
+  publishedAt: zod
+    .string()
+    .nullish()
+    .describe(
+      "ISO timestamp when published to families; null = draft (staff-only).",
+    ),
   attendance: zod.array(
     zod.object({
       studentId: zod.string(),
@@ -558,6 +658,12 @@ export const SetPulseBrainLabSessionGradingResponse = zod.object({
   benchmarkCode: zod.string().nullish(),
   benchmarkSubject: zod.string().nullish(),
   benchmarkLabel: zod.string().nullish(),
+  publishedAt: zod
+    .string()
+    .nullish()
+    .describe(
+      "ISO timestamp when published to families; null = draft (staff-only).",
+    ),
   attendance: zod.array(
     zod.object({
       studentId: zod.string(),

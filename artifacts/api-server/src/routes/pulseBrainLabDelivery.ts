@@ -24,7 +24,7 @@ import {
   studentsTable,
   staffTable,
 } from "@workspace/db";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, desc } from "drizzle-orm";
 import { genUrlSafeToken } from "../lib/urlSafeToken.js";
 import { renderPulseBrainLabFacilitationPdf } from "../lib/pulseBrainLabFacilitationPdf.js";
 import {
@@ -50,7 +50,9 @@ import { bindObjectToSchool, readStoredObject } from "./storage.js";
 import { buildHomeCards } from "../lib/pulseBrainLabHomeCards.js";
 import {
   renderPulseBrainLabPacketPdf,
+  renderPulseBrainLabStudentReportPdf,
   type PacketWorkSampleImage,
+  type PacketPdfInput,
 } from "../lib/pulseBrainLabPacketPdf.js";
 import { decodeWorksheetPdf } from "../lib/scanDecode.js";
 import { requireSchool } from "../lib/scope.js";
@@ -225,6 +227,7 @@ async function loadSessionDetail(schoolId: number, sessionId: number) {
     benchmarkCode: session.benchmarkCode ?? null,
     benchmarkSubject: session.benchmarkSubject ?? null,
     benchmarkLabel: session.benchmarkLabel ?? null,
+    publishedAt: session.publishedAt ? session.publishedAt.toISOString() : null,
     attendance: members.map((m) => ({
       studentId: m.studentId,
       localSisId: m.localSisId ?? null,
@@ -786,6 +789,73 @@ router.delete("/pulse-brain-lab/sessions/:sessionId", async (req, res) => {
     );
   res.status(204).end();
 });
+
+// POST /api/pulse-brain-lab/sessions/:sessionId/publish — make this assignment's
+// cards visible to families (group membership stays the outer gate). Idempotent:
+// re-publishing a published session refreshes publishedAt. Returns the detail.
+router.post(
+  "/pulse-brain-lab/sessions/:sessionId/publish",
+  async (req, res) => {
+    const staff = await loadCoreTeamStaff(req, res);
+    if (!staff) return;
+    const schoolId = requireSchool(req, res);
+    if (schoolId == null) return;
+    const sessionId = Number(req.params.sessionId);
+    if (!Number.isInteger(sessionId)) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    const updated = await db
+      .update(pulseBrainLabSessionsTable)
+      .set({ publishedAt: new Date() })
+      .where(
+        and(
+          eq(pulseBrainLabSessionsTable.id, sessionId),
+          eq(pulseBrainLabSessionsTable.schoolId, schoolId),
+        ),
+      )
+      .returning({ id: pulseBrainLabSessionsTable.id });
+    if (updated.length === 0) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    const detail = await loadSessionDetail(schoolId, sessionId);
+    res.json(detail);
+  },
+);
+
+// POST /api/pulse-brain-lab/sessions/:sessionId/unpublish — retract from families
+// (back to draft). Idempotent. Returns the refreshed detail.
+router.post(
+  "/pulse-brain-lab/sessions/:sessionId/unpublish",
+  async (req, res) => {
+    const staff = await loadCoreTeamStaff(req, res);
+    if (!staff) return;
+    const schoolId = requireSchool(req, res);
+    if (schoolId == null) return;
+    const sessionId = Number(req.params.sessionId);
+    if (!Number.isInteger(sessionId)) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    const updated = await db
+      .update(pulseBrainLabSessionsTable)
+      .set({ publishedAt: null })
+      .where(
+        and(
+          eq(pulseBrainLabSessionsTable.id, sessionId),
+          eq(pulseBrainLabSessionsTable.schoolId, schoolId),
+        ),
+      )
+      .returning({ id: pulseBrainLabSessionsTable.id });
+    if (updated.length === 0) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    const detail = await loadSessionDetail(schoolId, sessionId);
+    res.json(detail);
+  },
+);
 
 // PUT /api/pulse-brain-lab/sessions/:sessionId/attendance — upsert per-member
 // attendance. Only members of the session's group may be marked.
@@ -1596,6 +1666,66 @@ router.get(
   },
 );
 
+// GET /api/pulse-brain-lab/work-samples/:sampleId/image — staff preview of the
+// exact bytes a family would receive, so Core Team can eyeball a scan/photo's
+// quality before sharing it. Phone photos render inline (PNG/JPEG); scanned
+// PDFs are served as application/pdf. School-scoped to the actor.
+router.get(
+  "/pulse-brain-lab/work-samples/:sampleId/image",
+  async (req, res) => {
+    const staff = await loadCoreTeamStaff(req, res);
+    if (!staff) return;
+    const schoolId = requireSchool(req, res);
+    if (schoolId == null) return;
+    const sampleId = Number(req.params.sampleId);
+    if (!Number.isInteger(sampleId)) {
+      res.status(400).json({ error: "Invalid sample id" });
+      return;
+    }
+    const [row] = await db
+      .select({ objectKey: pulseBrainLabWorkSamplesTable.objectKey })
+      .from(pulseBrainLabWorkSamplesTable)
+      .where(
+        and(
+          eq(pulseBrainLabWorkSamplesTable.id, sampleId),
+          eq(pulseBrainLabWorkSamplesTable.schoolId, schoolId),
+        ),
+      );
+    if (!row) {
+      res.status(404).json({ error: "Work sample not found" });
+      return;
+    }
+    let buf: Buffer | null = null;
+    try {
+      buf = await readStoredObject(row.objectKey);
+    } catch {
+      buf = null;
+    }
+    if (!buf) {
+      res.status(404).json({ error: "Sample file unavailable" });
+      return;
+    }
+    const isPng = buf.length > 4 && buf[0] === 0x89 && buf[1] === 0x50;
+    const isJpeg = buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8;
+    const isPdf =
+      buf.length > 4 &&
+      buf[0] === 0x25 &&
+      buf[1] === 0x50 &&
+      buf[2] === 0x44 &&
+      buf[3] === 0x46;
+    const contentType = isPng
+      ? "image/png"
+      : isJpeg
+        ? "image/jpeg"
+        : isPdf
+          ? "application/pdf"
+          : "application/octet-stream";
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "private, max-age=60");
+    res.send(buf);
+  },
+);
+
 // DELETE /api/pulse-brain-lab/work-samples/:sampleId — remove a filed sample.
 router.delete("/pulse-brain-lab/work-samples/:sampleId", async (req, res) => {
   const staff = await loadCoreTeamStaff(req, res);
@@ -1799,7 +1929,9 @@ router.get(
       res.status(400).json({ error: "Invalid student id" });
       return;
     }
-    const cards = await buildHomeCards(schoolId, studentId);
+    const cards = await buildHomeCards(schoolId, studentId, {
+      includeUnpublished: true,
+    });
     res.json(cards);
   },
 );
@@ -1821,7 +1953,9 @@ router.get(
       return;
     }
     const lang = parseLang(req.query.lang);
-    const cards = await buildHomeCards(schoolId, studentId);
+    const cards = await buildHomeCards(schoolId, studentId, {
+      includeUnpublished: true,
+    });
     const card = cards.find((c) => c.lessonKey === lessonKey);
     if (!card) {
       res.status(404).json({ error: "No shared evidence for that lesson" });
@@ -1837,13 +1971,158 @@ router.get(
   },
 );
 
+// GET /api/pulse-brain-lab/students/:studentId/report.pdf?lang= — the official
+// printable per-student intervention report: every lesson the child has shared
+// evidence for (DRAFT + published), one lesson per page, behind a staff-facing
+// cover. Reuses the exact family-packet body renderer so what staff print
+// matches what families see. :studentId is the canonical FLEID FK (never shown);
+// the cover renders local_sis_id only.
+router.get(
+  "/pulse-brain-lab/students/:studentId/report.pdf",
+  async (req, res) => {
+    const staff = await loadCoreTeamStaff(req, res);
+    if (!staff) return;
+    const schoolId = requireSchool(req, res);
+    if (schoolId == null) return;
+    const studentId = String(req.params.studentId);
+    if (!studentId) {
+      res.status(400).json({ error: "Invalid student id" });
+      return;
+    }
+    const lang = parseLang(req.query.lang);
+    const [student] = await db
+      .select({
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        localSisId: studentsTable.localSisId,
+      })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.studentId, studentId),
+          eq(studentsTable.schoolId, schoolId),
+        ),
+      );
+    if (!student) {
+      res.status(404).json({ error: "Student not found" });
+      return;
+    }
+    const cards = await buildHomeCards(schoolId, studentId, {
+      includeUnpublished: true,
+    });
+    const lessons: PacketPdfInput[] = [];
+    for (const card of cards) {
+      lessons.push(await cardToPacketInput(card, lang));
+    }
+    const studentName =
+      [student.firstName, student.lastName].filter(Boolean).join(" ").trim() ||
+      (student.localSisId ?? "");
+    const generatedLabel = new Intl.DateTimeFormat("en-CA", {
+      timeZone: DEFAULT_SCHOOL_TZ,
+    }).format(new Date());
+    const pdf = await renderPulseBrainLabStudentReportPdf({
+      language: lang,
+      studentName,
+      localSisId: student.localSisId ?? null,
+      generatedLabel,
+      lessons,
+    });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="intervention-report-${student.localSisId ?? studentId}.pdf"`,
+    );
+    res.end(pdf);
+  },
+);
+
+// GET /api/pulse-brain-lab/sessions/:sessionId/home-responses — the staff viewer
+// of the Home Follow-Up transcripts families recorded for this session's lesson.
+// Returns a completion counter (how many of the current group roster responded)
+// plus one record per parent response, scoped to current group members so a
+// transferred-out student's old transcript doesn't surface. studentId is the
+// FLEID FK (key only — never displayed); records carry localSisId for the UI.
+router.get(
+  "/pulse-brain-lab/sessions/:sessionId/home-responses",
+  async (req, res) => {
+    const staff = await loadCoreTeamStaff(req, res);
+    if (!staff) return;
+    const schoolId = requireSchool(req, res);
+    if (schoolId == null) return;
+    const sessionId = Number(req.params.sessionId);
+    if (!Number.isInteger(sessionId)) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    const detail = await loadSessionDetail(schoolId, sessionId);
+    if (!detail) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    const members = detail.attendance;
+    const memberById = new Map(members.map((m) => [m.studentId, m]));
+    const memberIds = members.map((m) => m.studentId);
+
+    const rows =
+      memberIds.length === 0
+        ? []
+        : await db
+            .select({
+              studentId: pulseBrainLabHomeResponsesTable.studentId,
+              promptIndex: pulseBrainLabHomeResponsesTable.promptIndex,
+              transcript: pulseBrainLabHomeResponsesTable.transcript,
+              language: pulseBrainLabHomeResponsesTable.language,
+              updatedAt: pulseBrainLabHomeResponsesTable.updatedAt,
+            })
+            .from(pulseBrainLabHomeResponsesTable)
+            .where(
+              and(
+                eq(pulseBrainLabHomeResponsesTable.schoolId, schoolId),
+                eq(pulseBrainLabHomeResponsesTable.lessonKey, detail.lessonKey),
+                inArray(
+                  pulseBrainLabHomeResponsesTable.studentId,
+                  memberIds,
+                ),
+              ),
+            )
+            .orderBy(desc(pulseBrainLabHomeResponsesTable.updatedAt));
+
+    const records = rows.map((r) => {
+      const m = memberById.get(r.studentId);
+      const name = m
+        ? [m.firstName, m.lastName].filter(Boolean).join(" ").trim()
+        : "";
+      return {
+        studentId: r.studentId,
+        studentName: name || (m?.localSisId ?? ""),
+        localSisId: m?.localSisId ?? null,
+        promptIndex: r.promptIndex,
+        transcript: r.transcript,
+        language: r.language,
+        updatedAt: r.updatedAt.toISOString(),
+      };
+    });
+
+    const respondedStudents = new Set(rows.map((r) => r.studentId)).size;
+    res.json({
+      respondedStudents,
+      totalGroupMembers: members.length,
+      totalResponses: records.length,
+      records,
+    });
+  },
+);
+
 // Shared packet builder used by both the staff route above and the parent route.
 // Resolves each shared sample's stored object to image bytes when it is a phone
 // photo (PNG/JPEG magic bytes); scanned-PDF samples render as an on-file note.
-export async function buildPacketPdf(
+// Resolve ONE home card into the renderer input shape (decoding shared sample
+// images + collapsing per-sample grades). Shared by the single-lesson packet
+// and the multi-lesson student report so both render identically.
+export async function cardToPacketInput(
   card: Awaited<ReturnType<typeof buildHomeCards>>[number],
   lang: WorksheetLanguage,
-): Promise<Buffer> {
+): Promise<PacketPdfInput> {
   const sampleImages: PacketWorkSampleImage[] = [];
   for (const s of card.workSamples) {
     let imageBytes: Buffer | null = null;
@@ -1888,7 +2167,7 @@ export async function buildPacketPdf(
       benchmarkCode: s.benchmarkCode,
       benchmarkLabel: s.benchmarkLabel,
     }));
-  return renderPulseBrainLabPacketPdf({
+  return {
     language: lang,
     lessonTitle: card.lessonTitle,
     skillArea: card.skillArea,
@@ -1902,7 +2181,17 @@ export async function buildPacketPdf(
       promptIndex: r.promptIndex,
       transcript: r.transcript,
     })),
-  });
+  };
+}
+
+// Shared single-lesson packet builder used by both the staff route and the
+// parent route. Resolves the card to renderer input then renders the PDF.
+export async function buildPacketPdf(
+  card: Awaited<ReturnType<typeof buildHomeCards>>[number],
+  lang: WorksheetLanguage,
+): Promise<Buffer> {
+  const input = await cardToPacketInput(card, lang);
+  return renderPulseBrainLabPacketPdf(input);
 }
 
 // PNG (\x89PNG) or JPEG (\xFF\xD8\xFF) — the formats pdfkit's doc.image accepts.
