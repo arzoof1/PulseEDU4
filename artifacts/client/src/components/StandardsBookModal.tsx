@@ -350,21 +350,16 @@ export default function StandardsBookModal({
         {/* Header */}
         <div
           style={{
-            display: "flex",
+            display: "grid",
+            gridTemplateColumns: "30px 1fr 30px",
             alignItems: "center",
-            justifyContent: "space-between",
+            gap: 8,
             padding: "12px 16px",
             borderBottom: "1px solid #e5e7eb",
             background: "#1e3a8a",
             color: "white",
           }}
         >
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>{meta.heading}</div>
-            <div style={{ fontSize: 11, opacity: 0.8 }}>
-              {book ? `${book.title} · ${book.pageCount} pages` : meta.sub}
-            </div>
-          </div>
           <button
             onClick={onClose}
             aria-label="Close"
@@ -382,6 +377,13 @@ export default function StandardsBookModal({
           >
             ×
           </button>
+          <div style={{ textAlign: "center", minWidth: 0 }}>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>{meta.heading}</div>
+            <div style={{ fontSize: 11, opacity: 0.8 }}>
+              {book ? `${book.title} · ${book.pageCount} pages` : meta.sub}
+            </div>
+          </div>
+          <div aria-hidden style={{ width: 30, height: 30 }} />
         </div>
 
         {/* Toolbar */}
