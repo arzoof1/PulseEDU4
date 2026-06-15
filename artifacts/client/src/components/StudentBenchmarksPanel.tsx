@@ -68,17 +68,31 @@ function Sparkline({
   thresholdPct,
   width = 64,
   height = 18,
+  activeWindow,
+  activeSchoolYear,
 }: {
   points: HistoryPoint[];
   thresholdPct: number;
   width?: number;
   height?: number;
+  // The currently-selected testing window ("pm1"/"pm2"/"pm3") and school
+  // year. The dot for THIS window+year is emphasized so the big dot
+  // tracks the window toggle (not always PM3). When no point matches
+  // (the selected window has no data for this benchmark), every dot
+  // renders at the smaller size.
+  activeWindow?: string | null;
+  activeSchoolYear?: string | null;
 }): ReactElement | null {
   if (points.length < 2) return null;
-  // Dot radii: the latest window (PM3) is emphasized; earlier windows
-  // (PM1/PM2 + any history) get a smaller-but-clearly-visible dot. The
-  // plot padding is reserved to the LARGEST dot radius so no dot ever
-  // clips on any edge of the fixed-size cell (cell height stays put).
+  // Dot radii: the dot for the selected window is emphasized; all other
+  // windows (+ any cross-year history) get a smaller-but-clearly-visible
+  // dot. The plot padding is reserved to the LARGEST dot radius so no dot
+  // ever clips on any edge of the fixed-size cell (cell height stays put).
+  const emphasizedIdx = points.findIndex(
+    (p) =>
+      p.window === activeWindow &&
+      (activeSchoolYear == null || p.schoolYear === activeSchoolYear),
+  );
   const endR = 6;
   const midR = 4;
   const pad = endR;
@@ -93,7 +107,6 @@ function Sparkline({
     (p) => pad + innerH * (1 - Math.max(0, Math.min(100, p.pct)) / 100),
   );
   const path = xs.map((x, i) => `${i === 0 ? "M" : "L"}${x},${ys[i]}`).join(" ");
-  const lastIdx = points.length - 1;
   const thresholdY = pad + innerH * (1 - thresholdPct / 100);
   const label = points
     .map((p) => `${p.schoolYear} ${p.window.toUpperCase()}: ${p.pct}%`)
@@ -116,7 +129,7 @@ function Sparkline({
           key={`${p.schoolYear}-${p.window}-${i}`}
           cx={xs[i]}
           cy={ys[i]}
-          r={i === lastIdx ? endR : midR}
+          r={i === emphasizedIdx ? endR : midR}
           fill={cellColor(p.pct, thresholdPct).fg}
           stroke="#ffffff"
           strokeWidth={1}
@@ -491,6 +504,8 @@ function SubjectColumn({
                                 thresholdPct={data.thresholdPct}
                                 width={120}
                                 height={24}
+                                activeWindow={activeWindow}
+                                activeSchoolYear={schoolYear ?? data.schoolYear}
                               />
                             ) : (
                               <span
