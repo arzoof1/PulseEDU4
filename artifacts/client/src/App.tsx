@@ -103,6 +103,7 @@ import PbisPointsHub, {
   SchoolStoreView,
 } from "./components/PbisPointsHub";
 import PulseBrainLabHub from "./components/pulseBrainLab/PulseBrainLabHub";
+import PartneringWithParentsHub from "./components/academicEvidence/PartneringWithParentsHub";
 import TenancyPanel from "./components/TenancyPanel";
 import LogoGeneratorPage from "./components/LogoGeneratorPage";
 import SchoolPlansAdminPage from "./components/SchoolPlansAdminPage";
@@ -4935,6 +4936,7 @@ function App() {
     | "behaviorReview"
     | "behaviorSpecialist"
     | "pulseBrainLab"
+    | "partneringWithParents"
     | "hallPassMgmt"
     | "mtssCoordinator"
     | "mtssTemplates"
@@ -9314,6 +9316,16 @@ function App() {
   const pulseBrainLabNavSections: NavSection[] = [
     { key: "pulseBrainLab", label: "PulseBrainLab", icon: IconClipboard },
   ];
+  // Partnering with Parents — academic work-sample sharing. Like the Teacher
+  // Roster, it is available to any active teaching staff (not Behavior-Spec
+  // only); cross-teacher access is gated server-side via isCoreTeam.
+  const partneringWithParentsNavSections: NavSection[] = [
+    {
+      key: "partneringWithParents",
+      label: "Partnering with Parents",
+      icon: IconUser,
+    },
+  ];
   const mtssCoordNavSections: NavSection[] = [
     { key: "mtssCoordinator", label: "MTSS Coordinator", icon: IconClipboard },
   ];
@@ -9568,6 +9580,13 @@ function App() {
       description: "Your class lists, FAST scores, and student quick actions.",
       emoji: "👥",
       group: "quick",
+    });
+    add(!isNonExemptOnly, {
+      key: "partneringWithParents",
+      label: "Partnering with Parents",
+      description: "Capture classwork samples and share them with families.",
+      emoji: "🤝",
+      group: "family",
     });
     add(effectiveFeatures.Pbis && !isNonExemptOnly, {
       key: "pbis",
@@ -10347,6 +10366,11 @@ function App() {
               label: "Teacher Roster",
               icon: IconUser,
             })}
+            {/* Partnering with Parents — academic work-sample sharing,
+                available to any active teaching staff (cross-teacher reach
+                gated server-side). */}
+            {!isNonExemptOnly &&
+              partneringWithParentsNavSections.map(renderNavItem)}
             {effectiveFeatures.RequestPullout &&
               renderNavItem({
                 key: "requestPullout",
@@ -16299,6 +16323,9 @@ function App() {
 
       {activeSection === "pbis" && <PbisPointsHub />}
       {activeSection === "pulseBrainLab" && isBehaviorSpec && <PulseBrainLabHub />}
+      {activeSection === "partneringWithParents" && !isNonExemptOnly && (
+        <PartneringWithParentsHub />
+      )}
 
       {activeSection === "houseRankings" && (
         // House Rankings is part of the PBIS surface and its nav entry is

@@ -111,6 +111,8 @@ import standardsBookRouter from "./standardsBook";
 import pulseBrainLabRouter from "./pulseBrainLab";
 import pulseBrainLabDeliveryRouter from "./pulseBrainLabDelivery";
 import pulseBrainLabParentRouter from "./pulseBrainLabParent";
+import academicEvidenceRouter from "./academicEvidence";
+import academicEvidenceParentRouter from "./academicEvidenceParent";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -294,5 +296,7 @@ router.use(standardsBookRouter);
 router.use(pulseBrainLabRouter);
 router.use(pulseBrainLabDeliveryRouter);
 router.use(pulseBrainLabParentRouter);
+router.use(academicEvidenceRouter);
+router.use(academicEvidenceParentRouter);
 
 export default router;

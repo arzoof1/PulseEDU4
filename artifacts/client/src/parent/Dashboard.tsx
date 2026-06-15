@@ -38,6 +38,7 @@ import { parentFetch, setParentToken, navigate, type ParentMe } from "./api";
 import FamilyMessages from "./FamilyMessages";
 import ParentTabBar, { type ParentTab } from "./ParentTabBar";
 import ReinforceAtHomeSection from "./ReinforceAtHomeSection";
+import LearningAtHomeSection from "./LearningAtHomeSection";
 
 interface Snapshot {
   parent: { displayName: string; email: string };
@@ -1147,19 +1148,29 @@ function BehaviorTab({ snapshot }: { snapshot: Snapshot }) {
 // -----------------------------------------------------------------------------
 function AcademicsTab({ snapshot }: { snapshot: Snapshot }) {
   const { sectionsAvailable: sec } = snapshot;
+  // Count of "Learning at Home" class cards that carry shared work. Lifted from
+  // the self-gating section so the empty state below only shows when BOTH the
+  // formal academic sections AND the shared-classwork cards are empty.
+  const [learningAtHomeCount, setLearningAtHomeCount] = useState(0);
   const hasAny =
     (sec.fastScores && (snapshot.fastScores ?? []).length > 0) ||
     sec.mtss ||
     (sec.reteach && (snapshot.reteach?.items ?? []).length > 0) ||
     (sec.interventions && (snapshot.interventions ?? []).length > 0) ||
     sec.accommodations;
-  if (!hasAny) {
-    return (
-      <TabEmpty text="Nothing to show here yet. FAST scores, support plans, and accommodations will appear on this tab." />
-    );
-  }
   return (
     <div className="space-y-6">
+      {/* Learning at Home — academic work samples teachers shared, one card per
+          class. Self-gating: renders nothing until at least one teacher shares,
+          so it stays invisible otherwise even when no other academic sections
+          are on. */}
+      <LearningAtHomeSection
+        studentId={snapshot.student.id}
+        onLoaded={setLearningAtHomeCount}
+      />
+      {!hasAny && learningAtHomeCount === 0 && (
+        <TabEmpty text="Nothing to show here yet. FAST scores, support plans, and accommodations will appear on this tab." />
+      )}
       {/* Academics — FAST progress monitoring scores. Each subject is a
           separate tile so families can read ELA and Math independently;
           we always show all three PMs (PM1=fall, PM2=winter, PM3=spring)

@@ -54,3 +54,4 @@
 - [PulseBrainLab parent gate](pulsebrainlab-parent-gate.md) — group membership is the SOLE family gate (shared toggle is staff-only now); EVERY parent Brain Lab route must re-check membership + ownership, not ownership alone.
 - [orval *Params collision](orval-params-collision.md) — an OpenAPI op with BOTH a path AND a query param emits two clashing `<OpId>Params` exports (TS2308); make the query a path segment or rename.
 - [PulseBrainLab scan routing](pulsebrainlab-scan-routing.md) — copier-batch QR decode is SERVER-side (pdfium+jsQR+ZXing); a scannable QR needs a quiet zone + no caption touching it (margin:0 was the bug, not the decoder); unmatched-assign must be atomic.
+- [Academic evidence mirror](academic-evidence-mirror.md) — Partnering with Parents (staff) + Learning at Home (parent): publish-gate parity on cards AND image routes, read-only roster, local_sis_id boundary, self-gating empty state.

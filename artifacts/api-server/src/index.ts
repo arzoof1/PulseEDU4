@@ -63,6 +63,7 @@ import {
   seedBenchmarkDescriptions,
   seedPulseBrainLabLessons,
   ensurePulseBrainLabGroupsSchema,
+  ensureAcademicEvidenceSchema,
 } from "./seed";
 import { seedDistrictDemoExtras } from "./seedDemoExtras";
 import { backfillWitnessSequences } from "./lib/witnessStatementId";
@@ -306,6 +307,8 @@ async function runSeed(): Promise<void> {
     await seedPulseBrainLabLessons();
     // School-scoped PulseBrainLab delivery tables (groups/members/sessions/attendance).
     await ensurePulseBrainLabGroupsSchema();
+    // Academic "Partnering with Parents" work-sample table.
+    await ensureAcademicEvidenceSchema();
     await ensureBenchmarkDeliveriesSchema();
     await ensureSchoolBenchmarksCatalogBackfill();
     // One-shot backfill of the dev-entered deliveries into prod.

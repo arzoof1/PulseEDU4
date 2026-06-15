@@ -838,6 +838,43 @@ export async function ensurePulseBrainLabGroupsSchema() {
   );
 }
 
+// ACADEMIC EVIDENCE ("Partnering with Parents" staff surface + "Learning at
+// Home" parent mirror). Idempotent CREATE TABLE IF NOT EXISTS at boot mirrors
+// the PulseBrainLab / benchmark_descriptions pattern because drizzle-kit push
+// can't apply it non-interactively.
+export async function ensureAcademicEvidenceSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS academic_work_samples (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      section_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      assignment_title TEXT NOT NULL,
+      note TEXT,
+      object_key TEXT NOT NULL,
+      source TEXT NOT NULL,
+      shared BOOLEAN NOT NULL DEFAULT FALSE,
+      published_at TIMESTAMPTZ,
+      created_by_staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS academic_work_samples_school_idx ON academic_work_samples (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS academic_work_samples_section_idx ON academic_work_samples (school_id, section_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS academic_work_samples_student_idx ON academic_work_samples (school_id, student_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS academic_work_samples_section_subject_idx ON academic_work_samples (school_id, section_id, subject)`,
+  );
+}
+
 export async function seedPulseBrainLabLessons() {
   await ensurePulseBrainLabLessonsSchema();
   const lessons = PULSE_BRAIN_LAB_LESSONS;
