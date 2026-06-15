@@ -20,6 +20,7 @@ import {
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import mathPdfUrl from "../assets/standards/mathbeststandards.pdf?url";
+import elaPdfUrl from "../assets/standards/elabeststandardsfinal.pdf?url";
 import { authFetch } from "../lib/authToken";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -88,9 +89,12 @@ const SUBJECT_META: Record<Subject, { heading: string; sub: string }> = {
   },
 };
 
-// The original-page (PDF) image is only offered where equations matter (math).
+// The original-page (PDF) image is available for both subjects so the
+// exact printed standard (math notation, ELA exemplars/charts) renders
+// faithfully alongside the extracted text.
 const SUBJECT_PDF_URL: Partial<Record<Subject, string>> = {
   math: mathPdfUrl,
+  ela: elaPdfUrl,
 };
 
 function gradeRank(g: string): number {
