@@ -964,8 +964,164 @@ function AddSampleModal({
   const [source, setSource] = useState<AcademicSource>("phone");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const cameraRef = useRef<HTMLInputElement | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
+  const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const uploadRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        for (const t of streamRef.current.getTracks()) t.stop();
+        streamRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!cameraOpen || previewBlob) return;
+    let cancelled = false;
+    setCameraReady(false);
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+        if (cancelled) {
+          for (const t of stream.getTracks()) t.stop();
+          return;
+        }
+        streamRef.current = stream;
+        const v = videoRef.current;
+        if (!v) {
+          for (const t of stream.getTracks()) t.stop();
+          streamRef.current = null;
+          setErr(t("Camera UI didn't mount — try again.", "La cámara no cargó — intente de nuevo."));
+          return;
+        }
+        v.srcObject = stream;
+        const onReady = () => {
+          v.removeEventListener("loadedmetadata", onReady);
+          v.removeEventListener("playing", onReady);
+          if (!cancelled) setCameraReady(true);
+        };
+        v.addEventListener("loadedmetadata", onReady);
+        v.addEventListener("playing", onReady);
+        try {
+          await v.play();
+        } catch (playErr) {
+          setErr(
+            playErr instanceof Error
+              ? t(`Camera couldn't start: ${playErr.message}`, `No se pudo iniciar la cámara: ${playErr.message}`)
+              : t("Camera couldn't start.", "No se pudo iniciar la cámara."),
+          );
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setErr(
+          e instanceof Error
+            ? t(`Camera unavailable: ${e.message}`, `Cámara no disponible: ${e.message}`)
+            : t("Camera unavailable", "Cámara no disponible"),
+        );
+        setCameraOpen(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [cameraOpen, previewBlob, t]);
+
+  useEffect(() => {
+    if (!previewBlob) {
+      setPreviewUrl((u) => {
+        if (u) URL.revokeObjectURL(u);
+        return null;
+      });
+      return;
+    }
+    const url = URL.createObjectURL(previewBlob);
+    setPreviewUrl(url);
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [previewBlob]);
+
+  function stopStream() {
+    if (streamRef.current) {
+      for (const t of streamRef.current.getTracks()) t.stop();
+      streamRef.current = null;
+    }
+  }
+
+  function closeCamera() {
+    stopStream();
+    setCameraReady(false);
+    setPreviewBlob(null);
+    setCameraOpen(false);
+  }
+
+  function openCamera() {
+    setErr("");
+    setPreviewBlob(null);
+    setCameraOpen(true);
+  }
+
+  async function snap() {
+    const v = videoRef.current;
+    if (!v) {
+      setErr(t("Camera not ready yet — try again.", "La cámara no está lista — intente de nuevo."));
+      return;
+    }
+    if (!cameraReady || v.readyState < 2 || !v.videoWidth || !v.videoHeight) {
+      setErr(t("Camera still warming up — wait a moment.", "La cámara se está iniciando — espere un momento."));
+      return;
+    }
+    const w = v.videoWidth;
+    const h = v.videoHeight;
+    const maxDim = 1920;
+    const scale = Math.min(1, maxDim / Math.max(w, h));
+    const outW = Math.round(w * scale);
+    const outH = Math.round(h * scale);
+    const canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      setErr(t("Could not capture image.", "No se pudo capturar la imagen."));
+      return;
+    }
+    ctx.drawImage(v, 0, 0, outW, outH);
+    const blob: Blob | null = await new Promise((resolve) =>
+      canvas.toBlob((b) => resolve(b), "image/jpeg", 0.9),
+    );
+    if (!blob) {
+      setErr(t("Could not capture image.", "No se pudo capturar la imagen."));
+      return;
+    }
+    stopStream();
+    setCameraReady(false);
+    setPreviewBlob(blob);
+  }
+
+  function retake() {
+    setPreviewBlob(null);
+  }
+
+  function confirmPreview() {
+    if (!previewBlob) return;
+    const captured = new File(
+      [previewBlob],
+      `work-sample-${Date.now()}.jpg`,
+      { type: "image/jpeg" },
+    );
+    setFile(captured);
+    setSource("phone");
+    closeCamera();
+  }
 
   async function submit() {
     if (busy) return;
@@ -1069,27 +1225,15 @@ function AddSampleModal({
         <div>
           <FieldLabel text={t("Work sample", "Muestra de trabajo")} />
           <input
-            ref={cameraRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            style={{ display: "none" }}
-            onChange={(e) => {
-              const f = e.target.files?.[0] ?? null;
-              if (f) {
-                setFile(f);
-                setSource("phone");
-              }
-            }}
-          />
-          <input
             ref={uploadRef}
             type="file"
             accept="image/*,application/pdf"
             style={{ display: "none" }}
             onChange={(e) => {
               const f = e.target.files?.[0] ?? null;
+              e.target.value = "";
               if (f) {
+                closeCamera();
                 setFile(f);
                 setSource("upload");
               }
@@ -1098,7 +1242,7 @@ function AddSampleModal({
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <button
               type="button"
-              onClick={() => cameraRef.current?.click()}
+              onClick={openCamera}
               style={ghostBtn}
             >
               {t("Take photo", "Tomar foto")}
@@ -1111,6 +1255,93 @@ function AddSampleModal({
               {t("Attach file", "Adjuntar archivo")}
             </button>
           </div>
+          {cameraOpen && (
+            <div style={{ marginTop: 10 }}>
+              {previewBlob && previewUrl ? (
+                <>
+                  <div
+                    style={{
+                      width: "100%",
+                      maxWidth: 480,
+                      aspectRatio: "4 / 3",
+                      background: "#000",
+                      borderRadius: 8,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <img
+                      src={previewUrl}
+                      alt={t("Captured preview", "Vista previa")}
+                      style={{
+                        maxWidth: "100%",
+                        maxHeight: "100%",
+                        display: "block",
+                      }}
+                    />
+                  </div>
+                  <div style={{ marginTop: 6, fontSize: "0.75rem", color: C.sub }}>
+                    {t("Preview only — not attached yet.", "Solo vista previa — aún no adjunta.")}
+                  </div>
+                  <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button type="button" onClick={confirmPreview} style={primaryBtnSm}>
+                      {t("Use this photo", "Usar esta foto")}
+                    </button>
+                    <button type="button" onClick={retake} style={ghostBtn}>
+                      {t("Retake", "Repetir")}
+                    </button>
+                    <button type="button" onClick={closeCamera} style={ghostBtn}>
+                      {t("Cancel", "Cancelar")}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    style={{
+                      width: "100%",
+                      maxWidth: 480,
+                      aspectRatio: "4 / 3",
+                      background: "#000",
+                      borderRadius: 8,
+                      transform: "scaleX(-1)",
+                      objectFit: "cover",
+                    }}
+                  />
+                  <div
+                    style={{
+                      marginTop: 6,
+                      fontSize: "0.75rem",
+                      color: cameraReady ? C.ok : C.warn,
+                    }}
+                  >
+                    {cameraReady
+                      ? t("● Live — click Capture when ready.", "● En vivo — pulse Capturar cuando esté listo.")
+                      : t("Starting camera…", "Iniciando cámara…")}
+                  </div>
+                  <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      onClick={() => void snap()}
+                      disabled={!cameraReady}
+                      style={primaryBtnSm}
+                    >
+                      {t("Capture", "Capturar")}
+                    </button>
+                    <button type="button" onClick={closeCamera} style={ghostBtn}>
+                      {t("Cancel", "Cancelar")}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           {file && (
             <div style={{ fontSize: "0.8rem", color: C.ok, marginTop: 6 }}>
               {t("Attached:", "Adjuntado:")} {file.name}
