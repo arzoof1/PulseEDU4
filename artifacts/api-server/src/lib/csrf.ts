@@ -65,6 +65,11 @@ function isCsrfExempt(path: string, method: string): boolean {
   }
   if (path.startsWith("/api/kiosk/queue/")) return true;
 
+  // Public document e-sign — authorized by unguessable share token in the URL,
+  // not staff/parent session. Signers often open the link in the same browser
+  // where a staff session cookie is still active; CSRF must not block them.
+  if (path.startsWith("/api/esign/sign/")) return true;
+
   return false;
 }
 
