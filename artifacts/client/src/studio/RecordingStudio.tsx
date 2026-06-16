@@ -143,6 +143,13 @@ export default function RecordingStudio({
   const recordingRef = useRef(false);
   const elapsedRef = useRef(0);
   const mountedRef = useRef(true);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const meterRafRef = useRef<number | null>(null);
+  const lastClipRef = useRef(0);
+
+  const [level, setLevel] = useState(0);
+  const [clipping, setClipping] = useState(false);
 
   useEffect(() => {
     document.title = "Recording Studio · PulseEDU";
@@ -183,6 +190,53 @@ export default function RecordingStudio({
         }
         streamRef.current = s;
         setStream(s);
+
+        // Tap the mic for a live level meter. The analyser is connected to the
+        // source ONLY (never to destination) so the user does not hear
+        // themselves. The rAF loop reads time-domain samples to compute RMS
+        // (meter fill) and peak (clip detection).
+        try {
+          const AudioCtx =
+            window.AudioContext ||
+            (window as unknown as { webkitAudioContext?: typeof AudioContext })
+              .webkitAudioContext;
+          if (AudioCtx) {
+            const ctx = new AudioCtx();
+            const source = ctx.createMediaStreamSource(s);
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 1024;
+            analyser.smoothingTimeConstant = 0.8;
+            source.connect(analyser);
+            audioCtxRef.current = ctx;
+            analyserRef.current = analyser;
+
+            const data = new Float32Array(analyser.fftSize);
+            const tick = () => {
+              const a = analyserRef.current;
+              if (!a || !mountedRef.current || cancelled) return;
+              a.getFloatTimeDomainData(data);
+              let sumSquares = 0;
+              let peak = 0;
+              for (let i = 0; i < data.length; i++) {
+                const v = data[i];
+                sumSquares += v * v;
+                const abs = Math.abs(v);
+                if (abs > peak) peak = abs;
+              }
+              const rms = Math.sqrt(sumSquares / data.length);
+              // Scale RMS to a 0–1 meter range; ~0.5 RMS is already very hot.
+              const next = Math.min(1, rms * 2.2);
+              setLevel(next);
+              const now = Date.now();
+              if (peak >= 0.98) lastClipRef.current = now;
+              setClipping(now - lastClipRef.current < 1000);
+              meterRafRef.current = requestAnimationFrame(tick);
+            };
+            meterRafRef.current = requestAnimationFrame(tick);
+          }
+        } catch {
+          // Audio metering is best-effort; ignore failures.
+        }
       } catch (err) {
         if (cancelled) return;
         const name = (err as DOMException)?.name;
@@ -199,6 +253,16 @@ export default function RecordingStudio({
     return () => {
       cancelled = true;
       streamRef.current?.getTracks().forEach((t) => t.stop());
+      if (meterRafRef.current != null) {
+        cancelAnimationFrame(meterRafRef.current);
+        meterRafRef.current = null;
+      }
+      analyserRef.current?.disconnect();
+      analyserRef.current = null;
+      if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
+        void audioCtxRef.current.close().catch(() => {});
+      }
+      audioCtxRef.current = null;
     };
   }, []);
 
@@ -300,6 +364,16 @@ export default function RecordingStudio({
       }
       if (recordedUrlRef.current) URL.revokeObjectURL(recordedUrlRef.current);
       if (timerRef.current) clearInterval(timerRef.current);
+      if (meterRafRef.current != null) {
+        cancelAnimationFrame(meterRafRef.current);
+        meterRafRef.current = null;
+      }
+      analyserRef.current?.disconnect();
+      analyserRef.current = null;
+      if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
+        void audioCtxRef.current.close().catch(() => {});
+      }
+      audioCtxRef.current = null;
     };
   }, []);
 
@@ -537,6 +611,79 @@ export default function RecordingStudio({
             transform: mirrorCam ? "scaleX(-1)" : "none",
           }}
         />
+
+        {/* Mic level meter — visible while the preview is live (before and
+            during recording). Connected to the mic source only, so it never
+            affects what gets recorded. */}
+        {stream && !recordedUrl && (
+          <div
+            style={{
+              position: "absolute",
+              top: "0.75rem",
+              right: "0.75rem",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              padding: "0.4rem 0.6rem",
+              borderRadius: "8px",
+              background: "rgba(11,15,20,0.85)",
+              border: "1px solid rgba(148,163,184,0.25)",
+              pointerEvents: "none",
+              zIndex: 5,
+            }}
+          >
+            <span
+              style={{
+                fontSize: "0.7rem",
+                fontWeight: 700,
+                letterSpacing: "0.04em",
+                color: "#9ca3af",
+                textTransform: "uppercase",
+              }}
+            >
+              Mic
+            </span>
+            <div
+              style={{
+                position: "relative",
+                width: "120px",
+                height: "10px",
+                borderRadius: "5px",
+                background: "#1f2937",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  width: `${Math.round(level * 100)}%`,
+                  height: "100%",
+                  borderRadius: "5px",
+                  background:
+                    level >= 0.85 ? "#dc2626" : level >= 0.65 ? "#facc15" : "#16a34a",
+                  transition: "width 90ms linear, background-color 120ms linear",
+                }}
+              />
+            </div>
+            <span
+              style={{
+                fontSize: "0.65rem",
+                fontWeight: 800,
+                letterSpacing: "0.05em",
+                padding: "0.15rem 0.4rem",
+                borderRadius: "4px",
+                minWidth: "70px",
+                textAlign: "center",
+                boxSizing: "border-box",
+                color: clipping ? "#fff" : "#4b5563",
+                background: clipping ? "#dc2626" : "transparent",
+                border: `1px solid ${clipping ? "#dc2626" : "rgba(75,85,99,0.5)"}`,
+                transition: "color 120ms linear, background-color 120ms linear",
+              }}
+            >
+              {clipping ? "TOO LOUD" : "CLIP"}
+            </span>
+          </div>
+        )}
 
         {/* Teleprompter overlay */}
         {!editingScript && !recordedUrl && (

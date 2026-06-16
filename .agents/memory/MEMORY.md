@@ -39,6 +39,7 @@
 - [Demo/test-mode data isolation](demo-data-isolation.md) — synthetic rows sharing a prod table need a key prefix excluded from ALL real aggregation paths (not UI-only); clear-then-redraw in a tx; additive demo cols need a seed.ts ensure* boot migration.
 - [attendance_checkins createdAt timestamp](attendance-checkins-timestamp.md) — its createdAt is a real timestamp(Date), unlike text created_at on tardies/pbis_entries; filter by Date or the `day` TEXT column, not ISO strings.
 - [Kiosk destination precedence](kiosk-destination-precedence.md) — teacher allowlist is authoritative over the (auto-seeded ~everything) room matrix, NOT a union; GET listing + POST create must share precedence + active/visible/isDestination filter.
+- [Recording Studio overlay z-index](studio-overlay-zindex.md) — top-region overlays in the studio video container (e.g. mic meter) need explicit zIndex or the later teleprompter gradient paints over them ("I don't see the meter").
 
 - [Staff PATCH batched gating](staff-patch-batched-gating.md) — batched PATCH /admin/staff/:id must OMIT role flags/sensitive caps actor cant set AND self-revoked caps, or one bad field sinks the whole save.
 - [Teleprompter smooth scroll](teleprompter-smooth-scroll.md) — auto-scroll over the always-mounted, polling staff app must be a compositor WAAPI transform animation, not main-thread scrollTop/rAF (which pauses under re-render starvation).
