@@ -640,24 +640,15 @@ function PlaylistEditor({
         body: JSON.stringify({}),
       });
       const j1 = (await r1.json()) as
-        | { uploadURL: string; objectPath?: string }
+        | { uploadURL: string; objectPath: string }
         | { error: string };
-      if (!r1.ok || "error" in j1) {
+      if (!r1.ok || "error" in j1 || !j1.objectPath) {
         throw new Error(("error" in j1 && j1.error) || "Upload setup failed");
       }
-      // Server returns the signed URL; the path the API expects back
-      // when we register the item is /objects/<gcs object id>. We
-      // derive it from the signed URL's pathname tail.
-      const u = new URL(j1.uploadURL);
-      // GCS path looks like /<bucket>/.private/uploads/<id>; we want
-      // /objects/uploads/<id> which is what the auth-gated GET maps
-      // to. The storage skill / route stores under the same prefix.
-      const tail = u.pathname.split("/.private/")[1] ?? "";
-      if (!tail) throw new Error("Could not parse upload path");
-      const objectPath = `/objects/${tail}`;
+      const { uploadURL, objectPath } = j1;
 
       // Step 2: PUT the file body.
-      const r2 = await fetch(j1.uploadURL, {
+      const r2 = await fetch(uploadURL, {
         method: "PUT",
         headers: { "Content-Type": file.type || "application/octet-stream" },
         body: file,
