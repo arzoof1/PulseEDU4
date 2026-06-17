@@ -687,10 +687,42 @@ function CreateTab() {
         setError("You're generating quickly — give it a moment and try again.");
         return;
       }
-      if (!res.ok) throw new Error("draft failed");
-      const data = (await res.json()) as { output: string; usedPulseDna: boolean };
-      setOutput(data.output);
-      setUsedPulseDna(data.usedPulseDna);
+      const data = (await res.json().catch(() => ({}))) as {
+        output?: string;
+        usedPulseDna?: boolean;
+        error?: string;
+        message?: string;
+        detail?: {
+          message?: string;
+          status?: number;
+          type?: string;
+          code?: string;
+          cause?: string;
+          model?: string;
+          anthropicBaseURL?: string;
+        };
+      };
+      if (!res.ok) {
+        const parts = [
+          data.message ?? data.detail?.message,
+          data.detail?.status != null ? `HTTP ${data.detail.status}` : null,
+          data.detail?.type ? `type: ${data.detail.type}` : null,
+          data.detail?.code ? `code: ${data.detail.code}` : null,
+          data.detail?.cause ? `cause: ${data.detail.cause}` : null,
+          data.detail?.anthropicBaseURL
+            ? `baseURL: ${data.detail.anthropicBaseURL}`
+            : null,
+          data.detail?.model ? `model: ${data.detail.model}` : null,
+        ].filter(Boolean);
+        setError(
+          parts.length > 0
+            ? parts.join(" · ")
+            : `Could not generate a draft (${res.status}).`,
+        );
+        return;
+      }
+      setOutput(data.output ?? "");
+      setUsedPulseDna(!!data.usedPulseDna);
     } catch {
       setError("Could not generate a draft. Please try again.");
     } finally {
