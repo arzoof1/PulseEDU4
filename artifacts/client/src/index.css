@@ -727,6 +727,32 @@ select {
 }
 
 /* ===== Tables ===== */
+/* Benchmark heatmap — override global table overflow:hidden so sticky
+   thead pins to the scroll wrapper, not the table box. */
+.benchmark-heatmap-table {
+  overflow: visible !important;
+  border-radius: 0;
+  border: none;
+}
+
+.benchmark-heatmap-table th {
+  padding: unset;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: inherit;
+  color: inherit;
+  border-bottom: none !important;
+}
+
+.benchmark-heatmap-table td {
+  padding: unset;
+  border-bottom: none !important;
+}
+
+.benchmark-heatmap-table tbody tr:hover {
+  background: transparent;
+}
+
 table {
   width: 100%;
   border-collapse: separate !important;

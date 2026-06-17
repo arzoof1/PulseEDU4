@@ -68,6 +68,38 @@ type StaffRow = typeof staffTable.$inferSelect;
 const VALID_SUBJECTS = new Set(["ela", "math", "algebra1", "geometry"]);
 const VALID_WINDOWS = new Set(["pm1", "pm2", "pm3"]);
 
+const PDF_HEADER_SIN45 = Math.SQRT1_2;
+const PDF_HEADER_COS45 = Math.SQRT1_2;
+
+// Short column label for the printable heatmap — mirrors the on-screen
+// heatmap (last two dotted segments for ELA; benchmark portion after
+// "|" for Math composites).
+function pdfBenchmarkShortLabel(code: string): string {
+  if (code.includes("|")) {
+    const pieces = code.split(/\s+and\s+/i).map((part) => {
+      const seg = part.trim();
+      const pipe = seg.lastIndexOf("|");
+      return pipe >= 0 ? seg.slice(pipe + 1) : seg;
+    });
+    return [...new Set(pieces)].join(" / ");
+  }
+  const segs = code.split(".");
+  return segs.length >= 2 ? segs.slice(-2).join(".") : code;
+}
+
+function computePdfHeaderHeight(
+  doc: InstanceType<typeof PDFDocument>,
+  labels: string[],
+  fontSize: number,
+): number {
+  doc.font("Helvetica").fontSize(fontSize);
+  let maxReach = 0;
+  for (const label of labels) {
+    maxReach = Math.max(maxReach, doc.widthOfString(label) * PDF_HEADER_SIN45);
+  }
+  return Math.min(130, Math.max(46, Math.ceil(maxReach) + 14));
+}
+
 async function resolveStaff(req: Request): Promise<StaffRow | null> {
   const id = req.staffId;
   if (!id) return null;
@@ -1463,38 +1495,50 @@ router.get(
         });
       }
 
-      // Column header row — rotate -45° so long benchmark codes fit
-      // without overflowing the column width. headerHeight needs to
-      // be tall enough that the rotated text (80pt wide at 7pt has
-      // ~57pt vertical extent after a 45° rotation) fully clears the
-      // top of the band. 75pt gives a small safety margin without
-      // wasting page real estate — earlier value of 120 left ~45pt
-      // of pure whitespace above the codes and pushed the first
-      // student row off the page.
-      const headerHeight = 75;
-      // Small buffer above the band so the rotated text never bleeds
-      // into the bottom-3 tile above on chunk 0, or into the previous
-      // row of cells on subsequent chunks.
-      doc.y = doc.y + 4;
+      // Column header row — anchor each short label at its column's
+      // LEFT edge on the grid rule, rotate -45°, draw left-aligned so
+      // text rises up-and-to-the-right (see .agents/memory/fast-benchmarks-
+      // pdf-headers.md). Dynamic headerHeight keeps labels above the rule.
+      const shortLabels = chunk.map((b) => pdfBenchmarkShortLabel(b.code));
+      let fontSize = 7;
+      const pageRight = doc.page.width - doc.page.margins.right;
+      doc.font("Helvetica").fontSize(fontSize);
+      while (fontSize > 5) {
+        let fits = true;
+        for (let i = 0; i < chunk.length; i++) {
+          const colLeft = doc.page.margins.left + nameColW + i * cellW;
+          const w = doc.widthOfString(shortLabels[i]);
+          if (colLeft + w * PDF_HEADER_COS45 > pageRight - 4) {
+            fits = false;
+            break;
+          }
+        }
+        if (fits) break;
+        fontSize -= 0.5;
+        doc.fontSize(fontSize);
+      }
+      const headerHeight = computePdfHeaderHeight(doc, shortLabels, fontSize);
+      doc.y = doc.y + 6;
       const headerY = doc.y;
       doc
         .font("Helvetica-Bold")
         .fontSize(9)
+        .fillColor("#111")
         .text("Student", doc.page.margins.left, headerY + headerHeight - 14, {
           width: nameColW,
         });
 
-      chunk.forEach((b, i) => {
-        const x = doc.page.margins.left + nameColW + i * cellW + cellW / 2;
+      chunk.forEach((_b, i) => {
+        const colLeft = doc.page.margins.left + nameColW + i * cellW;
+        const anchorY = headerY + headerHeight;
         doc.save();
-        doc.rotate(-45, { origin: [x, headerY + headerHeight - 6] });
+        doc.translate(colLeft, anchorY);
+        doc.rotate(-45);
         doc
           .font("Helvetica")
-          .fontSize(7)
-          .text(b.code, x - 80, headerY + headerHeight - 10, {
-            width: 80,
-            align: "right",
-          });
+          .fontSize(fontSize)
+          .fillColor("#111")
+          .text(shortLabels[i], 2, -fontSize - 1, { lineBreak: false });
         doc.restore();
       });
 
