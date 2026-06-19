@@ -384,3 +384,9 @@ id = "E2rE4XUreKx4laFwiowf5"
 uri = "file://docs/PulseEDU-School-Tours-Brochure.pdf"
 type = "pdf"
 title = "PulseEDU School Tours — District Brochure"
+
+[[outputs]]
+id = "cdXEvB-Ze2T-T8KwiLnjw"
+uri = "file://docs/school-tours-live-tour-capture-MIGRATION.md"
+type = "text"
+title = "School Tours — Live Tour Capture: Production Migration Report"
