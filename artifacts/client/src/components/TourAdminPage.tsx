@@ -2539,6 +2539,12 @@ function BragEditor() {
 // ---------------------------------------------------------------------------
 // Outcome report
 // ---------------------------------------------------------------------------
+type GuideRollup = {
+  guideId: number;
+  guideName: string | null;
+  walks: number;
+  avgMinutes: number;
+};
 type Summary = {
   total: number;
   byStatus: Record<string, number>;
@@ -2547,6 +2553,9 @@ type Summary = {
   enrolled: number;
   toured: number;
   conversionRate: number;
+  walksCompleted: number;
+  avgTourMinutes: number | null;
+  byGuide: GuideRollup[];
 };
 
 function Report() {
@@ -2580,6 +2589,59 @@ function Report() {
         {tile("Toured", s.toured, "#7c3aed")}
         {tile("Enrolled", s.enrolled, "#059669")}
         {tile("Conversion", `${s.conversionRate}%`, "#0ea5a4")}
+      </div>
+
+      <div style={{ ...cardBox, marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, marginBottom: 10 }}>
+          Live tour walks
+        </div>
+        {s.walksCompleted === 0 ? (
+          <div style={{ color: "#94a3b8" }}>
+            No completed walks yet. Per-guide analytics appear here once a guide
+            finishes a live tour from the roadmap QR.
+          </div>
+        ) : (
+          <>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                gap: 12,
+                marginBottom: 12,
+              }}
+            >
+              {tile("Walks completed", s.walksCompleted, "#2563eb")}
+              {tile(
+                "Avg tour length",
+                s.avgTourMinutes != null ? `${s.avgTourMinutes} min` : "—",
+                "#7c3aed",
+              )}
+            </div>
+            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>
+              By tour guide
+            </div>
+            {s.byGuide.length === 0 ? (
+              <div style={{ color: "#94a3b8" }}>No guide attributed yet.</div>
+            ) : (
+              s.byGuide.map((g) => (
+                <div
+                  key={g.guideId}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    padding: "4px 0",
+                  }}
+                >
+                  <span>{g.guideName ?? "Unknown guide"}</span>
+                  <strong>
+                    {g.walks} walk{g.walks === 1 ? "" : "s"} · {g.avgMinutes} min
+                    avg
+                  </strong>
+                </div>
+              ))
+            )}
+          </>
+        )}
       </div>
 
       <div style={{ ...cardBox, marginBottom: 16 }}>
