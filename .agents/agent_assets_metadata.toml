@@ -378,3 +378,9 @@ id = "JlmLaw-9A_1nY8RkcKy3p"
 uri = "file://docs/school-tours-user-guide.md"
 type = "text"
 title = "PulseEDU School Tours — User Guide for Schools"
+
+[[outputs]]
+id = "E2rE4XUreKx4laFwiowf5"
+uri = "file://docs/PulseEDU-School-Tours-Brochure.pdf"
+type = "pdf"
+title = "PulseEDU School Tours — District Brochure"
