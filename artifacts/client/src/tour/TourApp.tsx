@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import TourWalk from "./TourWalk";
 
 // =============================================================================
 // TourApp — public, UNAUTHENTICATED enrollment surface for School Tours.
@@ -1473,6 +1474,11 @@ function SurveyPage({ token }: { token: string }) {
 
 export default function TourApp() {
   const path = window.location.pathname;
+  // /tour/walk/<token> — guide-facing live tour capture (Phase 4)
+  const walkMatch = path.match(/\/tour\/walk\/([^/]+)/);
+  if (walkMatch) {
+    return <TourWalk token={decodeURIComponent(walkMatch[1])} />;
+  }
   // /tour/survey/<token>
   const surveyMatch = path.match(/\/tour\/survey\/([^/]+)/);
   if (surveyMatch) {

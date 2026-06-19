@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import QRCode from "qrcode";
 import { authFetch } from "../lib/authToken";
 import {
   HowToUseHelp,
@@ -83,6 +84,33 @@ type LeadDetail = {
   lead: Lead & { surveyUrl: string };
   events: TimelineEvent[];
   survey: Survey | null;
+};
+
+type WalkStop = {
+  checkpointKey: string;
+  label: string;
+  location: string;
+  plannedMinutes: number;
+  order: number;
+  familyRequested: boolean;
+  schoolHighlight: boolean;
+  completedAt: string | null;
+  note: string;
+};
+
+type WalkDetail = {
+  walkUrl: string;
+  walkToken: string;
+  familyName: string;
+  walk: {
+    token: string;
+    status: "pending" | "in_progress" | "completed" | "abandoned";
+    startedAt: string | null;
+    endedAt: string | null;
+    guideStaffId: number | null;
+    guideName: string | null;
+  };
+  stops: WalkStop[];
 };
 
 const STATUS_ORDER: Status[] = [
@@ -569,6 +597,160 @@ function Pipeline() {
   );
 }
 
+// Live tour walk — shown inside the lead drawer. Before a walk runs it offers a
+// QR + link a guide can open on their phone (the printed roadmap carries the
+// same QR). Once captured it shows who guided, total length, per-stop
+// planned-vs-actual timings, and any staff notes flagged for the follow-up call.
+function WalkSection({ walk, qr }: { walk: WalkDetail; qr: string }) {
+  const started = !!walk.walk.startedAt;
+  const ended = !!walk.walk.endedAt;
+  const totalMs =
+    walk.walk.startedAt && walk.walk.endedAt
+      ? new Date(walk.walk.endedAt).getTime() -
+        new Date(walk.walk.startedAt).getTime()
+      : 0;
+  const totalMin = totalMs > 0 ? Math.round(totalMs / 60000) : 0;
+  const plannedMin = walk.stops.reduce((a, s) => a + (s.plannedMinutes || 0), 0);
+  const completed = walk.stops.filter((s) => !!s.completedAt);
+
+  // Per-stop actual = gap between consecutive completions in the order they
+  // were actually checked off (chronological, NOT planned order — guides tap
+  // out of sequence). The first completed stop is measured from the tour start.
+  const actualByKey = new Map<string, number>();
+  let prev = walk.walk.startedAt ? new Date(walk.walk.startedAt).getTime() : null;
+  for (const s of walk.stops
+    .filter((s) => !!s.completedAt)
+    .sort(
+      (a, b) =>
+        new Date(a.completedAt!).getTime() - new Date(b.completedAt!).getTime(),
+    )) {
+    const t = new Date(s.completedAt!).getTime();
+    if (prev != null) actualByKey.set(s.checkpointKey, Math.max(0, t - prev));
+    prev = t;
+  }
+
+  const notes = walk.stops.filter((s) => s.note.trim());
+
+  return (
+    <div style={{ ...cardBox, marginBottom: 16 }}>
+      <div style={{ fontWeight: 700, marginBottom: 8 }}>Live tour walk</div>
+
+      {!started && (
+        <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+          {qr && (
+            <img
+              src={qr}
+              alt="Scan to start the live tour"
+              width={104}
+              height={104}
+              style={{ borderRadius: 8, border: "1px solid #e2e8f0" }}
+            />
+          )}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, color: "#475569", marginBottom: 8 }}>
+              Scan with the guide’s phone (the printed roadmap has the same code)
+              to check off each stop as you walk — works offline.
+            </div>
+            <a
+              href={walk.walkUrl}
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                ...btn("#0ea5a4"),
+                display: "inline-block",
+                textDecoration: "none",
+              }}
+            >
+              Open live walk
+            </a>
+          </div>
+        </div>
+      )}
+
+      {started && (
+        <>
+          <div style={{ fontSize: 14, marginBottom: 6 }}>
+            <strong>Guide:</strong> {walk.walk.guideName ?? "—"}
+            {ended ? (
+              <>
+                {"  ·  "}
+                <strong>Length:</strong> {totalMin}m
+                {plannedMin > 0 && (
+                  <span style={{ color: "#94a3b8" }}>
+                    {" "}
+                    (planned ~{plannedMin}m)
+                  </span>
+                )}
+              </>
+            ) : (
+              <span style={{ color: "#d97706" }}> · in progress…</span>
+            )}
+          </div>
+          <div style={{ fontSize: 13, color: "#64748b", marginBottom: 8 }}>
+            {completed.length} of {walk.stops.length} stops checked off.
+          </div>
+
+          {completed.length > 0 && (
+            <div style={{ marginBottom: notes.length ? 10 : 0 }}>
+              {[...walk.stops]
+                .sort((a, b) => a.order - b.order)
+                .map((s) => {
+                  const actual = actualByKey.get(s.checkpointKey);
+                  return (
+                    <div
+                      key={s.checkpointKey}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 8,
+                        fontSize: 13,
+                        padding: "3px 0",
+                        color: s.completedAt ? "#1f2937" : "#cbd5e1",
+                      }}
+                    >
+                      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {s.completedAt ? "✓" : "○"} {s.label}
+                      </span>
+                      <span style={{ flexShrink: 0, color: "#64748b" }}>
+                        {s.completedAt && actual != null
+                          ? `${Math.max(1, Math.round(actual / 60000))}m`
+                          : "—"}
+                        {s.plannedMinutes > 0 && (
+                          <span style={{ color: "#cbd5e1" }}>
+                            {" / "}~{s.plannedMinutes}m
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })}
+            </div>
+          )}
+
+          {notes.length > 0 && (
+            <div
+              style={{
+                marginTop: 6,
+                paddingTop: 10,
+                borderTop: "1px solid #e2e8f0",
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#92400e", marginBottom: 4 }}>
+                📌 Follow-up notes from the walk
+              </div>
+              {notes.map((s) => (
+                <div key={s.checkpointKey} style={{ fontSize: 13, marginBottom: 4 }}>
+                  <strong>{s.label}:</strong> {s.note}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function LeadDrawer({
   id,
   onClose,
@@ -579,6 +761,8 @@ function LeadDrawer({
   onChanged: () => void;
 }) {
   const [detail, setDetail] = useState<LeadDetail | null>(null);
+  const [walk, setWalk] = useState<WalkDetail | null>(null);
+  const [walkQr, setWalkQr] = useState<string>("");
   const [staff, setStaff] = useState<{ id: number; name: string }[]>([]);
   const [noteText, setNoteText] = useState("");
   const [noteKind, setNoteKind] = useState<"note" | "contact">("note");
@@ -596,13 +780,34 @@ function LeadDrawer({
     }
   }, [id]);
 
+  const loadWalk = useCallback(async () => {
+    const res = await authFetch(`/api/tours/requests/${id}/walk`);
+    if (!res.ok) return;
+    const data = (await res.json()) as WalkDetail;
+    setWalk(data);
+    if (data.walkUrl) {
+      try {
+        setWalkQr(
+          await QRCode.toDataURL(data.walkUrl, {
+            margin: 1,
+            width: 200,
+            errorCorrectionLevel: "M",
+          }),
+        );
+      } catch {
+        /* QR is a convenience; the link still works without it */
+      }
+    }
+  }, [id]);
+
   useEffect(() => {
     void load();
+    void loadWalk();
     void (async () => {
       const res = await authFetch("/api/tours/assignable-staff");
       if (res.ok) setStaff((await res.json()) as { id: number; name: string }[]);
     })();
-  }, [load]);
+  }, [load, loadWalk]);
 
   const patch = async (body: Record<string, unknown>) => {
     setBusy(true);
@@ -1008,6 +1213,9 @@ function LeadDrawer({
                 )}
               </div>
             )}
+
+            {/* live tour walk — QR to start, results once captured */}
+            {walk && <WalkSection walk={walk} qr={walkQr} />}
 
             {/* log a contact / note */}
             <div style={{ ...cardBox, marginBottom: 16 }}>

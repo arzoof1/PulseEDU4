@@ -3,6 +3,34 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- School Tours — **Phase 4 (Live Tour Capture)**. A QR on the tour roadmap
+  (printed PDF + on-screen lead drawer) opens a token-gated, guide-facing,
+  offline-first live-walk screen at `/tour/walk/:token` (unauthenticated by
+  design — mirrors the survey/kiosk token pattern; the printed QR can't pre-auth
+  a guide so the screen asks the guide to confirm who is guiding, default = lead
+  owner, editable, before the clock starts). The guide taps ONCE per checkpoint
+  (client-timestamped), jots optional staff-only per-stop notes (never
+  family-facing; meant to catch a family follow-up question), and ends the tour.
+  Offline-first: every change is written to a `localStorage` buffer keyed by the
+  token and optimistically reflected; a debounced flush POSTs the FULL buffer to
+  `/tours/walk/:token/sync` (idempotent upserts keyed `walk_id` + `checkpoint_key`),
+  retries on the `online` event + a slow interval, and a synced/saving/offline
+  pill keeps the guide informed. **Sync race fix:** flush snapshots exactly what
+  it sends and only clears the dirty flag if the buffer is unchanged on return,
+  so taps made mid-request aren't silently dropped. Captured timings feed the
+  lead drawer (`WalkSection`: guide, total length vs planned, per-stop
+  planned-vs-actual computed in chronological completion order, follow-up notes
+  highlighted) and extend `/tours/outcomes/summary` with `walksCompleted`,
+  `avgTourMinutes`, and a per-guide rollup. Tables `tour_walks` (one per lead,
+  unique `tour_request_id` + unique `token`) + `tour_walk_steps`
+  (unique `walk_id` + `checkpoint_key`) in `lib/db/src/schema/tourWalks.ts`,
+  wired via `ensureTourWalksSchema()` boot migration. Server validates step taps
+  against the lead's eligible stops (family selections + always-included), the
+  guide against same-school active tour guides, and writes a one-time "walk
+  completed" timeline event. Roadmap PDF (`tourRoadmapPdf.ts`) renders a
+  "Start the digital tour" QR box; the roadmap route lazily ensures a walk +
+  embeds the QR. NO FLEID (tour leads carry none; the guide is staff).
+
 - PulseDNA Studio — **Phase 1 (profile + AI drafting)**. A per-school saved
   "communication profile" (PulseDNA) that schools upload (client-side parse of
   .txt/.md/.pdf/.docx) and/or paste, edit/replace anytime, with an

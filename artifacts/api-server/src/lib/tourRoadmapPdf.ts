@@ -36,6 +36,11 @@ export interface RoadmapInput {
   // The selected checkpoints, in the page's checkpoint order.
   stops: RoadmapStop[];
   accentColor: string;
+  // Phase 4 "Live Tour Capture": a pre-rendered QR PNG that deep-links the guide
+  // to the token-gated live-walk screen, plus the human-readable URL printed
+  // beneath it. When omitted the QR box is skipped (older callers stay valid).
+  walkQrPng?: Buffer | null;
+  walkUrl?: string | null;
   // District branding (set once by SuperUser). Only passed through when the
   // district's "printed documents" toggle is on.
   districtLogo?: Buffer | null;
@@ -140,6 +145,58 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
   row("Guide / owner", input.assignedTo || "Unassigned");
   row("Status", input.status);
   row("Requested", fmtDate(input.requestedAt));
+
+  // ---- Live Tour Capture QR ----------------------------------------------
+  // A guide scans this to open the offline-first live-walk screen — taps each
+  // stop as completed (timings + notes flow back to the lead drawer).
+  if (input.walkQrPng) {
+    doc.moveDown(0.6);
+    const qrSize = 92;
+    const boxTop = doc.y;
+    const boxHeight = qrSize + 24;
+    doc
+      .roundedRect(left, boxTop, width, boxHeight, 10)
+      .fillAndStroke("#f8fafc", "#e2e8f0");
+    try {
+      doc.image(input.walkQrPng, left + 12, boxTop + 12, {
+        fit: [qrSize, qrSize],
+      });
+    } catch {
+      /* bad QR bytes — skip the image, keep the caption */
+    }
+    const textX = left + 12 + qrSize + 16;
+    const textW = width - (12 + qrSize + 16) - 16;
+    doc
+      .fillColor(accent)
+      .font("Helvetica-Bold")
+      .fontSize(10)
+      .text("START THE DIGITAL TOUR", textX, boxTop + 16, {
+        width: textW,
+        characterSpacing: 1,
+      });
+    doc
+      .fillColor(INK)
+      .font("Helvetica")
+      .fontSize(10.5)
+      .text(
+        "Scan with your phone to check off each stop as you go. Works offline — taps sync when you're back on Wi-Fi.",
+        textX,
+        boxTop + 32,
+        { width: textW },
+      );
+    if (input.walkUrl) {
+      doc
+        .fillColor(MUTED)
+        .font("Helvetica")
+        .fontSize(8)
+        .text(input.walkUrl, textX, boxTop + boxHeight - 18, {
+          width: textW,
+          lineBreak: false,
+          ellipsis: true,
+        });
+    }
+    doc.y = boxTop + boxHeight;
+  }
 
   // ---- "Anything else?" note ---------------------------------------------
   if (input.notes.trim()) {

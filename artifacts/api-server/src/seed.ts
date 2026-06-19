@@ -3417,6 +3417,61 @@ export async function ensureToursSchema(): Promise<void> {
 }
 
 // -----------------------------------------------------------------------------
+// SCHOOL TOURS — Phase 4 "Live Tour Capture": per-lead live walk session
+// (tour_walks) + one row per checkpoint tapped (tour_walk_steps). The guide
+// scans the roadmap QR, confirms who is guiding, and taps each stop as it
+// completes; taps are client-stamped + buffered offline then synced. Idempotent
+// CREATE TABLE IF NOT EXISTS at boot (same pattern as the rest of Tours).
+// -----------------------------------------------------------------------------
+export async function ensureTourWalksSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS tour_walks (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      tour_request_id INTEGER NOT NULL,
+      token TEXT NOT NULL,
+      guide_staff_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'pending',
+      started_at TIMESTAMPTZ,
+      ended_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS tour_walks_request_unique ON tour_walks (tour_request_id)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS tour_walks_token_unique ON tour_walks (token)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS tour_walks_school_idx ON tour_walks (school_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS tour_walk_steps (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      walk_id INTEGER NOT NULL,
+      tour_request_id INTEGER NOT NULL,
+      checkpoint_key TEXT NOT NULL,
+      checkpoint_label TEXT NOT NULL DEFAULT '',
+      planned_minutes INTEGER NOT NULL DEFAULT 0,
+      completed_at TIMESTAMPTZ NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS tour_walk_steps_walk_checkpoint_unique ON tour_walk_steps (walk_id, checkpoint_key)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS tour_walk_steps_walk_idx ON tour_walk_steps (walk_id)`,
+  );
+}
+
+// -----------------------------------------------------------------------------
 // DISPLAY LIVE CONTROL: per-playlist remote-control state for digital signage.
 // One row per playlist (playlist_id is the PK). The public /display/<id> cycler
 // polls this so a presenter can manually advance slides / run a presentation
@@ -3608,6 +3663,7 @@ export async function seedFastScoresIfEmpty() {
   await ensureCaseOutcomeCatalogSchema();
   await ensureAlgebraPlacementOverridesSchema();
   await ensureToursSchema();
+  await ensureTourWalksSchema();
   await ensureDisplayLiveControlSchema();
   await ensureTicketingSchema();
   // FAST history visibility window (Phase 1 of Historical FAST work).

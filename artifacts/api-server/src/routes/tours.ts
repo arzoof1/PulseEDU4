@@ -15,9 +15,12 @@ import {
   tourRequestsTable,
   tourRequestEventsTable,
   tourSurveysTable,
+  tourWalksTable,
+  tourWalkStepsTable,
   adminNotificationsTable,
   TOUR_STATUSES,
   TOUR_OUTCOMES,
+  TOUR_WALK_STATUSES,
   type TourChild,
   type TourPageSection,
   type TourFlyer,
@@ -25,6 +28,8 @@ import {
   type TourTranslation,
   type TourStatus,
   type TourOutcome,
+  type TourWalkRow,
+  type TourWalkStatus,
 } from "@workspace/db";
 import { and, eq, desc, asc, sql } from "drizzle-orm";
 import { randomUUID, createHash } from "crypto";
@@ -54,6 +59,8 @@ import { buildTourBragSheetPdf } from "../lib/tourBragSheetPdf.js";
 import { buildTourLeaveBehindPdf } from "../lib/tourLeaveBehindPdf.js";
 import { buildTourRoadmapPdf } from "../lib/tourRoadmapPdf.js";
 import { buildTourNoteCatcherPdf } from "../lib/tourNoteCatcherPdf.js";
+import { genUrlSafeToken } from "../lib/urlSafeToken.js";
+import QRCode from "qrcode";
 import { logger } from "../lib/logger.js";
 
 const router: IRouter = Router();
@@ -212,6 +219,133 @@ function surveyUrlFor(token: string, req?: Request): string {
 
 function pipelineUrlFor(req?: Request): string {
   return `${publicAppOrigin(req)}/?settingsTile=school-tours`;
+}
+
+// Phase 4 "Live Tour Capture": the deep link a guide opens (QR on the roadmap
+// PDF + the on-screen lead view). Token-gated, unauthenticated-by-design — the
+// guide is walking the building with a phone and has no session. Mirrors the
+// survey URL shape.
+function walkUrlFor(token: string, req?: Request): string {
+  return `${publicAppOrigin(req)}/tour/walk/${encodeURIComponent(token)}`;
+}
+
+// Lazily mint (or fetch) the single live-walk session for a lead. The guide
+// defaults to the lead owner but is editable on the walk screen, so per-guide
+// metrics reflect who actually walked it. Race-safe: concurrent callers collide
+// on the tour_request_id unique index and fall back to a re-select.
+async function ensureWalkForLead(
+  schoolId: number,
+  leadId: number,
+  ownerStaffId: number | null,
+): Promise<TourWalkRow> {
+  const [existing] = await db
+    .select()
+    .from(tourWalksTable)
+    .where(
+      and(
+        eq(tourWalksTable.tourRequestId, leadId),
+        eq(tourWalksTable.schoolId, schoolId),
+      ),
+    );
+  if (existing) return existing;
+  const token = genUrlSafeToken(32); // ~190 bits, linkifier-safe (lib/urlSafeToken)
+  const [created] = await db
+    .insert(tourWalksTable)
+    .values({
+      schoolId,
+      tourRequestId: leadId,
+      token,
+      guideStaffId: ownerStaffId ?? null,
+    })
+    .onConflictDoNothing()
+    .returning();
+  if (created) return created;
+  const [again] = await db
+    .select()
+    .from(tourWalksTable)
+    .where(
+      and(
+        eq(tourWalksTable.tourRequestId, leadId),
+        eq(tourWalksTable.schoolId, schoolId),
+      ),
+    );
+  return again;
+}
+
+// The shared state shape for a live walk: lead context, the stops in page order
+// (family-selected + always-included school highlights), each merged with its
+// tapped completion + note, the guide picker options, and the current guide.
+// Consumed by the token-gated guide screen, the sync response, and the staff
+// lead-drawer route so all three always agree.
+async function buildWalkStatePayload(walk: TourWalkRow) {
+  const schoolId = walk.schoolId;
+  const [lead] = await db
+    .select()
+    .from(tourRequestsTable)
+    .where(
+      and(
+        eq(tourRequestsTable.id, walk.tourRequestId),
+        eq(tourRequestsTable.schoolId, schoolId),
+      ),
+    );
+  const page = await loadTourPage(schoolId);
+  const selectedSet = new Set(lead?.interestSelections ?? []);
+  const stepRows = await db
+    .select()
+    .from(tourWalkStepsTable)
+    .where(
+      and(
+        eq(tourWalkStepsTable.walkId, walk.id),
+        eq(tourWalkStepsTable.schoolId, schoolId),
+      ),
+    );
+  const stepByKey = new Map(stepRows.map((s) => [s.checkpointKey, s] as const));
+  const stops = (page?.checkpoints ?? [])
+    .filter((c) => selectedSet.has(c.key) || c.alwaysInclude === true)
+    .map((c, i) => {
+      const step = stepByKey.get(c.key);
+      return {
+        checkpointKey: c.key,
+        label: c.label,
+        location: c.location ?? "",
+        talkingPoints: c.talkingPoints ?? "",
+        plannedMinutes: c.minutes ?? 0,
+        order: i,
+        familyRequested: selectedSet.has(c.key),
+        schoolHighlight: c.alwaysInclude === true,
+        completedAt: step?.completedAt ?? null,
+        note: step?.note ?? "",
+      };
+    });
+  const staffRows = await db
+    .select()
+    .from(staffTable)
+    .where(and(eq(staffTable.schoolId, schoolId), eq(staffTable.active, true)));
+  const assignableStaff = staffRows
+    .filter((s) => canGuideTours(s))
+    .map((s) => ({ id: s.id, name: s.displayName }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const guideName =
+    walk.guideStaffId != null
+      ? staffRows.find((s) => s.id === walk.guideStaffId)?.displayName ?? null
+      : null;
+  return {
+    schoolName: await schoolName(schoolId),
+    familyName: lead?.familyName ?? "",
+    children: lead?.children ?? [],
+    leadStatus: lead?.status ?? null,
+    tourScheduledAt: lead?.tourScheduledAt ?? null,
+    walk: {
+      token: walk.token,
+      status: walk.status,
+      startedAt: walk.startedAt,
+      endedAt: walk.endedAt,
+      guideStaffId: walk.guideStaffId,
+      guideName,
+    },
+    stops,
+    assignableStaff,
+  };
 }
 
 type StaffRow = typeof staffTable.$inferSelect;
@@ -2001,6 +2135,20 @@ router.get(
         schoolHighlight: c.alwaysInclude === true,
       }));
     const docBranding = await loadDistrictDocumentBranding(schoolId);
+    // Phase 4: mint (or fetch) the live-walk session for this lead and render a
+    // QR that deep-links the guide to the token-gated offline walk screen.
+    const walk = await ensureWalkForLead(schoolId, id, lead.assignedStaffId);
+    const walkUrl = walkUrlFor(walk.token, req);
+    let walkQrPng: Buffer | null = null;
+    try {
+      walkQrPng = await QRCode.toBuffer(walkUrl, {
+        margin: 1,
+        width: 280,
+        errorCorrectionLevel: "M",
+      });
+    } catch {
+      walkQrPng = null; // never block the roadmap on QR rendering
+    }
     const pdf = await buildTourRoadmapPdf({
       schoolName: await schoolName(schoolId),
       familyName: lead.familyName,
@@ -2017,6 +2165,8 @@ router.get(
       notes: lead.interests,
       stops,
       accentColor: page?.accentColor ?? "#0ea5a4",
+      walkQrPng,
+      walkUrl,
       districtLogo: docBranding?.logo ?? null,
       districtTagline: docBranding?.tagline ?? null,
     });
@@ -2081,6 +2231,251 @@ router.get(
   },
 );
 
+// ---------------------------------------------------------------------------
+// Phase 4 "Live Tour Capture" — token-gated guide-facing live walk.
+// ---------------------------------------------------------------------------
+
+// GET /tours/walk/:token — UNAUTHENTICATED-by-design state for the guide screen.
+// The opaque per-walk token is the only gate (mirrors survey/kiosk). Returns the
+// lead context, the stops in page order (each with its tapped completion+note),
+// the guide picker options, and the current guide.
+router.get("/tours/walk/:token", async (req, res) => {
+  const token = String(req.params.token || "");
+  if (!token) {
+    res.status(404).json({ error: "Walk not found" });
+    return;
+  }
+  const [walk] = await db
+    .select()
+    .from(tourWalksTable)
+    .where(eq(tourWalksTable.token, token));
+  if (!walk) {
+    res.status(404).json({ error: "Walk not found" });
+    return;
+  }
+  res.json(await buildWalkStatePayload(walk));
+});
+
+// POST /tours/walk/:token/sync — UNAUTHENTICATED-by-design idempotent sync from
+// the offline-first guide screen. Accepts a partial walk update (guide, started,
+// ended, status) and a batch of checkpoint taps; step upserts are keyed
+// (walk_id, checkpoint_key) so re-syncing the same buffered taps is a no-op.
+// Everything is validated against the token's own school — checkpointKeys must
+// exist on this school's page and a guide must be a real same-school tour guide.
+router.post("/tours/walk/:token/sync", async (req, res) => {
+  const token = String(req.params.token || "");
+  if (!token) {
+    res.status(404).json({ error: "Walk not found" });
+    return;
+  }
+  const [walk] = await db
+    .select()
+    .from(tourWalksTable)
+    .where(eq(tourWalksTable.token, token));
+  if (!walk) {
+    res.status(404).json({ error: "Walk not found" });
+    return;
+  }
+  const schoolId = walk.schoolId;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+
+  const parseDate = (v: unknown): Date | undefined => {
+    if (typeof v !== "string" && typeof v !== "number") return undefined;
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? undefined : d;
+  };
+
+  const walkUpdate: Partial<typeof tourWalksTable.$inferInsert> = {
+    updatedAt: new Date(),
+  };
+
+  // --- guide (editable; default was the owner at create time) ---
+  if ("guideStaffId" in body) {
+    const gid = body.guideStaffId;
+    if (gid === null) {
+      walkUpdate.guideStaffId = null;
+    } else if (typeof gid === "number" && Number.isInteger(gid)) {
+      const [s] = await db
+        .select()
+        .from(staffTable)
+        .where(and(eq(staffTable.id, gid), eq(staffTable.schoolId, schoolId)));
+      if (s && s.active && canGuideTours(s)) walkUpdate.guideStaffId = s.id;
+    }
+  }
+
+  // --- times: start is first-tap (earliest wins), end is the explicit finish ---
+  const incomingStart = parseDate(body.startedAt);
+  if (
+    incomingStart &&
+    (!walk.startedAt || incomingStart.getTime() < walk.startedAt.getTime())
+  ) {
+    walkUpdate.startedAt = incomingStart;
+  }
+  const incomingEnd = parseDate(body.endedAt);
+  if (incomingEnd) walkUpdate.endedAt = incomingEnd;
+
+  // --- explicit status from the client, validated; else auto-derive below ---
+  if (
+    typeof body.status === "string" &&
+    (TOUR_WALK_STATUSES as readonly string[]).includes(body.status)
+  ) {
+    walkUpdate.status = body.status as TourWalkStatus;
+  }
+
+  // --- step taps (idempotent upsert keyed walk_id + checkpoint_key) ---
+  const steps = Array.isArray(body.steps) ? body.steps : [];
+  if (steps.length) {
+    const page = await loadTourPage(schoolId);
+    // Only the checkpoints this lead's tour is actually built from are
+    // acceptable: the family's selections plus the always-included highlights.
+    // Validating against the whole school catalog would let a token holder
+    // record completions/notes for stops not on this tour, inflating the
+    // step count + completion-note summary.
+    const [lead] = await db
+      .select({ interestSelections: tourRequestsTable.interestSelections })
+      .from(tourRequestsTable)
+      .where(
+        and(
+          eq(tourRequestsTable.id, walk.tourRequestId),
+          eq(tourRequestsTable.schoolId, schoolId),
+        ),
+      );
+    const selectedSet = new Set(lead?.interestSelections ?? []);
+    const cpByKey = new Map(
+      (page?.checkpoints ?? [])
+        .filter((c) => selectedSet.has(c.key) || c.alwaysInclude === true)
+        .map((c) => [c.key, c] as const),
+    );
+    for (const raw of steps) {
+      if (!raw || typeof raw !== "object") continue;
+      const r = raw as Record<string, unknown>;
+      const key = typeof r.checkpointKey === "string" ? r.checkpointKey : "";
+      if (!key) continue;
+      const cp = cpByKey.get(key);
+      if (!cp) continue; // not an eligible stop for this tour — skip
+      const completedAt = parseDate(r.completedAt);
+      if (!completedAt) continue;
+      const note = typeof r.note === "string" ? r.note.slice(0, 4000) : "";
+      await db
+        .insert(tourWalkStepsTable)
+        .values({
+          schoolId,
+          walkId: walk.id,
+          tourRequestId: walk.tourRequestId,
+          checkpointKey: key,
+          checkpointLabel: cp.label,
+          plannedMinutes: cp.minutes ?? 0,
+          completedAt,
+          note,
+        })
+        .onConflictDoUpdate({
+          target: [
+            tourWalkStepsTable.walkId,
+            tourWalkStepsTable.checkpointKey,
+          ],
+          set: {
+            completedAt,
+            note,
+            checkpointLabel: cp.label,
+            plannedMinutes: cp.minutes ?? 0,
+            updatedAt: new Date(),
+          },
+        });
+    }
+  }
+
+  // --- auto-coherence: never downgrade; bump pending→in_progress once started,
+  //     and to completed once ended (explicit client status still wins) ---
+  if (!walkUpdate.status) {
+    if (walkUpdate.endedAt || walk.endedAt) {
+      walkUpdate.status = "completed";
+    } else if (walkUpdate.startedAt || walk.startedAt) {
+      walkUpdate.status = "in_progress";
+    }
+  }
+
+  await db
+    .update(tourWalksTable)
+    .set(walkUpdate)
+    .where(eq(tourWalksTable.id, walk.id));
+
+  // Drop a timeline event the first time a walk reaches "completed" so the lead
+  // pipeline reflects that the tour was actually walked.
+  const becameCompleted =
+    walk.status !== "completed" && walkUpdate.status === "completed";
+  if (becameCompleted) {
+    const startedAt = walkUpdate.startedAt ?? walk.startedAt;
+    const endedAt = walkUpdate.endedAt ?? walk.endedAt;
+    const durMin =
+      startedAt && endedAt
+        ? Math.max(0, Math.round((endedAt.getTime() - startedAt.getTime()) / 60000))
+        : null;
+    const stepCount = await db
+      .select({ id: tourWalkStepsTable.id })
+      .from(tourWalkStepsTable)
+      .where(eq(tourWalkStepsTable.walkId, walk.id));
+    await db.insert(tourRequestEventsTable).values({
+      schoolId,
+      tourRequestId: walk.tourRequestId,
+      staffId: walkUpdate.guideStaffId ?? walk.guideStaffId ?? null,
+      eventType: "note",
+      body:
+        `Live tour walk completed — ${stepCount.length} stop` +
+        `${stepCount.length === 1 ? "" : "s"}` +
+        `${durMin != null ? `, ~${durMin} min` : ""}.`,
+    });
+  }
+
+  const [fresh] = await db
+    .select()
+    .from(tourWalksTable)
+    .where(eq(tourWalksTable.id, walk.id));
+  res.json(await buildWalkStatePayload(fresh ?? walk));
+});
+
+// GET /tours/requests/:id/walk — staff lead-drawer view. Ensures a walk exists
+// (mints the token lazily, guide defaulted to the lead owner) and returns the
+// state plus the shareable walk URL for the QR + "open live walk" link.
+router.get(
+  "/tours/requests/:id/walk",
+  requireStaff,
+  requireTourGuide,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [lead] = await db
+      .select()
+      .from(tourRequestsTable)
+      .where(
+        and(
+          eq(tourRequestsTable.id, id),
+          eq(tourRequestsTable.schoolId, schoolId),
+        ),
+      );
+    if (!lead) {
+      res.status(404).json({ error: "Lead not found" });
+      return;
+    }
+    if (!canAccessLead(staff, lead)) {
+      res.status(403).json({ error: "Not your assigned lead" });
+      return;
+    }
+    const walk = await ensureWalkForLead(schoolId, id, lead.assignedStaffId);
+    const payload = await buildWalkStatePayload(walk);
+    res.json({
+      ...payload,
+      walkUrl: walkUrlFor(walk.token, req),
+      walkToken: walk.token,
+    });
+  },
+);
+
 // GET /tours/outcomes/summary — outcome → enrollment reporting rollup.
 router.get(
   "/tours/outcomes/summary",
@@ -2108,6 +2503,50 @@ router.get(
     }
     const enrolled = byOutcome["enrolled"] ?? 0;
     const conversionRate = toured > 0 ? Math.round((enrolled / toured) * 100) : 0;
+
+    // Phase 4 "Live Tour Capture" metrics: avg tour length + per-guide rollup
+    // from completed walks. Only walks with both a start and an end count, and
+    // we drop implausible durations (0 or >10h) so a forgotten "end tap" the
+    // next day cannot skew the average.
+    const walks = await db
+      .select()
+      .from(tourWalksTable)
+      .where(eq(tourWalksTable.schoolId, schoolId));
+    const guideAgg = new Map<number, { walks: number; totalMin: number }>();
+    const durations: number[] = [];
+    for (const w of walks) {
+      if (w.status !== "completed" || !w.startedAt || !w.endedAt) continue;
+      const min = (w.endedAt.getTime() - w.startedAt.getTime()) / 60000;
+      if (!(min > 0 && min < 600)) continue;
+      durations.push(min);
+      if (w.guideStaffId != null) {
+        const g = guideAgg.get(w.guideStaffId) ?? { walks: 0, totalMin: 0 };
+        g.walks += 1;
+        g.totalMin += min;
+        guideAgg.set(w.guideStaffId, g);
+      }
+    }
+    const walksCompleted = durations.length;
+    const avgTourMinutes = walksCompleted
+      ? Math.round(durations.reduce((a, b) => a + b, 0) / walksCompleted)
+      : null;
+    const guideNames = new Map<number, string>();
+    if (guideAgg.size) {
+      const nameRows = await db
+        .select({ id: staffTable.id, name: staffTable.displayName })
+        .from(staffTable)
+        .where(eq(staffTable.schoolId, schoolId));
+      for (const r of nameRows) guideNames.set(r.id, r.name);
+    }
+    const byGuide = [...guideAgg.entries()]
+      .map(([guideId, v]) => ({
+        guideId,
+        guideName: guideNames.get(guideId) ?? null,
+        walks: v.walks,
+        avgMinutes: Math.round(v.totalMin / v.walks),
+      }))
+      .sort((a, b) => b.walks - a.walks);
+
     res.json({
       total: rows.length,
       byStatus,
@@ -2116,6 +2555,9 @@ router.get(
       enrolled,
       toured,
       conversionRate,
+      walksCompleted,
+      avgTourMinutes,
+      byGuide,
     });
   },
 );
