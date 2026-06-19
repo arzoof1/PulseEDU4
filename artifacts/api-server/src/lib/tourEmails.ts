@@ -100,6 +100,67 @@ export async function sendNewLeadNotifyEmail(
   }
 }
 
+export interface LeadAssignedEmailArgs {
+  to: string;
+  cc: string[];
+  schoolName: string;
+  familyName: string;
+  phone: string;
+  childrenSummary: string;
+  assigneeName: string;
+  assignedByName: string;
+  pipelineUrl: string;
+}
+
+// Notify a staff member they've been made the owner of a tour lead. The
+// principal/admins are CC'd for oversight. Best-effort, gated on email being
+// enabled.
+export async function sendLeadAssignedEmail(
+  args: LeadAssignedEmailArgs,
+): Promise<boolean> {
+  if (!emailEnabled() || !args.to) return false;
+  try {
+    const { client, fromEmail } = await getUncachableResendClient();
+    const rows = [
+      ["Family", args.familyName],
+      ["Phone", args.phone],
+      ["Student(s)", args.childrenSummary],
+      ["Assigned by", args.assignedByName],
+    ]
+      .map(
+        ([k, v]) =>
+          `<tr><td style="padding:4px 10px 4px 0; color:#6b7280; font-size:13px; vertical-align:top;">${escapeHtml(
+            k,
+          )}</td><td style="padding:4px 0; font-size:14px;"><strong>${escapeHtml(
+            v,
+          )}</strong></td></tr>`,
+      )
+      .join("");
+    const body = `
+      <p style="margin:0 0 14px 0;">Hi ${escapeHtml(args.assigneeName)},</p>
+      <p style="margin:0 0 14px 0;">You've been assigned a tour at <strong>${escapeHtml(
+        args.schoolName,
+      )}</strong>. Please reach out to the family within one school day and print the Tour Roadmap before they arrive.</p>
+      <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;">${rows}</table>
+      <p style="margin:0 0 22px 0; text-align:center;">
+        <a href="${args.pipelineUrl}" style="display:inline-block; background:#0ea5a4; color:#ffffff; text-decoration:none; padding:12px 24px; border-radius:10px; font-weight:600; font-size:15px;">Open the lead</a>
+      </p>`;
+    const result = await client.emails.send({
+      from: fromEmail,
+      to: args.to,
+      cc: args.cc.length ? args.cc : undefined,
+      subject: `Tour assigned to you: ${args.familyName} — ${args.schoolName}`,
+      html: shell("You've been assigned a tour", body),
+      text: `Hi ${args.assigneeName},\n\nYou've been assigned a tour at ${args.schoolName}.\n\nFamily: ${args.familyName}\nPhone: ${args.phone}\nStudent(s): ${args.childrenSummary}\nAssigned by: ${args.assignedByName}\n\nOpen the lead: ${args.pipelineUrl}`,
+    });
+    if (result.error) throw new Error(result.error.message);
+    return true;
+  } catch (err) {
+    logger.warn({ err }, "tour lead-assigned email failed");
+    return false;
+  }
+}
+
 export interface FamilyAckEmailArgs {
   to: string;
   schoolName: string;

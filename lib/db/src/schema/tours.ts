@@ -43,6 +43,12 @@ export type TourCheckpoint = {
   location: string;
   talkingPoints: string;
   minutes: number;
+  // When true this stop is on EVERY tour (a "school highlight") regardless of
+  // what the family ticked on the public form. It is not offered as a family
+  // checkbox; instead the public form lists it as "always included" and the
+  // staff Tour Roadmap merges it in with a "School highlight" badge. Optional /
+  // defaults to false so legacy rows (no field) behave as before.
+  alwaysInclude?: boolean;
 };
 
 // A machine-translated cache of the admin-authored brag-page content for one

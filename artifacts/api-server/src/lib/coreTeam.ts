@@ -234,6 +234,28 @@ export function canManageTours(staff: {
   );
 }
 
+// Lightweight "Tour Guide" gate. Anyone who can fully manage tours qualifies,
+// plus anyone an admin opts in via the assignable `capTourGuide` flag. Guides
+// who are NOT full managers can be assigned leads and open the Tour Roadmap
+// for leads assigned to them, but the calling route is responsible for the
+// per-lead ownership check (assignedStaffId === staff.id) — this gate only
+// answers "is this person allowed in the guide surface at all?".
+export function canGuideTours(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  isBehaviorSpecialist?: boolean | null;
+  isMtssCoordinator?: boolean | null;
+  isSchoolPsychologist?: boolean | null;
+  isCounselor?: boolean | null;
+  isGuidanceCounselor?: boolean | null;
+  canApproveAst?: boolean | null;
+  capTourNotify?: boolean | null;
+  capTourGuide?: boolean | null;
+}): boolean {
+  return canManageTours(staff) || Boolean(staff.capTourGuide);
+}
+
 // Event Ticketing management gate (Phase 1). Per product spec the audience
 // that can create events, allocate tickets, send/print, manage scanner links,
 // and void/reissue is: admin + Core Team + counselor (school OR guidance) +

@@ -968,6 +968,9 @@ type PageData = {
   headerTextColor: string;
   contactEmail: string | null;
   contactPhone: string | null;
+  // School-level: 'all' sends assignment SMS to the new owner; 'urgent' mutes
+  // routine assignment texts (email still goes out).
+  tourSmsScope: "all" | "urgent";
 };
 
 type TourFlyerItem = { key: string; label: string; kind: "image" | "pdf" };
@@ -978,6 +981,9 @@ type TourCheckpointItem = {
   location: string;
   talkingPoints: string;
   minutes: number;
+  // When true, this stop is added to EVERY tour roadmap regardless of what the
+  // family selects (a school highlight). Families see it as "always included."
+  alwaysInclude: boolean;
 };
 
 function ListEditor({
@@ -1146,6 +1152,24 @@ function CheckpointEditor({
             value={c.talkingPoints}
             onChange={(e) => update(i, { talkingPoints: e.target.value })}
           />
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginTop: 8,
+              fontSize: 13,
+              color: "#cbd5e1",
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={c.alwaysInclude}
+              onChange={(e) => update(i, { alwaysInclude: e.target.checked })}
+            />
+            Always include on every tour (school highlight)
+          </label>
         </div>
       ))}
       <button
@@ -1153,7 +1177,14 @@ function CheckpointEditor({
         onClick={() =>
           onChange([
             ...items,
-            { key: "", label: "", location: "", talkingPoints: "", minutes: 0 },
+            {
+              key: "",
+              label: "",
+              location: "",
+              talkingPoints: "",
+              minutes: 0,
+              alwaysInclude: false,
+            },
           ])
         }
         style={{
@@ -1609,9 +1640,10 @@ function BragEditor() {
         // can't break the uploader UI.
         json.flyers = Array.isArray(json.flyers) ? json.flyers : [];
         json.photos = Array.isArray(json.photos) ? json.photos : [];
-        json.checkpoints = Array.isArray(json.checkpoints)
-          ? json.checkpoints
-          : [];
+        json.checkpoints = (
+          Array.isArray(json.checkpoints) ? json.checkpoints : []
+        ).map((c) => ({ ...c, alwaysInclude: c.alwaysInclude === true }));
+        json.tourSmsScope = json.tourSmsScope === "urgent" ? "urgent" : "all";
         json.textPlacement = json.textPlacement === "bottom" ? "bottom" : "top";
         json.headerTextColor = /^#[0-9a-fA-F]{6}$/.test(json.headerTextColor)
           ? json.headerTextColor
@@ -1797,6 +1829,46 @@ function BragEditor() {
           items={data.checkpoints}
           onChange={(checkpoints) => set({ checkpoints })}
         />
+
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}>
+            Assignment text alerts
+          </div>
+          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8 }}>
+            When a tour lead is assigned, the new owner always gets an email.
+            Choose whether they also get a text message.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            {(
+              [
+                ["all", "Text on every assignment"],
+                ["urgent", "Email only (no routine texts)"],
+              ] as const
+            ).map(([value, lbl]) => {
+              const active = data.tourSmsScope === value;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => set({ tourSmsScope: value })}
+                  style={{
+                    padding: "8px 14px",
+                    borderRadius: 999,
+                    border: `1px solid ${active ? "var(--accent, #2563eb)" : "#334155"}`,
+                    background: active ? "var(--accent, #2563eb)" : "transparent",
+                    color: active ? "#fff" : "#cbd5e1",
+                    fontWeight: 600,
+                    fontSize: 13,
+                    cursor: "pointer",
+                  }}
+                >
+                  {lbl}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <PhotoUploader
           photos={data.photos}
           onChange={(photos) => set({ photos })}

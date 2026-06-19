@@ -12,6 +12,10 @@ export interface RoadmapStop {
   location: string;
   talkingPoints: string;
   minutes: number;
+  // The family ticked this stop on the public form.
+  familyRequested?: boolean;
+  // The school marked this checkpoint "always include" on every tour.
+  schoolHighlight?: boolean;
 }
 
 export interface RoadmapInput {
@@ -163,6 +167,15 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
 
   // ---- Checklist heading --------------------------------------------------
   const totalMinutes = input.stops.reduce((s, c) => s + (c.minutes || 0), 0);
+  const familyCount = input.stops.filter((s) => s.familyRequested).length;
+  const highlightCount = input.stops.filter(
+    (s) => s.schoolHighlight && !s.familyRequested,
+  ).length;
+  const countBits = [
+    `${familyCount} family-requested`,
+    highlightCount > 0 ? `${highlightCount} school highlight` : null,
+    totalMinutes > 0 ? `~${totalMinutes} min` : null,
+  ].filter(Boolean) as string[];
   doc.moveDown(0.9);
   doc
     .font("Helvetica-Bold")
@@ -173,11 +186,7 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
     .font("Helvetica")
     .fontSize(11)
     .fillColor(MUTED)
-    .text(
-      `    ${input.stops.length} selected${
-        totalMinutes > 0 ? ` · ~${totalMinutes} min` : ""
-      }`,
-    );
+    .text(`    ${countBits.join(" · ")}`);
   doc.moveDown(0.4);
   doc
     .moveTo(left, doc.y)
@@ -216,7 +225,13 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
           width: width - 34,
         })
       : 0;
-    const blockHeight = 26 + (stop.location ? 14 : 0) + tpHeight + 46;
+    const blockHeight =
+      26 +
+      12 + // origin badge
+      (stop.location ? 14 : 0) +
+      (stop.familyRequested ? 12 : 0) + // guide cue line
+      tpHeight +
+      46;
     ensureSpace(blockHeight);
 
     const topY = doc.y;
@@ -243,6 +258,20 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
         .fillColor(MUTED)
         .text(minutesLabel);
     }
+    // Origin badge: family pick (★), school highlight, or both.
+    const badge = stop.familyRequested
+      ? stop.schoolHighlight
+        ? "★ Family requested · School highlight"
+        : "★ Family requested"
+      : "School highlight";
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(8.5)
+      .fillColor(stop.familyRequested ? accent : MUTED)
+      .text(badge, left + 24, doc.y + 2, {
+        width: width - 24,
+        characterSpacing: 0.5,
+      });
     // Location
     if (stop.location) {
       doc
@@ -250,6 +279,16 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
         .fontSize(10)
         .fillColor(MUTED)
         .text(stop.location, left + 24, doc.y + 1, {
+          width: width - 24,
+        });
+    }
+    // Guide cue for family picks — reminds the guide why this stop matters.
+    if (stop.familyRequested) {
+      doc
+        .font("Helvetica-Oblique")
+        .fontSize(9)
+        .fillColor(accent)
+        .text("Be sure to spotlight this — the family asked to see it.", left + 24, doc.y + 1, {
           width: width - 24,
         });
     }

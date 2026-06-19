@@ -192,6 +192,13 @@ export const staffTable = pgTable("staff", {
   // route gate (admin OR this flag). Documents are private to the creator.
   capManageEsign: boolean("cap_manage_esign").notNull().default(false),
 
+  // School Tours — lightweight "Tour Guide" role. A guide can be ASSIGNED
+  // leads and open the Tour Roadmap for leads assigned to them, without the
+  // rest of the tour-management surface (brag-page editor, full lead
+  // pipeline). canManageTours members already have full access; this flag is
+  // for front-office/volunteer guides who only need their own assigned tours.
+  capTourGuide: boolean("cap_tour_guide").notNull().default(false),
+
   // Comp Time (FLSA compensatory time) per-staff capabilities. Mirrors
   // the AST gate above so the role-management UI can sit them side by
   // side under "Time Tracking."

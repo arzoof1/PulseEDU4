@@ -62,6 +62,15 @@ export const schoolSettingsTable = pgTable(
   pbisColdPeriodMultiple: integer("pbis_cold_period_multiple")
     .notNull()
     .default(5),
+  // School Tours — SMS notification scope. 'all' sends a text for every tour
+  // alert (new lead, lead assigned, …); 'urgent' limits texts to time-
+  // sensitive alerts only (the alert helper passes a tier and standard alerts
+  // are suppressed). Email is always sent regardless. Defaults to 'all' so
+  // existing behavior is unchanged.
+  tourSmsScope: text("tour_sms_scope")
+    .$type<"all" | "urgent">()
+    .notNull()
+    .default("all"),
   // When true, awarding a negative behavior subtracts its point value from
   // the student's running total. When false (default), the entry is logged
   // on the student's record as a red entry but does not affect the total.

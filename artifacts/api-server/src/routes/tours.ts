@@ -15,6 +15,7 @@ import {
   tourRequestsTable,
   tourRequestEventsTable,
   tourSurveysTable,
+  adminNotificationsTable,
   TOUR_STATUSES,
   TOUR_OUTCOMES,
   type TourChild,
@@ -28,7 +29,7 @@ import {
 import { and, eq, desc, asc, sql } from "drizzle-orm";
 import { randomUUID, createHash } from "crypto";
 import { requireSchool, getDistrictIdForSchool } from "../lib/scope.js";
-import { canManageTours } from "../lib/coreTeam.js";
+import { canManageTours, canGuideTours } from "../lib/coreTeam.js";
 import {
   ObjectStorageService,
   ObjectNotFoundError,
@@ -37,6 +38,7 @@ import { bindObjectToSchool } from "./storage.js";
 import {
   sendNewLeadNotifyEmail,
   sendFamilyAckEmail,
+  sendLeadAssignedEmail,
 } from "../lib/tourEmails.js";
 import { sendSmsBatch } from "../lib/sms.js";
 import {
@@ -239,6 +241,27 @@ function requireTourManager(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+// Allows full tour managers AND lightweight Tour Guides. Routes that use this
+// must additionally enforce own-lead scoping for guides via canAccessLead().
+function requireTourGuide(req: Request, res: Response, next: NextFunction) {
+  const staff = (req as Request & { staff?: StaffRow }).staff;
+  if (!staff || !canGuideTours(staff)) {
+    res.status(403).json({ error: "Not authorized for School Tours" });
+    return;
+  }
+  next();
+}
+
+// Full managers can touch any lead; a Tour Guide may only act on a lead they
+// own. Returns true when the staff member is allowed to view/print this lead.
+function canAccessLead(
+  staff: StaffRow,
+  lead: { assignedStaffId: number | null },
+): boolean {
+  if (canManageTours(staff)) return true;
+  return lead.assignedStaffId === staff.id;
+}
+
 function sanitizeStrings(input: unknown, max: number): string[] {
   if (!Array.isArray(input)) return [];
   return input
@@ -305,7 +328,8 @@ function sanitizeCheckpoints(input: unknown): TourCheckpoint[] {
       Number.isFinite(minutesRaw) && minutesRaw > 0
         ? Math.min(Math.round(minutesRaw), 240)
         : 0;
-    out.push({ key, label, location, talkingPoints, minutes });
+    const alwaysInclude = r.alwaysInclude === true;
+    out.push({ key, label, location, talkingPoints, minutes, alwaysInclude });
     if (out.length >= 30) break;
   }
   return out;
@@ -629,11 +653,16 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
     subheadline: tr?.subheadline ?? page.subheadline,
     intro: tr?.intro ?? page.intro,
     sections: tr?.sections ?? page.sections,
-    // Public form only needs key + label — location / talking points / minutes
-    // are staff-facing and stay server-side.
+    // Public form only needs key + label + the always-include flag — location
+    // / talking points / minutes are staff-facing and stay server-side. The
+    // always-include flag lives only on the source row (translations cache
+    // key + label), so we look it up by key from the source checkpoints.
     checkpoints: (tr?.checkpoints ?? page.checkpoints ?? []).map((c) => ({
       key: c.key,
       label: c.label,
+      alwaysInclude:
+        (page.checkpoints ?? []).find((s) => s.key === c.key)?.alwaysInclude ===
+        true,
     })),
     programs: tr?.programs ?? page.programs,
     electives: tr?.electives ?? page.electives,
@@ -921,9 +950,16 @@ router.get("/tours/page", requireStaff, requireTourManager, async (req, res) => 
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
   const page = await loadTourPage(schoolId);
+  const [settings] = await db
+    .select({ tourSmsScope: schoolSettingsTable.tourSmsScope })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
   res.json({
     schoolName: await schoolName(schoolId),
     schoolId,
+    // School-level tour preference (lives on schoolSettings, surfaced here so
+    // the Tour Admin page can manage it alongside the brag page).
+    tourSmsScope: settings?.tourSmsScope ?? "all",
     published: page?.published ?? false,
     headline: page?.headline ?? "Come See Our School",
     subheadline: page?.subheadline ?? "",
@@ -1047,6 +1083,19 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) => 
       },
     });
 
+  // Persist the school-level tour SMS scope (separate table). Only 'urgent'
+  // narrows alerts; anything else keeps the default 'all'.
+  if ("tourSmsScope" in body) {
+    const scope = body.tourSmsScope === "urgent" ? "urgent" : "all";
+    await db
+      .insert(schoolSettingsTable)
+      .values({ schoolId, tourSmsScope: scope })
+      .onConflictDoUpdate({
+        target: schoolSettingsTable.schoolId,
+        set: { tourSmsScope: scope },
+      });
+  }
+
   res.json({ ok: true, publicUrl: `${publicAppOrigin(req)}/tour/${schoolId}` });
 });
 
@@ -1166,7 +1215,8 @@ router.get(
       .where(and(eq(staffTable.schoolId, schoolId), eq(staffTable.active, true)));
     res.json(
       staff
-        .filter((s) => canManageTours(s))
+        // Full tour managers AND lightweight Tour Guides can own a lead.
+        .filter((s) => canGuideTours(s))
         .map((s) => ({ id: s.id, name: s.displayName }))
         .sort((a, b) => a.name.localeCompare(b.name)),
     );
@@ -1177,10 +1227,11 @@ router.get(
 router.get(
   "/tours/requests/:id",
   requireStaff,
-  requireTourManager,
+  requireTourGuide,
   async (req, res) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) {
       res.status(400).json({ error: "Invalid id" });
@@ -1197,6 +1248,10 @@ router.get(
       );
     if (!lead) {
       res.status(404).json({ error: "Lead not found" });
+      return;
+    }
+    if (!canAccessLead(staff, lead)) {
+      res.status(403).json({ error: "Not your assigned lead" });
       return;
     }
 
@@ -1309,6 +1364,14 @@ router.patch(
     const body = (req.body ?? {}) as Record<string, unknown>;
     const updates: Partial<typeof tourRequestsTable.$inferInsert> = {};
     const events: { eventType: string; body: string }[] = [];
+    // Set when this PATCH (re)assigns the lead to a real staff member, so we
+    // can fire the assignee notification AFTER the transaction commits.
+    let assignmentNotify: {
+      assigneeStaffId: number;
+      assigneeName: string;
+      assigneeEmail: string | null;
+      assigneeCell: string | null;
+    } | null = null;
 
     // Status change.
     if (
@@ -1342,7 +1405,11 @@ router.patch(
         let assigneeName = "Unassigned";
         if (nextId !== null) {
           const [a] = await db
-            .select({ name: staffTable.displayName })
+            .select({
+              name: staffTable.displayName,
+              email: staffTable.email,
+              cell: staffTable.cellPhone,
+            })
             .from(staffTable)
             .where(
               and(eq(staffTable.id, nextId), eq(staffTable.schoolId, schoolId)),
@@ -1352,6 +1419,12 @@ router.patch(
             return;
           }
           assigneeName = a.name;
+          assignmentNotify = {
+            assigneeStaffId: nextId,
+            assigneeName: a.name,
+            assigneeEmail: a.email ?? null,
+            assigneeCell: a.cell ?? null,
+          };
         }
         events.push({
           eventType: "assignment",
@@ -1443,6 +1516,85 @@ router.patch(
         });
       }
     });
+
+    // Assignment notification (fire-and-forget). When a lead gains a new
+    // owner, alert the assignee directly (email always; SMS gated by the
+    // school's tour SMS scope) and CC the principals/admins for oversight.
+    // Best-effort: failures are logged, never block the PATCH response.
+    if (assignmentNotify) {
+      const notify = assignmentNotify;
+      void (async () => {
+        try {
+          const name = await schoolName(schoolId);
+          // Principals/admins to CC (excluding the assignee themselves).
+          const admins = await db
+            .select({
+              email: staffTable.email,
+              isAdmin: staffTable.isAdmin,
+              id: staffTable.id,
+            })
+            .from(staffTable)
+            .where(
+              and(
+                eq(staffTable.schoolId, schoolId),
+                eq(staffTable.active, true),
+                eq(staffTable.isAdmin, true),
+              ),
+            );
+          const ccEmails = admins
+            .filter((a) => a.id !== notify.assigneeStaffId)
+            .map((a) => a.email)
+            .filter((e): e is string => Boolean(e));
+
+          const childrenSummary =
+            lead.children
+              .map((c) => `${c.name}${c.grade ? ` (Grade ${c.grade})` : ""}`)
+              .join(", ") || "—";
+
+          if (notify.assigneeEmail) {
+            await sendLeadAssignedEmail({
+              to: notify.assigneeEmail,
+              cc: ccEmails,
+              schoolName: name,
+              familyName: lead.familyName,
+              phone: lead.phone,
+              childrenSummary,
+              assigneeName: notify.assigneeName,
+              assignedByName: staff.displayName,
+              pipelineUrl: pipelineUrlFor(req),
+            });
+          }
+
+          // SMS only when the school's scope allows standard alerts.
+          const [settings] = await db
+            .select({ scope: schoolSettingsTable.tourSmsScope })
+            .from(schoolSettingsTable)
+            .where(eq(schoolSettingsTable.schoolId, schoolId));
+          const smsAllowed = (settings?.scope ?? "all") === "all";
+          if (smsAllowed && notify.assigneeCell) {
+            await sendSmsBatch(
+              [notify.assigneeCell],
+              `You've been assigned a tour at ${name}: ${lead.familyName} (${lead.phone}). Open PulseEDU to follow up.`,
+            );
+          }
+
+          // In-app record for admin oversight.
+          await db.insert(adminNotificationsTable).values({
+            schoolId,
+            type: "tour_lead_assigned",
+            payload: {
+              leadId: id,
+              familyName: lead.familyName,
+              assigneeStaffId: notify.assigneeStaffId,
+              assigneeName: notify.assigneeName,
+              assignedByStaffId: staff.id,
+            },
+          });
+        } catch (err) {
+          req.log.warn({ err }, "tour assignment notification failed");
+        }
+      })();
+    }
 
     res.json({ ok: true });
   },
@@ -1637,10 +1789,11 @@ router.get(
 router.get(
   "/tours/requests/:id/roadmap.pdf",
   requireStaff,
-  requireTourManager,
+  requireTourGuide,
   async (req, res) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) {
       res.status(400).json({ error: "Invalid id" });
@@ -1649,6 +1802,10 @@ router.get(
     const lead = await loadLeadForPdf(schoolId, id);
     if (!lead) {
       res.status(404).json({ error: "Lead not found" });
+      return;
+    }
+    if (!canAccessLead(staff, lead)) {
+      res.status(403).json({ error: "Not your assigned lead" });
       return;
     }
     let assignedTo: string | null = null;
@@ -1665,15 +1822,20 @@ router.get(
       assignedTo = a?.name ?? null;
     }
     const page = await loadTourPage(schoolId);
-    // Resolve the family's selected keys to full checkpoints, in page order.
+    // Build the roadmap from the union of (a) the stops the family ticked and
+    // (b) the school's "always include" highlights — in page order. Each stop
+    // carries flags so the PDF can badge it: family pick (★), school highlight,
+    // or both. This is the "Option A" walkable route the guide follows.
     const selectedSet = new Set(lead.interestSelections ?? []);
     const stops = (page?.checkpoints ?? [])
-      .filter((c) => selectedSet.has(c.key))
+      .filter((c) => selectedSet.has(c.key) || c.alwaysInclude === true)
       .map((c) => ({
         label: c.label,
         location: c.location,
         talkingPoints: c.talkingPoints,
         minutes: c.minutes,
+        familyRequested: selectedSet.has(c.key),
+        schoolHighlight: c.alwaysInclude === true,
       }));
     const docBranding = await loadDistrictDocumentBranding(schoolId);
     const pdf = await buildTourRoadmapPdf({
@@ -1709,10 +1871,11 @@ router.get(
 router.get(
   "/tours/requests/:id/note-catcher.pdf",
   requireStaff,
-  requireTourManager,
+  requireTourGuide,
   async (req, res) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) {
       res.status(400).json({ error: "Invalid id" });
@@ -1723,10 +1886,16 @@ router.get(
       res.status(404).json({ error: "Lead not found" });
       return;
     }
+    if (!canAccessLead(staff, lead)) {
+      res.status(403).json({ error: "Not your assigned lead" });
+      return;
+    }
     const page = await loadTourPage(schoolId);
+    // Include the family's picks AND the school's always-include highlights so
+    // the family's take-along sheet matches the actual tour route.
     const selectedSet = new Set(lead.interestSelections ?? []);
     const stops = (page?.checkpoints ?? [])
-      .filter((c) => selectedSet.has(c.key))
+      .filter((c) => selectedSet.has(c.key) || c.alwaysInclude === true)
       .map((c) => ({ label: c.label }));
     const docBranding = await loadDistrictDocumentBranding(schoolId);
     const pdf = await buildTourNoteCatcherPdf({

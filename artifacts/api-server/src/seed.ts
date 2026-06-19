@@ -1945,6 +1945,12 @@ export async function ensureAdminHubSchema() {
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS iss_capacity_behavior TEXT NOT NULL DEFAULT 'soft'`,
   );
 
+  // School Tours — SMS notification scope ('all' | 'urgent'). Governs which
+  // tour SMS alerts are sent; email is always sent regardless.
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_sms_scope TEXT NOT NULL DEFAULT 'all'`,
+  );
+
   // OSS section + reason gates on school_heartbeat_settings + parent prefs.
   await db.execute(
     sql`ALTER TABLE school_heartbeat_settings ADD COLUMN IF NOT EXISTS show_oss BOOLEAN NOT NULL DEFAULT FALSE`,
@@ -3329,6 +3335,11 @@ export async function ensureToursSchema(): Promise<void> {
   // Notify-group capability on staff (assignable in Staff & Roles).
   await db.execute(
     sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS cap_tour_notify BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  // Lightweight Tour Guide role (assignable in Staff & Roles): assignable as a
+  // lead owner + can open the Tour Roadmap for leads assigned to them.
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS cap_tour_guide BOOLEAN NOT NULL DEFAULT FALSE`,
   );
 
   // Photo/flyer uploads + layout toggle (additive).
