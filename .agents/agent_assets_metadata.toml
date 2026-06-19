@@ -372,3 +372,9 @@ id = "6c-AcUXBEPPh0IBJkGl00"
 uri = "file://docs/demo/print/README.pdf"
 type = "pdf"
 title = "Demo Kit — README (print)"
+
+[[outputs]]
+id = "JlmLaw-9A_1nY8RkcKy3p"
+uri = "file://docs/school-tours-user-guide.md"
+type = "text"
+title = "PulseEDU School Tours — User Guide for Schools"
