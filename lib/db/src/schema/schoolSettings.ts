@@ -71,6 +71,26 @@ export const schoolSettingsTable = pgTable(
     .$type<"all" | "urgent">()
     .notNull()
     .default("all"),
+  // School Tours — Phase 2 "never lose a lead" SLA settings. The background
+  // escalation job + the pipeline overdue flags read these.
+  //   tourFirstContactHours — a 'new' lead uncontacted longer than this is
+  //     overdue (legacy hard-coded 24h is now the default).
+  //   tourFollowUpBusinessDays — when a lead is moved to "Still deciding", its
+  //     follow-up becomes due this many business days later.
+  //   tourArchiveDays — closed leads older than this drop off the default
+  //     pipeline board (still queryable via ?view=archived).
+  //   tourEscalationEnabled — master switch for the automated overdue emails.
+  //     Sending is ALSO gated globally on EMAIL_REMINDERS_ENABLED.
+  tourFirstContactHours: integer("tour_first_contact_hours")
+    .notNull()
+    .default(24),
+  tourFollowUpBusinessDays: integer("tour_follow_up_business_days")
+    .notNull()
+    .default(3),
+  tourArchiveDays: integer("tour_archive_days").notNull().default(3),
+  tourEscalationEnabled: boolean("tour_escalation_enabled")
+    .notNull()
+    .default(true),
   // When true, awarding a negative behavior subtracts its point value from
   // the student's running total. When false (default), the entry is logged
   // on the student's record as a red entry but does not affect the total.

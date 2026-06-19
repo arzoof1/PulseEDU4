@@ -41,6 +41,8 @@ import {
   sendLeadAssignedEmail,
 } from "../lib/tourEmails.js";
 import { sendSmsBatch } from "../lib/sms.js";
+import { addBusinessDays } from "../lib/businessDays.js";
+import { overdueFor } from "../lib/tourReminders.js";
 import {
   translateTourContent,
   isSupportedTargetLang,
@@ -951,7 +953,13 @@ router.get("/tours/page", requireStaff, requireTourManager, async (req, res) => 
   if (!schoolId) return;
   const page = await loadTourPage(schoolId);
   const [settings] = await db
-    .select({ tourSmsScope: schoolSettingsTable.tourSmsScope })
+    .select({
+      tourSmsScope: schoolSettingsTable.tourSmsScope,
+      tourFirstContactHours: schoolSettingsTable.tourFirstContactHours,
+      tourFollowUpBusinessDays: schoolSettingsTable.tourFollowUpBusinessDays,
+      tourArchiveDays: schoolSettingsTable.tourArchiveDays,
+      tourEscalationEnabled: schoolSettingsTable.tourEscalationEnabled,
+    })
     .from(schoolSettingsTable)
     .where(eq(schoolSettingsTable.schoolId, schoolId));
   res.json({
@@ -960,6 +968,11 @@ router.get("/tours/page", requireStaff, requireTourManager, async (req, res) => 
     // School-level tour preference (lives on schoolSettings, surfaced here so
     // the Tour Admin page can manage it alongside the brag page).
     tourSmsScope: settings?.tourSmsScope ?? "all",
+    // Phase 2 "never lose a lead" SLA settings (also on schoolSettings).
+    tourFirstContactHours: settings?.tourFirstContactHours ?? 24,
+    tourFollowUpBusinessDays: settings?.tourFollowUpBusinessDays ?? 3,
+    tourArchiveDays: settings?.tourArchiveDays ?? 3,
+    tourEscalationEnabled: settings?.tourEscalationEnabled ?? true,
     published: page?.published ?? false,
     headline: page?.headline ?? "Come See Our School",
     subheadline: page?.subheadline ?? "",
@@ -1096,6 +1109,40 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) => 
       });
   }
 
+  // Persist the Phase 2 SLA settings (schoolSettings). Each is clamped to a
+  // sane range; only fields present in the body are touched.
+  const slaSet: Partial<typeof schoolSettingsTable.$inferInsert> = {};
+  const clampInt = (v: unknown, min: number, max: number, dflt: number) => {
+    const n = Math.round(Number(v));
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt;
+  };
+  if ("tourFirstContactHours" in body) {
+    slaSet.tourFirstContactHours = clampInt(body.tourFirstContactHours, 1, 720, 24);
+  }
+  if ("tourFollowUpBusinessDays" in body) {
+    slaSet.tourFollowUpBusinessDays = clampInt(
+      body.tourFollowUpBusinessDays,
+      1,
+      60,
+      3,
+    );
+  }
+  if ("tourArchiveDays" in body) {
+    slaSet.tourArchiveDays = clampInt(body.tourArchiveDays, 1, 365, 3);
+  }
+  if ("tourEscalationEnabled" in body) {
+    slaSet.tourEscalationEnabled = body.tourEscalationEnabled === true;
+  }
+  if (Object.keys(slaSet).length > 0) {
+    await db
+      .insert(schoolSettingsTable)
+      .values({ schoolId, ...slaSet })
+      .onConflictDoUpdate({
+        target: schoolSettingsTable.schoolId,
+        set: slaSet,
+      });
+  }
+
   res.json({ ok: true, publicUrl: `${publicAppOrigin(req)}/tour/${schoolId}` });
 });
 
@@ -1162,41 +1209,66 @@ router.get(
       for (const o of owners) ownerNames.set(o.id, o.name);
     }
 
+    // Default view hides archived (long-closed) leads; ?view=archived shows
+    // only them. Archive cutoff + first-contact window come from school settings.
+    const view = req.query.view === "archived" ? "archived" : "active";
+    const [settings] = await db
+      .select({
+        firstContactHours: schoolSettingsTable.tourFirstContactHours,
+        archiveDays: schoolSettingsTable.tourArchiveDays,
+      })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId));
+    const archiveMs = (settings?.archiveDays ?? 3) * 24 * 60 * 60 * 1000;
+
     const now = Date.now();
-    const ESCALATE_MS = 24 * 60 * 60 * 1000;
+    const nowDate = new Date(now);
+    const mapped = rows.map((r) => {
+      // Response clock: ms from creation to first contact (or to now if still
+      // un-contacted).
+      const responseMs = r.firstContactedAt
+        ? r.firstContactedAt.getTime() - r.createdAt.getTime()
+        : now - r.createdAt.getTime();
+      // Stage-aware overdue (Phase 2) via the shared overdueFor() helper — the
+      // single source of truth used by the list, the detail drawer, and the
+      // hourly escalation sweep, so they can never disagree on who is overdue.
+      const od = overdueFor(r, settings?.firstContactHours ?? 24, nowDate);
+      const overdue = od != null;
+      const overdueReason = od?.reason ?? null;
+      const archived =
+        r.status === "closed" &&
+        r.closedAt != null &&
+        now - r.closedAt.getTime() > archiveMs;
+      return {
+        id: r.id,
+        familyName: r.familyName,
+        phone: r.phone,
+        email: r.email,
+        children: r.children,
+        interests: r.interests,
+        source: r.source,
+        preferredLanguage: r.preferredLanguage,
+        status: r.status,
+        outcome: r.outcome,
+        outcomeReason: r.outcomeReason,
+        assignedStaffId: r.assignedStaffId,
+        assignedTo: r.assignedStaffId
+          ? ownerNames.get(r.assignedStaffId) ?? null
+          : null,
+        tourScheduledAt: r.tourScheduledAt,
+        firstContactedAt: r.firstContactedAt,
+        followUpDueAt: r.followUpDueAt,
+        closedAt: r.closedAt,
+        surveySubmittedAt: r.surveySubmittedAt,
+        createdAt: r.createdAt,
+        responseMs,
+        overdue,
+        overdueReason,
+        archived,
+      };
+    });
     res.json(
-      rows.map((r) => {
-        // Response clock: ms from creation to first contact (or to now if
-        // still un-contacted). Overdue when a 'new' lead has sat >24h.
-        const responseMs = r.firstContactedAt
-          ? r.firstContactedAt.getTime() - r.createdAt.getTime()
-          : now - r.createdAt.getTime();
-        const overdue =
-          r.status === "new" && now - r.createdAt.getTime() > ESCALATE_MS;
-        return {
-          id: r.id,
-          familyName: r.familyName,
-          phone: r.phone,
-          email: r.email,
-          children: r.children,
-          interests: r.interests,
-          source: r.source,
-          preferredLanguage: r.preferredLanguage,
-          status: r.status,
-          outcome: r.outcome,
-          outcomeReason: r.outcomeReason,
-          assignedStaffId: r.assignedStaffId,
-          assignedTo: r.assignedStaffId
-            ? ownerNames.get(r.assignedStaffId) ?? null
-            : null,
-          tourScheduledAt: r.tourScheduledAt,
-          firstContactedAt: r.firstContactedAt,
-          surveySubmittedAt: r.surveySubmittedAt,
-          createdAt: r.createdAt,
-          responseMs,
-          overdue,
-        };
-      }),
+      mapped.filter((m) => (view === "archived" ? m.archived : !m.archived)),
     );
   },
 );
@@ -1300,9 +1372,19 @@ router.get(
     const responseMs = lead.firstContactedAt
       ? lead.firstContactedAt.getTime() - lead.createdAt.getTime()
       : Date.now() - lead.createdAt.getTime();
-    const overdue =
-      lead.status === "new" &&
-      Date.now() - lead.createdAt.getTime() > 24 * 60 * 60 * 1000;
+    // Stage-aware overdue via the shared overdueFor() helper, so the drawer
+    // agrees with the pipeline list and the escalation sweep.
+    const [detailSettings] = await db
+      .select({ firstContactHours: schoolSettingsTable.tourFirstContactHours })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId));
+    const od = overdueFor(
+      lead,
+      detailSettings?.firstContactHours ?? 24,
+      new Date(),
+    );
+    const overdue = od != null;
+    const overdueReason = od?.reason ?? null;
 
     // Resolve the family's checkpoint selections to their current labels, in
     // the page's checkpoint order. Stops deleted since they were selected fall
@@ -1321,6 +1403,7 @@ router.get(
           : null,
         responseMs,
         overdue,
+        overdueReason,
         selectedCheckpoints,
         surveyUrl: surveyUrlFor(lead.surveyToken, req),
       },
@@ -1332,6 +1415,16 @@ router.get(
     });
   },
 );
+
+// Resolve a fresh "Still deciding" follow-up due date from the school's
+// configured business-day window (defaults to 3 if the row is missing).
+async function followUpDueDate(schoolId: number): Promise<Date> {
+  const [s] = await db
+    .select({ days: schoolSettingsTable.tourFollowUpBusinessDays })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
+  return addBusinessDays(new Date(), s?.days ?? 3);
+}
 
 // PATCH /tours/requests/:id — status / assignment / outcome / schedule.
 router.patch(
@@ -1389,6 +1482,25 @@ router.patch(
       if (next !== "new" && !lead.firstContactedAt) {
         updates.firstContactedAt = new Date();
       }
+      // Phase 2 lifecycle stamps tied to the new stage.
+      if (next === "deciding") {
+        // Entering "Still deciding" starts the business-day follow-up clock.
+        updates.followUpDueAt = await followUpDueDate(schoolId);
+      } else if (lead.status === "deciding") {
+        // Leaving "Still deciding" clears the follow-up clock.
+        updates.followUpDueAt = null;
+      }
+      if (next === "closed") {
+        updates.closedAt = new Date();
+        updates.followUpDueAt = null;
+      } else if (lead.status === "closed") {
+        // Re-opening a closed lead clears the archive clock.
+        updates.closedAt = null;
+      }
+      // Any staff-driven stage change re-arms the escalation job so the next
+      // applicable overdue condition fires a fresh nudge.
+      updates.lastEscalatedAt = null;
+      updates.lastEscalatedReason = null;
     }
 
     // Assignment.
@@ -1460,23 +1572,44 @@ router.patch(
       }
     }
 
-    // Outcome (only meaningful with a status of toured/closed).
+    // Outcome. enrolled|chose_other are TERMINAL (close + start the archive
+    // clock). "deciding" is no longer a terminal outcome — it maps to the live
+    // "Still deciding" stage with a follow-up clock (back-compat for any client
+    // that still posts outcome:'deciding'; the Phase 2 UI drives it via status).
     if ("outcome" in body) {
       const raw = body.outcome;
+      const reason =
+        typeof body.outcomeReason === "string"
+          ? body.outcomeReason.slice(0, 1000)
+          : null;
       if (raw === null) {
         updates.outcome = null;
         updates.outcomeReason = null;
+      } else if (raw === "deciding") {
+        // Live holding stage, not a close.
+        updates.outcome = null;
+        updates.outcomeReason = reason;
+        updates.followUpDueAt = await followUpDueDate(schoolId);
+        updates.closedAt = null;
+        updates.lastEscalatedAt = null;
+        updates.lastEscalatedReason = null;
+        if (lead.status !== "deciding") {
+          updates.status = "deciding";
+          events.push({
+            eventType: "status_change",
+            body: `Status: ${lead.status} → deciding.`,
+          });
+        }
       } else if (
         typeof raw === "string" &&
         (TOUR_OUTCOMES as readonly string[]).includes(raw)
       ) {
         updates.outcome = raw as TourOutcome;
-        updates.outcomeReason =
-          typeof body.outcomeReason === "string"
-            ? body.outcomeReason.slice(0, 1000)
-            : null;
-        // Recording an outcome closes the lead.
+        updates.outcomeReason = reason;
+        // Recording a terminal outcome closes the lead + starts the archive clock.
         updates.status = "closed";
+        updates.closedAt = new Date();
+        updates.followUpDueAt = null;
         events.push({
           eventType: "outcome",
           body: `Outcome: ${raw}${
@@ -1650,11 +1783,23 @@ router.post(
       body: text.slice(0, 4000),
     });
 
-    // Logging a contact stamps the response clock the first time.
+    // Logging a contact stamps the response clock the first time, and — when
+    // the lead is "Still deciding" — pushes the follow-up clock forward and
+    // re-arms the escalation job (the owner just did the follow-up).
+    const contactUpdates: Partial<typeof tourRequestsTable.$inferInsert> = {};
     if (kind === "contact" && !lead.firstContactedAt) {
+      contactUpdates.firstContactedAt = new Date();
+    }
+    if (kind === "contact" && lead.status === "deciding") {
+      contactUpdates.followUpDueAt = await followUpDueDate(schoolId);
+      contactUpdates.lastEscalatedAt = null;
+      contactUpdates.lastEscalatedReason = null;
+    }
+    if (Object.keys(contactUpdates).length > 0) {
+      contactUpdates.updatedAt = new Date();
       await db
         .update(tourRequestsTable)
-        .set({ firstContactedAt: new Date(), updatedAt: new Date() })
+        .set(contactUpdates)
         .where(
           and(
             eq(tourRequestsTable.id, id),

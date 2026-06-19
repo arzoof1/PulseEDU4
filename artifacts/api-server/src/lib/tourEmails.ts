@@ -161,6 +161,98 @@ export async function sendLeadAssignedEmail(
   }
 }
 
+export type TourOverdueReason =
+  | "first_contact"
+  | "tour_not_logged"
+  | "follow_up";
+
+export interface LeadOverdueEmailArgs {
+  to: string[];
+  cc: string[];
+  schoolName: string;
+  familyName: string;
+  phone: string;
+  childrenSummary: string;
+  assigneeName: string | null;
+  reason: TourOverdueReason;
+  // Human-readable description of how long the lead has been waiting.
+  waitingSummary: string;
+  pipelineUrl: string;
+}
+
+const OVERDUE_COPY: Record<
+  TourOverdueReason,
+  { label: string; line: string; subject: string }
+> = {
+  first_contact: {
+    label: "First contact overdue",
+    line: "This new tour lead hasn't been contacted yet and is now past your first-contact window. Reach out today to keep the family warm.",
+    subject: "Tour lead needs first contact",
+  },
+  tour_not_logged: {
+    label: "Tour not logged",
+    line: "This lead's scheduled tour time has passed but no outcome has been recorded. Log how the tour went (or reschedule) so the lead doesn't stall.",
+    subject: "Tour outcome not logged",
+  },
+  follow_up: {
+    label: "Follow-up due",
+    line: "This family is still deciding and their follow-up is now due. A quick check-in keeps you top of mind while they choose.",
+    subject: "Still-deciding lead needs a follow-up",
+  },
+};
+
+// Escalation nudge to the lead's owner (or the notify group when unassigned),
+// CC'ing the coordinator/principal. Sent by the background escalation job when a
+// lead crosses its SLA threshold. Reason-specific copy. Best-effort, gated on
+// email being enabled.
+export async function sendLeadOverdueEscalationEmail(
+  args: LeadOverdueEmailArgs,
+): Promise<boolean> {
+  if (!emailEnabled() || args.to.length === 0) return false;
+  try {
+    const { client, fromEmail } = await getUncachableResendClient();
+    const copy = OVERDUE_COPY[args.reason];
+    const rows = [
+      ["Family", args.familyName],
+      ["Phone", args.phone],
+      ["Student(s)", args.childrenSummary],
+      ["Owner", args.assigneeName || "Unassigned"],
+      ["Waiting", args.waitingSummary],
+    ]
+      .map(
+        ([k, v]) =>
+          `<tr><td style="padding:4px 10px 4px 0; color:#6b7280; font-size:13px; vertical-align:top;">${escapeHtml(
+            k,
+          )}</td><td style="padding:4px 0; font-size:14px;"><strong>${escapeHtml(
+            v,
+          )}</strong></td></tr>`,
+      )
+      .join("");
+    const body = `
+      <p style="margin:0 0 10px 0;"><span style="display:inline-block; background:#fef2f2; color:#b91c1c; font-size:12px; font-weight:700; letter-spacing:0.4px; text-transform:uppercase; padding:4px 10px; border-radius:999px;">${escapeHtml(
+        copy.label,
+      )}</span></p>
+      <p style="margin:0 0 14px 0;">${escapeHtml(copy.line)}</p>
+      <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;">${rows}</table>
+      <p style="margin:0 0 22px 0; text-align:center;">
+        <a href="${args.pipelineUrl}" style="display:inline-block; background:#0ea5a4; color:#ffffff; text-decoration:none; padding:12px 24px; border-radius:10px; font-weight:600; font-size:15px;">Open the lead</a>
+      </p>`;
+    const result = await client.emails.send({
+      from: fromEmail,
+      to: args.to,
+      cc: args.cc.length ? args.cc : undefined,
+      subject: `${copy.subject}: ${args.familyName} — ${args.schoolName}`,
+      html: shell(copy.label, body),
+      text: `${copy.label} — ${args.schoolName}\n\n${copy.line}\n\nFamily: ${args.familyName}\nPhone: ${args.phone}\nStudent(s): ${args.childrenSummary}\nOwner: ${args.assigneeName || "Unassigned"}\nWaiting: ${args.waitingSummary}\n\nOpen the lead: ${args.pipelineUrl}`,
+    });
+    if (result.error) throw new Error(result.error.message);
+    return true;
+  } catch (err) {
+    logger.warn({ err }, "tour lead-overdue escalation email failed");
+    return false;
+  }
+}
+
 export interface FamilyAckEmailArgs {
   to: string;
   schoolName: string;

@@ -73,6 +73,7 @@ import { sendWeeklyHeartbeatEmails } from "./lib/weeklyHeartbeatEmail";
 import { runDueLotteryDraws } from "./lib/onTimeLottery";
 import { startReminderScheduler } from "./lib/scheduler";
 import { runAstYearEndLapse } from "./cron/astLapse";
+import { runTourEscalations } from "./lib/tourReminders";
 import { runFeatureLicensingOverrideSweep } from "./cron/featureLicensingOverrideSweep";
 import { runPickupEndOfDayAutoClear } from "./cron/pickupEndOfDayAutoClear";
 import { runInRouteOverdueSweep } from "./cron/inRouteOverdue";
@@ -658,6 +659,32 @@ function startListening(): void {
           logger.error(
             { err: schedErr },
             "Failed to schedule feature licensing override sweep",
+          );
+        }
+
+        // School Tours — Phase 2 "never lose a lead" escalation sweep. Hourly
+        // scan that emails the lead owner (CC principal/admins) when a lead
+        // crosses its stage SLA (first-contact / scheduled-not-toured /
+        // deciding-follow-up). Idempotent per reason + re-nudge window. Gated
+        // globally on EMAIL_REMINDERS_ENABLED and per-school on
+        // tourEscalationEnabled. Override schedule via TOUR_ESCALATION_CRON.
+        const tourEscExpr = process.env.TOUR_ESCALATION_CRON ?? "0 * * * *";
+        try {
+          cron.schedule(tourEscExpr, async () => {
+            try {
+              const r = await runTourEscalations(new Date());
+              if (r.sent > 0) {
+                logger.info(r, "Tour escalation sweep complete");
+              }
+            } catch (cronErr) {
+              logger.error({ err: cronErr }, "Tour escalation sweep failed");
+            }
+          });
+          logger.info({ expr: tourEscExpr }, "Tour escalation sweep scheduled");
+        } catch (schedErr) {
+          logger.error(
+            { err: schedErr },
+            "Failed to schedule tour escalation sweep",
           );
         }
 

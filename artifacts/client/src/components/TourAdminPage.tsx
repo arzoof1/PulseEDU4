@@ -22,7 +22,13 @@ import {
 // =============================================================================
 
 type Child = { name: string; grade: string };
-type Status = "new" | "contacted" | "scheduled" | "toured" | "closed";
+type Status =
+  | "new"
+  | "contacted"
+  | "scheduled"
+  | "toured"
+  | "deciding"
+  | "closed";
 type Outcome = "enrolled" | "deciding" | "chose_other";
 
 type Lead = {
@@ -45,6 +51,13 @@ type Lead = {
   createdAt: string;
   responseMs: number;
   overdue: boolean;
+  // Phase 2 lifecycle. overdueReason explains WHY a lead is flagged overdue;
+  // followUpDueAt is the deciding-stage business-day clock; closedAt/archived
+  // drive the auto-archive declutter.
+  overdueReason?: string | null;
+  followUpDueAt?: string | null;
+  closedAt?: string | null;
+  archived?: boolean;
   // Family's selected tour checkpoints, resolved to current labels.
   selectedCheckpoints?: string[];
 };
@@ -77,6 +90,7 @@ const STATUS_ORDER: Status[] = [
   "contacted",
   "scheduled",
   "toured",
+  "deciding",
   "closed",
 ];
 const STATUS_LABEL: Record<Status, string> = {
@@ -84,6 +98,7 @@ const STATUS_LABEL: Record<Status, string> = {
   contacted: "Contacted",
   scheduled: "Scheduled",
   toured: "Toured",
+  deciding: "Still deciding",
   closed: "Closed",
 };
 const STATUS_COLOR: Record<Status, string> = {
@@ -91,6 +106,7 @@ const STATUS_COLOR: Record<Status, string> = {
   contacted: "#d97706",
   scheduled: "#2563eb",
   toured: "#7c3aed",
+  deciding: "#db2777",
   closed: "#059669",
 };
 const OUTCOME_LABEL: Record<Outcome, string> = {
@@ -116,6 +132,43 @@ function fmtDate(iso: string | null): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+// Short, reason-aware label for the red overdue badge on a lead card. The
+// server returns overdueReason so the badge can say WHY the lead is flagged,
+// not just ">24h" (which only made sense for the first-contact case).
+function overdueBadgeLabel(reason?: string | null): string {
+  switch (reason) {
+    case "first_contact":
+      return "No first contact";
+    case "tour_not_logged":
+      return "Tour not logged";
+    case "follow_up":
+      return "Follow-up due";
+    default:
+      return "Overdue";
+  }
+}
+// Coerce a possibly-undefined/NaN numeric setting into an integer within
+// [min,max], falling back to fallback. Mirrors the server-side clampInt so the
+// inputs never show an out-of-range value the API would reject.
+function clampNum(v: unknown, min: number, max: number, fallback: number): number {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+// Human countdown to (or past) the deciding-stage follow-up due date.
+function followUpCountdownLabel(dueIso: string): string {
+  const due = new Date(dueIso).getTime();
+  if (Number.isNaN(due)) return "Follow up";
+  const diffMs = due - Date.now();
+  const dayMs = 86_400_000;
+  if (diffMs <= 0) {
+    const overdueDays = Math.floor(-diffMs / dayMs);
+    if (overdueDays >= 1) return `Follow-up ${overdueDays}d overdue`;
+    return "Follow-up due";
+  }
+  const days = Math.ceil(diffMs / dayMs);
+  return days <= 1 ? "Follow up by tomorrow" : `Follow up in ${days}d`;
 }
 // Format a stored ISO instant as a local wall-clock value for a
 // datetime-local input (YYYY-MM-DDTHH:mm). Using toISOString() here would
@@ -296,16 +349,21 @@ function Pipeline() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState<number | null>(null);
+  const [view, setView] = useState<"active" | "archived">("active");
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await authFetch("/api/tours/requests");
+      const res = await authFetch(
+        view === "archived"
+          ? "/api/tours/requests?view=archived"
+          : "/api/tours/requests",
+      );
       if (res.ok) setLeads((await res.json()) as Lead[]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [view]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -316,29 +374,84 @@ function Pipeline() {
       contacted: [],
       scheduled: [],
       toured: [],
+      deciding: [],
       closed: [],
     };
     for (const l of leads) m[l.status]?.push(l);
     return m;
   }, [leads]);
 
-  if (loading) return <div style={{ color: "#64748b" }}>Loading leads…</div>;
+  const viewTabs = (
+    <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+      {(
+        [
+          ["active", "Active pipeline"],
+          ["archived", "Archived"],
+        ] as const
+      ).map(([v, lbl]) => {
+        const active = view === v;
+        return (
+          <button
+            key={v}
+            type="button"
+            onClick={() => setView(v)}
+            style={{
+              padding: "6px 14px",
+              borderRadius: 999,
+              border: `1px solid ${active ? "var(--accent, #2563eb)" : "#334155"}`,
+              background: active ? "var(--accent, #2563eb)" : "transparent",
+              color: active ? "#fff" : "#cbd5e1",
+              fontWeight: 600,
+              fontSize: 13,
+              cursor: "pointer",
+            }}
+          >
+            {lbl}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  if (loading)
+    return (
+      <>
+        {viewTabs}
+        <div style={{ color: "#64748b" }}>Loading leads…</div>
+      </>
+    );
 
   if (leads.length === 0) {
     return (
-      <div style={{ ...cardBox, textAlign: "center", padding: 40 }}>
-        <div style={{ fontSize: 40 }}>🗒️</div>
-        <h3 style={{ margin: "12px 0 6px" }}>No tour requests yet</h3>
-        <p style={{ color: "#64748b", margin: 0 }}>
-          Publish your Brag Page and share the link — new leads land here
-          automatically.
-        </p>
-      </div>
+      <>
+        {viewTabs}
+        <div style={{ ...cardBox, textAlign: "center", padding: 40 }}>
+          <div style={{ fontSize: 40 }}>🗒️</div>
+          {view === "archived" ? (
+            <>
+              <h3 style={{ margin: "12px 0 6px" }}>Nothing archived yet</h3>
+              <p style={{ color: "#64748b", margin: 0 }}>
+                Closed tours move here automatically after the archive window
+                you set in Settings.
+              </p>
+            </>
+          ) : (
+            <>
+              <h3 style={{ margin: "12px 0 6px" }}>No tour requests yet</h3>
+              <p style={{ color: "#64748b", margin: 0 }}>
+                Publish your Brag Page and share the link — new leads land here
+                automatically.
+              </p>
+            </>
+          )}
+        </div>
+      </>
     );
   }
 
   return (
     <>
+      {viewTabs}
       <div
         style={{
           display: "grid",
@@ -411,7 +524,21 @@ function Pipeline() {
                           padding: "1px 6px",
                         }}
                       >
-                        ⏰ &gt;24h
+                        ⏰ {overdueBadgeLabel(l.overdueReason)}
+                      </span>
+                    )}
+                    {l.status === "deciding" && l.followUpDueAt && (
+                      <span
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: "#fff",
+                          background: l.overdue ? "#dc2626" : "#db2777",
+                          borderRadius: 6,
+                          padding: "1px 6px",
+                        }}
+                      >
+                        📞 {followUpCountdownLabel(l.followUpDueAt)}
                       </span>
                     )}
                     {l.assignedTo && (
@@ -708,6 +835,22 @@ function LeadDrawer({
                   </button>
                 ))}
               </div>
+              {lead.status === "deciding" && lead.followUpDueAt && (
+                <div
+                  style={{
+                    fontSize: 13,
+                    marginTop: 8,
+                    fontWeight: 600,
+                    color: lead.overdue ? "#fca5a5" : "#f9a8d4",
+                  }}
+                >
+                  📞 {followUpCountdownLabel(lead.followUpDueAt)} ·{" "}
+                  <span style={{ fontWeight: 400, color: "#94a3b8" }}>
+                    due {fmtDate(lead.followUpDueAt)}. Logging a contact resets
+                    the clock.
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* assign + schedule */}
@@ -971,6 +1114,11 @@ type PageData = {
   // School-level: 'all' sends assignment SMS to the new owner; 'urgent' mutes
   // routine assignment texts (email still goes out).
   tourSmsScope: "all" | "urgent";
+  // Phase 2 "never lose a lead" SLA settings.
+  tourFirstContactHours: number;
+  tourFollowUpBusinessDays: number;
+  tourArchiveDays: number;
+  tourEscalationEnabled: boolean;
 };
 
 type TourFlyerItem = { key: string; label: string; kind: "image" | "pdf" };
@@ -1644,6 +1792,15 @@ function BragEditor() {
           Array.isArray(json.checkpoints) ? json.checkpoints : []
         ).map((c) => ({ ...c, alwaysInclude: c.alwaysInclude === true }));
         json.tourSmsScope = json.tourSmsScope === "urgent" ? "urgent" : "all";
+        json.tourFirstContactHours = clampNum(json.tourFirstContactHours, 1, 720, 24);
+        json.tourFollowUpBusinessDays = clampNum(
+          json.tourFollowUpBusinessDays,
+          1,
+          30,
+          3,
+        );
+        json.tourArchiveDays = clampNum(json.tourArchiveDays, 1, 365, 3);
+        json.tourEscalationEnabled = json.tourEscalationEnabled !== false;
         json.textPlacement = json.textPlacement === "bottom" ? "bottom" : "top";
         json.headerTextColor = /^#[0-9a-fA-F]{6}$/.test(json.headerTextColor)
           ? json.headerTextColor
@@ -1867,6 +2024,119 @@ function BragEditor() {
               );
             })}
           </div>
+        </div>
+
+        {/* Phase 2 "never lose a lead" SLA settings. */}
+        <div
+          style={{
+            ...cardBox,
+            marginBottom: 18,
+            borderLeft: "3px solid #db2777",
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>
+            Follow-up &amp; escalation
+          </div>
+          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>
+            Set how long a lead can sit before it counts as overdue, how long the
+            “Still deciding” follow-up clock runs, and when closed tours archive
+            off the board.
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+              gap: 12,
+            }}
+          >
+            <label style={{ display: "block" }}>
+              <div
+                style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}
+              >
+                First-contact window (hours)
+              </div>
+              <input
+                type="number"
+                min={1}
+                max={720}
+                style={inputStyle}
+                value={data.tourFirstContactHours}
+                onChange={(e) =>
+                  set({
+                    tourFirstContactHours: clampNum(
+                      e.target.value,
+                      1,
+                      720,
+                      24,
+                    ),
+                  })
+                }
+              />
+            </label>
+            <label style={{ display: "block" }}>
+              <div
+                style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}
+              >
+                Follow-up window (business days)
+              </div>
+              <input
+                type="number"
+                min={1}
+                max={30}
+                style={inputStyle}
+                value={data.tourFollowUpBusinessDays}
+                onChange={(e) =>
+                  set({
+                    tourFollowUpBusinessDays: clampNum(
+                      e.target.value,
+                      1,
+                      30,
+                      3,
+                    ),
+                  })
+                }
+              />
+            </label>
+            <label style={{ display: "block" }}>
+              <div
+                style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}
+              >
+                Archive closed tours after (days)
+              </div>
+              <input
+                type="number"
+                min={1}
+                max={365}
+                style={inputStyle}
+                value={data.tourArchiveDays}
+                onChange={(e) =>
+                  set({
+                    tourArchiveDays: clampNum(e.target.value, 1, 365, 3),
+                  })
+                }
+              />
+            </label>
+          </div>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              marginTop: 14,
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={data.tourEscalationEnabled}
+              onChange={(e) =>
+                set({ tourEscalationEnabled: e.target.checked })
+              }
+            />
+            <span style={{ fontSize: 14 }}>
+              Email overdue leads to the owner (CC principal/coordinator)
+            </span>
+          </label>
         </div>
 
         <PhotoUploader

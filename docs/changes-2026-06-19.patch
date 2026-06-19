@@ -1,3 +1,48 @@
+diff --git a/artifacts/api-server/src/index.ts b/artifacts/api-server/src/index.ts
+index ee8aa2fd..2dd3fc7c 100644
+--- a/artifacts/api-server/src/index.ts
++++ b/artifacts/api-server/src/index.ts
+@@ -73,6 +73,7 @@ import { sendWeeklyHeartbeatEmails } from "./lib/weeklyHeartbeatEmail";
+ import { runDueLotteryDraws } from "./lib/onTimeLottery";
+ import { startReminderScheduler } from "./lib/scheduler";
+ import { runAstYearEndLapse } from "./cron/astLapse";
++import { runTourEscalations } from "./lib/tourReminders";
+ import { runFeatureLicensingOverrideSweep } from "./cron/featureLicensingOverrideSweep";
+ import { runPickupEndOfDayAutoClear } from "./cron/pickupEndOfDayAutoClear";
+ import { runInRouteOverdueSweep } from "./cron/inRouteOverdue";
+@@ -661,6 +662,32 @@ function startListening(): void {
+           );
+         }
+ 
++        // School Tours — Phase 2 "never lose a lead" escalation sweep. Hourly
++        // scan that emails the lead owner (CC principal/admins) when a lead
++        // crosses its stage SLA (first-contact / scheduled-not-toured /
++        // deciding-follow-up). Idempotent per reason + re-nudge window. Gated
++        // globally on EMAIL_REMINDERS_ENABLED and per-school on
++        // tourEscalationEnabled. Override schedule via TOUR_ESCALATION_CRON.
++        const tourEscExpr = process.env.TOUR_ESCALATION_CRON ?? "0 * * * *";
++        try {
++          cron.schedule(tourEscExpr, async () => {
++            try {
++              const r = await runTourEscalations(new Date());
++              if (r.sent > 0) {
++                logger.info(r, "Tour escalation sweep complete");
++              }
++            } catch (cronErr) {
++              logger.error({ err: cronErr }, "Tour escalation sweep failed");
++            }
++          });
++          logger.info({ expr: tourEscExpr }, "Tour escalation sweep scheduled");
++        } catch (schedErr) {
++          logger.error(
++            { err: schedErr },
++            "Failed to schedule tour escalation sweep",
++          );
++        }
++
+         // Pickup queue end-of-day auto-clear. Inserts an `auto_cleared`
+         // event for every student who entered the queue today but
+         // didn't get a terminal release. Append-only — preserves the
 diff --git a/artifacts/api-server/src/lib/coreTeam.ts b/artifacts/api-server/src/lib/coreTeam.ts
 index a61b5da8..beff5bc2 100644
 --- a/artifacts/api-server/src/lib/coreTeam.ts
@@ -32,10 +77,10 @@ index a61b5da8..beff5bc2 100644
  // that can create events, allocate tickets, send/print, manage scanner links,
  // and void/reissue is: admin + Core Team + counselor (school OR guidance) +
 diff --git a/artifacts/api-server/src/lib/tourEmails.ts b/artifacts/api-server/src/lib/tourEmails.ts
-index 34ec2d8b..3d2f2dc4 100644
+index 34ec2d8b..88351dc9 100644
 --- a/artifacts/api-server/src/lib/tourEmails.ts
 +++ b/artifacts/api-server/src/lib/tourEmails.ts
-@@ -100,6 +100,67 @@ export async function sendNewLeadNotifyEmail(
+@@ -100,6 +100,159 @@ export async function sendNewLeadNotifyEmail(
    }
  }
  
@@ -96,6 +141,98 @@ index 34ec2d8b..3d2f2dc4 100644
 +    return true;
 +  } catch (err) {
 +    logger.warn({ err }, "tour lead-assigned email failed");
++    return false;
++  }
++}
++
++export type TourOverdueReason =
++  | "first_contact"
++  | "tour_not_logged"
++  | "follow_up";
++
++export interface LeadOverdueEmailArgs {
++  to: string[];
++  cc: string[];
++  schoolName: string;
++  familyName: string;
++  phone: string;
++  childrenSummary: string;
++  assigneeName: string | null;
++  reason: TourOverdueReason;
++  // Human-readable description of how long the lead has been waiting.
++  waitingSummary: string;
++  pipelineUrl: string;
++}
++
++const OVERDUE_COPY: Record<
++  TourOverdueReason,
++  { label: string; line: string; subject: string }
++> = {
++  first_contact: {
++    label: "First contact overdue",
++    line: "This new tour lead hasn't been contacted yet and is now past your first-contact window. Reach out today to keep the family warm.",
++    subject: "Tour lead needs first contact",
++  },
++  tour_not_logged: {
++    label: "Tour not logged",
++    line: "This lead's scheduled tour time has passed but no outcome has been recorded. Log how the tour went (or reschedule) so the lead doesn't stall.",
++    subject: "Tour outcome not logged",
++  },
++  follow_up: {
++    label: "Follow-up due",
++    line: "This family is still deciding and their follow-up is now due. A quick check-in keeps you top of mind while they choose.",
++    subject: "Still-deciding lead needs a follow-up",
++  },
++};
++
++// Escalation nudge to the lead's owner (or the notify group when unassigned),
++// CC'ing the coordinator/principal. Sent by the background escalation job when a
++// lead crosses its SLA threshold. Reason-specific copy. Best-effort, gated on
++// email being enabled.
++export async function sendLeadOverdueEscalationEmail(
++  args: LeadOverdueEmailArgs,
++): Promise<boolean> {
++  if (!emailEnabled() || args.to.length === 0) return false;
++  try {
++    const { client, fromEmail } = await getUncachableResendClient();
++    const copy = OVERDUE_COPY[args.reason];
++    const rows = [
++      ["Family", args.familyName],
++      ["Phone", args.phone],
++      ["Student(s)", args.childrenSummary],
++      ["Owner", args.assigneeName || "Unassigned"],
++      ["Waiting", args.waitingSummary],
++    ]
++      .map(
++        ([k, v]) =>
++          `<tr><td style="padding:4px 10px 4px 0; color:#6b7280; font-size:13px; vertical-align:top;">${escapeHtml(
++            k,
++          )}</td><td style="padding:4px 0; font-size:14px;"><strong>${escapeHtml(
++            v,
++          )}</strong></td></tr>`,
++      )
++      .join("");
++    const body = `
++      <p style="margin:0 0 10px 0;"><span style="display:inline-block; background:#fef2f2; color:#b91c1c; font-size:12px; font-weight:700; letter-spacing:0.4px; text-transform:uppercase; padding:4px 10px; border-radius:999px;">${escapeHtml(
++        copy.label,
++      )}</span></p>
++      <p style="margin:0 0 14px 0;">${escapeHtml(copy.line)}</p>
++      <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;">${rows}</table>
++      <p style="margin:0 0 22px 0; text-align:center;">
++        <a href="${args.pipelineUrl}" style="display:inline-block; background:#0ea5a4; color:#ffffff; text-decoration:none; padding:12px 24px; border-radius:10px; font-weight:600; font-size:15px;">Open the lead</a>
++      </p>`;
++    const result = await client.emails.send({
++      from: fromEmail,
++      to: args.to,
++      cc: args.cc.length ? args.cc : undefined,
++      subject: `${copy.subject}: ${args.familyName} — ${args.schoolName}`,
++      html: shell(copy.label, body),
++      text: `${copy.label} — ${args.schoolName}\n\n${copy.line}\n\nFamily: ${args.familyName}\nPhone: ${args.phone}\nStudent(s): ${args.childrenSummary}\nOwner: ${args.assigneeName || "Unassigned"}\nWaiting: ${args.waitingSummary}\n\nOpen the lead: ${args.pipelineUrl}`,
++    });
++    if (result.error) throw new Error(result.error.message);
++    return true;
++  } catch (err) {
++    logger.warn({ err }, "tour lead-overdue escalation email failed");
 +    return false;
 +  }
 +}
@@ -200,40 +337,8 @@ index 1e5e9889..58f36c32 100644
      // Talking points
      if (stop.talkingPoints) {
        doc
-diff --git a/artifacts/api-server/src/routes/adminStaff.ts b/artifacts/api-server/src/routes/adminStaff.ts
-index 99d19a88..4ba41358 100644
---- a/artifacts/api-server/src/routes/adminStaff.ts
-+++ b/artifacts/api-server/src/routes/adminStaff.ts
-@@ -104,6 +104,7 @@ const CAP_FLAGS = [
-   "capCarRiderMonitor",
-   "capManageDismissal",
-   "capTourNotify",
-+  "capTourGuide",
-   "capManageEsign",
- ] as const;
- type CapFlag = (typeof CAP_FLAGS)[number];
-@@ -172,6 +173,7 @@ const STAFF_SELECT = {
-   capCarRiderMonitor: staffTable.capCarRiderMonitor,
-   capManageDismissal: staffTable.capManageDismissal,
-   capTourNotify: staffTable.capTourNotify,
-+  capTourGuide: staffTable.capTourGuide,
-   capManageEsign: staffTable.capManageEsign,
-   defaultRoom: staffTable.defaultRoom,
-   houseId: staffTable.houseId,
-diff --git a/artifacts/api-server/src/routes/auth.ts b/artifacts/api-server/src/routes/auth.ts
-index 6b5ab433..15c29424 100644
---- a/artifacts/api-server/src/routes/auth.ts
-+++ b/artifacts/api-server/src/routes/auth.ts
-@@ -52,6 +52,7 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
-     capCarRiderMonitor: row.capCarRiderMonitor,
-     capManageDismissal: row.capManageDismissal,
-     capTourNotify: row.capTourNotify,
-+    capTourGuide: row.capTourGuide,
-     capManageEsign: row.capManageEsign,
-     canApproveAst: row.canApproveAst,
-     canApproveCompTime: row.canApproveCompTime,
 diff --git a/artifacts/api-server/src/routes/tours.ts b/artifacts/api-server/src/routes/tours.ts
-index 1d9e4c8d..1958f41a 100644
+index 3166517d..21d43879 100644
 --- a/artifacts/api-server/src/routes/tours.ts
 +++ b/artifacts/api-server/src/routes/tours.ts
 @@ -15,6 +15,7 @@ import {
@@ -244,24 +349,49 @@ index 1d9e4c8d..1958f41a 100644
    TOUR_STATUSES,
    TOUR_OUTCOMES,
    type TourChild,
-@@ -28,7 +29,7 @@ import {
+@@ -26,9 +27,9 @@ import {
+   type TourOutcome,
+ } from "@workspace/db";
  import { and, eq, desc, asc, sql } from "drizzle-orm";
- import { randomUUID, createHash } from "crypto";
+-import { randomUUID } from "crypto";
++import { randomUUID, createHash } from "crypto";
  import { requireSchool, getDistrictIdForSchool } from "../lib/scope.js";
 -import { canManageTours } from "../lib/coreTeam.js";
 +import { canManageTours, canGuideTours } from "../lib/coreTeam.js";
  import {
    ObjectStorageService,
    ObjectNotFoundError,
-@@ -37,6 +38,7 @@ import { bindObjectToSchool } from "./storage.js";
+@@ -37,8 +38,11 @@ import { bindObjectToSchool } from "./storage.js";
  import {
    sendNewLeadNotifyEmail,
    sendFamilyAckEmail,
 +  sendLeadAssignedEmail,
  } from "../lib/tourEmails.js";
  import { sendSmsBatch } from "../lib/sms.js";
++import { addBusinessDays } from "../lib/businessDays.js";
++import { overdueFor } from "../lib/tourReminders.js";
  import {
-@@ -239,6 +241,27 @@ function requireTourManager(req: Request, res: Response, next: NextFunction) {
+   translateTourContent,
+   isSupportedTargetLang,
+@@ -117,6 +121,17 @@ async function pipeStorageResponse(
+ // /storage/objects, which the public has no token for). Legacy external URLs
+ // are passed through via redirect. `allowed` constrains which content-types may
+ // render inline (see PUBLIC_*_TYPES).
++// Short content-version token derived from the object-storage key. Public
++// photo/flyer URLs are index-based (`/photo/0`, `/flyer/0`), so when a school
++// deletes an asset and uploads a replacement the new file lands at the SAME
++// index and the URL never changes — the browser then serves the previously
++// cached image (Cache-Control max-age) and the old "seed" picture appears to
++// persist. Appending `?v=<hash-of-key>` makes the URL change whenever the
++// underlying object changes (each upload mints a fresh key), busting the cache.
++function assetVersion(key: string): string {
++  return createHash("sha1").update(key).digest("hex").slice(0, 10);
++}
++
+ async function streamTourAsset(
+   key: string,
+   req: Request,
+@@ -228,6 +243,27 @@ function requireTourManager(req: Request, res: Response, next: NextFunction) {
    next();
  }
  
@@ -289,7 +419,7 @@ index 1d9e4c8d..1958f41a 100644
  function sanitizeStrings(input: unknown, max: number): string[] {
    if (!Array.isArray(input)) return [];
    return input
-@@ -305,7 +328,8 @@ function sanitizeCheckpoints(input: unknown): TourCheckpoint[] {
+@@ -294,7 +330,8 @@ function sanitizeCheckpoints(input: unknown): TourCheckpoint[] {
        Number.isFinite(minutesRaw) && minutesRaw > 0
          ? Math.min(Math.round(minutesRaw), 240)
          : 0;
@@ -299,7 +429,7 @@ index 1d9e4c8d..1958f41a 100644
      if (out.length >= 30) break;
    }
    return out;
-@@ -629,11 +653,16 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
+@@ -618,11 +655,16 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
      subheadline: tr?.subheadline ?? page.subheadline,
      intro: tr?.intro ?? page.intro,
      sections: tr?.sections ?? page.sections,
@@ -318,12 +448,44 @@ index 1d9e4c8d..1958f41a 100644
      })),
      programs: tr?.programs ?? page.programs,
      electives: tr?.electives ?? page.electives,
-@@ -921,9 +950,16 @@ router.get("/tours/page", requireStaff, requireTourManager, async (req, res) =>
+@@ -631,13 +673,14 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
+     // unauthenticated families never touch the school-ACL object path. Keys
+     // are never exposed to the client.
+     photos: page.photos.map(
+-      (_, i) => `/api/tours/public/${schoolId}/photo/${i}`,
++      (key, i) =>
++        `/api/tours/public/${schoolId}/photo/${i}?v=${assetVersion(key)}`,
+     ),
+     textPlacement: page.textPlacement === "bottom" ? "bottom" : "top",
+     flyers: (page.flyers ?? []).map((f, i) => ({
+       label: f.label,
+       kind: f.kind,
+-      url: `/api/tours/public/${schoolId}/flyer/${i}`,
++      url: `/api/tours/public/${schoolId}/flyer/${i}?v=${assetVersion(f.key)}`,
+     })),
+     ctaText: tr?.ctaText ?? page.ctaText,
+     accentColor: page.accentColor,
+@@ -652,7 +695,7 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
+           tagline: branding.tagline,
+           hasLogo: !!branding.logoObjectKey,
+           logoUrl: branding.logoObjectKey
+-            ? `/api/tours/public/${schoolId}/district-logo`
++            ? `/api/tours/public/${schoolId}/district-logo?v=${assetVersion(branding.logoObjectKey)}`
+             : null,
+           placements: {
+             heroTop: branding.brandHeroTop,
+@@ -909,9 +952,27 @@ router.get("/tours/page", requireStaff, requireTourManager, async (req, res) =>
    const schoolId = requireSchool(req, res);
    if (!schoolId) return;
    const page = await loadTourPage(schoolId);
 +  const [settings] = await db
-+    .select({ tourSmsScope: schoolSettingsTable.tourSmsScope })
++    .select({
++      tourSmsScope: schoolSettingsTable.tourSmsScope,
++      tourFirstContactHours: schoolSettingsTable.tourFirstContactHours,
++      tourFollowUpBusinessDays: schoolSettingsTable.tourFollowUpBusinessDays,
++      tourArchiveDays: schoolSettingsTable.tourArchiveDays,
++      tourEscalationEnabled: schoolSettingsTable.tourEscalationEnabled,
++    })
 +    .from(schoolSettingsTable)
 +    .where(eq(schoolSettingsTable.schoolId, schoolId));
    res.json({
@@ -332,10 +494,15 @@ index 1d9e4c8d..1958f41a 100644
 +    // School-level tour preference (lives on schoolSettings, surfaced here so
 +    // the Tour Admin page can manage it alongside the brag page).
 +    tourSmsScope: settings?.tourSmsScope ?? "all",
++    // Phase 2 "never lose a lead" SLA settings (also on schoolSettings).
++    tourFirstContactHours: settings?.tourFirstContactHours ?? 24,
++    tourFollowUpBusinessDays: settings?.tourFollowUpBusinessDays ?? 3,
++    tourArchiveDays: settings?.tourArchiveDays ?? 3,
++    tourEscalationEnabled: settings?.tourEscalationEnabled ?? true,
      published: page?.published ?? false,
      headline: page?.headline ?? "Come See Our School",
      subheadline: page?.subheadline ?? "",
-@@ -1047,6 +1083,19 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) =>
+@@ -1035,6 +1096,53 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) =>
        },
      });
  
@@ -352,10 +519,144 @@ index 1d9e4c8d..1958f41a 100644
 +      });
 +  }
 +
++  // Persist the Phase 2 SLA settings (schoolSettings). Each is clamped to a
++  // sane range; only fields present in the body are touched.
++  const slaSet: Partial<typeof schoolSettingsTable.$inferInsert> = {};
++  const clampInt = (v: unknown, min: number, max: number, dflt: number) => {
++    const n = Math.round(Number(v));
++    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt;
++  };
++  if ("tourFirstContactHours" in body) {
++    slaSet.tourFirstContactHours = clampInt(body.tourFirstContactHours, 1, 720, 24);
++  }
++  if ("tourFollowUpBusinessDays" in body) {
++    slaSet.tourFollowUpBusinessDays = clampInt(
++      body.tourFollowUpBusinessDays,
++      1,
++      60,
++      3,
++    );
++  }
++  if ("tourArchiveDays" in body) {
++    slaSet.tourArchiveDays = clampInt(body.tourArchiveDays, 1, 365, 3);
++  }
++  if ("tourEscalationEnabled" in body) {
++    slaSet.tourEscalationEnabled = body.tourEscalationEnabled === true;
++  }
++  if (Object.keys(slaSet).length > 0) {
++    await db
++      .insert(schoolSettingsTable)
++      .values({ schoolId, ...slaSet })
++      .onConflictDoUpdate({
++        target: schoolSettingsTable.schoolId,
++        set: slaSet,
++      });
++  }
++
    res.json({ ok: true, publicUrl: `${publicAppOrigin(req)}/tour/${schoolId}` });
  });
  
-@@ -1166,7 +1215,8 @@ router.get(
+@@ -1101,41 +1209,66 @@ router.get(
+       for (const o of owners) ownerNames.set(o.id, o.name);
+     }
+ 
++    // Default view hides archived (long-closed) leads; ?view=archived shows
++    // only them. Archive cutoff + first-contact window come from school settings.
++    const view = req.query.view === "archived" ? "archived" : "active";
++    const [settings] = await db
++      .select({
++        firstContactHours: schoolSettingsTable.tourFirstContactHours,
++        archiveDays: schoolSettingsTable.tourArchiveDays,
++      })
++      .from(schoolSettingsTable)
++      .where(eq(schoolSettingsTable.schoolId, schoolId));
++    const archiveMs = (settings?.archiveDays ?? 3) * 24 * 60 * 60 * 1000;
++
+     const now = Date.now();
+-    const ESCALATE_MS = 24 * 60 * 60 * 1000;
++    const nowDate = new Date(now);
++    const mapped = rows.map((r) => {
++      // Response clock: ms from creation to first contact (or to now if still
++      // un-contacted).
++      const responseMs = r.firstContactedAt
++        ? r.firstContactedAt.getTime() - r.createdAt.getTime()
++        : now - r.createdAt.getTime();
++      // Stage-aware overdue (Phase 2) via the shared overdueFor() helper — the
++      // single source of truth used by the list, the detail drawer, and the
++      // hourly escalation sweep, so they can never disagree on who is overdue.
++      const od = overdueFor(r, settings?.firstContactHours ?? 24, nowDate);
++      const overdue = od != null;
++      const overdueReason = od?.reason ?? null;
++      const archived =
++        r.status === "closed" &&
++        r.closedAt != null &&
++        now - r.closedAt.getTime() > archiveMs;
++      return {
++        id: r.id,
++        familyName: r.familyName,
++        phone: r.phone,
++        email: r.email,
++        children: r.children,
++        interests: r.interests,
++        source: r.source,
++        preferredLanguage: r.preferredLanguage,
++        status: r.status,
++        outcome: r.outcome,
++        outcomeReason: r.outcomeReason,
++        assignedStaffId: r.assignedStaffId,
++        assignedTo: r.assignedStaffId
++          ? ownerNames.get(r.assignedStaffId) ?? null
++          : null,
++        tourScheduledAt: r.tourScheduledAt,
++        firstContactedAt: r.firstContactedAt,
++        followUpDueAt: r.followUpDueAt,
++        closedAt: r.closedAt,
++        surveySubmittedAt: r.surveySubmittedAt,
++        createdAt: r.createdAt,
++        responseMs,
++        overdue,
++        overdueReason,
++        archived,
++      };
++    });
+     res.json(
+-      rows.map((r) => {
+-        // Response clock: ms from creation to first contact (or to now if
+-        // still un-contacted). Overdue when a 'new' lead has sat >24h.
+-        const responseMs = r.firstContactedAt
+-          ? r.firstContactedAt.getTime() - r.createdAt.getTime()
+-          : now - r.createdAt.getTime();
+-        const overdue =
+-          r.status === "new" && now - r.createdAt.getTime() > ESCALATE_MS;
+-        return {
+-          id: r.id,
+-          familyName: r.familyName,
+-          phone: r.phone,
+-          email: r.email,
+-          children: r.children,
+-          interests: r.interests,
+-          source: r.source,
+-          preferredLanguage: r.preferredLanguage,
+-          status: r.status,
+-          outcome: r.outcome,
+-          outcomeReason: r.outcomeReason,
+-          assignedStaffId: r.assignedStaffId,
+-          assignedTo: r.assignedStaffId
+-            ? ownerNames.get(r.assignedStaffId) ?? null
+-            : null,
+-          tourScheduledAt: r.tourScheduledAt,
+-          firstContactedAt: r.firstContactedAt,
+-          surveySubmittedAt: r.surveySubmittedAt,
+-          createdAt: r.createdAt,
+-          responseMs,
+-          overdue,
+-        };
+-      }),
++      mapped.filter((m) => (view === "archived" ? m.archived : !m.archived)),
+     );
+   },
+ );
+@@ -1154,7 +1287,8 @@ router.get(
        .where(and(eq(staffTable.schoolId, schoolId), eq(staffTable.active, true)));
      res.json(
        staff
@@ -365,7 +666,7 @@ index 1d9e4c8d..1958f41a 100644
          .map((s) => ({ id: s.id, name: s.displayName }))
          .sort((a, b) => a.name.localeCompare(b.name)),
      );
-@@ -1177,10 +1227,11 @@ router.get(
+@@ -1165,10 +1299,11 @@ router.get(
  router.get(
    "/tours/requests/:id",
    requireStaff,
@@ -378,7 +679,7 @@ index 1d9e4c8d..1958f41a 100644
      const id = Number(req.params.id);
      if (!Number.isInteger(id)) {
        res.status(400).json({ error: "Invalid id" });
-@@ -1199,6 +1250,10 @@ router.get(
+@@ -1187,6 +1322,10 @@ router.get(
        res.status(404).json({ error: "Lead not found" });
        return;
      }
@@ -389,7 +690,55 @@ index 1d9e4c8d..1958f41a 100644
  
      const events = await db
        .select()
-@@ -1309,6 +1364,14 @@ router.patch(
+@@ -1233,9 +1372,19 @@ router.get(
+     const responseMs = lead.firstContactedAt
+       ? lead.firstContactedAt.getTime() - lead.createdAt.getTime()
+       : Date.now() - lead.createdAt.getTime();
+-    const overdue =
+-      lead.status === "new" &&
+-      Date.now() - lead.createdAt.getTime() > 24 * 60 * 60 * 1000;
++    // Stage-aware overdue via the shared overdueFor() helper, so the drawer
++    // agrees with the pipeline list and the escalation sweep.
++    const [detailSettings] = await db
++      .select({ firstContactHours: schoolSettingsTable.tourFirstContactHours })
++      .from(schoolSettingsTable)
++      .where(eq(schoolSettingsTable.schoolId, schoolId));
++    const od = overdueFor(
++      lead,
++      detailSettings?.firstContactHours ?? 24,
++      new Date(),
++    );
++    const overdue = od != null;
++    const overdueReason = od?.reason ?? null;
+ 
+     // Resolve the family's checkpoint selections to their current labels, in
+     // the page's checkpoint order. Stops deleted since they were selected fall
+@@ -1254,6 +1403,7 @@ router.get(
+           : null,
+         responseMs,
+         overdue,
++        overdueReason,
+         selectedCheckpoints,
+         surveyUrl: surveyUrlFor(lead.surveyToken, req),
+       },
+@@ -1266,6 +1416,16 @@ router.get(
+   },
+ );
+ 
++// Resolve a fresh "Still deciding" follow-up due date from the school's
++// configured business-day window (defaults to 3 if the row is missing).
++async function followUpDueDate(schoolId: number): Promise<Date> {
++  const [s] = await db
++    .select({ days: schoolSettingsTable.tourFollowUpBusinessDays })
++    .from(schoolSettingsTable)
++    .where(eq(schoolSettingsTable.schoolId, schoolId));
++  return addBusinessDays(new Date(), s?.days ?? 3);
++}
++
+ // PATCH /tours/requests/:id — status / assignment / outcome / schedule.
+ router.patch(
+   "/tours/requests/:id",
+@@ -1297,6 +1457,14 @@ router.patch(
      const body = (req.body ?? {}) as Record<string, unknown>;
      const updates: Partial<typeof tourRequestsTable.$inferInsert> = {};
      const events: { eventType: string; body: string }[] = [];
@@ -404,7 +753,33 @@ index 1d9e4c8d..1958f41a 100644
  
      // Status change.
      if (
-@@ -1342,7 +1405,11 @@ router.patch(
+@@ -1314,6 +1482,25 @@ router.patch(
+       if (next !== "new" && !lead.firstContactedAt) {
+         updates.firstContactedAt = new Date();
+       }
++      // Phase 2 lifecycle stamps tied to the new stage.
++      if (next === "deciding") {
++        // Entering "Still deciding" starts the business-day follow-up clock.
++        updates.followUpDueAt = await followUpDueDate(schoolId);
++      } else if (lead.status === "deciding") {
++        // Leaving "Still deciding" clears the follow-up clock.
++        updates.followUpDueAt = null;
++      }
++      if (next === "closed") {
++        updates.closedAt = new Date();
++        updates.followUpDueAt = null;
++      } else if (lead.status === "closed") {
++        // Re-opening a closed lead clears the archive clock.
++        updates.closedAt = null;
++      }
++      // Any staff-driven stage change re-arms the escalation job so the next
++      // applicable overdue condition fires a fresh nudge.
++      updates.lastEscalatedAt = null;
++      updates.lastEscalatedReason = null;
+     }
+ 
+     // Assignment.
+@@ -1330,7 +1517,11 @@ router.patch(
          let assigneeName = "Unassigned";
          if (nextId !== null) {
            const [a] = await db
@@ -417,7 +792,7 @@ index 1d9e4c8d..1958f41a 100644
              .from(staffTable)
              .where(
                and(eq(staffTable.id, nextId), eq(staffTable.schoolId, schoolId)),
-@@ -1352,6 +1419,12 @@ router.patch(
+@@ -1340,6 +1531,12 @@ router.patch(
              return;
            }
            assigneeName = a.name;
@@ -430,7 +805,58 @@ index 1d9e4c8d..1958f41a 100644
          }
          events.push({
            eventType: "assignment",
-@@ -1444,6 +1517,85 @@ router.patch(
+@@ -1375,23 +1572,44 @@ router.patch(
+       }
+     }
+ 
+-    // Outcome (only meaningful with a status of toured/closed).
++    // Outcome. enrolled|chose_other are TERMINAL (close + start the archive
++    // clock). "deciding" is no longer a terminal outcome — it maps to the live
++    // "Still deciding" stage with a follow-up clock (back-compat for any client
++    // that still posts outcome:'deciding'; the Phase 2 UI drives it via status).
+     if ("outcome" in body) {
+       const raw = body.outcome;
++      const reason =
++        typeof body.outcomeReason === "string"
++          ? body.outcomeReason.slice(0, 1000)
++          : null;
+       if (raw === null) {
+         updates.outcome = null;
+         updates.outcomeReason = null;
++      } else if (raw === "deciding") {
++        // Live holding stage, not a close.
++        updates.outcome = null;
++        updates.outcomeReason = reason;
++        updates.followUpDueAt = await followUpDueDate(schoolId);
++        updates.closedAt = null;
++        updates.lastEscalatedAt = null;
++        updates.lastEscalatedReason = null;
++        if (lead.status !== "deciding") {
++          updates.status = "deciding";
++          events.push({
++            eventType: "status_change",
++            body: `Status: ${lead.status} → deciding.`,
++          });
++        }
+       } else if (
+         typeof raw === "string" &&
+         (TOUR_OUTCOMES as readonly string[]).includes(raw)
+       ) {
+         updates.outcome = raw as TourOutcome;
+-        updates.outcomeReason =
+-          typeof body.outcomeReason === "string"
+-            ? body.outcomeReason.slice(0, 1000)
+-            : null;
+-        // Recording an outcome closes the lead.
++        updates.outcomeReason = reason;
++        // Recording a terminal outcome closes the lead + starts the archive clock.
+         updates.status = "closed";
++        updates.closedAt = new Date();
++        updates.followUpDueAt = null;
+         events.push({
+           eventType: "outcome",
+           body: `Outcome: ${raw}${
+@@ -1432,6 +1650,85 @@ router.patch(
        }
      });
  
@@ -516,7 +942,33 @@ index 1d9e4c8d..1958f41a 100644
      res.json({ ok: true });
    },
  );
-@@ -1637,10 +1789,11 @@ router.get(
+@@ -1486,11 +1783,23 @@ router.post(
+       body: text.slice(0, 4000),
+     });
+ 
+-    // Logging a contact stamps the response clock the first time.
++    // Logging a contact stamps the response clock the first time, and — when
++    // the lead is "Still deciding" — pushes the follow-up clock forward and
++    // re-arms the escalation job (the owner just did the follow-up).
++    const contactUpdates: Partial<typeof tourRequestsTable.$inferInsert> = {};
+     if (kind === "contact" && !lead.firstContactedAt) {
++      contactUpdates.firstContactedAt = new Date();
++    }
++    if (kind === "contact" && lead.status === "deciding") {
++      contactUpdates.followUpDueAt = await followUpDueDate(schoolId);
++      contactUpdates.lastEscalatedAt = null;
++      contactUpdates.lastEscalatedReason = null;
++    }
++    if (Object.keys(contactUpdates).length > 0) {
++      contactUpdates.updatedAt = new Date();
+       await db
+         .update(tourRequestsTable)
+-        .set({ firstContactedAt: new Date(), updatedAt: new Date() })
++        .set(contactUpdates)
+         .where(
+           and(
+             eq(tourRequestsTable.id, id),
+@@ -1625,10 +1934,11 @@ router.get(
  router.get(
    "/tours/requests/:id/roadmap.pdf",
    requireStaff,
@@ -529,7 +981,7 @@ index 1d9e4c8d..1958f41a 100644
      const id = Number(req.params.id);
      if (!Number.isInteger(id)) {
        res.status(400).json({ error: "Invalid id" });
-@@ -1651,6 +1804,10 @@ router.get(
+@@ -1639,6 +1949,10 @@ router.get(
        res.status(404).json({ error: "Lead not found" });
        return;
      }
@@ -540,7 +992,7 @@ index 1d9e4c8d..1958f41a 100644
      let assignedTo: string | null = null;
      if (lead.assignedStaffId) {
        const [a] = await db
-@@ -1665,15 +1822,20 @@ router.get(
+@@ -1653,15 +1967,20 @@ router.get(
        assignedTo = a?.name ?? null;
      }
      const page = await loadTourPage(schoolId);
@@ -563,7 +1015,7 @@ index 1d9e4c8d..1958f41a 100644
        }));
      const docBranding = await loadDistrictDocumentBranding(schoolId);
      const pdf = await buildTourRoadmapPdf({
-@@ -1709,10 +1871,11 @@ router.get(
+@@ -1697,10 +2016,11 @@ router.get(
  router.get(
    "/tours/requests/:id/note-catcher.pdf",
    requireStaff,
@@ -576,7 +1028,7 @@ index 1d9e4c8d..1958f41a 100644
      const id = Number(req.params.id);
      if (!Number.isInteger(id)) {
        res.status(400).json({ error: "Invalid id" });
-@@ -1723,10 +1886,16 @@ router.get(
+@@ -1711,10 +2031,16 @@ router.get(
        res.status(404).json({ error: "Lead not found" });
        return;
      }
@@ -595,10 +1047,10 @@ index 1d9e4c8d..1958f41a 100644
      const docBranding = await loadDistrictDocumentBranding(schoolId);
      const pdf = await buildTourNoteCatcherPdf({
 diff --git a/artifacts/api-server/src/seed.ts b/artifacts/api-server/src/seed.ts
-index 2a2b4034..cff690ec 100644
+index 2a2b4034..3ad1c58f 100644
 --- a/artifacts/api-server/src/seed.ts
 +++ b/artifacts/api-server/src/seed.ts
-@@ -1945,6 +1945,12 @@ export async function ensureAdminHubSchema() {
+@@ -1945,6 +1945,26 @@ export async function ensureAdminHubSchema() {
      sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS iss_capacity_behavior TEXT NOT NULL DEFAULT 'soft'`,
    );
  
@@ -608,10 +1060,24 @@ index 2a2b4034..cff690ec 100644
 +    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_sms_scope TEXT NOT NULL DEFAULT 'all'`,
 +  );
 +
++  // School Tours — Phase 2 "never lose a lead" SLA settings (additive).
++  await db.execute(
++    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_first_contact_hours INTEGER NOT NULL DEFAULT 24`,
++  );
++  await db.execute(
++    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_follow_up_business_days INTEGER NOT NULL DEFAULT 3`,
++  );
++  await db.execute(
++    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_archive_days INTEGER NOT NULL DEFAULT 3`,
++  );
++  await db.execute(
++    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_escalation_enabled BOOLEAN NOT NULL DEFAULT TRUE`,
++  );
++
    // OSS section + reason gates on school_heartbeat_settings + parent prefs.
    await db.execute(
      sql`ALTER TABLE school_heartbeat_settings ADD COLUMN IF NOT EXISTS show_oss BOOLEAN NOT NULL DEFAULT FALSE`,
-@@ -3330,6 +3336,11 @@ export async function ensureToursSchema(): Promise<void> {
+@@ -3330,6 +3350,11 @@ export async function ensureToursSchema(): Promise<void> {
    await db.execute(
      sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS cap_tour_notify BOOLEAN NOT NULL DEFAULT FALSE`,
    );
@@ -623,33 +1089,308 @@ index 2a2b4034..cff690ec 100644
  
    // Photo/flyer uploads + layout toggle (additive).
    await db.execute(
-diff --git a/artifacts/client/src/components/StaffRolesMatrix.tsx b/artifacts/client/src/components/StaffRolesMatrix.tsx
-index 00f209f2..d473c66f 100644
---- a/artifacts/client/src/components/StaffRolesMatrix.tsx
-+++ b/artifacts/client/src/components/StaffRolesMatrix.tsx
-@@ -91,6 +91,7 @@ const PAGES: { key: BoolKey; label: string; group: string }[] = [
-   { group: "Admin", key: "capManageDisplays", label: "Manage Displays" },
-   { group: "Admin", key: "capManageDismissal", label: "Set Dismissal Mode" },
-   { group: "Admin", key: "capTourNotify", label: "Tour Alerts" },
-+  { group: "Admin", key: "capTourGuide", label: "Tour Guide" },
-   { group: "Admin", key: "capManageEsign", label: "e-Sign Documents" },
- ];
+@@ -3354,6 +3379,20 @@ export async function ensureToursSchema(): Promise<void> {
+   await db.execute(
+     sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS interest_selections JSONB NOT NULL DEFAULT '[]'::jsonb`,
+   );
++
++  // Phase 2 lead-rescue lifecycle columns on tour_requests (additive).
++  await db.execute(
++    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS follow_up_due_at TIMESTAMPTZ`,
++  );
++  await db.execute(
++    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ`,
++  );
++  await db.execute(
++    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS last_escalated_at TIMESTAMPTZ`,
++  );
++  await db.execute(
++    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS last_escalated_reason TEXT`,
++  );
+ }
  
+ // -----------------------------------------------------------------------------
 diff --git a/artifacts/client/src/components/TourAdminPage.tsx b/artifacts/client/src/components/TourAdminPage.tsx
-index 98801cba..814c3ea0 100644
+index 98801cba..9bdc8738 100644
 --- a/artifacts/client/src/components/TourAdminPage.tsx
 +++ b/artifacts/client/src/components/TourAdminPage.tsx
-@@ -968,6 +968,9 @@ type PageData = {
+@@ -22,7 +22,13 @@ import {
+ // =============================================================================
+ 
+ type Child = { name: string; grade: string };
+-type Status = "new" | "contacted" | "scheduled" | "toured" | "closed";
++type Status =
++  | "new"
++  | "contacted"
++  | "scheduled"
++  | "toured"
++  | "deciding"
++  | "closed";
+ type Outcome = "enrolled" | "deciding" | "chose_other";
+ 
+ type Lead = {
+@@ -45,6 +51,13 @@ type Lead = {
+   createdAt: string;
+   responseMs: number;
+   overdue: boolean;
++  // Phase 2 lifecycle. overdueReason explains WHY a lead is flagged overdue;
++  // followUpDueAt is the deciding-stage business-day clock; closedAt/archived
++  // drive the auto-archive declutter.
++  overdueReason?: string | null;
++  followUpDueAt?: string | null;
++  closedAt?: string | null;
++  archived?: boolean;
+   // Family's selected tour checkpoints, resolved to current labels.
+   selectedCheckpoints?: string[];
+ };
+@@ -77,6 +90,7 @@ const STATUS_ORDER: Status[] = [
+   "contacted",
+   "scheduled",
+   "toured",
++  "deciding",
+   "closed",
+ ];
+ const STATUS_LABEL: Record<Status, string> = {
+@@ -84,6 +98,7 @@ const STATUS_LABEL: Record<Status, string> = {
+   contacted: "Contacted",
+   scheduled: "Scheduled",
+   toured: "Toured",
++  deciding: "Still deciding",
+   closed: "Closed",
+ };
+ const STATUS_COLOR: Record<Status, string> = {
+@@ -91,6 +106,7 @@ const STATUS_COLOR: Record<Status, string> = {
+   contacted: "#d97706",
+   scheduled: "#2563eb",
+   toured: "#7c3aed",
++  deciding: "#db2777",
+   closed: "#059669",
+ };
+ const OUTCOME_LABEL: Record<Outcome, string> = {
+@@ -117,6 +133,43 @@ function fmtDate(iso: string | null): string {
+     minute: "2-digit",
+   });
+ }
++// Short, reason-aware label for the red overdue badge on a lead card. The
++// server returns overdueReason so the badge can say WHY the lead is flagged,
++// not just ">24h" (which only made sense for the first-contact case).
++function overdueBadgeLabel(reason?: string | null): string {
++  switch (reason) {
++    case "first_contact":
++      return "No first contact";
++    case "tour_not_logged":
++      return "Tour not logged";
++    case "follow_up":
++      return "Follow-up due";
++    default:
++      return "Overdue";
++  }
++}
++// Coerce a possibly-undefined/NaN numeric setting into an integer within
++// [min,max], falling back to fallback. Mirrors the server-side clampInt so the
++// inputs never show an out-of-range value the API would reject.
++function clampNum(v: unknown, min: number, max: number, fallback: number): number {
++  const n = Math.round(Number(v));
++  if (!Number.isFinite(n)) return fallback;
++  return Math.min(max, Math.max(min, n));
++}
++// Human countdown to (or past) the deciding-stage follow-up due date.
++function followUpCountdownLabel(dueIso: string): string {
++  const due = new Date(dueIso).getTime();
++  if (Number.isNaN(due)) return "Follow up";
++  const diffMs = due - Date.now();
++  const dayMs = 86_400_000;
++  if (diffMs <= 0) {
++    const overdueDays = Math.floor(-diffMs / dayMs);
++    if (overdueDays >= 1) return `Follow-up ${overdueDays}d overdue`;
++    return "Follow-up due";
++  }
++  const days = Math.ceil(diffMs / dayMs);
++  return days <= 1 ? "Follow up by tomorrow" : `Follow up in ${days}d`;
++}
+ // Format a stored ISO instant as a local wall-clock value for a
+ // datetime-local input (YYYY-MM-DDTHH:mm). Using toISOString() here would
+ // show the UTC time instead of the school's local time.
+@@ -296,16 +349,21 @@ function Pipeline() {
+   const [leads, setLeads] = useState<Lead[]>([]);
+   const [loading, setLoading] = useState(true);
+   const [openId, setOpenId] = useState<number | null>(null);
++  const [view, setView] = useState<"active" | "archived">("active");
+ 
+   const load = useCallback(async () => {
+     setLoading(true);
+     try {
+-      const res = await authFetch("/api/tours/requests");
++      const res = await authFetch(
++        view === "archived"
++          ? "/api/tours/requests?view=archived"
++          : "/api/tours/requests",
++      );
+       if (res.ok) setLeads((await res.json()) as Lead[]);
+     } finally {
+       setLoading(false);
+     }
+-  }, []);
++  }, [view]);
+   useEffect(() => {
+     void load();
+   }, [load]);
+@@ -316,29 +374,84 @@ function Pipeline() {
+       contacted: [],
+       scheduled: [],
+       toured: [],
++      deciding: [],
+       closed: [],
+     };
+     for (const l of leads) m[l.status]?.push(l);
+     return m;
+   }, [leads]);
+ 
+-  if (loading) return <div style={{ color: "#64748b" }}>Loading leads…</div>;
++  const viewTabs = (
++    <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
++      {(
++        [
++          ["active", "Active pipeline"],
++          ["archived", "Archived"],
++        ] as const
++      ).map(([v, lbl]) => {
++        const active = view === v;
++        return (
++          <button
++            key={v}
++            type="button"
++            onClick={() => setView(v)}
++            style={{
++              padding: "6px 14px",
++              borderRadius: 999,
++              border: `1px solid ${active ? "var(--accent, #2563eb)" : "#334155"}`,
++              background: active ? "var(--accent, #2563eb)" : "transparent",
++              color: active ? "#fff" : "#cbd5e1",
++              fontWeight: 600,
++              fontSize: 13,
++              cursor: "pointer",
++            }}
++          >
++            {lbl}
++          </button>
++        );
++      })}
++    </div>
++  );
++
++  if (loading)
++    return (
++      <>
++        {viewTabs}
++        <div style={{ color: "#64748b" }}>Loading leads…</div>
++      </>
++    );
+ 
+   if (leads.length === 0) {
+     return (
+-      <div style={{ ...cardBox, textAlign: "center", padding: 40 }}>
+-        <div style={{ fontSize: 40 }}>🗒️</div>
+-        <h3 style={{ margin: "12px 0 6px" }}>No tour requests yet</h3>
+-        <p style={{ color: "#64748b", margin: 0 }}>
+-          Publish your Brag Page and share the link — new leads land here
+-          automatically.
+-        </p>
+-      </div>
++      <>
++        {viewTabs}
++        <div style={{ ...cardBox, textAlign: "center", padding: 40 }}>
++          <div style={{ fontSize: 40 }}>🗒️</div>
++          {view === "archived" ? (
++            <>
++              <h3 style={{ margin: "12px 0 6px" }}>Nothing archived yet</h3>
++              <p style={{ color: "#64748b", margin: 0 }}>
++                Closed tours move here automatically after the archive window
++                you set in Settings.
++              </p>
++            </>
++          ) : (
++            <>
++              <h3 style={{ margin: "12px 0 6px" }}>No tour requests yet</h3>
++              <p style={{ color: "#64748b", margin: 0 }}>
++                Publish your Brag Page and share the link — new leads land here
++                automatically.
++              </p>
++            </>
++          )}
++        </div>
++      </>
+     );
+   }
+ 
+   return (
+     <>
++      {viewTabs}
+       <div
+         style={{
+           display: "grid",
+@@ -411,7 +524,21 @@ function Pipeline() {
+                           padding: "1px 6px",
+                         }}
+                       >
+-                        ⏰ &gt;24h
++                        ⏰ {overdueBadgeLabel(l.overdueReason)}
++                      </span>
++                    )}
++                    {l.status === "deciding" && l.followUpDueAt && (
++                      <span
++                        style={{
++                          fontSize: 11,
++                          fontWeight: 700,
++                          color: "#fff",
++                          background: l.overdue ? "#dc2626" : "#db2777",
++                          borderRadius: 6,
++                          padding: "1px 6px",
++                        }}
++                      >
++                        📞 {followUpCountdownLabel(l.followUpDueAt)}
+                       </span>
+                     )}
+                     {l.assignedTo && (
+@@ -708,6 +835,22 @@ function LeadDrawer({
+                   </button>
+                 ))}
+               </div>
++              {lead.status === "deciding" && lead.followUpDueAt && (
++                <div
++                  style={{
++                    fontSize: 13,
++                    marginTop: 8,
++                    fontWeight: 600,
++                    color: lead.overdue ? "#fca5a5" : "#f9a8d4",
++                  }}
++                >
++                  📞 {followUpCountdownLabel(lead.followUpDueAt)} ·{" "}
++                  <span style={{ fontWeight: 400, color: "#94a3b8" }}>
++                    due {fmtDate(lead.followUpDueAt)}. Logging a contact resets
++                    the clock.
++                  </span>
++                </div>
++              )}
+             </div>
+ 
+             {/* assign + schedule */}
+@@ -968,6 +1111,14 @@ type PageData = {
    headerTextColor: string;
    contactEmail: string | null;
    contactPhone: string | null;
 +  // School-level: 'all' sends assignment SMS to the new owner; 'urgent' mutes
 +  // routine assignment texts (email still goes out).
 +  tourSmsScope: "all" | "urgent";
++  // Phase 2 "never lose a lead" SLA settings.
++  tourFirstContactHours: number;
++  tourFollowUpBusinessDays: number;
++  tourArchiveDays: number;
++  tourEscalationEnabled: boolean;
  };
  
  type TourFlyerItem = { key: string; label: string; kind: "image" | "pdf" };
-@@ -978,6 +981,9 @@ type TourCheckpointItem = {
+@@ -978,6 +1129,9 @@ type TourCheckpointItem = {
    location: string;
    talkingPoints: string;
    minutes: number;
@@ -659,7 +1400,7 @@ index 98801cba..814c3ea0 100644
  };
  
  function ListEditor({
-@@ -1146,6 +1152,24 @@ function CheckpointEditor({
+@@ -1146,6 +1300,24 @@ function CheckpointEditor({
              value={c.talkingPoints}
              onChange={(e) => update(i, { talkingPoints: e.target.value })}
            />
@@ -684,7 +1425,7 @@ index 98801cba..814c3ea0 100644
          </div>
        ))}
        <button
-@@ -1153,7 +1177,14 @@ function CheckpointEditor({
+@@ -1153,7 +1325,14 @@ function CheckpointEditor({
          onClick={() =>
            onChange([
              ...items,
@@ -700,7 +1441,7 @@ index 98801cba..814c3ea0 100644
            ])
          }
          style={{
-@@ -1609,9 +1640,10 @@ function BragEditor() {
+@@ -1609,9 +1788,19 @@ function BragEditor() {
          // can't break the uploader UI.
          json.flyers = Array.isArray(json.flyers) ? json.flyers : [];
          json.photos = Array.isArray(json.photos) ? json.photos : [];
@@ -711,10 +1452,19 @@ index 98801cba..814c3ea0 100644
 +          Array.isArray(json.checkpoints) ? json.checkpoints : []
 +        ).map((c) => ({ ...c, alwaysInclude: c.alwaysInclude === true }));
 +        json.tourSmsScope = json.tourSmsScope === "urgent" ? "urgent" : "all";
++        json.tourFirstContactHours = clampNum(json.tourFirstContactHours, 1, 720, 24);
++        json.tourFollowUpBusinessDays = clampNum(
++          json.tourFollowUpBusinessDays,
++          1,
++          30,
++          3,
++        );
++        json.tourArchiveDays = clampNum(json.tourArchiveDays, 1, 365, 3);
++        json.tourEscalationEnabled = json.tourEscalationEnabled !== false;
          json.textPlacement = json.textPlacement === "bottom" ? "bottom" : "top";
          json.headerTextColor = /^#[0-9a-fA-F]{6}$/.test(json.headerTextColor)
            ? json.headerTextColor
-@@ -1797,6 +1829,46 @@ function BragEditor() {
+@@ -1797,6 +1986,159 @@ function BragEditor() {
            items={data.checkpoints}
            onChange={(checkpoints) => set({ checkpoints })}
          />
@@ -756,6 +1506,119 @@ index 98801cba..814c3ea0 100644
 +              );
 +            })}
 +          </div>
++        </div>
++
++        {/* Phase 2 "never lose a lead" SLA settings. */}
++        <div
++          style={{
++            ...cardBox,
++            marginBottom: 18,
++            borderLeft: "3px solid #db2777",
++          }}
++        >
++          <div style={{ fontWeight: 700, marginBottom: 4 }}>
++            Follow-up &amp; escalation
++          </div>
++          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>
++            Set how long a lead can sit before it counts as overdue, how long the
++            “Still deciding” follow-up clock runs, and when closed tours archive
++            off the board.
++          </div>
++          <div
++            style={{
++              display: "grid",
++              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
++              gap: 12,
++            }}
++          >
++            <label style={{ display: "block" }}>
++              <div
++                style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}
++              >
++                First-contact window (hours)
++              </div>
++              <input
++                type="number"
++                min={1}
++                max={720}
++                style={inputStyle}
++                value={data.tourFirstContactHours}
++                onChange={(e) =>
++                  set({
++                    tourFirstContactHours: clampNum(
++                      e.target.value,
++                      1,
++                      720,
++                      24,
++                    ),
++                  })
++                }
++              />
++            </label>
++            <label style={{ display: "block" }}>
++              <div
++                style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}
++              >
++                Follow-up window (business days)
++              </div>
++              <input
++                type="number"
++                min={1}
++                max={30}
++                style={inputStyle}
++                value={data.tourFollowUpBusinessDays}
++                onChange={(e) =>
++                  set({
++                    tourFollowUpBusinessDays: clampNum(
++                      e.target.value,
++                      1,
++                      30,
++                      3,
++                    ),
++                  })
++                }
++              />
++            </label>
++            <label style={{ display: "block" }}>
++              <div
++                style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}
++              >
++                Archive closed tours after (days)
++              </div>
++              <input
++                type="number"
++                min={1}
++                max={365}
++                style={inputStyle}
++                value={data.tourArchiveDays}
++                onChange={(e) =>
++                  set({
++                    tourArchiveDays: clampNum(e.target.value, 1, 365, 3),
++                  })
++                }
++              />
++            </label>
++          </div>
++          <label
++            style={{
++              display: "flex",
++              alignItems: "center",
++              gap: 10,
++              marginTop: 14,
++              cursor: "pointer",
++            }}
++          >
++            <input
++              type="checkbox"
++              checked={data.tourEscalationEnabled}
++              onChange={(e) =>
++                set({ tourEscalationEnabled: e.target.checked })
++              }
++            />
++            <span style={{ fontSize: 14 }}>
++              Email overdue leads to the owner (CC principal/coordinator)
++            </span>
++          </label>
 +        </div>
 +
          <PhotoUploader
@@ -874,10 +1737,10 @@ index f6d0087a..7b074664 100644
                  <label style={label}>{t.interests}</label>
                  <textarea
 diff --git a/lib/db/src/schema/schoolSettings.ts b/lib/db/src/schema/schoolSettings.ts
-index 4558beb2..a010aead 100644
+index 4558beb2..0c800b8e 100644
 --- a/lib/db/src/schema/schoolSettings.ts
 +++ b/lib/db/src/schema/schoolSettings.ts
-@@ -62,6 +62,15 @@ export const schoolSettingsTable = pgTable(
+@@ -62,6 +62,35 @@ export const schoolSettingsTable = pgTable(
    pbisColdPeriodMultiple: integer("pbis_cold_period_multiple")
      .notNull()
      .default(5),
@@ -890,29 +1753,31 @@ index 4558beb2..a010aead 100644
 +    .$type<"all" | "urgent">()
 +    .notNull()
 +    .default("all"),
++  // School Tours — Phase 2 "never lose a lead" SLA settings. The background
++  // escalation job + the pipeline overdue flags read these.
++  //   tourFirstContactHours — a 'new' lead uncontacted longer than this is
++  //     overdue (legacy hard-coded 24h is now the default).
++  //   tourFollowUpBusinessDays — when a lead is moved to "Still deciding", its
++  //     follow-up becomes due this many business days later.
++  //   tourArchiveDays — closed leads older than this drop off the default
++  //     pipeline board (still queryable via ?view=archived).
++  //   tourEscalationEnabled — master switch for the automated overdue emails.
++  //     Sending is ALSO gated globally on EMAIL_REMINDERS_ENABLED.
++  tourFirstContactHours: integer("tour_first_contact_hours")
++    .notNull()
++    .default(24),
++  tourFollowUpBusinessDays: integer("tour_follow_up_business_days")
++    .notNull()
++    .default(3),
++  tourArchiveDays: integer("tour_archive_days").notNull().default(3),
++  tourEscalationEnabled: boolean("tour_escalation_enabled")
++    .notNull()
++    .default(true),
    // When true, awarding a negative behavior subtracts its point value from
    // the student's running total. When false (default), the entry is logged
    // on the student's record as a red entry but does not affect the total.
-diff --git a/lib/db/src/schema/staff.ts b/lib/db/src/schema/staff.ts
-index 495ff638..57b6cbf4 100644
---- a/lib/db/src/schema/staff.ts
-+++ b/lib/db/src/schema/staff.ts
-@@ -192,6 +192,13 @@ export const staffTable = pgTable("staff", {
-   // route gate (admin OR this flag). Documents are private to the creator.
-   capManageEsign: boolean("cap_manage_esign").notNull().default(false),
- 
-+  // School Tours — lightweight "Tour Guide" role. A guide can be ASSIGNED
-+  // leads and open the Tour Roadmap for leads assigned to them, without the
-+  // rest of the tour-management surface (brag-page editor, full lead
-+  // pipeline). canManageTours members already have full access; this flag is
-+  // for front-office/volunteer guides who only need their own assigned tours.
-+  capTourGuide: boolean("cap_tour_guide").notNull().default(false),
-+
-   // Comp Time (FLSA compensatory time) per-staff capabilities. Mirrors
-   // the AST gate above so the role-management UI can sit them side by
-   // side under "Time Tracking."
 diff --git a/lib/db/src/schema/tours.ts b/lib/db/src/schema/tours.ts
-index 2dacebe2..d659172c 100644
+index 2dacebe2..092c9007 100644
 --- a/lib/db/src/schema/tours.ts
 +++ b/lib/db/src/schema/tours.ts
 @@ -43,6 +43,12 @@ export type TourCheckpoint = {
@@ -928,3 +1793,335 @@ index 2dacebe2..d659172c 100644
  };
  
  // A machine-translated cache of the admin-authored brag-page content for one
+@@ -139,6 +145,11 @@ export const TOUR_STATUSES = [
+   "contacted",
+   "scheduled",
+   "toured",
++  // "Still deciding" — a LIVE holding stage (Phase 2) between a completed tour
++  // and a final close. A lead here has a `follow_up_due_at` clock; the
++  // background escalation job nudges the owner when it lapses. Distinct from
++  // the terminal `deciding` OUTCOME on legacy rows (kept for back-compat).
++  "deciding",
+   "closed",
+ ] as const;
+ export type TourStatus = (typeof TOUR_STATUSES)[number];
+@@ -176,6 +187,19 @@ export const tourRequestsTable = pgTable(
+     // Set the first time a staff member logs a "contact" event — powers the
+     // response-time clock + the >24h escalation flag.
+     firstContactedAt: timestamp("first_contacted_at", { withTimezone: true }),
++    // Phase 2 lead-rescue lifecycle.
++    //   followUpDueAt — set when a lead is moved to "Still deciding"; the next
++    //     follow-up is due at this time. Drives the board countdown + the
++    //     deciding-overdue branch of the escalation job. Logging a contact on a
++    //     deciding lead pushes it forward and clears the escalation stamp.
++    //   closedAt — stamped when the lead moves to 'closed'; drives auto-archive.
++    //   lastEscalatedAt / lastEscalatedReason — idempotency for the background
++    //     escalation job: it re-nudges at most once per re-nudge window and
++    //     immediately when the reason changes (e.g. new→scheduled→deciding).
++    followUpDueAt: timestamp("follow_up_due_at", { withTimezone: true }),
++    closedAt: timestamp("closed_at", { withTimezone: true }),
++    lastEscalatedAt: timestamp("last_escalated_at", { withTimezone: true }),
++    lastEscalatedReason: text("last_escalated_reason"),
+     // Opaque token for the post-tour survey link (printed as a QR on the
+     // leave-behind). Unique across all schools so the public survey route
+     // can resolve the school from the token alone.
+@@ -206,6 +230,9 @@ export const TOUR_EVENT_TYPES = [
+   "scheduled",
+   "outcome",
+   "survey_submitted",
++  // System event written by the background escalation job when it emails the
++  // owner about an overdue lead (first-contact / tour-not-logged / follow-up).
++  "escalation",
+ ] as const;
+ export type TourEventType = (typeof TOUR_EVENT_TYPES)[number];
+ 
+diff --git a/artifacts/api-server/src/lib/businessDays.ts b/artifacts/api-server/src/lib/businessDays.ts
+new file mode 100644
+index 00000000..66eecdd0
+--- /dev/null
++++ b/artifacts/api-server/src/lib/businessDays.ts
+@@ -0,0 +1,16 @@
++// Add N business days (Mon–Fri) to a date, preserving the time-of-day.
++// Weekends are skipped; public holidays are NOT considered (out of scope — the
++// same simplification the rest of the tours SLA math uses). Day-of-week is read
++// in the server's local time; a per-school timezone is tracked as future work
++// (see DEFAULT_SCHOOL_TZ). Used for the "Still deciding" follow-up clock and
++// the background escalation job.
++export function addBusinessDays(from: Date, days: number): Date {
++  const d = new Date(from.getTime());
++  let remaining = Math.max(0, Math.floor(days));
++  while (remaining > 0) {
++    d.setDate(d.getDate() + 1);
++    const dow = d.getDay();
++    if (dow !== 0 && dow !== 6) remaining -= 1;
++  }
++  return d;
++}
+diff --git a/artifacts/api-server/src/lib/tourReminders.ts b/artifacts/api-server/src/lib/tourReminders.ts
+new file mode 100644
+index 00000000..2b9194a7
+--- /dev/null
++++ b/artifacts/api-server/src/lib/tourReminders.ts
+@@ -0,0 +1,262 @@
++import { and, eq, inArray } from "drizzle-orm";
++import {
++  db,
++  tourRequestsTable,
++  tourRequestEventsTable,
++  schoolSettingsTable,
++  schoolsTable,
++  staffTable,
++  adminNotificationsTable,
++} from "@workspace/db";
++import { canManageTours } from "./coreTeam.js";
++import {
++  sendLeadOverdueEscalationEmail,
++  type TourOverdueReason,
++} from "./tourEmails.js";
++import { logger } from "./logger.js";
++
++// -----------------------------------------------------------------------------
++// School Tours — Phase 2 "never lose a lead" background escalation job.
++//
++// Hourly sweep that finds leads that have crossed their stage SLA and emails the
++// owner (or the notify group when unassigned), CC'ing the principal/admins. It
++// is idempotent: a lead is nudged at most once per reason per re-nudge window
++// (RENUDGE_MS), and immediately again when the reason changes (e.g. the lead
++// moved new → scheduled and is now overdue for a different reason). Any staff
++// stage change or logged contact clears lastEscalatedReason, re-arming the job.
++//
++// Sending is gated globally on EMAIL_REMINDERS_ENABLED *and* per-school on
++// schoolSettings.tourEscalationEnabled. Best-effort: failures are logged, never
++// thrown, so one bad lead never sinks the sweep.
++// -----------------------------------------------------------------------------
++
++const RENUDGE_MS = 24 * 60 * 60 * 1000;
++const ACTIVE_STATUSES = ["new", "scheduled", "deciding"] as const;
++
++// Resolve the staff-app origin for the "Open the lead" button. No request is
++// available inside a cron, so resolve from env only (prod domain in prod, dev
++// host in dev) — mirrors publicAppOrigin() in routes/tours.ts.
++function pipelineUrl(): string {
++  const explicit = process.env.PUBLIC_APP_URL;
++  if (explicit && explicit.length > 0)
++    return `${explicit.replace(/\/+$/, "")}/?settingsTile=school-tours`;
++  const replitDomains = (process.env.REPLIT_DOMAINS ?? "").trim();
++  if (replitDomains) {
++    const first = replitDomains.split(",")[0]?.trim();
++    if (first) return `https://${first}/?settingsTile=school-tours`;
++  }
++  const replit = process.env.REPLIT_DEV_DOMAIN;
++  if (replit && replit.length > 0)
++    return `https://${replit}/?settingsTile=school-tours`;
++  return "http://localhost:5000/?settingsTile=school-tours";
++}
++
++function waitingSummary(since: Date, now: Date): string {
++  const ms = Math.max(0, now.getTime() - since.getTime());
++  const days = Math.floor(ms / (24 * 60 * 60 * 1000));
++  if (days >= 1) return `${days} day${days === 1 ? "" : "s"} overdue`;
++  const hours = Math.floor(ms / (60 * 60 * 1000));
++  return `${hours} hour${hours === 1 ? "" : "s"} overdue`;
++}
++
++// Decide whether a lead is overdue and why. Returns the reason + the timestamp
++// the lead has been waiting since, or null when not overdue.
++//
++// This is the SINGLE source of truth for overdue semantics. The hourly
++// escalation sweep, the pipeline list endpoint, and the lead-detail endpoint
++// all call it so they can never disagree on who is overdue or why. It only
++// needs the lifecycle-relevant fields, so it accepts a structural subset rather
++// than the full row.
++export function overdueFor(
++  lead: Pick<
++    typeof tourRequestsTable.$inferSelect,
++    "status" | "createdAt" | "tourScheduledAt" | "followUpDueAt"
++  >,
++  firstContactHours: number,
++  now: Date,
++): { reason: TourOverdueReason; since: Date } | null {
++  if (lead.status === "new") {
++    const since = lead.createdAt;
++    if (now.getTime() - since.getTime() > firstContactHours * 60 * 60 * 1000) {
++      return { reason: "first_contact", since };
++    }
++  } else if (lead.status === "scheduled") {
++    if (lead.tourScheduledAt && lead.tourScheduledAt.getTime() < now.getTime()) {
++      return { reason: "tour_not_logged", since: lead.tourScheduledAt };
++    }
++  } else if (lead.status === "deciding") {
++    if (lead.followUpDueAt && lead.followUpDueAt.getTime() < now.getTime()) {
++      return { reason: "follow_up", since: lead.followUpDueAt };
++    }
++  }
++  return null;
++}
++
++export interface TourEscalationResult {
++  skipped: boolean;
++  scanned: number;
++  sent: number;
++}
++
++export async function runTourEscalations(
++  now: Date = new Date(),
++): Promise<TourEscalationResult> {
++  if (process.env.EMAIL_REMINDERS_ENABLED !== "true") {
++    return { skipped: true, scanned: 0, sent: 0 };
++  }
++
++  // All active candidate leads across every school (kept small by status).
++  const leads = await db
++    .select()
++    .from(tourRequestsTable)
++    .where(inArray(tourRequestsTable.status, ACTIVE_STATUSES as never));
++  if (leads.length === 0) return { skipped: false, scanned: 0, sent: 0 };
++
++  const schoolIds = Array.from(new Set(leads.map((l) => l.schoolId)));
++
++  // Per-school SLA settings (default when no row exists).
++  const settingsRows = await db
++    .select({
++      schoolId: schoolSettingsTable.schoolId,
++      firstContactHours: schoolSettingsTable.tourFirstContactHours,
++      escalationEnabled: schoolSettingsTable.tourEscalationEnabled,
++    })
++    .from(schoolSettingsTable)
++    .where(inArray(schoolSettingsTable.schoolId, schoolIds));
++  const settingsMap = new Map(settingsRows.map((s) => [s.schoolId, s]));
++
++  // School names for subject lines.
++  const schoolRows = await db
++    .select({ id: schoolsTable.id, name: schoolsTable.name })
++    .from(schoolsTable)
++    .where(inArray(schoolsTable.id, schoolIds));
++  const schoolNameMap = new Map(schoolRows.map((s) => [s.id, s.name]));
++
++  // Active staff for the schools in play (recipients + CC).
++  const staff = await db
++    .select()
++    .from(staffTable)
++    .where(
++      and(
++        inArray(staffTable.schoolId, schoolIds),
++        eq(staffTable.active, true),
++      ),
++    );
++  const staffById = new Map(staff.map((s) => [s.id, s]));
++  const notifyBySchool = new Map<number, string[]>();
++  const adminsBySchool = new Map<number, { id: number; email: string }[]>();
++  for (const id of schoolIds) {
++    const forSchool = staff.filter((s) => s.schoolId === id);
++    notifyBySchool.set(
++      id,
++      forSchool
++        .filter((s) => canManageTours(s) && Boolean(s.email))
++        .map((s) => s.email as string),
++    );
++    adminsBySchool.set(
++      id,
++      forSchool
++        .filter((s) => s.isAdmin && Boolean(s.email))
++        .map((s) => ({ id: s.id, email: s.email as string })),
++    );
++  }
++
++  const url = pipelineUrl();
++  let sent = 0;
++
++  for (const lead of leads) {
++    const settings = settingsMap.get(lead.schoolId);
++    // Per-school master switch (defaults to enabled when no row exists).
++    if (settings && settings.escalationEnabled === false) continue;
++    const firstContactHours = settings?.firstContactHours ?? 24;
++
++    const overdue = overdueFor(lead, firstContactHours, now);
++    if (!overdue) continue;
++
++    // Idempotency: at most one nudge per reason per re-nudge window.
++    if (
++      lead.lastEscalatedReason === overdue.reason &&
++      lead.lastEscalatedAt &&
++      now.getTime() - lead.lastEscalatedAt.getTime() < RENUDGE_MS
++    ) {
++      continue;
++    }
++
++    // Recipients: the owner if assigned (else the notify group); CC the
++    // principal/admins (excluding the to-address to avoid a dup).
++    const owner = lead.assignedStaffId
++      ? staffById.get(lead.assignedStaffId)
++      : undefined;
++    const ownerEmail = owner?.email ?? null;
++    const to = ownerEmail
++      ? [ownerEmail]
++      : (notifyBySchool.get(lead.schoolId) ?? []);
++    if (to.length === 0) {
++      // No one to email yet — leave the lead un-stamped so it retries once a
++      // recipient exists.
++      continue;
++    }
++    const cc = (adminsBySchool.get(lead.schoolId) ?? [])
++      .filter((a) => a.id !== lead.assignedStaffId)
++      .map((a) => a.email)
++      .filter((e) => !to.includes(e));
++
++    const childrenSummary =
++      lead.children
++        .map((c) => `${c.name}${c.grade ? ` (Grade ${c.grade})` : ""}`)
++        .join(", ") || "—";
++
++    const ok = await sendLeadOverdueEscalationEmail({
++      to,
++      cc,
++      schoolName: schoolNameMap.get(lead.schoolId) ?? "your school",
++      familyName: lead.familyName,
++      phone: lead.phone,
++      childrenSummary,
++      assigneeName: owner?.displayName ?? null,
++      reason: overdue.reason,
++      waitingSummary: waitingSummary(overdue.since, now),
++      pipelineUrl: url,
++    });
++    if (!ok) continue;
++
++    // Stamp + record only after a successful send so a transient email failure
++    // is retried on the next sweep.
++    await db
++      .update(tourRequestsTable)
++      .set({
++        lastEscalatedAt: now,
++        lastEscalatedReason: overdue.reason,
++        updatedAt: now,
++      })
++      .where(
++        and(
++          eq(tourRequestsTable.id, lead.id),
++          eq(tourRequestsTable.schoolId, lead.schoolId),
++        ),
++      );
++    await db.insert(tourRequestEventsTable).values({
++      schoolId: lead.schoolId,
++      tourRequestId: lead.id,
++      staffId: null,
++      eventType: "escalation",
++      body: `Auto-escalation emailed (${overdue.reason}): ${waitingSummary(
++        overdue.since,
++        now,
++      )}.`,
++    });
++    await db.insert(adminNotificationsTable).values({
++      schoolId: lead.schoolId,
++      type: "tour_lead_overdue",
++      payload: {
++        tourRequestId: lead.id,
++        familyName: lead.familyName,
++        reason: overdue.reason,
++        assignedStaffId: lead.assignedStaffId ?? null,
++      },
++    });
++    sent += 1;
++  }
++
++  return { skipped: false, scanned: leads.length, sent };
++}

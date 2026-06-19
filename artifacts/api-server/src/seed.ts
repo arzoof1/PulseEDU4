@@ -1951,6 +1951,20 @@ export async function ensureAdminHubSchema() {
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_sms_scope TEXT NOT NULL DEFAULT 'all'`,
   );
 
+  // School Tours — Phase 2 "never lose a lead" SLA settings (additive).
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_first_contact_hours INTEGER NOT NULL DEFAULT 24`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_follow_up_business_days INTEGER NOT NULL DEFAULT 3`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_archive_days INTEGER NOT NULL DEFAULT 3`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_escalation_enabled BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
+
   // OSS section + reason gates on school_heartbeat_settings + parent prefs.
   await db.execute(
     sql`ALTER TABLE school_heartbeat_settings ADD COLUMN IF NOT EXISTS show_oss BOOLEAN NOT NULL DEFAULT FALSE`,
@@ -3364,6 +3378,20 @@ export async function ensureToursSchema(): Promise<void> {
   );
   await db.execute(
     sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS interest_selections JSONB NOT NULL DEFAULT '[]'::jsonb`,
+  );
+
+  // Phase 2 lead-rescue lifecycle columns on tour_requests (additive).
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS follow_up_due_at TIMESTAMPTZ`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS last_escalated_at TIMESTAMPTZ`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS last_escalated_reason TEXT`,
   );
 }
 
