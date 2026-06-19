@@ -1119,6 +1119,9 @@ type PageData = {
   tourFollowUpBusinessDays: number;
   tourArchiveDays: number;
   tourEscalationEnabled: boolean;
+  // Phase 3 "close the loop with families" — automated family nurture cadence.
+  tourFamilyNurtureEnabled: boolean;
+  tourReminderLeadHours: number;
 };
 
 type TourFlyerItem = { key: string; label: string; kind: "image" | "pdf" };
@@ -1801,6 +1804,13 @@ function BragEditor() {
         );
         json.tourArchiveDays = clampNum(json.tourArchiveDays, 1, 365, 3);
         json.tourEscalationEnabled = json.tourEscalationEnabled !== false;
+        json.tourFamilyNurtureEnabled = json.tourFamilyNurtureEnabled === true;
+        json.tourReminderLeadHours = clampNum(
+          json.tourReminderLeadHours,
+          1,
+          168,
+          24,
+        );
         json.textPlacement = json.textPlacement === "bottom" ? "bottom" : "top";
         json.headerTextColor = /^#[0-9a-fA-F]{6}$/.test(json.headerTextColor)
           ? json.headerTextColor
@@ -2137,6 +2147,49 @@ function BragEditor() {
               Email overdue leads to the owner (CC principal/coordinator)
             </span>
           </label>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              marginTop: 14,
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={data.tourFamilyNurtureEnabled}
+              onChange={(e) =>
+                set({ tourFamilyNurtureEnabled: e.target.checked })
+              }
+            />
+            <span style={{ fontSize: 14 }}>
+              Send families automatic nurture emails (tour reminder, post-tour
+              thank-you &amp; survey, "still deciding" check-in, enrollment
+              welcome)
+            </span>
+          </label>
+          {data.tourFamilyNurtureEnabled && (
+            <label style={{ display: "block", marginTop: 12 }}>
+              <div
+                style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}
+              >
+                Send the pre-tour reminder this many hours ahead
+              </div>
+              <input
+                type="number"
+                min={1}
+                max={168}
+                style={{ ...inputStyle, maxWidth: 160 }}
+                value={data.tourReminderLeadHours}
+                onChange={(e) =>
+                  set({
+                    tourReminderLeadHours: clampNum(e.target.value, 1, 168, 24),
+                  })
+                }
+              />
+            </label>
+          )}
         </div>
 
         <PhotoUploader

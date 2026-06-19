@@ -959,6 +959,8 @@ router.get("/tours/page", requireStaff, requireTourManager, async (req, res) => 
       tourFollowUpBusinessDays: schoolSettingsTable.tourFollowUpBusinessDays,
       tourArchiveDays: schoolSettingsTable.tourArchiveDays,
       tourEscalationEnabled: schoolSettingsTable.tourEscalationEnabled,
+      tourFamilyNurtureEnabled: schoolSettingsTable.tourFamilyNurtureEnabled,
+      tourReminderLeadHours: schoolSettingsTable.tourReminderLeadHours,
     })
     .from(schoolSettingsTable)
     .where(eq(schoolSettingsTable.schoolId, schoolId));
@@ -973,6 +975,9 @@ router.get("/tours/page", requireStaff, requireTourManager, async (req, res) => 
     tourFollowUpBusinessDays: settings?.tourFollowUpBusinessDays ?? 3,
     tourArchiveDays: settings?.tourArchiveDays ?? 3,
     tourEscalationEnabled: settings?.tourEscalationEnabled ?? true,
+    // Phase 3 "close the loop with families" family-nurture settings.
+    tourFamilyNurtureEnabled: settings?.tourFamilyNurtureEnabled ?? false,
+    tourReminderLeadHours: settings?.tourReminderLeadHours ?? 24,
     published: page?.published ?? false,
     headline: page?.headline ?? "Come See Our School",
     subheadline: page?.subheadline ?? "",
@@ -1132,6 +1137,12 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) => 
   }
   if ("tourEscalationEnabled" in body) {
     slaSet.tourEscalationEnabled = body.tourEscalationEnabled === true;
+  }
+  if ("tourFamilyNurtureEnabled" in body) {
+    slaSet.tourFamilyNurtureEnabled = body.tourFamilyNurtureEnabled === true;
+  }
+  if ("tourReminderLeadHours" in body) {
+    slaSet.tourReminderLeadHours = clampInt(body.tourReminderLeadHours, 1, 168, 24);
   }
   if (Object.keys(slaSet).length > 0) {
     await db
@@ -1486,6 +1497,8 @@ router.patch(
       if (next === "deciding") {
         // Entering "Still deciding" starts the business-day follow-up clock.
         updates.followUpDueAt = await followUpDueDate(schoolId);
+        // Phase 3: re-arm the family deciding-nudge for this fresh cycle.
+        updates.familyDecidingNudgeSentAt = null;
       } else if (lead.status === "deciding") {
         // Leaving "Still deciding" clears the follow-up clock.
         updates.followUpDueAt = null;
@@ -1593,6 +1606,8 @@ router.patch(
         updates.closedAt = null;
         updates.lastEscalatedAt = null;
         updates.lastEscalatedReason = null;
+        // Phase 3: re-arm the family deciding-nudge for this fresh cycle.
+        updates.familyDecidingNudgeSentAt = null;
         if (lead.status !== "deciding") {
           updates.status = "deciding";
           events.push({
@@ -1794,6 +1809,9 @@ router.post(
       contactUpdates.followUpDueAt = await followUpDueDate(schoolId);
       contactUpdates.lastEscalatedAt = null;
       contactUpdates.lastEscalatedReason = null;
+      // Phase 3: logging a contact pushes the follow-up clock forward, so
+      // re-arm the family deciding-nudge for the next cycle.
+      contactUpdates.familyDecidingNudgeSentAt = null;
     }
     if (Object.keys(contactUpdates).length > 0) {
       contactUpdates.updatedAt = new Date();

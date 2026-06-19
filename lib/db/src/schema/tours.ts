@@ -200,6 +200,28 @@ export const tourRequestsTable = pgTable(
     closedAt: timestamp("closed_at", { withTimezone: true }),
     lastEscalatedAt: timestamp("last_escalated_at", { withTimezone: true }),
     lastEscalatedReason: text("last_escalated_reason"),
+    // Phase 3 "close the loop with families" — idempotency stamps for the
+    // automated FAMILY-facing nurture cadence (separate from the staff
+    // escalation stamps above). Each is set only after a successful send so a
+    // transient email failure is retried on the next sweep.
+    //   familyReminderSentAt    — pre-tour reminder (day before tourScheduledAt)
+    //   familyThankYouSentAt    — post-tour thank-you + survey link (on "toured")
+    //   familyDecidingNudgeSentAt — gentle "still deciding" nudge; cleared
+    //     whenever the deciding follow-up clock is (re)armed so a fresh
+    //     deciding cycle can nudge again.
+    //   familyWelcomeSentAt     — enrollment welcome (on close w/ outcome enrolled)
+    familyReminderSentAt: timestamp("family_reminder_sent_at", {
+      withTimezone: true,
+    }),
+    familyThankYouSentAt: timestamp("family_thank_you_sent_at", {
+      withTimezone: true,
+    }),
+    familyDecidingNudgeSentAt: timestamp("family_deciding_nudge_sent_at", {
+      withTimezone: true,
+    }),
+    familyWelcomeSentAt: timestamp("family_welcome_sent_at", {
+      withTimezone: true,
+    }),
     // Opaque token for the post-tour survey link (printed as a QR on the
     // leave-behind). Unique across all schools so the public survey route
     // can resolve the school from the token alone.

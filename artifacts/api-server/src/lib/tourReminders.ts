@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import {
   db,
   tourRequestsTable,
@@ -11,8 +11,13 @@ import {
 import { canManageTours } from "./coreTeam.js";
 import {
   sendLeadOverdueEscalationEmail,
+  sendFamilyTourReminderEmail,
+  sendFamilyPostTourThankYouEmail,
+  sendFamilyDecidingNudgeEmail,
+  sendFamilyEnrollmentWelcomeEmail,
   type TourOverdueReason,
 } from "./tourEmails.js";
+import { DEFAULT_SCHOOL_TZ } from "./schoolYear.js";
 import { logger } from "./logger.js";
 
 // -----------------------------------------------------------------------------
@@ -33,22 +38,31 @@ import { logger } from "./logger.js";
 const RENUDGE_MS = 24 * 60 * 60 * 1000;
 const ACTIVE_STATUSES = ["new", "scheduled", "deciding"] as const;
 
-// Resolve the staff-app origin for the "Open the lead" button. No request is
-// available inside a cron, so resolve from env only (prod domain in prod, dev
-// host in dev) — mirrors publicAppOrigin() in routes/tours.ts.
-function pipelineUrl(): string {
+// Resolve the public app origin from env only — no request is available inside
+// a cron (prod domain in prod, dev host in dev). Mirrors publicAppOrigin() in
+// routes/tours.ts so cron-built links match request-built ones.
+function originFromEnv(): string {
   const explicit = process.env.PUBLIC_APP_URL;
-  if (explicit && explicit.length > 0)
-    return `${explicit.replace(/\/+$/, "")}/?settingsTile=school-tours`;
+  if (explicit && explicit.length > 0) return explicit.replace(/\/+$/, "");
   const replitDomains = (process.env.REPLIT_DOMAINS ?? "").trim();
   if (replitDomains) {
     const first = replitDomains.split(",")[0]?.trim();
-    if (first) return `https://${first}/?settingsTile=school-tours`;
+    if (first) return `https://${first}`;
   }
   const replit = process.env.REPLIT_DEV_DOMAIN;
-  if (replit && replit.length > 0)
-    return `https://${replit}/?settingsTile=school-tours`;
-  return "http://localhost:5000/?settingsTile=school-tours";
+  if (replit && replit.length > 0) return `https://${replit}`;
+  return "http://localhost:5000";
+}
+
+// Staff-app origin for the "Open the lead" button.
+function pipelineUrl(): string {
+  return `${originFromEnv()}/?settingsTile=school-tours`;
+}
+
+// Public survey link printed/emailed to families — mirrors surveyUrlFor() in
+// routes/tours.ts.
+function surveyUrlForToken(token: string): string {
+  return `${originFromEnv()}/tour/survey/${encodeURIComponent(token)}`;
 }
 
 function waitingSummary(since: Date, now: Date): string {
@@ -254,6 +268,178 @@ export async function runTourEscalations(
         reason: overdue.reason,
         assignedStaffId: lead.assignedStaffId ?? null,
       },
+    });
+    sent += 1;
+  }
+
+  return { skipped: false, scanned: leads.length, sent };
+}
+
+// -----------------------------------------------------------------------------
+// School Tours — Phase 3 "close the loop with families" background nurture job.
+//
+// Hourly sweep (shares the escalation cron) that emails the FAMILY at the right
+// lifecycle moment:
+//   1. Pre-tour reminder      — status 'scheduled', within reminderLeadHours of
+//                               tourScheduledAt (and not past).
+//   2. Post-tour thank-you    — status 'toured' (with the survey link).
+//   3. "Still deciding" nudge — status 'deciding', follow-up clock lapsed.
+//   4. Enrollment welcome     — status 'closed' with outcome 'enrolled'.
+//
+// Idempotent: each step has its own *SentAt stamp set ONLY after a successful
+// send, so a transient email failure is retried next hour and a step never
+// double-sends. The deciding-nudge stamp is cleared whenever the follow-up
+// clock is re-armed (see routes/tours.ts), so a fresh deciding cycle nudges
+// again. Gated globally on EMAIL_REMINDERS_ENABLED and per-school on
+// schoolSettings.tourFamilyNurtureEnabled (defaults OFF). Best-effort: one bad
+// lead never sinks the sweep. Families without an email on file are skipped.
+// -----------------------------------------------------------------------------
+
+const FAMILY_STATUSES = ["scheduled", "toured", "deciding"] as const;
+
+export interface TourFamilyNurtureResult {
+  skipped: boolean;
+  scanned: number;
+  sent: number;
+}
+
+export async function runTourFamilyNurture(
+  now: Date = new Date(),
+): Promise<TourFamilyNurtureResult> {
+  if (process.env.EMAIL_REMINDERS_ENABLED !== "true") {
+    return { skipped: true, scanned: 0, sent: 0 };
+  }
+
+  // Candidates: the active-ish family-touch statuses, PLUS closed+enrolled leads
+  // that have not yet had a welcome (the isNull guard keeps the historical
+  // closed pile from being re-scanned forever).
+  const leads = await db
+    .select()
+    .from(tourRequestsTable)
+    .where(
+      or(
+        inArray(tourRequestsTable.status, FAMILY_STATUSES as never),
+        and(
+          eq(tourRequestsTable.status, "closed"),
+          eq(tourRequestsTable.outcome, "enrolled"),
+          isNull(tourRequestsTable.familyWelcomeSentAt),
+        ),
+      ),
+    );
+  if (leads.length === 0) return { skipped: false, scanned: 0, sent: 0 };
+
+  const schoolIds = Array.from(new Set(leads.map((l) => l.schoolId)));
+
+  const settingsRows = await db
+    .select({
+      schoolId: schoolSettingsTable.schoolId,
+      nurtureEnabled: schoolSettingsTable.tourFamilyNurtureEnabled,
+      reminderLeadHours: schoolSettingsTable.tourReminderLeadHours,
+    })
+    .from(schoolSettingsTable)
+    .where(inArray(schoolSettingsTable.schoolId, schoolIds));
+  const settingsMap = new Map(settingsRows.map((s) => [s.schoolId, s]));
+
+  const schoolRows = await db
+    .select({ id: schoolsTable.id, name: schoolsTable.name })
+    .from(schoolsTable)
+    .where(inArray(schoolsTable.id, schoolIds));
+  const schoolNameMap = new Map(schoolRows.map((s) => [s.id, s.name]));
+
+  let sent = 0;
+
+  for (const lead of leads) {
+    const settings = settingsMap.get(lead.schoolId);
+    // Per-school opt-in (defaults OFF when no row exists).
+    if (!settings || settings.nurtureEnabled !== true) continue;
+    // Family email is required for every nurture message.
+    const to = lead.email;
+    if (!to) continue;
+
+    const schoolName = schoolNameMap.get(lead.schoolId) ?? "our school";
+    const base = {
+      to,
+      schoolName,
+      familyName: lead.familyName,
+      fromName: schoolName,
+      signature: `Warmly,\nThe ${schoolName} Team`,
+    };
+
+    // Decide which (single) message applies to this lead this hour, send it,
+    // and record the matching stamp column. At most one send per lead per pass.
+    let ok = false;
+    let stamp: Partial<typeof tourRequestsTable.$inferInsert> | null = null;
+    let eventBody = "";
+
+    if (lead.status === "scheduled") {
+      const leadHours = settings.reminderLeadHours ?? 24;
+      const at = lead.tourScheduledAt;
+      const windowOpens = at
+        ? at.getTime() - leadHours * 60 * 60 * 1000
+        : null;
+      if (
+        at &&
+        !lead.familyReminderSentAt &&
+        windowOpens !== null &&
+        now.getTime() >= windowOpens &&
+        now.getTime() < at.getTime()
+      ) {
+        ok = await sendFamilyTourReminderEmail({
+          ...base,
+          tourWhen: at.toLocaleString("en-US", {
+            timeZone: DEFAULT_SCHOOL_TZ,
+            dateStyle: "full",
+            timeStyle: "short",
+          }),
+        });
+        stamp = { familyReminderSentAt: now };
+        eventBody = "Pre-tour reminder emailed to the family.";
+      }
+    } else if (lead.status === "toured") {
+      if (!lead.familyThankYouSentAt) {
+        ok = await sendFamilyPostTourThankYouEmail({
+          ...base,
+          surveyUrl: surveyUrlForToken(lead.surveyToken),
+        });
+        stamp = { familyThankYouSentAt: now };
+        eventBody = "Post-tour thank-you + survey emailed to the family.";
+      }
+    } else if (lead.status === "deciding") {
+      if (
+        !lead.familyDecidingNudgeSentAt &&
+        lead.followUpDueAt &&
+        lead.followUpDueAt.getTime() < now.getTime()
+      ) {
+        ok = await sendFamilyDecidingNudgeEmail(base);
+        stamp = { familyDecidingNudgeSentAt: now };
+        eventBody = "Gentle \u201cstill deciding\u201d nudge emailed to the family.";
+      }
+    } else if (lead.status === "closed" && lead.outcome === "enrolled") {
+      if (!lead.familyWelcomeSentAt) {
+        ok = await sendFamilyEnrollmentWelcomeEmail(base);
+        stamp = { familyWelcomeSentAt: now };
+        eventBody = "Enrollment welcome emailed to the family.";
+      }
+    }
+
+    if (!ok || !stamp) continue;
+
+    // Stamp + log only after a successful send.
+    await db
+      .update(tourRequestsTable)
+      .set({ ...stamp, updatedAt: now })
+      .where(
+        and(
+          eq(tourRequestsTable.id, lead.id),
+          eq(tourRequestsTable.schoolId, lead.schoolId),
+        ),
+      );
+    await db.insert(tourRequestEventsTable).values({
+      schoolId: lead.schoolId,
+      tourRequestId: lead.id,
+      staffId: null,
+      eventType: "escalation",
+      body: eventBody,
     });
     sent += 1;
   }

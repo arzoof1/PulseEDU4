@@ -91,6 +91,17 @@ export const schoolSettingsTable = pgTable(
   tourEscalationEnabled: boolean("tour_escalation_enabled")
     .notNull()
     .default(true),
+  // School Tours — Phase 3 "close the loop with families" master switch for the
+  // automated FAMILY nurture cadence (pre-tour reminder, post-tour thank-you +
+  // survey, gentle "still deciding" nudge, enrollment welcome). Defaults OFF so
+  // no school starts emailing families automatically without opting in.
+  tourFamilyNurtureEnabled: boolean("tour_family_nurture_enabled")
+    .notNull()
+    .default(false),
+  // How many hours before the scheduled tour the pre-tour reminder goes out.
+  tourReminderLeadHours: integer("tour_reminder_lead_hours")
+    .notNull()
+    .default(24),
   // When true, awarding a negative behavior subtracts its point value from
   // the student's running total. When false (default), the entry is logged
   // on the student's record as a red entry but does not affect the total.

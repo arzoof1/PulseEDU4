@@ -1964,6 +1964,13 @@ export async function ensureAdminHubSchema() {
   await db.execute(
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_escalation_enabled BOOLEAN NOT NULL DEFAULT TRUE`,
   );
+  // School Tours — Phase 3 "close the loop with families" settings (additive).
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_family_nurture_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_reminder_lead_hours INTEGER NOT NULL DEFAULT 24`,
+  );
 
   // OSS section + reason gates on school_heartbeat_settings + parent prefs.
   await db.execute(
@@ -3392,6 +3399,20 @@ export async function ensureToursSchema(): Promise<void> {
   );
   await db.execute(
     sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS last_escalated_reason TEXT`,
+  );
+
+  // Phase 3 "close the loop with families" — family-nurture idempotency stamps.
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS family_reminder_sent_at TIMESTAMPTZ`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS family_thank_you_sent_at TIMESTAMPTZ`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS family_deciding_nudge_sent_at TIMESTAMPTZ`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS family_welcome_sent_at TIMESTAMPTZ`,
   );
 }
 

@@ -73,7 +73,10 @@ import { sendWeeklyHeartbeatEmails } from "./lib/weeklyHeartbeatEmail";
 import { runDueLotteryDraws } from "./lib/onTimeLottery";
 import { startReminderScheduler } from "./lib/scheduler";
 import { runAstYearEndLapse } from "./cron/astLapse";
-import { runTourEscalations } from "./lib/tourReminders";
+import {
+  runTourEscalations,
+  runTourFamilyNurture,
+} from "./lib/tourReminders";
 import { runFeatureLicensingOverrideSweep } from "./cron/featureLicensingOverrideSweep";
 import { runPickupEndOfDayAutoClear } from "./cron/pickupEndOfDayAutoClear";
 import { runInRouteOverdueSweep } from "./cron/inRouteOverdue";
@@ -678,6 +681,20 @@ function startListening(): void {
               }
             } catch (cronErr) {
               logger.error({ err: cronErr }, "Tour escalation sweep failed");
+            }
+            // Phase 3 "close the loop with families" — family nurture cadence
+            // shares this hourly tick. Gated per-school on
+            // tourFamilyNurtureEnabled (defaults OFF); best-effort.
+            try {
+              const r = await runTourFamilyNurture(new Date());
+              if (r.sent > 0) {
+                logger.info(r, "Tour family nurture sweep complete");
+              }
+            } catch (cronErr) {
+              logger.error(
+                { err: cronErr },
+                "Tour family nurture sweep failed",
+              );
             }
           });
           logger.info({ expr: tourEscExpr }, "Tour escalation sweep scheduled");
