@@ -2123,7 +2123,7 @@ async function renderNoteCatcherPdf(
   const selectedSet = new Set(lead.interestSelections ?? []);
   const stops = (page?.checkpoints ?? [])
     .filter((c) => selectedSet.has(c.key) || c.alwaysInclude === true)
-    .map((c) => ({ label: c.label }));
+    .map((c) => ({ label: c.label, requested: selectedSet.has(c.key) }));
   const docBranding = await loadDistrictDocumentBranding(schoolId);
   return buildTourNoteCatcherPdf({
     schoolName: await schoolName(schoolId),

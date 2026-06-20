@@ -9,6 +9,10 @@ import PDFDocument from "pdfkit";
 
 export interface NoteCatcherStop {
   label: string;
+  // True when the family selected this stop themselves; false when it's a
+  // school "always include" highlight we added to the route. Drives the
+  // per-stop tag (✓ "You asked to see this" vs ★ "We added this for you").
+  requested: boolean;
 }
 
 export interface NoteCatcherInput {
@@ -17,7 +21,9 @@ export interface NoteCatcherInput {
   tourScheduledAt: Date | null;
   contactEmail: string | null;
   contactPhone: string | null;
-  // The stops the family selected, in page order (label only).
+  // The tour route in page order (label only): the family's selected stops
+  // plus the school's always-include highlights. `requested` on each stop
+  // distinguishes the two for the per-stop tag.
   stops: NoteCatcherStop[];
   accentColor: string;
   // District branding (set once by SuperUser). Only passed through when the
@@ -155,10 +161,60 @@ export function buildTourNoteCatcherPdf(
     doc.moveDown(0.5);
   };
 
+  // pdfkit's built-in Helvetica is WinAnsi-encoded and has no ★/✓ glyphs, so
+  // we draw both markers as vectors. (cx, cy) is the marker center.
+  const drawStar = (cx: number, cy: number, outerR: number, color: string) => {
+    const innerR = outerR * 0.42;
+    const spikes = 5;
+    const step = Math.PI / spikes;
+    let rot = (Math.PI / 2) * 3;
+    doc.save();
+    doc.moveTo(cx, cy - outerR);
+    for (let n = 0; n < spikes; n++) {
+      doc.lineTo(cx + Math.cos(rot) * outerR, cy + Math.sin(rot) * outerR);
+      rot += step;
+      doc.lineTo(cx + Math.cos(rot) * innerR, cy + Math.sin(rot) * innerR);
+      rot += step;
+    }
+    doc.closePath().fill(color);
+    doc.restore();
+  };
+
+  const drawCheck = (cx: number, cy: number, r: number, color: string) => {
+    doc.save();
+    doc
+      .lineWidth(1.6)
+      .lineCap("round")
+      .lineJoin("round")
+      .strokeColor(color)
+      .moveTo(cx - r, cy + r * 0.1)
+      .lineTo(cx - r * 0.25, cy + r * 0.8)
+      .lineTo(cx + r, cy - r * 0.7)
+      .stroke();
+    doc.restore();
+  };
+
   // ---- Per-stop note areas ------------------------------------------------
   if (input.stops.length > 0) {
-    sectionHeading("What you asked to see");
+    sectionHeading("Your tour at a glance");
+    doc
+      .font("Helvetica-Oblique")
+      .fontSize(10)
+      .fillColor(MUTED)
+      .text(
+        "A mix of the places you asked about and a few highlights we think you'll love.",
+        left,
+        doc.y,
+        { width },
+      );
+    doc.moveDown(0.7);
+    const REQUESTED_COLOR = accent;
+    const HIGHLIGHT_COLOR = "#d97706"; // amber — the school-added highlights
     input.stops.forEach((stop, i) => {
+      const tagText = stop.requested
+        ? "YOU ASKED TO SEE THIS"
+        : "WE ADDED THIS FOR YOU";
+      const tagColor = stop.requested ? REQUESTED_COLOR : HIGHLIGHT_COLOR;
       // Measure the (possibly wrapping) heading so long labels never push the
       // prompt + ruled lines off the page.
       const headingText = `${i + 1}. ${stop.label}`;
@@ -166,13 +222,29 @@ export function buildTourNoteCatcherPdf(
         .font("Helvetica-Bold")
         .fontSize(12.5)
         .heightOfString(headingText, { width });
-      // heading + prompt row + 3 ruled lines + spacing
-      const blockHeight = headingH + 14 + 3 * 22 + 14;
+      // tag row + heading + prompt row + 3 ruled lines + spacing
+      const blockHeight = 13 + headingH + 14 + 3 * 22 + 16;
       ensureSpace(blockHeight);
+
+      // Tag row: vector marker (✓ requested / ★ highlight) + small caps label.
+      const tagY = doc.y;
+      const markerCy = tagY + 3.5;
+      if (stop.requested) {
+        drawCheck(left + 3.5, markerCy, 3.5, tagColor);
+      } else {
+        drawStar(left + 3.5, markerCy, 4.2, tagColor);
+      }
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(7.5)
+        .fillColor(tagColor)
+        .text(tagText, left + 13, tagY, { characterSpacing: 0.8, width: width - 13 });
+      doc.y = tagY + 13;
+
       doc
         .font("Helvetica-Bold")
         .fontSize(12.5)
-        .fillColor(accent)
+        .fillColor(INK)
         .text(headingText, left, doc.y, { width });
       doc
         .font("Helvetica-Oblique")
@@ -180,7 +252,7 @@ export function buildTourNoteCatcherPdf(
         .fillColor(MUTED)
         .text("Notes & questions to follow up on:", left, doc.y + 1);
       ruledLines(3);
-      doc.moveDown(0.5);
+      doc.moveDown(0.6);
     });
   } else {
     // No specific stops — give a generous open notes area instead.

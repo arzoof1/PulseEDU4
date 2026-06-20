@@ -8,6 +8,7 @@
 - [School Grade LG parity](school-grade-lg-parity.md) — learning-gain prior evidence must come from `loadFastHistory` historical PM3 (like Teacher Roster), never `priorYearScore`.
 - [FAST Benchmarks PDF headers](fast-benchmarks-pdf-headers.md) — diagonal code headers: anchor at column LEFT edge + translate/rotate rising up-right; verify by rendering the real PDF, don't eyeball.
 - [pdfkit absolute-text pagination](pdfkit-absolute-text-pagination.md) — center-aligned bottom-edge .text() wraps + adds a blank page even with lineBreak:false; auto-fit font to one line, don't truncate.
+- [pdfkit WinAnsi glyph limit](pdfkit-winansi-glyphs.md) — built-in fonts can't render ★/✓/emoji (WinAnsi only); draw them as save/restore-wrapped vectors and manually advance doc.y.
 - [Hall pass destination policy](hall-pass-destination-policy.md) — destination-visibility policies (e.g. Restroom Access) must be enforced in POST /hall-passes, not just CreatePassModal; client filtering is bypassable.
 - [Hall pass create-on-behalf auth](hall-pass-create-on-behalf.md) — teacherName/originRoom are identity: only Core Team may attribute to another teacher/room; server derives both from actor for non-Core-Team. Client canChangeTeacher must mirror server isCoreTeam().
 - [One-way hall pass lifecycle](one-way-hall-pass.md) — non-restroom=one-way (check-in at dest), restroom=round-trip; one discriminator (loadRestroomDestinationNames); derive endedBy server-side; overdue dedup = atomic claim.
