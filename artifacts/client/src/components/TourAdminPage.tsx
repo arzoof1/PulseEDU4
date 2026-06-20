@@ -2061,6 +2061,42 @@ function BragEditor() {
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [publicUrl, setPublicUrl] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  // Copy the public brag-page URL with visible feedback. navigator.clipboard
+  // can be undefined or rejected inside the Replit preview iframe (it requires
+  // a secure, allowed context), so fall back to a hidden textarea + execCommand
+  // so the button always works and always confirms.
+  const copyPublicUrl = async () => {
+    let ok = false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(publicUrl);
+        ok = true;
+      }
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = publicUrl;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ok = document.execCommand("copy");
+        ta.remove();
+      } catch {
+        ok = false;
+      }
+    }
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
 
   useEffect(() => {
     void (async () => {
@@ -2217,10 +2253,14 @@ function BragEditor() {
           </a>
           <button
             type="button"
-            onClick={() => navigator.clipboard?.writeText(publicUrl)}
-            style={{ ...btn("#334155"), padding: "5px 10px" }}
+            onClick={() => void copyPublicUrl()}
+            style={{
+              ...btn(copied ? "#16a34a" : "#334155"),
+              padding: "5px 10px",
+              transition: "background 0.2s ease",
+            }}
           >
-            Copy
+            {copied ? "✓ Copied!" : "Copy"}
           </button>
         </div>
       </div>
