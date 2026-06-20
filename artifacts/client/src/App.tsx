@@ -18616,10 +18616,20 @@ function App() {
         <PrivacyGate sessionKey="studentLookup">
           <StudentLookupPage
             onBack={() => setActiveSection("hallPasses")}
+            // Dismissal-mode editor gate — mirrors canManageDismissal() in
+            // lib/coreTeam.ts: admin / Core Team (BS, MTSS, school psych,
+            // district, super, assignable isCoreTeam) / counselor (school OR
+            // guidance) / front-office secretary (capManageDismissal).
             canManageDismissal={Boolean(
               authUser?.isAdmin ||
                 authUser?.isSuperUser ||
                 authUser?.isDistrictAdmin ||
+                authUser?.isBehaviorSpecialist ||
+                authUser?.isMtssCoordinator ||
+                authUser?.isSchoolPsychologist ||
+                authUser?.isCoreTeam ||
+                authUser?.isCounselor ||
+                authUser?.isGuidanceCounselor ||
                 authUser?.capManageDismissal,
             )}
           />
