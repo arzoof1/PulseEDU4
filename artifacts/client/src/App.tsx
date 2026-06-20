@@ -9600,7 +9600,7 @@ function App() {
     });
     add(!isNonExemptOnly, {
       key: "studentLookup",
-      label: "Student Lookup",
+      label: "Student Profile",
       description: "Search a student for a read-only one-stop snapshot.",
       emoji: "🔎",
       group: "quick",
@@ -10397,7 +10397,7 @@ function App() {
             {!isNonExemptOnly &&
               renderNavItem({
                 key: "studentLookup",
-                label: "Student Lookup",
+                label: "Student Profile",
                 icon: IconUser,
               })}
             {/* Partnering with Parents — academic work-sample sharing,
@@ -18614,7 +18614,15 @@ function App() {
         // student-facing display. Visibility scoping (own roster vs school-
         // wide) is enforced server-side on every endpoint it calls.
         <PrivacyGate sessionKey="studentLookup">
-          <StudentLookupPage onBack={() => setActiveSection("hallPasses")} />
+          <StudentLookupPage
+            onBack={() => setActiveSection("hallPasses")}
+            canManageDismissal={Boolean(
+              authUser?.isAdmin ||
+                authUser?.isSuperUser ||
+                authUser?.isDistrictAdmin ||
+                authUser?.capManageDismissal,
+            )}
+          />
         </PrivacyGate>
       )}
 

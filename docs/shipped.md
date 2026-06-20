@@ -3,6 +3,25 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Student Profile (Student Lookup evolved)** — the Quick Access "Student
+  Lookup" surface is now labeled **Student Profile** (sidebar nav item, quick
+  tile, and page heading); the internal `activeSection` key stays `studentLookup`
+  (the separate insights `studentProfile` deep page is untouched). The shared
+  whole-child `StudentProfile.tsx` was reordered into a single top-to-bottom flex
+  column via CSS `order`: pinned header → **Student schedule** (collapsed) →
+  Family → Spider/radar → Attendance & Flow → Behavior → Academics → Supports →
+  Intervention history → Things-to-know → **FAST Analysis (bottom)**. New
+  collapsed **Student schedule** block behind a "View schedule" button, backed by
+  `GET /api/student-lookup/:studentId/schedule` (visibility-scoped via
+  `getVisibleStudentIds`; `section_roster ⨝ class_sections ⨝ staff`, school-scoped,
+  non-planning, ordered by period). The schedule fetch lazy-loads on first open and
+  is keyed `key={studentId}` so switching students remounts it (no stale
+  cross-student rows). Car-rider / dismissal-mode editing is gated by
+  `canManageDismissal` (admin tier OR `cap_manage_dismissal`), threaded App →
+  StudentLookupPage → SnapshotView → StudentProfile (read-only otherwise). The
+  HeartBEAT note editor is collapsed behind a button, closed by default. NO FLEID
+  forward-facing — the schedule renders no student id.
+
 - **Student Lookup** — a search-first, read-only "one-stop-shop" Student
   Snapshot in the staff app's Quick Access sidebar. Staff type a name (or local
   SIS id), pick a student, and get the existing whole-child Student Profile

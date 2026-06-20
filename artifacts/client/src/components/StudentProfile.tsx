@@ -544,6 +544,109 @@ function Card({
   );
 }
 
+// Per-student class/period schedule, collapsed behind a "View schedule"
+// button (closed by default). Lazy-loads from the visibility-scoped
+// /api/student-lookup/:id/schedule endpoint only once, on first open.
+function ScheduleSection({ studentId }: { studentId: string }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [rows, setRows] = useState<
+    Array<{ period: number; courseName: string; teacherName: string }>
+  >([]);
+
+  useEffect(() => {
+    if (!open || loaded) return;
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    (async () => {
+      try {
+        const r = await authFetch(
+          `/api/student-lookup/${encodeURIComponent(studentId)}/schedule`,
+        );
+        if (!r.ok) {
+          const b = await r.json().catch(() => ({}));
+          throw new Error(b?.error || "Could not load schedule");
+        }
+        const data = (await r.json()) as {
+          schedule: Array<{
+            period: number;
+            courseName: string;
+            teacherName: string;
+          }>;
+        };
+        if (cancelled) return;
+        setRows(data.schedule ?? []);
+        setLoaded(true);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Load failed");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, loaded, studentId]);
+
+  return (
+    <div className="card" style={{ marginBottom: 0 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "0.75rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <h3 style={{ margin: 0, fontSize: "1rem" }}>Student schedule</h3>
+        <button className="btn-secondary" onClick={() => setOpen((v) => !v)}>
+          {open ? "Hide schedule" : "View schedule"}
+        </button>
+      </div>
+      {open && (
+        <div style={{ marginTop: "0.75rem" }}>
+          {loading && <div style={{ color: "var(--muted)" }}>Loading…</div>}
+          {error && (
+            <div style={{ color: "#b91c1c", fontSize: "0.85rem" }}>{error}</div>
+          )}
+          {!loading && !error && rows.length === 0 && (
+            <div style={{ color: "#9ca3af", fontSize: "0.9rem" }}>
+              No scheduled classes found.
+            </div>
+          )}
+          {!loading && !error && rows.length > 0 && (
+            <table
+              className="pulse-table"
+              style={{ width: "100%", fontSize: "0.85rem" }}
+            >
+              <thead>
+                <tr style={{ color: "#6b7280", textAlign: "left" }}>
+                  <th>Period</th>
+                  <th>Course</th>
+                  <th>Teacher</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((s) => (
+                  <tr key={s.period}>
+                    <td>{s.period}</td>
+                    <td>{s.courseName}</td>
+                    <td>{s.teacherName || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function scoreColor(score: number): string {
   if (score >= 75) return "#16a34a"; // green
   if (score >= 50) return "#ca8a04"; // amber
@@ -3090,9 +3193,20 @@ export default function StudentProfile({
         </div>
       </div>
 
-      {/* Risk callout rail */}
-      {riskFlags.length > 0 && (
-        <div className="card" style={{ marginBottom: 0 }}>
+      {/* Reordered whole-child sections — single top-to-bottom column.
+          Source order is irrelevant; the visual order is controlled by the
+          `order` on each flex child:
+          1 schedule · 2 family · 3 radar · 4 attendance · 5 behavior ·
+          6 academics · 7 supports · 8 intervention history ·
+          9 things-to-know · 10 FAST analysis. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+        <div style={{ order: 1 }}>
+          <ScheduleSection key={studentId} studentId={studentId} />
+        </div>
+
+        {/* Risk callout rail */}
+        {riskFlags.length > 0 && (
+          <div className="card" style={{ marginBottom: 0, order: 9 }}>
           <h3 style={{ margin: "0 0 0.5rem 0", fontSize: "1rem" }}>Things to know</h3>
           <div>
             {riskFlags.map((f) => {
@@ -3117,15 +3231,17 @@ export default function StudentProfile({
         </div>
       )}
 
-      {/* Whole-child radar */}
-      <WholeChildRadar axes={data.radar.axes} />
+      {/* Whole-child radar (spider report) */}
+      <div style={{ order: 3 }}>
+        <WholeChildRadar axes={data.radar.axes} />
+      </div>
 
       {/* FAST Analysis Over Time — full-width section above the
           pillars grid. Pulled out of the Academics card so each
           subject gets ~half the page width, the trend sparkline is
           readable at a glance, and the page reads as "trajectory
           first, pillar deep-dives below". */}
-      <div className="card" style={{ marginBottom: 0 }}>
+      <div className="card" style={{ marginBottom: 0, order: 10 }}>
         <div
           style={{
             display: "flex",
@@ -3173,14 +3289,10 @@ export default function StudentProfile({
         </div>
       </div>
 
-      {/* Pillars grid */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-          gap: "0.75rem",
-        }}
-      >
+      {/* Pillars — now individual full-width sections in the reordered
+          column (grid removed so each pillar can be ordered independently
+          relative to the radar / FAST / history sections). */}
+      <div style={{ order: 6, minWidth: 0 }}>
         <Card
           title="Academics"
           empty={
@@ -3419,7 +3531,9 @@ export default function StudentProfile({
               gets ~half the page width and the trend sparkline is
               readable. */}
         </Card>
+      </div>
 
+      <div style={{ order: 5, minWidth: 0 }}>
         <Card
           title="Behavior"
           empty={
@@ -3529,7 +3643,9 @@ export default function StudentProfile({
             </div>
           )}
         </Card>
+      </div>
 
+      <div style={{ order: 4, minWidth: 0 }}>
         <Card
           title="Attendance & Flow"
           empty={
@@ -3616,7 +3732,9 @@ export default function StudentProfile({
             </div>
           )}
         </Card>
+      </div>
 
+      <div style={{ order: 7, minWidth: 0 }}>
         <Card
           title="Supports"
           empty={
@@ -3740,7 +3858,9 @@ export default function StudentProfile({
             </div>
           )}
         </Card>
+      </div>
 
+      <div style={{ order: 2, minWidth: 0 }}>
         <Card
           title="Family"
           empty={
@@ -3802,7 +3922,7 @@ export default function StudentProfile({
 
       <div
         className="card"
-        style={{ marginTop: "1rem", padding: "1rem 1.25rem" }}
+        style={{ marginTop: 0, padding: "1rem 1.25rem", order: 8 }}
       >
         <div
           style={{
@@ -3968,6 +4088,7 @@ export default function StudentProfile({
             </table>
           </div>
         )}
+      </div>
       </div>
       {changeHouseOpen && data && (
         <ChangeHouseModal

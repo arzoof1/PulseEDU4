@@ -5,7 +5,13 @@ import {
   type Response,
   type NextFunction,
 } from "express";
-import { db, studentsTable, staffTable } from "@workspace/db";
+import {
+  db,
+  studentsTable,
+  staffTable,
+  classSectionsTable,
+  sectionRosterTable,
+} from "@workspace/db";
 import { eq, and, or, ilike } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { getVisibleStudentIds } from "./insights.js";
@@ -92,6 +98,77 @@ router.get("/student-lookup/search", requireStaff, async (req, res) => {
   // return the whole school; the UI is a picker, not a roster export.
   res.json({ students: scoped.slice(0, 50) });
 });
+
+// ---------------------------------------------------------------------------
+// GET /api/student-lookup/:studentId/schedule
+//
+// Per-student class/period schedule (course + teacher per period) for the
+// "View schedule" affordance on the Student Profile. Visibility-scoped via
+// the SAME resolver as the rest of this router (getVisibleStudentIds) so a
+// teacher can only see the schedule of a student they can already open.
+//
+// student_id is NOT globally unique across schools — both section_roster and
+// class_sections are AND-filtered by schoolId so a sister school's section
+// can never surface. Planning periods are excluded. Ordered by period.
+// ---------------------------------------------------------------------------
+router.get(
+  "/student-lookup/:studentId/schedule",
+  requireStaff,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (schoolId == null) return;
+    const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+      .staff;
+    const studentId = String(req.params.studentId ?? "").trim();
+    if (!studentId) {
+      res.status(400).json({ error: "studentId required" });
+      return;
+    }
+
+    // Visibility check FIRST — never leak the existence of an out-of-scope
+    // student (mirror the profile + heartbeat-note endpoints).
+    const visibility = await getVisibleStudentIds(staff, schoolId);
+    if (!visibility.full && !visibility.ids.has(studentId)) {
+      res
+        .status(403)
+        .json({ error: "Not in your roster or trusted-adult list" });
+      return;
+    }
+
+    const rows = await db
+      .select({
+        period: classSectionsTable.period,
+        courseName: classSectionsTable.courseName,
+        teacherName: staffTable.displayName,
+      })
+      .from(sectionRosterTable)
+      .innerJoin(
+        classSectionsTable,
+        eq(sectionRosterTable.sectionId, classSectionsTable.id),
+      )
+      .innerJoin(
+        staffTable,
+        eq(staffTable.id, classSectionsTable.teacherStaffId),
+      )
+      .where(
+        and(
+          eq(sectionRosterTable.schoolId, schoolId),
+          eq(classSectionsTable.schoolId, schoolId),
+          eq(sectionRosterTable.studentId, studentId),
+          eq(classSectionsTable.isPlanning, false),
+        ),
+      )
+      .orderBy(classSectionsTable.period);
+
+    res.json({
+      schedule: rows.map((r) => ({
+        period: r.period,
+        courseName: r.courseName,
+        teacherName: r.teacherName ?? "",
+      })),
+    });
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /api/student-lookup/:studentId/heartbeat-note

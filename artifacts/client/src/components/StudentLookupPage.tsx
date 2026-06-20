@@ -27,6 +27,9 @@ interface SearchHit {
 
 interface Props {
   onBack: () => void;
+  // Gated to pickup/dismissal managers — when true the StudentProfile's
+  // car-rider/dismissal status becomes editable; otherwise read-only.
+  canManageDismissal?: boolean;
 }
 
 const MAX_NOTE_LEN = 1000;
@@ -36,7 +39,10 @@ function gradeLabel(grade: number): string {
   return `Grade ${grade}`;
 }
 
-export default function StudentLookupPage({ onBack }: Props) {
+export default function StudentLookupPage({
+  onBack,
+  canManageDismissal = false,
+}: Props) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
@@ -87,6 +93,7 @@ export default function StudentLookupPage({ onBack }: Props) {
         <SnapshotView
           hit={selected}
           onBackToSearch={() => setSelected(null)}
+          canManageDismissal={canManageDismissal}
         />
       </div>
     );
@@ -103,7 +110,7 @@ export default function StudentLookupPage({ onBack }: Props) {
         }}
       >
         <div>
-          <h2 style={{ margin: 0 }}>Student Lookup</h2>
+          <h2 style={{ margin: 0 }}>Student Profile</h2>
           <p style={{ margin: "4px 0 0", color: "var(--muted)" }}>
             Search a student for a read-only one-stop snapshot.
           </p>
@@ -205,17 +212,33 @@ export default function StudentLookupPage({ onBack }: Props) {
 function SnapshotView({
   hit,
   onBackToSearch,
+  canManageDismissal,
 }: {
   hit: SearchHit;
   onBackToSearch: () => void;
+  canManageDismissal: boolean;
 }) {
+  // HeartBEAT note editor is collapsed by default — staff open it only when
+  // they want to leave a parent-facing message for this week's HeartBEAT.
+  const [showNote, setShowNote] = useState(false);
   return (
     <div>
-      <HeartbeatNoteCard studentId={hit.studentId} />
+      <div style={{ marginBottom: 12 }}>
+        <button
+          className="btn-secondary"
+          onClick={() => setShowNote((v) => !v)}
+        >
+          {showNote
+            ? "Hide HeartBEAT message"
+            : "✏️ Leave a message for this week's HeartBEAT"}
+        </button>
+      </div>
+      {showNote && <HeartbeatNoteCard studentId={hit.studentId} />}
       <StudentProfile
         studentId={hit.studentId}
         onBack={onBackToSearch}
         backLabel="← Back to search"
+        canManageDismissal={canManageDismissal}
       />
     </div>
   );
