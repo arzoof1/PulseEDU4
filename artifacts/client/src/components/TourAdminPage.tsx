@@ -774,6 +774,7 @@ function LeadDrawer({
   const [outcomeReason, setOutcomeReason] = useState("");
   const [schedDraft, setSchedDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [packetBusy, setPacketBusy] = useState(false);
 
   const load = useCallback(async () => {
     const res = await authFetch(`/api/tours/requests/${id}`);
@@ -878,6 +879,28 @@ function LeadDrawer({
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
+  };
+
+  // Complete packet: the server merges all four PDFs into one document (tour
+  // order) so the guide gets a single print job. Same blob-download path as
+  // downloadPdf for the same iframe-auth reasons.
+  const downloadPacket = async () => {
+    setPacketBusy(true);
+    try {
+      const res = await authFetch(`/api/tours/requests/${id}/packet.pdf`);
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "tour-packet.pdf";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } finally {
+      setPacketBusy(false);
+    }
   };
 
   const lead = detail?.lead;
@@ -1152,7 +1175,51 @@ function LeadDrawer({
               )}
             </div>
 
-            {/* PDFs — download the file, then open it to print */}
+            {/* Complete packet — every leave-behind merged into one print job,
+                in tour order. Individual buttons stay below for reprints. */}
+            <div style={{ marginBottom: 8 }}>
+              <button
+                type="button"
+                onClick={() => void downloadPacket()}
+                disabled={packetBusy}
+                style={{
+                  ...btn("#1d4ed8"),
+                  width: "100%",
+                  justifyContent: "center",
+                  fontSize: 15,
+                  padding: "11px 16px",
+                  opacity: packetBusy ? 0.6 : 1,
+                  cursor: packetBusy ? "wait" : "pointer",
+                }}
+              >
+                {packetBusy
+                  ? "Building packet…"
+                  : "🗂️ Print Complete Tour Packet (PDF)"}
+              </button>
+            </div>
+            <div
+              style={{
+                fontSize: 12,
+                color: "#94a3b8",
+                marginBottom: 10,
+              }}
+            >
+              One file, in tour order: brag sheet → roadmap → note catcher →
+              feedback page.
+            </div>
+
+            {/* PDFs — download the file, then open it to print. Kept as
+                individual pages so any one can be reprinted if lost or damaged. */}
+            <div
+              style={{
+                fontSize: 12,
+                fontWeight: 600,
+                color: "#94a3b8",
+                marginBottom: 6,
+              }}
+            >
+              Or print an individual page
+            </div>
             <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
               <button
                 type="button"

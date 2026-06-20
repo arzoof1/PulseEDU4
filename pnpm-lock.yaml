@@ -238,6 +238,9 @@ importers:
       papaparse:
         specifier: ^5.5.3
         version: 5.5.3
+      pdf-lib:
+        specifier: ^1.17.1
+        version: 1.17.1
       pdfkit:
         specifier: ^0.18.0
         version: 0.18.0

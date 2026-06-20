@@ -59,6 +59,7 @@ import { buildTourBragSheetPdf } from "../lib/tourBragSheetPdf.js";
 import { buildTourLeaveBehindPdf } from "../lib/tourLeaveBehindPdf.js";
 import { buildTourRoadmapPdf } from "../lib/tourRoadmapPdf.js";
 import { buildTourNoteCatcherPdf } from "../lib/tourNoteCatcherPdf.js";
+import { mergePdfs } from "../lib/mergePdfs.js";
 import { genUrlSafeToken } from "../lib/urlSafeToken.js";
 import QRCode from "qrcode";
 import { logger } from "../lib/logger.js";
@@ -1979,6 +1980,164 @@ async function loadLeadForPdf(schoolId: number, id: number) {
   return lead ?? null;
 }
 
+type LeadRow = NonNullable<Awaited<ReturnType<typeof loadLeadForPdf>>>;
+
+async function resolveAssignedTo(
+  schoolId: number,
+  lead: LeadRow,
+): Promise<string | null> {
+  if (!lead.assignedStaffId) return null;
+  const [a] = await db
+    .select({ name: staffTable.displayName })
+    .from(staffTable)
+    .where(
+      and(
+        eq(staffTable.id, lead.assignedStaffId),
+        eq(staffTable.schoolId, schoolId),
+      ),
+    );
+  return a?.name ?? null;
+}
+
+// --- Shared PDF builders -----------------------------------------------------
+// Each returns a rendered Buffer so a single route can serve one document AND
+// the "complete packet" route can stitch them all together (mergePdfs) without
+// the two paths drifting out of sync.
+async function renderBragSheetPdf(
+  schoolId: number,
+  lead: LeadRow,
+): Promise<Buffer> {
+  const assignedTo = await resolveAssignedTo(schoolId, lead);
+  const page = await loadTourPage(schoolId);
+  const selectedSet = new Set(lead.interestSelections ?? []);
+  const selectedStops = (page?.checkpoints ?? [])
+    .filter((c) => selectedSet.has(c.key))
+    .map((c) => c.label);
+  const docBranding = await loadDistrictDocumentBranding(schoolId);
+  return buildTourBragSheetPdf({
+    schoolName: await schoolName(schoolId),
+    familyName: lead.familyName,
+    phone: lead.phone,
+    email: lead.email,
+    preferredLanguage: lead.preferredLanguage,
+    children: lead.children,
+    selectedStops,
+    interests: lead.interests,
+    source: lead.source,
+    status: lead.status,
+    assignedTo,
+    requestedAt: lead.createdAt,
+    tourScheduledAt: lead.tourScheduledAt,
+    districtLogo: docBranding?.logo ?? null,
+    districtTagline: docBranding?.tagline ?? null,
+  });
+}
+
+async function renderLeaveBehindPdf(
+  schoolId: number,
+  lead: LeadRow,
+  req: Request,
+): Promise<Buffer> {
+  const page = await loadTourPage(schoolId);
+  const docBranding = await loadDistrictDocumentBranding(schoolId);
+  return buildTourLeaveBehindPdf({
+    schoolName: await schoolName(schoolId),
+    familyName: lead.familyName,
+    surveyUrl: surveyUrlFor(lead.surveyToken, req),
+    contactEmail: page?.contactEmail ?? null,
+    contactPhone: page?.contactPhone ?? null,
+    accentColor: page?.accentColor ?? "#0ea5a4",
+    districtLogo: docBranding?.logo ?? null,
+    districtTagline: docBranding?.tagline ?? null,
+  });
+}
+
+async function renderRoadmapPdf(
+  schoolId: number,
+  lead: LeadRow,
+  id: number,
+  req: Request,
+): Promise<Buffer> {
+  const assignedTo = await resolveAssignedTo(schoolId, lead);
+  const page = await loadTourPage(schoolId);
+  // Build the roadmap from the union of (a) the stops the family ticked and
+  // (b) the school's "always include" highlights — in page order. Each stop
+  // carries flags so the PDF can badge it: family pick (★), school highlight,
+  // or both. This is the "Option A" walkable route the guide follows.
+  const selectedSet = new Set(lead.interestSelections ?? []);
+  const stops = (page?.checkpoints ?? [])
+    .filter((c) => selectedSet.has(c.key) || c.alwaysInclude === true)
+    .map((c) => ({
+      label: c.label,
+      location: c.location,
+      talkingPoints: c.talkingPoints,
+      minutes: c.minutes,
+      familyRequested: selectedSet.has(c.key),
+      schoolHighlight: c.alwaysInclude === true,
+    }));
+  const docBranding = await loadDistrictDocumentBranding(schoolId);
+  // Phase 4: mint (or fetch) the live-walk session for this lead and render a
+  // QR that deep-links the guide to the token-gated offline walk screen.
+  const walk = await ensureWalkForLead(schoolId, id, lead.assignedStaffId);
+  const walkUrl = walkUrlFor(walk.token, req);
+  let walkQrPng: Buffer | null = null;
+  try {
+    walkQrPng = await QRCode.toBuffer(walkUrl, {
+      margin: 1,
+      width: 280,
+      errorCorrectionLevel: "M",
+    });
+  } catch {
+    walkQrPng = null; // never block the roadmap on QR rendering
+  }
+  return buildTourRoadmapPdf({
+    schoolName: await schoolName(schoolId),
+    familyName: lead.familyName,
+    phone: lead.phone,
+    email: lead.email,
+    preferredLanguage: lead.preferredLanguage,
+    children: lead.children,
+    status: lead.status,
+    assignedTo,
+    requestedAt: lead.createdAt,
+    tourScheduledAt: lead.tourScheduledAt,
+    contactEmail: page?.contactEmail ?? null,
+    contactPhone: page?.contactPhone ?? null,
+    notes: lead.interests,
+    stops,
+    accentColor: page?.accentColor ?? "#0ea5a4",
+    walkQrPng,
+    walkUrl,
+    districtLogo: docBranding?.logo ?? null,
+    districtTagline: docBranding?.tagline ?? null,
+  });
+}
+
+async function renderNoteCatcherPdf(
+  schoolId: number,
+  lead: LeadRow,
+): Promise<Buffer> {
+  const page = await loadTourPage(schoolId);
+  // Include the family's picks AND the school's always-include highlights so
+  // the family's take-along sheet matches the actual tour route.
+  const selectedSet = new Set(lead.interestSelections ?? []);
+  const stops = (page?.checkpoints ?? [])
+    .filter((c) => selectedSet.has(c.key) || c.alwaysInclude === true)
+    .map((c) => ({ label: c.label }));
+  const docBranding = await loadDistrictDocumentBranding(schoolId);
+  return buildTourNoteCatcherPdf({
+    schoolName: await schoolName(schoolId),
+    familyName: lead.familyName,
+    tourScheduledAt: lead.tourScheduledAt,
+    contactEmail: page?.contactEmail ?? null,
+    contactPhone: page?.contactPhone ?? null,
+    stops,
+    accentColor: page?.accentColor ?? "#0ea5a4",
+    districtLogo: docBranding?.logo ?? null,
+    districtTagline: docBranding?.tagline ?? null,
+  });
+}
+
 // GET /tours/requests/:id/brag-sheet.pdf
 router.get(
   "/tours/requests/:id/brag-sheet.pdf",
@@ -1997,42 +2156,7 @@ router.get(
       res.status(404).json({ error: "Lead not found" });
       return;
     }
-    let assignedTo: string | null = null;
-    if (lead.assignedStaffId) {
-      const [a] = await db
-        .select({ name: staffTable.displayName })
-        .from(staffTable)
-        .where(
-          and(
-            eq(staffTable.id, lead.assignedStaffId),
-            eq(staffTable.schoolId, schoolId),
-          ),
-        );
-      assignedTo = a?.name ?? null;
-    }
-    const page = await loadTourPage(schoolId);
-    const selectedSet = new Set(lead.interestSelections ?? []);
-    const selectedStops = (page?.checkpoints ?? [])
-      .filter((c) => selectedSet.has(c.key))
-      .map((c) => c.label);
-    const docBranding = await loadDistrictDocumentBranding(schoolId);
-    const pdf = await buildTourBragSheetPdf({
-      schoolName: await schoolName(schoolId),
-      familyName: lead.familyName,
-      phone: lead.phone,
-      email: lead.email,
-      preferredLanguage: lead.preferredLanguage,
-      children: lead.children,
-      selectedStops,
-      interests: lead.interests,
-      source: lead.source,
-      status: lead.status,
-      assignedTo,
-      requestedAt: lead.createdAt,
-      tourScheduledAt: lead.tourScheduledAt,
-      districtLogo: docBranding?.logo ?? null,
-      districtTagline: docBranding?.tagline ?? null,
-    });
+    const pdf = await renderBragSheetPdf(schoolId, lead);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
@@ -2060,18 +2184,7 @@ router.get(
       res.status(404).json({ error: "Lead not found" });
       return;
     }
-    const page = await loadTourPage(schoolId);
-    const docBranding = await loadDistrictDocumentBranding(schoolId);
-    const pdf = await buildTourLeaveBehindPdf({
-      schoolName: await schoolName(schoolId),
-      familyName: lead.familyName,
-      surveyUrl: surveyUrlFor(lead.surveyToken, req),
-      contactEmail: page?.contactEmail ?? null,
-      contactPhone: page?.contactPhone ?? null,
-      accentColor: page?.accentColor ?? "#0ea5a4",
-      districtLogo: docBranding?.logo ?? null,
-      districtTagline: docBranding?.tagline ?? null,
-    });
+    const pdf = await renderLeaveBehindPdf(schoolId, lead, req);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
@@ -2105,71 +2218,7 @@ router.get(
       res.status(403).json({ error: "Not your assigned lead" });
       return;
     }
-    let assignedTo: string | null = null;
-    if (lead.assignedStaffId) {
-      const [a] = await db
-        .select({ name: staffTable.displayName })
-        .from(staffTable)
-        .where(
-          and(
-            eq(staffTable.id, lead.assignedStaffId),
-            eq(staffTable.schoolId, schoolId),
-          ),
-        );
-      assignedTo = a?.name ?? null;
-    }
-    const page = await loadTourPage(schoolId);
-    // Build the roadmap from the union of (a) the stops the family ticked and
-    // (b) the school's "always include" highlights — in page order. Each stop
-    // carries flags so the PDF can badge it: family pick (★), school highlight,
-    // or both. This is the "Option A" walkable route the guide follows.
-    const selectedSet = new Set(lead.interestSelections ?? []);
-    const stops = (page?.checkpoints ?? [])
-      .filter((c) => selectedSet.has(c.key) || c.alwaysInclude === true)
-      .map((c) => ({
-        label: c.label,
-        location: c.location,
-        talkingPoints: c.talkingPoints,
-        minutes: c.minutes,
-        familyRequested: selectedSet.has(c.key),
-        schoolHighlight: c.alwaysInclude === true,
-      }));
-    const docBranding = await loadDistrictDocumentBranding(schoolId);
-    // Phase 4: mint (or fetch) the live-walk session for this lead and render a
-    // QR that deep-links the guide to the token-gated offline walk screen.
-    const walk = await ensureWalkForLead(schoolId, id, lead.assignedStaffId);
-    const walkUrl = walkUrlFor(walk.token, req);
-    let walkQrPng: Buffer | null = null;
-    try {
-      walkQrPng = await QRCode.toBuffer(walkUrl, {
-        margin: 1,
-        width: 280,
-        errorCorrectionLevel: "M",
-      });
-    } catch {
-      walkQrPng = null; // never block the roadmap on QR rendering
-    }
-    const pdf = await buildTourRoadmapPdf({
-      schoolName: await schoolName(schoolId),
-      familyName: lead.familyName,
-      phone: lead.phone,
-      email: lead.email,
-      preferredLanguage: lead.preferredLanguage,
-      children: lead.children,
-      status: lead.status,
-      assignedTo,
-      requestedAt: lead.createdAt,
-      tourScheduledAt: lead.tourScheduledAt,
-      contactEmail: page?.contactEmail ?? null,
-      contactPhone: page?.contactPhone ?? null,
-      notes: lead.interests,
-      stops,
-      accentColor: page?.accentColor ?? "#0ea5a4",
-      walkQrPng,
-      walkUrl,
-      districtLogo: docBranding?.logo ?? null,
-      districtTagline: docBranding?.tagline ?? null,
-    });
+    const pdf = await renderRoadmapPdf(schoolId, lead, id, req);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
@@ -2203,31 +2252,66 @@ router.get(
       res.status(403).json({ error: "Not your assigned lead" });
       return;
     }
-    const page = await loadTourPage(schoolId);
-    // Include the family's picks AND the school's always-include highlights so
-    // the family's take-along sheet matches the actual tour route.
-    const selectedSet = new Set(lead.interestSelections ?? []);
-    const stops = (page?.checkpoints ?? [])
-      .filter((c) => selectedSet.has(c.key) || c.alwaysInclude === true)
-      .map((c) => ({ label: c.label }));
-    const docBranding = await loadDistrictDocumentBranding(schoolId);
-    const pdf = await buildTourNoteCatcherPdf({
-      schoolName: await schoolName(schoolId),
-      familyName: lead.familyName,
-      tourScheduledAt: lead.tourScheduledAt,
-      contactEmail: page?.contactEmail ?? null,
-      contactPhone: page?.contactPhone ?? null,
-      stops,
-      accentColor: page?.accentColor ?? "#0ea5a4",
-      districtLogo: docBranding?.logo ?? null,
-      districtTagline: docBranding?.tagline ?? null,
-    });
+    const pdf = await renderNoteCatcherPdf(schoolId, lead);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
       `inline; filename="tour-note-catcher-${id}.pdf"`,
     );
     res.send(pdf);
+  },
+);
+
+// GET /tours/requests/:id/packet.pdf — the COMPLETE tour packet: every
+// leave-behind merged into one print job, in the order a guide works through a
+// tour: (1) Brag sheet (who's coming / prep cover), (2) Roadmap (the walkable
+// route + live-walk QR), (3) Note catcher (family take-along), (4) Share Your
+// Feedback (handed to the family at the end). The individual buttons remain so
+// a single page can be reprinted if one is lost or damaged.
+router.get(
+  "/tours/requests/:id/packet.pdf",
+  requireStaff,
+  requireTourGuide,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    // Packet includes the manager-only brag sheet + leave-behind, so require a
+    // full tour manager (guides get the per-page guide docs, not the packet).
+    // Check authorization BEFORE loading the lead so a non-manager guide can't
+    // probe lead existence via the 404.
+    if (!canManageTours(staff)) {
+      res.status(403).json({ error: "Not authorized for the full packet" });
+      return;
+    }
+    const lead = await loadLeadForPdf(schoolId, id);
+    if (!lead) {
+      res.status(404).json({ error: "Lead not found" });
+      return;
+    }
+    const [bragSheet, roadmap, noteCatcher, leaveBehind] = await Promise.all([
+      renderBragSheetPdf(schoolId, lead),
+      renderRoadmapPdf(schoolId, lead, id, req),
+      renderNoteCatcherPdf(schoolId, lead),
+      renderLeaveBehindPdf(schoolId, lead, req),
+    ]);
+    const packet = await mergePdfs([
+      bragSheet,
+      roadmap,
+      noteCatcher,
+      leaveBehind,
+    ]);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="tour-packet-${id}.pdf"`,
+    );
+    res.send(packet);
   },
 );
 
