@@ -117,6 +117,53 @@ const smallBtn: CSSProperties = {
   cursor: "pointer",
 };
 
+// Two-step danger confirmation overlay. We deliberately do NOT use
+// window.confirm here: the Replit preview iframe silently suppresses native
+// dialogs, so a confirm() would no-op and the destructive action would fire
+// with no warning at all. These inline modals always render.
+const modalOverlay: CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.5)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 1000,
+  padding: 16,
+};
+
+const modalCard: CSSProperties = {
+  background: "var(--surface, #fff)",
+  color: "var(--text, #111827)",
+  borderRadius: 12,
+  padding: 20,
+  maxWidth: 520,
+  width: "100%",
+  boxShadow: "0 20px 50px rgba(0,0,0,0.3)",
+  maxHeight: "90vh",
+  overflowY: "auto",
+};
+
+const dangerBtn: CSSProperties = {
+  padding: "8px 14px",
+  borderRadius: 8,
+  background: "#dc2626",
+  color: "#fff",
+  border: "none",
+  fontSize: 14,
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const ackRow: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  alignItems: "flex-start",
+  fontSize: 14,
+  margin: "12px 0",
+  color: "var(--text, #111827)",
+};
+
 const tableStyle: CSSProperties = {
   width: "100%",
   borderCollapse: "collapse",
@@ -159,6 +206,18 @@ export default function PickupTagsPanel() {
   // confirm before firing because it can mint thousands of numbers.
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkResult, setBulkResult] = useState<string | null>(null);
+
+  // Two-step gate for the school-wide assign (the high-blast-radius action):
+  // an "I understand" checkbox AND a typed-word confirmation must both pass
+  // before the destructive button enables.
+  const [confirmBulk, setConfirmBulk] = useState(false);
+  const [bulkAck, setBulkAck] = useState(false);
+  const [bulkType, setBulkType] = useState("");
+
+  // Two-step gate for the per-tag reprint/reissue (invalidates a family's
+  // distributed card): an "I understand" checkbox plus an explicit confirm.
+  const [confirmReissue, setConfirmReissue] = useState<AuthRow | null>(null);
+  const [reissueAck, setReissueAck] = useState(false);
 
   // Manual issue form (for the looked-up student) — covers the edge case
   // of a student with no SIS contact who still needs an extra number.
@@ -290,18 +349,15 @@ export default function PickupTagsPanel() {
   })();
 
   // School-wide assign — Path B (one number per emergency contact).
+  const openBulkConfirm = () => {
+    setBulkAck(false);
+    setBulkType("");
+    setBulkResult(null);
+    setConfirmBulk(true);
+  };
+
   const runBulkAssign = async () => {
-    const ok = window.confirm(
-      "Assign pickup codes to every student?\n\n" +
-        "Each student gets ONE base number; each authorized adult on file " +
-        "gets a letter suffix (1001A = Mom, 1001B = Dad). One adult's code " +
-        "releases all of that adult's kids. Students/adults already covered " +
-        "are skipped — it is safe to run after each roster import.\n\n" +
-        "Older letterless codes (e.g. 1026) are upgraded to add a letter " +
-        "(1026 → 1026A). That changes the code, so those tags must be " +
-        "reprinted.",
-    );
-    if (!ok) return;
+    setConfirmBulk(false);
     setBulkBusy(true);
     setBulkResult(null);
     setMsg(null);
@@ -484,13 +540,13 @@ export default function PickupTagsPanel() {
   // Reprint = reissue: deactivate the old number (curb keypad rejects it
   // immediately) and mint a fresh one, then download the new tag. This
   // is the "lost tag" flow — the family's old card stops working.
+  const openReissueConfirm = (a: AuthRow) => {
+    setReissueAck(false);
+    setConfirmReissue(a);
+  };
+
   const reissueAndPrint = async (a: AuthRow) => {
-    const ok = window.confirm(
-      `Reprint tag ${a.pickupNumber} for ${a.guardianLabel}?\n\n` +
-        "This invalidates the current number and issues a NEW one. The " +
-        "old card will no longer work at the curb.",
-    );
-    if (!ok) return;
+    setConfirmReissue(null);
     setRowBusyId(a.id);
     setMsg(null);
     try {
@@ -617,8 +673,146 @@ export default function PickupTagsPanel() {
 
   const viewOfficeStrip = () => viewPdf(`/api/pickup/office-strip.pdf`);
 
+  const bulkReady = bulkAck && bulkType.trim().toUpperCase() === "ASSIGN";
+
   return (
     <div style={wrap}>
+      {confirmBulk && (
+        <div style={modalOverlay} role="dialog" aria-modal="true">
+          <div style={modalCard}>
+            <div
+              style={{
+                fontWeight: 800,
+                fontSize: 18,
+                color: "#b91c1c",
+                marginBottom: 8,
+              }}
+            >
+              ⚠️ Assign pickup numbers school-wide
+            </div>
+            <p style={{ fontSize: 14, lineHeight: 1.5, marginTop: 0 }}>
+              This runs across the <strong>entire school</strong>. It fills in
+              any missing numbers and <strong>upgrades older letterless codes</strong>{" "}
+              (e.g. <code>1026</code> → <code>1026A</code>). Any tag whose number
+              changes <strong>must be reprinted and redistributed</strong> — the
+              old printed card will stop working at the curb.
+            </p>
+            <p style={{ fontSize: 14, lineHeight: 1.5 }}>
+              Students who already have lettered codes are left unchanged. This
+              is a front-office action — curb monitors do not have it.
+            </p>
+            <label style={ackRow}>
+              <input
+                type="checkbox"
+                checked={bulkAck}
+                onChange={(e) => setBulkAck(e.target.checked)}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                I understand this can change existing pickup numbers and require
+                reprinting tags that families already have.
+              </span>
+            </label>
+            <label style={labelStyle}>Type ASSIGN to confirm</label>
+            <input
+              value={bulkType}
+              onChange={(e) => setBulkType(e.target.value)}
+              placeholder="ASSIGN"
+              style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
+            />
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "flex-end",
+                marginTop: 16,
+              }}
+            >
+              <button
+                style={secondaryBtn}
+                onClick={() => setConfirmBulk(false)}
+              >
+                Cancel
+              </button>
+              <button
+                style={{
+                  ...dangerBtn,
+                  opacity: bulkReady ? 1 : 0.5,
+                  cursor: bulkReady ? "pointer" : "not-allowed",
+                }}
+                disabled={!bulkReady}
+                onClick={runBulkAssign}
+              >
+                Assign numbers
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmReissue && (
+        <div style={modalOverlay} role="dialog" aria-modal="true">
+          <div style={modalCard}>
+            <div
+              style={{
+                fontWeight: 800,
+                fontSize: 18,
+                color: "#b91c1c",
+                marginBottom: 8,
+              }}
+            >
+              ⚠️ Reprint tag {confirmReissue.pickupNumber}
+            </div>
+            <p style={{ fontSize: 14, lineHeight: 1.5, marginTop: 0 }}>
+              Reprinting issues a <strong>new number</strong> for{" "}
+              <strong>{confirmReissue.guardianLabel}</strong> and{" "}
+              <strong>immediately invalidates</strong> the current card
+              (<code>{confirmReissue.pickupNumber}</code>). The family's existing
+              printed card will stop working at the curb until they receive the
+              new one.
+            </p>
+            <label style={ackRow}>
+              <input
+                type="checkbox"
+                checked={reissueAck}
+                onChange={(e) => setReissueAck(e.target.checked)}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                I understand the current card will stop working and a new tag
+                must be given to the family.
+              </span>
+            </label>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "flex-end",
+                marginTop: 16,
+              }}
+            >
+              <button
+                style={secondaryBtn}
+                onClick={() => setConfirmReissue(null)}
+              >
+                Cancel
+              </button>
+              <button
+                style={{
+                  ...dangerBtn,
+                  opacity: reissueAck ? 1 : 0.5,
+                  cursor: reissueAck ? "pointer" : "not-allowed",
+                }}
+                disabled={!reissueAck}
+                onClick={() => void reissueAndPrint(confirmReissue)}
+              >
+                Reprint &amp; download
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <h2 style={{ marginTop: 0 }}>Parent Pickup</h2>
       <p style={{ color: "var(--text-subtle, #6b7280)", marginTop: 0 }}>
         Assign pickup numbers, print tags (alphabetical, by teacher, or by
@@ -648,7 +842,7 @@ export default function PickupTagsPanel() {
           missing numbers are filled.
         </div>
         <button
-          onClick={runBulkAssign}
+          onClick={openBulkConfirm}
           style={primaryBtn}
           disabled={bulkBusy}
         >
@@ -1053,7 +1247,7 @@ export default function PickupTagsPanel() {
                           {a.active && (
                             <>
                               <button
-                                onClick={() => void reissueAndPrint(a)}
+                                onClick={() => openReissueConfirm(a)}
                                 style={smallBtn}
                                 disabled={busy}
                                 title="Invalidate this number and print a fresh one (lost-tag reprint)."

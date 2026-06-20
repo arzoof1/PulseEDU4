@@ -60,3 +60,4 @@
 - [Academic evidence mirror](academic-evidence-mirror.md) — Partnering with Parents (staff) + Learning at Home (parent): publish-gate parity on cards AND image routes, read-only roster, local_sis_id boundary, self-gating empty state.
 - [Academic Evidence feature gate](academic-evidence-feature-gate.md) — per-school admin toggle must be enforced server-side on every staff+parent route (UI gating is bypassable); parentSnapshot reads heartbeat-settings table but flags live on school_settings — query both.
 - [Offline-first sync buffer](offline-sync-buffer.md) — full-state flush must snapshot what it sent and only clear dirty if buffer unchanged on return, or mid-flight edits are silently dropped.
+- [Pickup capability split](pickup-capability-split.md) — curb monitor (capCarRiderMonitor) ≠ tag mgmt (capManageDismissal/canManagePickup); a cap missing from StaffRolesMatrix PAGES is ungrantable except via Admin.
