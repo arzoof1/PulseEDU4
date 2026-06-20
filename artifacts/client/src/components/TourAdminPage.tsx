@@ -239,7 +239,9 @@ const inputStyle: React.CSSProperties = {
 };
 
 export default function TourAdminPage() {
-  const [tab, setTab] = useState<"pipeline" | "page" | "report">("pipeline");
+  const [tab, setTab] = useState<
+    "pipeline" | "page" | "report" | "feedback"
+  >("pipeline");
   return (
     <div style={{ padding: "0 4px" }}>
       <HowToUseHelp title="How to use School Tours">
@@ -278,6 +280,7 @@ export default function TourAdminPage() {
             ["pipeline", "📋 Lead Pipeline"],
             ["page", "✨ Brag Page"],
             ["report", "📊 Outcomes"],
+            ["feedback", "💬 Feedback"],
           ] as const
         ).map(([k, lbl]) => (
           <button
@@ -301,6 +304,7 @@ export default function TourAdminPage() {
       {tab === "pipeline" && <Pipeline />}
       {tab === "page" && <BragEditor />}
       {tab === "report" && <Report />}
+      {tab === "feedback" && <FeedbackTab />}
     </div>
   );
 }
@@ -2543,8 +2547,14 @@ function BragEditor() {
 type GuideRollup = {
   guideId: number;
   guideName: string | null;
+  tours: number;
+  enrolled: number;
+  conversionRate: number | null;
+  avgRating: number | null;
+  avgResponseMin: number | null;
   walks: number;
-  avgMinutes: number;
+  avgMinutes: number | null;
+  avgPlannedMinutes: number | null;
 };
 type Summary = {
   total: number;
@@ -2558,6 +2568,13 @@ type Summary = {
   avgTourMinutes: number | null;
   byGuide: GuideRollup[];
 };
+
+function formatResponse(min: number | null): string {
+  if (min == null) return "—";
+  if (min < 60) return `${Math.round(min)}m`;
+  if (min < 1440) return `${Math.round(min / 60)}h`;
+  return `${Math.round(min / 1440)}d`;
+}
 
 function Report() {
   const [s, setS] = useState<Summary | null>(null);
@@ -2593,55 +2610,117 @@ function Report() {
       </div>
 
       <div style={{ ...cardBox, marginBottom: 16 }}>
-        <div style={{ fontWeight: 700, marginBottom: 10 }}>
-          Live tour walks
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+            gap: 12,
+            marginBottom: 12,
+          }}
+        >
+          {tile("Walks completed", s.walksCompleted, "#2563eb")}
+          {tile(
+            "Avg tour length",
+            s.avgTourMinutes != null ? `${s.avgTourMinutes} min` : "—",
+            "#7c3aed",
+          )}
         </div>
-        {s.walksCompleted === 0 ? (
-          <div style={{ color: "#94a3b8" }}>
-            No completed walks yet. Per-guide analytics appear here once a guide
-            finishes a live tour from the roadmap QR.
+        {s.walksCompleted === 0 && (
+          <div style={{ color: "#94a3b8", fontSize: 13 }}>
+            Tour-length + pacing fill in once a guide finishes a live walk from
+            the roadmap QR.
           </div>
+        )}
+      </div>
+
+      <div style={{ ...cardBox, marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, marginBottom: 4 }}>By tour guide</div>
+        <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 10 }}>
+          Read with the tour count in mind — a guide with only 1–2 tours is a
+          small sample, not a ranking.
+        </div>
+        {s.byGuide.length === 0 ? (
+          <div style={{ color: "#94a3b8" }}>No guide attributed yet.</div>
         ) : (
-          <>
-            <div
+          <div style={{ overflowX: "auto" }}>
+            <table
               style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-                gap: 12,
-                marginBottom: 12,
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: 13,
               }}
             >
-              {tile("Walks completed", s.walksCompleted, "#2563eb")}
-              {tile(
-                "Avg tour length",
-                s.avgTourMinutes != null ? `${s.avgTourMinutes} min` : "—",
-                "#7c3aed",
-              )}
-            </div>
-            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>
-              By tour guide
-            </div>
-            {s.byGuide.length === 0 ? (
-              <div style={{ color: "#94a3b8" }}>No guide attributed yet.</div>
-            ) : (
-              s.byGuide.map((g) => (
-                <div
-                  key={g.guideId}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    padding: "4px 0",
-                  }}
-                >
-                  <span>{g.guideName ?? "Unknown guide"}</span>
-                  <strong>
-                    {g.walks} walk{g.walks === 1 ? "" : "s"} · {g.avgMinutes} min
-                    avg
-                  </strong>
-                </div>
-              ))
-            )}
-          </>
+              <thead>
+                <tr style={{ color: "#94a3b8", textAlign: "left" }}>
+                  <th style={{ padding: "4px 8px 4px 0" }}>Guide</th>
+                  <th style={{ padding: "4px 8px", textAlign: "right" }}>
+                    Tours
+                  </th>
+                  <th style={{ padding: "4px 8px", textAlign: "right" }}>
+                    Enrolled
+                  </th>
+                  <th style={{ padding: "4px 8px", textAlign: "right" }}>
+                    Conversion
+                  </th>
+                  <th style={{ padding: "4px 8px", textAlign: "right" }}>
+                    Avg rating
+                  </th>
+                  <th style={{ padding: "4px 8px", textAlign: "right" }}>
+                    Avg response
+                  </th>
+                  <th style={{ padding: "4px 8px", textAlign: "right" }}>
+                    Pacing (act/plan)
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {s.byGuide.map((g) => (
+                  <tr
+                    key={g.guideId}
+                    style={{ borderTop: "1px solid var(--border, #e2e8f0)" }}
+                  >
+                    <td style={{ padding: "6px 8px 6px 0", fontWeight: 600 }}>
+                      {g.guideName ?? "Unknown guide"}
+                    </td>
+                    <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                      {g.tours}
+                    </td>
+                    <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                      {g.enrolled}
+                    </td>
+                    <td
+                      style={{
+                        padding: "6px 8px",
+                        textAlign: "right",
+                        fontWeight: 700,
+                        color:
+                          g.conversionRate == null
+                            ? "#94a3b8"
+                            : g.conversionRate >= 50
+                              ? "#059669"
+                              : "inherit",
+                      }}
+                    >
+                      {g.conversionRate == null ? "—" : `${g.conversionRate}%`}
+                    </td>
+                    <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                      {g.avgRating == null ? "—" : `${g.avgRating}★`}
+                    </td>
+                    <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                      {formatResponse(g.avgResponseMin)}
+                    </td>
+                    <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                      {g.avgMinutes == null
+                        ? "—"
+                        : g.avgPlannedMinutes == null
+                          ? `${g.avgMinutes}m`
+                          : `${g.avgMinutes} / ${g.avgPlannedMinutes}m`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
@@ -2682,6 +2761,221 @@ function Report() {
                 <strong>{n}</strong>
               </div>
             ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Feedback tab — every family's post-tour survey + themed "Top wonderings"
+// ---------------------------------------------------------------------------
+type FeedbackTheme = {
+  key: string;
+  label: string;
+  count: number;
+  examples: string[];
+};
+type FeedbackSurvey = {
+  requestId: number;
+  familyName: string;
+  guideName: string | null;
+  rating: number | null;
+  liked: string;
+  questions: string;
+  comments: string;
+  submittedAt: string;
+};
+type FeedbackData = {
+  avgRating: number | null;
+  surveyCount: number;
+  surveys: FeedbackSurvey[];
+  themes: FeedbackTheme[];
+};
+
+function FeedbackTab() {
+  const [d, setD] = useState<FeedbackData | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await authFetch("/api/tours/feedback");
+        if (res.ok) setD((await res.json()) as FeedbackData);
+        else setErr(`Could not load feedback (${res.status}).`);
+      } catch {
+        setErr("Could not load feedback.");
+      }
+    })();
+  }, []);
+
+  if (err) return <div style={{ color: "#dc2626" }}>{err}</div>;
+  if (!d) return <div style={{ color: "#94a3b8" }}>Loading feedback…</div>;
+
+  const fmtDate = (iso: string) => {
+    const dt = new Date(iso);
+    return isNaN(dt.getTime()) ? "" : dt.toLocaleDateString();
+  };
+
+  return (
+    <div>
+      <style>{`@media print {
+        .tours-feedback-noprint { display: none !important; }
+        .tours-feedback-card { break-inside: avoid; }
+      }`}</style>
+      <div
+        className="tours-feedback-noprint"
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 14,
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ fontSize: 13, color: "#94a3b8" }}>
+          {d.surveyCount === 0
+            ? "No post-tour surveys returned yet."
+            : `${d.surveyCount} survey${d.surveyCount === 1 ? "" : "s"} returned`}
+          {d.avgRating != null && ` · ${d.avgRating}★ average`}
+        </div>
+        <button
+          type="button"
+          onClick={() => window.print()}
+          style={{
+            padding: "8px 16px",
+            borderRadius: 9,
+            border: "1px solid var(--border, #e2e8f0)",
+            background: "var(--accent, #2563eb)",
+            color: "#fff",
+            fontWeight: 600,
+            cursor: "pointer",
+          }}
+        >
+          🖨️ Print
+        </button>
+      </div>
+
+      {d.themes.length > 0 && (
+        <div style={{ ...cardBox, marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>
+            Top wonderings
+          </div>
+          <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 12 }}>
+            What families keep asking — across survey questions, comments, and
+            guide walk notes. Prep answers for the ones at the top.
+          </div>
+          {d.themes.map((t) => (
+            <div
+              key={t.key}
+              className="tours-feedback-card"
+              style={{
+                padding: "8px 0",
+                borderTop: "1px solid var(--border, #e2e8f0)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <strong>{t.label}</strong>
+                <span
+                  style={{
+                    background: "var(--accent, #2563eb)",
+                    color: "#fff",
+                    borderRadius: 999,
+                    padding: "1px 10px",
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  {t.count}
+                </span>
+              </div>
+              {t.examples.length > 0 && (
+                <ul
+                  style={{
+                    margin: "6px 0 0",
+                    paddingLeft: 18,
+                    fontSize: 13,
+                    color: "#64748b",
+                  }}
+                >
+                  {t.examples.map((ex, i) => (
+                    <li key={i}>“{ex}”</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ ...cardBox }}>
+        <div style={{ fontWeight: 700, marginBottom: 12 }}>
+          Every family's survey
+        </div>
+        {d.surveys.length === 0 ? (
+          <div style={{ color: "#94a3b8" }}>
+            Surveys appear here once families complete the post-tour survey QR.
+          </div>
+        ) : (
+          d.surveys.map((sv) => (
+            <div
+              key={sv.requestId}
+              className="tours-feedback-card"
+              style={{
+                padding: "12px 0",
+                borderTop: "1px solid var(--border, #e2e8f0)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "baseline",
+                  gap: 8,
+                  flexWrap: "wrap",
+                }}
+              >
+                <strong>{sv.familyName}</strong>
+                <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                  {sv.guideName ? `Guide: ${sv.guideName} · ` : ""}
+                  {fmtDate(sv.submittedAt)}
+                </span>
+              </div>
+              {sv.rating != null && (
+                <div style={{ margin: "4px 0", color: "#f59e0b" }}>
+                  {"★".repeat(sv.rating)}
+                  <span style={{ color: "#cbd5e1" }}>
+                    {"★".repeat(Math.max(0, 5 - sv.rating))}
+                  </span>
+                </div>
+              )}
+              {sv.liked.trim() && (
+                <div style={{ fontSize: 13, marginTop: 4 }}>
+                  <span style={{ color: "#94a3b8" }}>Liked: </span>
+                  {sv.liked}
+                </div>
+              )}
+              {sv.questions.trim() && (
+                <div style={{ fontSize: 13, marginTop: 4 }}>
+                  <span style={{ color: "#94a3b8" }}>Still wondering: </span>
+                  {sv.questions}
+                </div>
+              )}
+              {sv.comments.trim() && (
+                <div style={{ fontSize: 13, marginTop: 4 }}>
+                  <span style={{ color: "#94a3b8" }}>Comments: </span>
+                  {sv.comments}
+                </div>
+              )}
+            </div>
+          ))
         )}
       </div>
     </div>

@@ -2504,27 +2504,98 @@ router.get(
     const enrolled = byOutcome["enrolled"] ?? 0;
     const conversionRate = toured > 0 ? Math.round((enrolled / toured) * 100) : 0;
 
-    // Phase 4 "Live Tour Capture" metrics: avg tour length + per-guide rollup
-    // from completed walks. Only walks with both a start and an end count, and
-    // we drop implausible durations (0 or >10h) so a forgotten "end tap" the
-    // next day cannot skew the average.
+    // Phase 4 "Live Tour Capture" metrics + per-guide effectiveness. Per-guide
+    // rows are keyed by the lead OWNER (assigned_staff_id) — the default tour
+    // guide — so conversion, ratings, response time and pacing all roll up under
+    // one consistent identity. Only completed walks with a sane duration (0-10h)
+    // feed length/pacing so a forgotten "end tap" cannot skew the average.
     const walks = await db
       .select()
       .from(tourWalksTable)
       .where(eq(tourWalksTable.schoolId, schoolId));
-    const guideAgg = new Map<number, { walks: number; totalMin: number }>();
+    const steps = await db
+      .select()
+      .from(tourWalkStepsTable)
+      .where(eq(tourWalkStepsTable.schoolId, schoolId));
+    const surveysForGuides = await db
+      .select()
+      .from(tourSurveysTable)
+      .where(eq(tourSurveysTable.schoolId, schoolId));
+
+    const plannedByWalk = new Map<number, number>();
+    for (const st of steps) {
+      plannedByWalk.set(
+        st.walkId,
+        (plannedByWalk.get(st.walkId) ?? 0) + (st.plannedMinutes ?? 0),
+      );
+    }
+    const ratingByLead = new Map<number, number>();
+    for (const sv of surveysForGuides) {
+      if (sv.rating != null) ratingByLead.set(sv.tourRequestId, sv.rating);
+    }
+    const leadById = new Map<number, (typeof rows)[number]>();
+    for (const r of rows) leadById.set(r.id, r);
+
+    type GuideAgg = {
+      tours: number;
+      enrolled: number;
+      ratingSum: number;
+      ratingCount: number;
+      responseSum: number;
+      responseCount: number;
+      walks: number;
+      actualMin: number;
+      plannedMin: number;
+    };
+    const newGuideAgg = (): GuideAgg => ({
+      tours: 0,
+      enrolled: 0,
+      ratingSum: 0,
+      ratingCount: 0,
+      responseSum: 0,
+      responseCount: 0,
+      walks: 0,
+      actualMin: 0,
+      plannedMin: 0,
+    });
+    const guideAgg = new Map<number, GuideAgg>();
+
+    // Lead-derived metrics: conversion, family rating, first-contact response.
+    for (const r of rows) {
+      if (r.assignedStaffId == null) continue;
+      const g = guideAgg.get(r.assignedStaffId) ?? newGuideAgg();
+      if (r.status === "toured" || r.status === "closed") g.tours += 1;
+      if (r.outcome === "enrolled") g.enrolled += 1;
+      const rating = ratingByLead.get(r.id);
+      if (rating != null) {
+        g.ratingSum += rating;
+        g.ratingCount += 1;
+      }
+      if (r.firstContactedAt && r.createdAt) {
+        const min =
+          (r.firstContactedAt.getTime() - r.createdAt.getTime()) / 60000;
+        if (min >= 0) {
+          g.responseSum += min;
+          g.responseCount += 1;
+        }
+      }
+      guideAgg.set(r.assignedStaffId, g);
+    }
+
+    // Walk-derived metrics: tour length + pacing, attributed to the lead owner.
     const durations: number[] = [];
     for (const w of walks) {
       if (w.status !== "completed" || !w.startedAt || !w.endedAt) continue;
       const min = (w.endedAt.getTime() - w.startedAt.getTime()) / 60000;
       if (!(min > 0 && min < 600)) continue;
       durations.push(min);
-      if (w.guideStaffId != null) {
-        const g = guideAgg.get(w.guideStaffId) ?? { walks: 0, totalMin: 0 };
-        g.walks += 1;
-        g.totalMin += min;
-        guideAgg.set(w.guideStaffId, g);
-      }
+      const owner = leadById.get(w.tourRequestId)?.assignedStaffId ?? null;
+      if (owner == null) continue;
+      const g = guideAgg.get(owner) ?? newGuideAgg();
+      g.walks += 1;
+      g.actualMin += min;
+      g.plannedMin += plannedByWalk.get(w.id) ?? 0;
+      guideAgg.set(owner, g);
     }
     const walksCompleted = durations.length;
     const avgTourMinutes = walksCompleted
@@ -2542,10 +2613,24 @@ router.get(
       .map(([guideId, v]) => ({
         guideId,
         guideName: guideNames.get(guideId) ?? null,
+        tours: v.tours,
+        enrolled: v.enrolled,
+        conversionRate:
+          v.tours > 0 ? Math.round((v.enrolled / v.tours) * 100) : null,
+        avgRating: v.ratingCount
+          ? Math.round((v.ratingSum / v.ratingCount) * 10) / 10
+          : null,
+        avgResponseMin: v.responseCount
+          ? Math.round(v.responseSum / v.responseCount)
+          : null,
         walks: v.walks,
-        avgMinutes: Math.round(v.totalMin / v.walks),
+        avgMinutes: v.walks ? Math.round(v.actualMin / v.walks) : null,
+        avgPlannedMinutes:
+          v.walks && v.plannedMin > 0
+            ? Math.round(v.plannedMin / v.walks)
+            : null,
       }))
-      .sort((a, b) => b.walks - a.walks);
+      .sort((a, b) => b.tours - a.tours || b.walks - a.walks);
 
     res.json({
       total: rows.length,
@@ -2561,5 +2646,314 @@ router.get(
     });
   },
 );
+
+// --- "still wondering" theming ---------------------------------------------
+// Keyword buckets over post-tour survey free-text + guide walk notes, so guides
+// can pre-empt the questions families keep asking. Pure substring match (no AI)
+// keeps it deterministic + explainable; one snippet can land in several themes.
+const FEEDBACK_THEMES: { key: string; label: string; keywords: string[] }[] = [
+  {
+    key: "cost",
+    label: "Tuition & cost",
+    keywords: [
+      "tuition",
+      "cost",
+      "price",
+      "fee",
+      "scholarship",
+      "financial",
+      "afford",
+      "payment",
+    ],
+  },
+  {
+    key: "transport",
+    label: "Transportation & busing",
+    keywords: [
+      "bus",
+      "busing",
+      "transport",
+      "ride",
+      "car line",
+      "carpool",
+      "drop off",
+      "drop-off",
+    ],
+  },
+  {
+    key: "schedule",
+    label: "Bell schedule & hours",
+    keywords: [
+      "schedule",
+      "start time",
+      "end time",
+      "hours",
+      "bell",
+      "what time",
+      "dismissal",
+      "early release",
+    ],
+  },
+  {
+    key: "academics",
+    label: "Academics & AP / honors",
+    keywords: [
+      "academ",
+      "ap ",
+      "honors",
+      "advanced",
+      "gifted",
+      "curriculum",
+      "reading",
+      "math",
+      "grades",
+      "gpa",
+      "college",
+      "rigor",
+      "course",
+    ],
+  },
+  {
+    key: "athletics",
+    label: "Athletics & sports",
+    keywords: [
+      "sport",
+      "athletic",
+      "team",
+      "football",
+      "basketball",
+      "soccer",
+      "baseball",
+      "track",
+      "cheer",
+      "volleyball",
+      "tryout",
+    ],
+  },
+  {
+    key: "arts",
+    label: "Arts, music & electives",
+    keywords: [
+      "art",
+      "music",
+      "band",
+      "chorus",
+      "choir",
+      "drama",
+      "theater",
+      "theatre",
+      "elective",
+      "dance",
+      "media",
+    ],
+  },
+  {
+    key: "safety",
+    label: "Safety & discipline",
+    keywords: [
+      "safe",
+      "security",
+      "bully",
+      "discipline",
+      "behavior",
+      "fight",
+      "drill",
+      "lockdown",
+    ],
+  },
+  {
+    key: "sped",
+    label: "Special education (IEP/504/ESE)",
+    keywords: [
+      "iep",
+      "504",
+      "ese",
+      "special ed",
+      "disab",
+      "accommodation",
+      "therapy",
+      "speech",
+      "exceptional",
+    ],
+  },
+  {
+    key: "ell",
+    label: "Language & ESOL",
+    keywords: [
+      "esol",
+      "ell",
+      "english learner",
+      "spanish",
+      "bilingual",
+      "translat",
+      "language",
+    ],
+  },
+  {
+    key: "food",
+    label: "Lunch & food",
+    keywords: [
+      "lunch",
+      "food",
+      "cafeteria",
+      "breakfast",
+      "meal",
+      "menu",
+      "allerg",
+    ],
+  },
+  {
+    key: "uniform",
+    label: "Uniforms & dress code",
+    keywords: ["uniform", "dress code", "attire"],
+  },
+  {
+    key: "tech",
+    label: "Technology & devices",
+    keywords: [
+      "technology",
+      "laptop",
+      "device",
+      "ipad",
+      "chromebook",
+      "computer",
+      "wifi",
+      "phone policy",
+    ],
+  },
+  {
+    key: "afterschool",
+    label: "After-school & clubs",
+    keywords: [
+      "after school",
+      "after-school",
+      "aftercare",
+      "club",
+      "extracurricular",
+      "tutoring",
+      "activities",
+    ],
+  },
+  {
+    key: "enroll",
+    label: "Enrollment & application",
+    keywords: [
+      "enroll",
+      "apply",
+      "application",
+      "register",
+      "registration",
+      "waitlist",
+      "deadline",
+      "zoning",
+      "zone",
+    ],
+  },
+  {
+    key: "classsize",
+    label: "Class size & teachers",
+    keywords: ["class size", "how many students", "ratio", "teacher"],
+  },
+];
+
+function classifyFeedback(text: string): string[] {
+  const t = text.toLowerCase();
+  const hits: string[] = [];
+  for (const theme of FEEDBACK_THEMES) {
+    if (theme.keywords.some((k) => t.includes(k))) hits.push(theme.key);
+  }
+  return hits;
+}
+
+// GET /tours/feedback — post-tour survey results + themed "still wondering"
+// rollup for the Feedback tab. Themes pull from BOTH the family's survey
+// free-text AND the guide's per-stop walk notes.
+router.get("/tours/feedback", requireStaff, requireTourManager, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const leadRows = await db
+    .select()
+    .from(tourRequestsTable)
+    .where(eq(tourRequestsTable.schoolId, schoolId));
+  const leadById = new Map<number, (typeof leadRows)[number]>();
+  for (const r of leadRows) leadById.set(r.id, r);
+
+  const guideNames = new Map<number, string>();
+  const nameRows = await db
+    .select({ id: staffTable.id, name: staffTable.displayName })
+    .from(staffTable)
+    .where(eq(staffTable.schoolId, schoolId));
+  for (const r of nameRows) guideNames.set(r.id, r.name);
+
+  const surveyRows = await db
+    .select()
+    .from(tourSurveysTable)
+    .where(eq(tourSurveysTable.schoolId, schoolId));
+  const stepRows = await db
+    .select()
+    .from(tourWalkStepsTable)
+    .where(eq(tourWalkStepsTable.schoolId, schoolId));
+
+  const themeAgg = new Map<string, { count: number; examples: string[] }>();
+  const bump = (keys: string[], snippet: string) => {
+    const clean = snippet.trim();
+    if (!clean) return;
+    for (const k of keys) {
+      const a = themeAgg.get(k) ?? { count: 0, examples: [] };
+      a.count += 1;
+      if (a.examples.length < 4) a.examples.push(clean.slice(0, 160));
+      themeAgg.set(k, a);
+    }
+  };
+
+  let ratingSum = 0;
+  let ratingCount = 0;
+  const surveys = surveyRows
+    .map((sv) => {
+      const lead = leadById.get(sv.tourRequestId);
+      if (sv.rating != null) {
+        ratingSum += sv.rating;
+        ratingCount += 1;
+      }
+      const combined = [sv.questions, sv.comments].filter(Boolean).join(" ");
+      if (combined.trim()) {
+        bump(classifyFeedback(combined), sv.questions || sv.comments);
+      }
+      return {
+        requestId: sv.tourRequestId,
+        familyName: lead?.familyName ?? "Unknown family",
+        guideName:
+          lead?.assignedStaffId != null
+            ? guideNames.get(lead.assignedStaffId) ?? null
+            : null,
+        rating: sv.rating,
+        liked: sv.liked,
+        questions: sv.questions,
+        comments: sv.comments,
+        submittedAt: (lead?.surveySubmittedAt ?? sv.createdAt).toISOString(),
+      };
+    })
+    .sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1));
+
+  for (const st of stepRows) {
+    if (st.note && st.note.trim()) bump(classifyFeedback(st.note), st.note);
+  }
+
+  const themes = [...themeAgg.entries()]
+    .map(([key, v]) => ({
+      key,
+      label: FEEDBACK_THEMES.find((t) => t.key === key)?.label ?? key,
+      count: v.count,
+      examples: v.examples,
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  res.json({
+    avgRating: ratingCount ? Math.round((ratingSum / ratingCount) * 10) / 10 : null,
+    surveyCount: surveys.length,
+    surveys,
+    themes,
+  });
+});
 
 export default router;
