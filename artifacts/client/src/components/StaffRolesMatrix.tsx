@@ -90,6 +90,7 @@ const PAGES: { key: BoolKey; label: string; group: string }[] = [
   { group: "Admin", key: "capManageRoles", label: "Manage Roles" },
   { group: "Admin", key: "capManageDisplays", label: "Manage Displays" },
   { group: "Admin", key: "capManageDismissal", label: "Set Dismissal Mode" },
+  { group: "Admin", key: "capCarRiderMonitor", label: "Curb / Walker Monitor" },
   { group: "Admin", key: "capTourNotify", label: "Tour Alerts" },
   { group: "Admin", key: "capTourGuide", label: "Tour Guide" },
   { group: "Admin", key: "capManageEsign", label: "e-Sign Documents" },
