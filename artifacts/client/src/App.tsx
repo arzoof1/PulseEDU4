@@ -134,6 +134,7 @@ import SebSelDashboard from "./components/SebSelDashboard";
 import EquityDashboard from "./components/EquityDashboard";
 import EarlyWarningDashboard from "./components/EarlyWarningDashboard";
 import StudentProfile from "./components/StudentProfile";
+import StudentLookupPage from "./components/StudentLookupPage";
 import SafetyPlansAdminPage from "./components/SafetyPlansAdminPage";
 import TrustedAdultsAdmin from "./components/TrustedAdultsAdmin";
 import SettingsHub, {
@@ -4943,6 +4944,7 @@ function App() {
     | "mtssPlans"
     | "safetyPlans"
     | "teacherRoster"
+    | "studentLookup"
     | "settings"
     | "staffRoles"
     | "bellSchedule"
@@ -9596,6 +9598,13 @@ function App() {
       emoji: "👥",
       group: "quick",
     });
+    add(!isNonExemptOnly, {
+      key: "studentLookup",
+      label: "Student Lookup",
+      description: "Search a student for a read-only one-stop snapshot.",
+      emoji: "🔎",
+      group: "quick",
+    });
     add(effectiveFeatures.AcademicEvidence && !isNonExemptOnly, {
       key: "partneringWithParents",
       label: "Partnering with Parents",
@@ -10381,6 +10390,16 @@ function App() {
               label: "Teacher Roster",
               icon: IconUser,
             })}
+            {/* Student Lookup — search any visible student (teachers: own
+                roster; core team/admin/counselor: school-wide) and open a
+                read-only one-stop snapshot with the editable weekly
+                HeartBEAT message. Visibility scoping enforced server-side. */}
+            {!isNonExemptOnly &&
+              renderNavItem({
+                key: "studentLookup",
+                label: "Student Lookup",
+                icon: IconUser,
+              })}
             {/* Partnering with Parents — academic work-sample sharing,
                 available to any active teaching staff (cross-teacher reach
                 gated server-side). */}
@@ -18585,6 +18604,17 @@ function App() {
              Safety Plans page or from Student Profile. The hover popover
              still works because SafetyPlanPill renders without onOpen. */
         />
+        </PrivacyGate>
+      )}
+
+      {activeSection === "studentLookup" && (
+        // Student Lookup — search-first one-stop snapshot. Same PrivacyGate
+        // as the roster: the snapshot surfaces FAST scores, IEP/504/ELL
+        // flags, and safety-plan indicators that must never land on a
+        // student-facing display. Visibility scoping (own roster vs school-
+        // wide) is enforced server-side on every endpoint it calls.
+        <PrivacyGate sessionKey="studentLookup">
+          <StudentLookupPage onBack={() => setActiveSection("hallPasses")} />
         </PrivacyGate>
       )}
 

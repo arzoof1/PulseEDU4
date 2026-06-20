@@ -3263,6 +3263,21 @@ export async function ensureBenchmarkReteachLogSchema(): Promise<void> {
   );
 }
 
+// Student Lookup snapshot — per-student parent-facing HeartBEAT note +
+// its audit columns. Additive ALTERs (same pattern as the reteach column
+// above), idempotent at boot.
+export async function ensureHeartbeatNoteSchema(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS heartbeat_note TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS heartbeat_note_updated_by INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS heartbeat_note_updated_at TEXT`,
+  );
+}
+
 // School Tours — public brag page + lead pipeline. Idempotent CREATE TABLE
 // IF NOT EXISTS at boot (same pattern as the rest of the module schemas).
 export async function ensureToursSchema(): Promise<void> {
@@ -3649,6 +3664,7 @@ export async function ensureStaffPasswordResetsSchema(): Promise<void> {
 export async function seedFastScoresIfEmpty() {
   await ensureFastScoresSchema();
   await ensureBenchmarkReteachLogSchema();
+  await ensureHeartbeatNoteSchema();
   await ensureSchoolSettingsFeatureFlagsSchema();
   await ensureAdminHubSchema();
   await ensureTierPresetsSchema();

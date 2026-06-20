@@ -107,7 +107,7 @@ function isCoreTeam(s: typeof staffTable.$inferSelect): boolean {
 // `coreTeamShortcut` short-circuits the union for performance — the watch-
 // list and profile callers test isCoreTeam first and pass true here, in
 // which case we return the full school set with a single query.
-async function getVisibleStudentIds(
+export async function getVisibleStudentIds(
   staff: typeof staffTable.$inferSelect,
   schoolId: number,
 ): Promise<{ ids: Set<string>; full: boolean }> {

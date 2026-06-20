@@ -71,6 +71,9 @@ export interface ParentSnapshot {
     // Grades the student was retained in, ascending. Empty when none.
     // Drives the "R" indicator on the parent portal student card.
     retainedGrades: number[];
+    // Staff-authored parent-facing note for THIS week's HeartBEAT, written
+    // from the Student Snapshot page. null/empty = no note (block skipped).
+    heartbeatNote: string | null;
   };
   sectionsAvailable: {
     recognition: boolean;
@@ -1117,6 +1120,7 @@ export async function buildParentSnapshot(
         lastName: student.lastName,
         grade: student.grade,
         retainedGrades: retainedGradesForStudent,
+        heartbeatNote: student.heartbeatNote ?? null,
       },
       sectionsAvailable,
       pbis: {

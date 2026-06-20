@@ -3,6 +3,27 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Student Lookup** — a search-first, read-only "one-stop-shop" Student
+  Snapshot in the staff app's Quick Access sidebar. Staff type a name (or local
+  SIS id), pick a student, and get the existing whole-child Student Profile
+  rendered fully read-only (every edit affordance disabled), under the same
+  `PrivacyGate` as the Teacher Roster. The ONE editable field is a per-student
+  parent-facing **"Message for this week's HeartBEAT"** note that surfaces on
+  the Friday HeartBEAT family communication — a highlighted block near the top
+  of the snapshot PDF and an inline block in the weekly email (both skipped when
+  empty). Note stored on `students` (`heartbeat_note` + `heartbeat_note_updated_by`
+  / `heartbeat_note_updated_at`; additive boot ALTERs). New route file
+  `routes/studentLookup.ts`: `GET /student-lookup/search?q=` (typeahead),
+  `GET /student-lookup/:id/heartbeat-note` (read), and
+  `PUT /student-lookup/:id/heartbeat-note` (write/clear) — **all three
+  visibility-scoped via the now-exported `getVisibleStudentIds`** so teachers
+  only ever find/read/write their own roster (+ trusted-adult) students while
+  core team / admin / counselor reach school-wide, matching the Student Profile
+  endpoint's allowed set exactly (no "found but can't open" mismatch). The note
+  read deliberately does NOT reuse the school-only-scoped `GET /students/:id`,
+  which would leak out-of-roster notes. NO FLEID forward-facing — search results
+  and the snapshot render `localSisId` only; `studentId` stays the lookup key.
+
 - Parent Pick-Up — **front-office manual override of car-tag / rider /
   pickup-authorization details**. Pickup authorizations normally flow in from
   RosterOne (via ClassLink); the front office can now override them by hand when

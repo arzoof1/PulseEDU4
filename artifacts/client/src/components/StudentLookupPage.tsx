@@ -1,0 +1,412 @@
+// Student Lookup — a search-first "one-stop-shop" snapshot. Staff type a
+// name (or local SIS id), pick a student, and get the whole-child Student
+// Profile rendered READ-ONLY, plus the one editable field: a parent-facing
+// "Message for this week's HeartBEAT" that surfaces on the Friday family
+// communication (PDF + email).
+//
+// Visibility is enforced server-side on every endpoint:
+//   - GET  /api/student-lookup/search        (own roster vs school-wide)
+//   - GET  /api/students/:id                 (current note + identity)
+//   - PUT  /api/student-lookup/:id/heartbeat-note
+//   - GET  /api/insights/students/:id/profile (the embedded StudentProfile)
+//
+// NO FLEID forward-facing: search results and the snapshot only ever render
+// localSisId; the canonical studentId is used solely as the lookup key.
+
+import React, { useEffect, useRef, useState } from "react";
+import { authFetch } from "../lib/authToken";
+import StudentProfile from "./StudentProfile";
+
+interface SearchHit {
+  studentId: string;
+  localSisId: string | null;
+  firstName: string;
+  lastName: string;
+  grade: number;
+}
+
+interface Props {
+  onBack: () => void;
+}
+
+const MAX_NOTE_LEN = 1000;
+
+function gradeLabel(grade: number): string {
+  if (grade === 0) return "K";
+  return `Grade ${grade}`;
+}
+
+export default function StudentLookupPage({ onBack }: Props) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<SearchHit[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const [selected, setSelected] = useState<SearchHit | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounced search. Empty query clears results (we never auto-dump the
+  // whole school into the picker).
+  useEffect(() => {
+    if (selected) return; // pause searching while viewing a snapshot
+    const q = query.trim();
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (q.length === 0) {
+      setResults([]);
+      setSearchError("");
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const r = await authFetch(
+          `/api/student-lookup/search?q=${encodeURIComponent(q)}`,
+        );
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body?.error || "Search failed");
+        }
+        const data = (await r.json()) as { students: SearchHit[] };
+        setResults(data.students ?? []);
+        setSearchError("");
+      } catch (e) {
+        setSearchError(e instanceof Error ? e.message : "Search failed");
+        setResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 250);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [query, selected]);
+
+  if (selected) {
+    return (
+      <div>
+        <SnapshotView
+          hit={selected}
+          onBackToSearch={() => setSelected(null)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ maxWidth: 720, margin: "0 auto" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 16,
+        }}
+      >
+        <div>
+          <h2 style={{ margin: 0 }}>Student Lookup</h2>
+          <p style={{ margin: "4px 0 0", color: "var(--muted)" }}>
+            Search a student for a read-only one-stop snapshot.
+          </p>
+        </div>
+        <button className="btn-secondary" onClick={onBack}>
+          ← Back
+        </button>
+      </div>
+
+      <input
+        autoFocus
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search by first name, last name, or SIS ID…"
+        style={{
+          width: "100%",
+          padding: "12px 14px",
+          fontSize: 16,
+          borderRadius: 10,
+          border: "1px solid var(--border)",
+          boxSizing: "border-box",
+        }}
+      />
+
+      <div style={{ marginTop: 16 }}>
+        {searching && (
+          <div style={{ color: "var(--muted)", padding: "8px 2px" }}>
+            Searching…
+          </div>
+        )}
+        {searchError && (
+          <div
+            style={{
+              color: "var(--negative, #b91c1c)",
+              padding: "8px 12px",
+              background: "var(--negative-soft, #fef2f2)",
+              borderRadius: 8,
+            }}
+          >
+            {searchError}
+          </div>
+        )}
+        {!searching &&
+          !searchError &&
+          query.trim().length > 0 &&
+          results.length === 0 && (
+            <div style={{ color: "var(--muted)", padding: "8px 2px" }}>
+              No students found. Teachers can only look up students on their
+              own roster.
+            </div>
+          )}
+        {results.length > 0 && (
+          <div
+            style={{
+              border: "1px solid var(--border)",
+              borderRadius: 10,
+              overflow: "hidden",
+            }}
+          >
+            {results.map((hit, i) => (
+              <button
+                key={hit.studentId}
+                onClick={() => setSelected(hit)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  width: "100%",
+                  padding: "12px 14px",
+                  background: "transparent",
+                  border: "none",
+                  borderTop: i === 0 ? "none" : "1px solid var(--border)",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  font: "inherit",
+                  color: "var(--text)",
+                }}
+              >
+                <span style={{ fontWeight: 600 }}>
+                  {hit.lastName}, {hit.firstName}
+                </span>
+                <span style={{ color: "var(--muted)", fontSize: 13 }}>
+                  {gradeLabel(hit.grade)} · ID {hit.localSisId ?? "—"}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot view — the editable HeartBEAT note card on top, then the
+// read-only StudentProfile (all edit affordances disabled).
+// ---------------------------------------------------------------------------
+function SnapshotView({
+  hit,
+  onBackToSearch,
+}: {
+  hit: SearchHit;
+  onBackToSearch: () => void;
+}) {
+  return (
+    <div>
+      <HeartbeatNoteCard studentId={hit.studentId} />
+      <StudentProfile
+        studentId={hit.studentId}
+        onBack={onBackToSearch}
+        backLabel="← Back to search"
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// HeartBEAT note editor — the ONE editable field on this page. Loads the
+// current note from /api/students/:id and saves via the dedicated PUT.
+// ---------------------------------------------------------------------------
+function HeartbeatNoteCard({ studentId }: { studentId: string }) {
+  const [note, setNote] = useState("");
+  const [original, setOriginal] = useState("");
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    (async () => {
+      try {
+        const r = await authFetch(
+          `/api/student-lookup/${encodeURIComponent(studentId)}/heartbeat-note`,
+        );
+        if (!r.ok) throw new Error("Could not load the current message.");
+        const data = await r.json();
+        if (cancelled) return;
+        const current = typeof data?.message === "string" ? data.message : "";
+        setNote(current);
+        setOriginal(current);
+        setUpdatedAt(
+          typeof data?.updatedAt === "string" ? data.updatedAt : null,
+        );
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Load failed");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId]);
+
+  const dirty = note !== original;
+
+  async function save() {
+    setSaving(true);
+    setError("");
+    try {
+      const r = await authFetch(
+        `/api/student-lookup/${encodeURIComponent(studentId)}/heartbeat-note`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: note }),
+        },
+      );
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body?.error || "Could not save the message.");
+      }
+      const data = await r.json();
+      const saved = typeof data?.message === "string" ? data.message : "";
+      setNote(saved);
+      setOriginal(saved);
+      setUpdatedAt(typeof data?.updatedAt === "string" ? data.updatedAt : null);
+      setSavedAt(Date.now());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        border: "1px solid var(--accent, #6366f1)",
+        background: "var(--accent-soft, #f5f5ff)",
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 16,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          marginBottom: 8,
+        }}
+      >
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>
+            Message for this week's HeartBEAT
+          </div>
+          <div style={{ color: "var(--muted)", fontSize: 13, marginTop: 2 }}>
+            A short, parent-facing note. It appears on this student's Friday
+            HeartBEAT email and PDF. Leave blank to send no message.
+          </div>
+        </div>
+        <span style={{ fontSize: 22 }} aria-hidden>
+          💜
+        </span>
+      </div>
+
+      <textarea
+        value={note}
+        disabled={loading || saving}
+        maxLength={MAX_NOTE_LEN}
+        onChange={(e) => {
+          setNote(e.target.value);
+          setSavedAt(null);
+        }}
+        placeholder={
+          loading ? "Loading…" : "e.g. Ava had a wonderful week in reading group!"
+        }
+        rows={4}
+        style={{
+          width: "100%",
+          padding: "10px 12px",
+          fontSize: 14,
+          borderRadius: 8,
+          border: "1px solid var(--border)",
+          boxSizing: "border-box",
+          resize: "vertical",
+          fontFamily: "inherit",
+        }}
+      />
+
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          marginTop: 8,
+        }}
+      >
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+          {note.length}/{MAX_NOTE_LEN}
+          {updatedAt && (
+            <>
+              {" · "}Last saved {new Date(updatedAt).toLocaleString()}
+            </>
+          )}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {savedAt && !dirty && (
+            <span style={{ color: "var(--positive, #15803d)", fontSize: 13 }}>
+              Saved ✓
+            </span>
+          )}
+          {dirty && (
+            <button
+              className="btn-secondary"
+              disabled={saving}
+              onClick={() => {
+                setNote(original);
+                setSavedAt(null);
+              }}
+            >
+              Discard
+            </button>
+          )}
+          <button
+            className="btn-primary"
+            disabled={loading || saving || !dirty}
+            onClick={save}
+          >
+            {saving ? "Saving…" : "Save message"}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div
+          style={{
+            marginTop: 8,
+            color: "var(--negative, #b91c1c)",
+            fontSize: 13,
+          }}
+        >
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}

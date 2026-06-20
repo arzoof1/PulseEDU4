@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
 import studentsRouter from "./students";
+import studentLookupRouter from "./studentLookup";
 import hallPassesRouter from "./hallPasses";
 import coverageRouter from "./coverage";
 import tardiesRouter from "./tardies";
@@ -126,6 +127,7 @@ router.use(healthRouter);
 // students router exposes `GET /students/:studentId`, which would
 // otherwise shadow `GET /students/id-badges.pdf`.
 router.use(studentIdBadgesRouter);
+router.use(studentLookupRouter);
 router.use(studentsRouter);
 router.use(hallPassesRouter);
 router.use(coverageRouter);
