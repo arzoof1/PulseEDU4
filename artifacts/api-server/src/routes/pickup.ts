@@ -13,13 +13,27 @@ import {
   studentPickupAuthorizationsTable,
   studentEmergencyContactsTable,
   pickupQueueEventsTable,
+  pickupOverrideAuditTable,
   bellSchedulesTable,
   bellSchedulePeriodsTable,
   schoolSettingsTable,
   classSectionsTable,
   sectionRosterTable,
 } from "@workspace/db";
-import { and, eq, inArray, gt, gte, sql, desc, asc } from "drizzle-orm";
+import {
+  and,
+  eq,
+  inArray,
+  gt,
+  gte,
+  lt,
+  isNull,
+  isNotNull,
+  or,
+  sql,
+  desc,
+  asc,
+} from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { canManageDismissal, canManagePickup } from "../lib/coreTeam.js";
 import {
@@ -68,6 +82,140 @@ const VALID_ACTIONS = new Set([
 // Window during which a teacher can take back a `released_to_walk`
 // they themselves wrote. Matches the 10s undo toast on the client.
 const RELEASE_UNDO_WINDOW_MS = 10_000;
+
+// =============================================================================
+// Front-office MANUAL OVERRIDE helpers
+//
+// RosterOne (via ClassLink) is the system of record for pickup authorizations;
+// the school-wide bulk-assign derives most rows from student_emergency_contacts.
+// The office can override individual rows (add an adult RosterOne doesn't have,
+// block a guardian on a same-day custody change, fix a label). Every override
+// captures a REQUIRED reason and writes an append-only audit row. A row is
+// sync-protected (bulk-assign must never rewrite/deactivate it) once it is
+// source='manual' OR carries an override_reason. Temporary overrides carry an
+// expiry; the curb lookup ignores expired rows immediately and the sweep
+// retires them. "Office wins until manually cleared" = the override stands
+// until a person deactivates it (with a reason).
+// =============================================================================
+
+// Minimum justification length — mirrors the curb `restricted_override`
+// discipline so an override is never logged with an empty/“.” reason.
+const OVERRIDE_REASON_MIN = 5;
+
+// Validate + normalize a required override reason. Returns the trimmed string
+// or null when it fails the minimum-length bar.
+function cleanOverrideReason(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const v = raw.trim();
+  return v.length >= OVERRIDE_REASON_MIN ? v : null;
+}
+
+// Parse an optional expiry. Returns { ok:false } on a malformed value, and a
+// Date | null on success (null = clear/permanent). A past date is rejected so
+// the office can't create an override that's born expired.
+function parseExpiresAt(
+  raw: unknown,
+): { ok: true; value: Date | null } | { ok: false } {
+  if (raw === undefined) return { ok: true, value: null };
+  if (raw === null || raw === "") return { ok: true, value: null };
+  if (typeof raw !== "string" && typeof raw !== "number") return { ok: false };
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return { ok: false };
+  // Allow same-day end-of-day; reject clearly-past timestamps.
+  if (d.getTime() < Date.now() - 60_000) return { ok: false };
+  return { ok: true, value: d };
+}
+
+// drizzle predicate: a row whose temporary expiry has NOT passed (permanent
+// rows have expires_at NULL and always pass). Used at the curb so an expired
+// temporary tag stops working the instant it lapses, before the sweep runs.
+function notExpiredPredicate() {
+  return or(
+    isNull(studentPickupAuthorizationsTable.expiresAt),
+    gt(studentPickupAuthorizationsTable.expiresAt, new Date()),
+  );
+}
+
+// A row the office has deliberately taken control of — bulk-assign must leave
+// it alone.
+function isSyncProtected(row: {
+  source: string | null;
+  overrideReason: string | null;
+}): boolean {
+  return row.source === "manual" || Boolean(row.overrideReason);
+}
+
+// Append one row to the override audit log. When passed the surrounding
+// transaction, the audit insert commits atomically with the data mutation, so
+// a mutated row can never exist without its audit trail.
+async function writeOverrideAudit(
+  opts: {
+    schoolId: number;
+    studentId: number;
+    authorizationId: number | null;
+    actorStaffId: number;
+    actorDisplayName: string;
+    action: string;
+    reason: string | null;
+    detail?: string | null;
+  },
+  // Pass the surrounding transaction so the data mutation and its audit row
+  // commit together — a failed audit insert must roll back the change, never
+  // leave a mutated row without its audit trail.
+  executor: Pick<typeof db, "insert"> = db,
+): Promise<void> {
+  await executor.insert(pickupOverrideAuditTable).values({
+    schoolId: opts.schoolId,
+    studentId: opts.studentId,
+    authorizationId: opts.authorizationId ?? null,
+    actorStaffId: opts.actorStaffId,
+    actorDisplayName: opts.actorDisplayName,
+    action: opts.action,
+    reason: opts.reason ?? null,
+    detail: opts.detail ?? null,
+  });
+}
+
+// Retire any active temporary override whose expiry has passed. Idempotent and
+// cheap (the dataset is tiny); called before the office reviews authorizations
+// or the reconciliation tile so the state shown is always current.
+async function sweepExpiredOverrides(schoolId: number): Promise<number> {
+  const now = new Date();
+  const expired = await db
+    .select({
+      id: studentPickupAuthorizationsTable.id,
+      studentId: studentPickupAuthorizationsTable.studentId,
+      expiresAt: studentPickupAuthorizationsTable.expiresAt,
+    })
+    .from(studentPickupAuthorizationsTable)
+    .where(
+      and(
+        eq(studentPickupAuthorizationsTable.schoolId, schoolId),
+        eq(studentPickupAuthorizationsTable.active, true),
+        isNotNull(studentPickupAuthorizationsTable.expiresAt),
+        lt(studentPickupAuthorizationsTable.expiresAt, now),
+      ),
+    );
+  for (const row of expired) {
+    await db
+      .update(studentPickupAuthorizationsTable)
+      .set({ active: false, deactivatedAt: now })
+      .where(eq(studentPickupAuthorizationsTable.id, row.id));
+    await writeOverrideAudit({
+      schoolId,
+      studentId: row.studentId,
+      authorizationId: row.id,
+      actorStaffId: 0,
+      actorDisplayName: "system",
+      action: "auto_expire",
+      reason: null,
+      detail: `temporary override expired ${
+        row.expiresAt ? row.expiresAt.toISOString() : ""
+      }`,
+    });
+  }
+  return expired.length;
+}
 
 // Resolve the integer student PKs that a given teacher owns across
 // their non-planning class sections. section_roster.student_id is the
@@ -380,6 +528,9 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
         eq(studentPickupAuthorizationsTable.schoolId, schoolId),
         eq(studentPickupAuthorizationsTable.pickupNumber, pickupNumber),
         eq(studentPickupAuthorizationsTable.active, true),
+        // A temporary override past its expiry is treated as not found, so an
+        // expired tag stops releasing the moment it lapses (before the sweep).
+        notExpiredPredicate(),
       ),
     );
   if (!auth) {
@@ -443,6 +594,7 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
             eq(studentPickupAuthorizationsTable.schoolId, schoolId),
             eq(studentPickupAuthorizationsTable.adultKey, auth.adultKey),
             eq(studentPickupAuthorizationsTable.active, true),
+            notExpiredPredicate(),
           ),
         );
     } else if (auth.parentId !== null) {
@@ -454,6 +606,7 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
             eq(studentPickupAuthorizationsTable.schoolId, schoolId),
             eq(studentPickupAuthorizationsTable.parentId, auth.parentId),
             eq(studentPickupAuthorizationsTable.active, true),
+            notExpiredPredicate(),
           ),
         );
     }
@@ -1418,6 +1571,9 @@ router.get("/pickup/authorizations", requireStaff, async (req, res) => {
     res.status(403).json({ error: "Not authorized to manage pickup tags" });
     return;
   }
+  // Retire any lapsed temporary overrides before listing so the office never
+  // sees an expired temp tag shown as active.
+  await sweepExpiredOverrides(schoolId);
   const studentDbId = Number(req.query.studentDbId);
   const filters = [
     eq(studentPickupAuthorizationsTable.schoolId, schoolId),
@@ -1485,6 +1641,10 @@ router.post("/pickup/authorizations", requireStaff, async (req, res) => {
     req.body.pickupNumber.trim().length > 0
       ? String(req.body.pickupNumber).trim()
       : null;
+  // A hand-issued authorization is a MANUAL OVERRIDE of the RosterOne feed,
+  // so it requires a justification and may carry a temporary expiry.
+  const overrideReason = cleanOverrideReason(req.body?.overrideReason);
+  const expiry = parseExpiresAt(req.body?.expiresAt);
 
   if (!Number.isInteger(studentDbId) || studentDbId <= 0) {
     res.status(400).json({ error: "studentDbId required" });
@@ -1492,6 +1652,18 @@ router.post("/pickup/authorizations", requireStaff, async (req, res) => {
   }
   if (!guardianLabel) {
     res.status(400).json({ error: "guardianLabel required" });
+    return;
+  }
+  if (!overrideReason) {
+    res.status(400).json({
+      error: `A reason of at least ${OVERRIDE_REASON_MIN} characters is required to manually issue a pickup authorization.`,
+    });
+    return;
+  }
+  if (!expiry.ok) {
+    res.status(400).json({
+      error: "expiresAt must be a valid future date/time (or omitted for a permanent override).",
+    });
     return;
   }
   if (parentId !== null && !Number.isInteger(parentId)) {
@@ -1614,21 +1786,45 @@ router.post("/pickup/authorizations", requireStaff, async (req, res) => {
   }
 
   try {
-    const [created] = await db
-      .insert(studentPickupAuthorizationsTable)
-      .values({
-        schoolId,
-        studentId: studentDbId,
-        parentId,
-        guardianLabel,
-        baseNumber,
-        letter,
-        adultKey,
-        pickupNumber,
-        restrictedFrom,
-        active: true,
-      })
-      .returning();
+    const now = new Date();
+    const created = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(studentPickupAuthorizationsTable)
+        .values({
+          schoolId,
+          studentId: studentDbId,
+          parentId,
+          guardianLabel,
+          baseNumber,
+          letter,
+          adultKey,
+          pickupNumber,
+          restrictedFrom,
+          active: true,
+          source: "manual",
+          overrideReason,
+          overrideBy: staff.id,
+          overrideAt: now,
+          expiresAt: expiry.value,
+        })
+        .returning();
+      await writeOverrideAudit(
+        {
+          schoolId,
+          studentId: studentDbId,
+          authorizationId: row?.id ?? null,
+          actorStaffId: staff.id,
+          actorDisplayName: staff.displayName ?? "Staff",
+          action: "manual_add",
+          reason: overrideReason,
+          detail: `${guardianLabel} — ${pickupNumber}${
+            restrictedFrom ? " (restricted)" : ""
+          }${expiry.value ? ` · temporary until ${expiry.value.toISOString()}` : " · permanent"}`,
+        },
+        tx,
+      );
+      return row;
+    });
     res.status(201).json({ authorization: created });
   } catch (e) {
     // Most likely cause: partial unique index on (school_id, pickup_number)
@@ -1672,29 +1868,120 @@ router.patch("/pickup/authorizations/:id", requireStaff, async (req, res) => {
     return;
   }
 
+  // Each kind of change becomes one audited override action. We collect the
+  // human-readable action verbs so a single PATCH (e.g. relabel + set expiry)
+  // logs each distinct change.
+  const actions: Array<{ action: string; detail: string }> = [];
   const patch: Partial<typeof studentPickupAuthorizationsTable.$inferInsert> = {};
   if (typeof req.body?.guardianLabel === "string") {
     const v = req.body.guardianLabel.trim();
-    if (v.length > 0) patch.guardianLabel = v;
+    if (v.length > 0 && v !== auth.guardianLabel) {
+      patch.guardianLabel = v;
+      actions.push({
+        action: "relabel",
+        detail: `"${auth.guardianLabel}" -> "${v}"`,
+      });
+    }
   }
-  if (typeof req.body?.restrictedFrom === "boolean") {
+  if (
+    typeof req.body?.restrictedFrom === "boolean" &&
+    req.body.restrictedFrom !== auth.restrictedFrom
+  ) {
     patch.restrictedFrom = req.body.restrictedFrom;
+    actions.push({
+      action: req.body.restrictedFrom ? "restrict" : "unrestrict",
+      detail: req.body.restrictedFrom
+        ? "guardian blocked from pickup"
+        : "guardian un-blocked",
+    });
   }
-  if (typeof req.body?.active === "boolean") {
+  if (
+    typeof req.body?.active === "boolean" &&
+    req.body.active !== auth.active
+  ) {
     patch.active = req.body.active;
     if (!req.body.active) {
       patch.deactivatedAt = new Date();
+      // Deactivate-with-reason IS the "manually cleared" path that ends an
+      // office override.
+      actions.push({ action: "deactivate", detail: "override cleared" });
+    } else {
+      patch.deactivatedAt = null;
+      actions.push({ action: "reactivate", detail: "authorization reactivated" });
     }
   }
-  if (Object.keys(patch).length === 0) {
+  // Expiry: present in the body (even null) means the office is setting or
+  // clearing the temporary window. Absent means "leave as-is".
+  let expiryChange: { value: Date | null } | null = null;
+  if ("expiresAt" in (req.body ?? {})) {
+    const parsed = parseExpiresAt(req.body?.expiresAt);
+    if (!parsed.ok) {
+      res.status(400).json({
+        error: "expiresAt must be a valid future date/time (or null to make the override permanent).",
+      });
+      return;
+    }
+    const oldIso = auth.expiresAt ? auth.expiresAt.toISOString() : null;
+    const newIso = parsed.value ? parsed.value.toISOString() : null;
+    if (oldIso !== newIso) {
+      expiryChange = { value: parsed.value };
+      patch.expiresAt = parsed.value;
+      actions.push({
+        action: "set_expiry",
+        detail: `${oldIso ?? "permanent"} -> ${newIso ?? "permanent"}`,
+      });
+    }
+  }
+
+  if (actions.length === 0) {
     res.status(400).json({ error: "No valid fields to update" });
     return;
   }
-  const [updated] = await db
-    .update(studentPickupAuthorizationsTable)
-    .set(patch)
-    .where(eq(studentPickupAuthorizationsTable.id, id))
-    .returning();
+
+  // Any change to an authorization is a manual override of the RosterOne feed,
+  // so it must carry a justification.
+  const overrideReason = cleanOverrideReason(req.body?.overrideReason);
+  if (!overrideReason) {
+    res.status(400).json({
+      error: `A reason of at least ${OVERRIDE_REASON_MIN} characters is required to change a pickup authorization.`,
+    });
+    return;
+  }
+
+  const now = new Date();
+  // Mark the row as office-owned so bulk-assign never clobbers it, and stamp
+  // the override metadata. We do NOT flip an existing portal/sis row's source
+  // away from its origin unless it was a sis row — a portal row stays portal
+  // for adultKey grouping, but is still sync-protected by override_reason.
+  patch.overrideReason = overrideReason;
+  patch.overrideBy = staff.id;
+  patch.overrideAt = now;
+  if (auth.source === "sis" || auth.source === null) patch.source = "manual";
+  void expiryChange;
+
+  const updated = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(studentPickupAuthorizationsTable)
+      .set(patch)
+      .where(eq(studentPickupAuthorizationsTable.id, id))
+      .returning();
+    for (const a of actions) {
+      await writeOverrideAudit(
+        {
+          schoolId,
+          studentId: auth.studentId,
+          authorizationId: id,
+          actorStaffId: staff.id,
+          actorDisplayName: staff.displayName ?? "Staff",
+          action: a.action,
+          reason: overrideReason,
+          detail: a.detail,
+        },
+        tx,
+      );
+    }
+    return row;
+  });
   res.json({ authorization: updated });
 });
 
@@ -1730,18 +2017,220 @@ router.patch(
       res.status(400).json({ error: "Invalid dismissalMode" });
       return;
     }
-    const [updated] = await db
-      .update(studentsTable)
-      .set({ dismissalMode: mode })
+    // Changing how a child goes home is a safety-relevant override of the SIS
+    // value, so it requires a justification too.
+    const overrideReason = cleanOverrideReason(req.body?.reason);
+    if (!overrideReason) {
+      res.status(400).json({
+        error: `A reason of at least ${OVERRIDE_REASON_MIN} characters is required to change a student's dismissal mode.`,
+      });
+      return;
+    }
+    // Read the old mode first so the audit can record old -> new.
+    const [before] = await db
+      .select({
+        id: studentsTable.id,
+        dismissalMode: studentsTable.dismissalMode,
+      })
+      .from(studentsTable)
       .where(
         and(eq(studentsTable.id, id), eq(studentsTable.schoolId, schoolId)),
-      )
-      .returning({ id: studentsTable.id, dismissalMode: studentsTable.dismissalMode });
+      );
+    if (!before) {
+      res.status(404).json({ error: "Student not found" });
+      return;
+    }
+    const updated = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(studentsTable)
+        .set({ dismissalMode: mode })
+        .where(
+          and(eq(studentsTable.id, id), eq(studentsTable.schoolId, schoolId)),
+        )
+        .returning({
+          id: studentsTable.id,
+          dismissalMode: studentsTable.dismissalMode,
+        });
+      if (!row) return null;
+      await writeOverrideAudit(
+        {
+          schoolId,
+          studentId: id,
+          authorizationId: null,
+          actorStaffId: staff.id,
+          actorDisplayName: staff.displayName ?? "Staff",
+          action: "dismissal_mode",
+          reason: overrideReason,
+          detail: `${before.dismissalMode ?? "unset"} -> ${mode}`,
+        },
+        tx,
+      );
+      return row;
+    });
     if (!updated) {
       res.status(404).json({ error: "Student not found" });
       return;
     }
     res.json({ student: updated });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /pickup/overrides/reconciliation
+// Office review surface: every ACTIVE office-owned authorization (source
+// 'manual' OR carrying an override_reason), with the student it belongs to,
+// who set it / when / why, its temporary-vs-permanent state, and a best-effort
+// hint about whether RosterOne (via the SIS emergency-contact feed) appears to
+// AGREE with the override. The office uses this to spot overrides that should
+// be cleared because the SIS has caught up — "office wins until manually
+// cleared", loudly flagged when the two disagree. Sweeps lapsed temps first so
+// the list never shows an expired override as active.
+// ---------------------------------------------------------------------------
+router.get(
+  "/pickup/overrides/reconciliation",
+  requireStaff,
+  async (req, res) => {
+    const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+      .staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    if (!canManagePickup(staff)) {
+      res.status(403).json({ error: "Not authorized to manage pickup tags" });
+      return;
+    }
+    await sweepExpiredOverrides(schoolId);
+
+    const rows = await db
+      .select({
+        id: studentPickupAuthorizationsTable.id,
+        studentDbId: studentPickupAuthorizationsTable.studentId,
+        pickupNumber: studentPickupAuthorizationsTable.pickupNumber,
+        guardianLabel: studentPickupAuthorizationsTable.guardianLabel,
+        adultKey: studentPickupAuthorizationsTable.adultKey,
+        restrictedFrom: studentPickupAuthorizationsTable.restrictedFrom,
+        source: studentPickupAuthorizationsTable.source,
+        overrideReason: studentPickupAuthorizationsTable.overrideReason,
+        overrideBy: studentPickupAuthorizationsTable.overrideBy,
+        overrideAt: studentPickupAuthorizationsTable.overrideAt,
+        expiresAt: studentPickupAuthorizationsTable.expiresAt,
+        // NO FLEID forward-facing — localSisId is the only display id.
+        studentLocalSisId: studentsTable.localSisId,
+        studentSisId: studentsTable.studentId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+      })
+      .from(studentPickupAuthorizationsTable)
+      .innerJoin(
+        studentsTable,
+        eq(studentsTable.id, studentPickupAuthorizationsTable.studentId),
+      )
+      .where(
+        and(
+          eq(studentPickupAuthorizationsTable.schoolId, schoolId),
+          eq(studentPickupAuthorizationsTable.active, true),
+          or(
+            eq(studentPickupAuthorizationsTable.source, "manual"),
+            isNotNull(studentPickupAuthorizationsTable.overrideReason),
+          ),
+        ),
+      )
+      .orderBy(
+        asc(studentsTable.lastName),
+        asc(studentsTable.firstName),
+        asc(studentPickupAuthorizationsTable.pickupNumber),
+      );
+
+    // Hydrate actor display names for who-set-it.
+    const actorIds = Array.from(
+      new Set(
+        rows
+          .map((r) => r.overrideBy)
+          .filter((p): p is number => typeof p === "number" && p > 0),
+      ),
+    );
+    let actorById = new Map<number, string>();
+    if (actorIds.length > 0) {
+      const actors = await db
+        .select({ id: staffTable.id, displayName: staffTable.displayName })
+        .from(staffTable)
+        .where(
+          and(
+            eq(staffTable.schoolId, schoolId),
+            inArray(staffTable.id, actorIds),
+          ),
+        );
+      actorById = new Map(actors.map((a) => [a.id, a.displayName]));
+    }
+
+    // Best-effort SIS agreement hint. The emergency-contact feed is keyed by
+    // the canonical SIS student id (text). For each override we check whether
+    // RosterOne lists a contact whose name OR relationship matches the override
+    // label — a name-only heuristic (manual rows carry only a label, no phone),
+    // so it is a HINT, not a guarantee. When false, the office override adds an
+    // adult RosterOne doesn't have (the disagreement worth flagging).
+    const sisIds = Array.from(new Set(rows.map((r) => r.studentSisId)));
+    const contactsByStudent = new Map<string, Set<string>>();
+    if (sisIds.length > 0) {
+      const contacts = await db
+        .select({
+          studentId: studentEmergencyContactsTable.studentId,
+          contactName: studentEmergencyContactsTable.contactName,
+          relationship: studentEmergencyContactsTable.relationship,
+        })
+        .from(studentEmergencyContactsTable)
+        .where(
+          and(
+            eq(studentEmergencyContactsTable.schoolId, schoolId),
+            inArray(studentEmergencyContactsTable.studentId, sisIds),
+          ),
+        );
+      for (const c of contacts) {
+        const set = contactsByStudent.get(c.studentId) ?? new Set<string>();
+        const name = normAdultPart(c.contactName);
+        const rel = normAdultPart(c.relationship);
+        if (name) set.add(name);
+        if (rel) set.add(rel);
+        contactsByStudent.set(c.studentId, set);
+      }
+    }
+
+    const now = Date.now();
+    const overrides = rows.map((r) => {
+      const sisSet = contactsByStudent.get(r.studentSisId) ?? new Set<string>();
+      const label = normAdultPart(r.guardianLabel);
+      const sisMayHaveContact = label.length > 0 && sisSet.has(label);
+      return {
+        id: r.id,
+        studentDbId: r.studentDbId,
+        localSisId: r.studentLocalSisId ?? null,
+        studentName: `${r.firstName} ${r.lastName}`.trim(),
+        grade: r.grade,
+        pickupNumber: r.pickupNumber,
+        guardianLabel: r.guardianLabel,
+        restricted: r.restrictedFrom,
+        source: r.source ?? "sis",
+        reason: r.overrideReason,
+        overrideByName: r.overrideBy
+          ? actorById.get(r.overrideBy) ?? null
+          : null,
+        overrideAt: r.overrideAt ? r.overrideAt.toISOString() : null,
+        expiresAt: r.expiresAt ? r.expiresAt.toISOString() : null,
+        temporary: r.expiresAt !== null,
+        expired: r.expiresAt ? r.expiresAt.getTime() < now : false,
+        sisMayHaveContact,
+      };
+    });
+
+    res.json({
+      overrides,
+      counts: {
+        total: overrides.length,
+        restricted: overrides.filter((o) => o.restricted).length,
+        temporary: overrides.filter((o) => o.temporary).length,
+        sisDisagrees: overrides.filter((o) => !o.sisMayHaveContact).length,
+      },
+    });
   },
 );
 
@@ -1966,6 +2455,8 @@ router.post(
             adultKey: studentPickupAuthorizationsTable.adultKey,
             active: studentPickupAuthorizationsTable.active,
             createdAt: studentPickupAuthorizationsTable.createdAt,
+            source: studentPickupAuthorizationsTable.source,
+            overrideReason: studentPickupAuthorizationsTable.overrideReason,
           })
           .from(studentPickupAuthorizationsTable)
           .where(eq(studentPickupAuthorizationsTable.schoolId, schoolId));
@@ -2074,6 +2565,9 @@ router.post(
         let upgraded = 0;
         for (const a of allAuths) {
           if (!a.active || a.letter) continue; // only legacy letterless rows.
+          // Office-owned overrides are never rewritten by the sync — the office
+          // wins until a person clears the row.
+          if (isSyncProtected(a)) continue;
           // Prefer the student's existing base; else reuse the old bare number
           // if it's a valid, currently-free base; else mint a fresh one.
           let base = baseByStudent.get(a.studentId) ?? null;

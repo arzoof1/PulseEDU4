@@ -2189,6 +2189,12 @@ function DismissalModeChip({
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // A dismissal-mode change is an office override of the RosterOne record,
+  // so it requires a reason (captured inline — the preview iframe blocks
+  // window.prompt). The staff member picks the new mode, types a reason,
+  // then confirms.
+  const [pendingMode, setPendingMode] = useState<DismissalMode | null>(null);
+  const [reason, setReason] = useState("");
 
   // Two modes carry safety/operational weight that the front desk
   // needs to spot at a glance:
@@ -2213,7 +2219,14 @@ function DismissalModeChip({
     cursor: canEdit ? "pointer" : "default",
   };
 
-  async function save(next: DismissalMode) {
+  function resetEditor() {
+    setEditing(false);
+    setPendingMode(null);
+    setReason("");
+    setErr(null);
+  }
+
+  async function save(next: DismissalMode, why: string) {
     setBusy(true);
     setErr(null);
     try {
@@ -2222,7 +2235,7 @@ function DismissalModeChip({
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ dismissalMode: next }),
+          body: JSON.stringify({ dismissalMode: next, reason: why }),
         },
       );
       if (!r.ok) {
@@ -2230,7 +2243,7 @@ function DismissalModeChip({
         throw new Error(j.error ?? `Save failed (${r.status})`);
       }
       onSaved(next);
-      setEditing(false);
+      resetEditor();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Save failed");
     } finally {
@@ -2256,6 +2269,9 @@ function DismissalModeChip({
     );
   }
 
+  const selected = pendingMode ?? (value as DismissalMode) ?? "car_rider";
+  const reasonOk = reason.trim().length >= 5;
+
   return (
     <span
       style={{
@@ -2263,12 +2279,13 @@ function DismissalModeChip({
         alignItems: "center",
         gap: 4,
         marginLeft: 4,
+        flexWrap: "wrap",
       }}
     >
       <select
-        value={value ?? "car_rider"}
+        value={selected}
         disabled={busy}
-        onChange={(e) => void save(e.target.value as DismissalMode)}
+        onChange={(e) => setPendingMode(e.target.value as DismissalMode)}
         style={{
           padding: "0.18rem 0.4rem",
           borderRadius: 6,
@@ -2282,12 +2299,43 @@ function DismissalModeChip({
           </option>
         ))}
       </select>
+      <input
+        value={reason}
+        disabled={busy}
+        onChange={(e) => setReason(e.target.value)}
+        placeholder="Reason (min 5 chars) — required"
+        style={{
+          padding: "0.18rem 0.4rem",
+          borderRadius: 6,
+          border: "1px solid #94a3b8",
+          fontSize: "0.78rem",
+          minWidth: 220,
+        }}
+      />
       <button
         type="button"
-        onClick={() => {
-          setEditing(false);
-          setErr(null);
+        onClick={() => void save(selected, reason.trim())}
+        disabled={busy || !reasonOk}
+        title={
+          reasonOk
+            ? "Save dismissal-mode change (recorded in the audit log)"
+            : "Enter a reason of at least 5 characters"
+        }
+        style={{
+          background: reasonOk ? "#1d4ed8" : "#93c5fd",
+          color: "#fff",
+          border: "none",
+          borderRadius: 6,
+          padding: "0.15rem 0.5rem",
+          fontSize: "0.72rem",
+          cursor: busy || !reasonOk ? "not-allowed" : "pointer",
         }}
+      >
+        {busy ? "Saving…" : "Save"}
+      </button>
+      <button
+        type="button"
+        onClick={resetEditor}
         disabled={busy}
         style={{
           background: "transparent",

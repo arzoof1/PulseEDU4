@@ -131,6 +131,7 @@ export * from "./schoolGradeManualInputs";
 export * from "./schoolGradeSurveys";
 export * from "./attendanceCheckins";
 export * from "./onTimeLotteryDraws";
+export * from "./pickupOverrideAudit";
 
 export * from "./parentMessages";
 export * from "./pulseDna";

@@ -3,6 +3,35 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- Parent Pick-Up — **front-office manual override of car-tag / rider /
+  pickup-authorization details**. Pickup authorizations normally flow in from
+  RosterOne (via ClassLink); the front office can now override them by hand when
+  the SIS is wrong or behind. Every override path carries a required reason (min
+  5 chars) and writes to a new `pickup_override_audit` log. Authorizations gained
+  `source` ('sis' | 'portal' | 'manual'), `override_reason`, `override_by`,
+  `override_at`, and `expires_at` (null = permanent) columns. Overrides come in
+  two flavors: **temporary** (an `expires_at`; auto-retired by an idempotent
+  expiry sweep that runs before any office read / the curb lookup, and excluded
+  from `/pickup/lookup` the instant it lapses) and **permanent** (sticky until
+  cleared). An override **wins until manually cleared** — bulk-assign's
+  legacy-upgrade loop skips any office-owned row (`isSyncProtected` = source
+  'manual' OR carries an override reason) so a roster re-import never clobbers it;
+  "manually cleared" = Deactivate-with-reason. A new **reconciliation tile** on
+  the Parent Pickup screen (`GET /pickup/overrides/reconciliation`) lists every
+  active override with who/when/why + temporary-vs-permanent state and **loudly
+  flags rows where RosterOne disagrees** (best-effort: the SIS emergency-contact
+  feed has no matching contact for the guardian label). The table also shows an
+  "Office — reason" badge and a temporary/expired chip per authorization. A
+  dismissal-mode change (walker / car_rider / parent_pickup_only / …) is likewise
+  treated as a safety-relevant override and now requires an inline reason captured
+  on the `StudentProfile` chip. All override surfaces sit behind the single
+  existing `canManagePickup` gate (dismissal mode keeps its `canManageDismissal`
+  gate). Each data mutation + its audit row(s) commit in one DB transaction, so a
+  mutated row can never exist without its audit trail. NO FLEID forward-facing:
+  the reconciliation tile renders `localSisId` only. Reason capture is
+  iframe-safe (inline modal / inline field — never `window.prompt`). Expiry from
+  the client `datetime-local` is converted to a UTC ISO instant before send.
+
 - School Tours — **Phase 4 (Live Tour Capture)**. A QR on the tour roadmap
   (printed PDF + on-screen lead drawer) opens a token-gated, guide-facing,
   offline-first live-walk screen at `/tour/walk/:token` (unauthenticated by

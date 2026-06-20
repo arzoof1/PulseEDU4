@@ -15,6 +15,7 @@
 - [Cross-device data freshness](cross-device-data-freshness.md) — staff-app counts/lists for data kiosks can mutate must POLL (15s), not just refresh on mount + own-action, or kiosk rows go unseen.
 - [Pickup bulk-assign concurrency](pickup-bulk-assign-concurrency.md) — school-wide number minter needs DB partial-unique index + per-school advisory lock + 23505→409 mapping, not just app-level dedup.
 - [Pickup release-undo idempotency](pickup-release-undo.md) — undo must be idempotent (double-tap/already-undone → ok); only terminal events block; never dump raw JSON errors.
+- [Pickup manual override](pickup-manual-override.md) — RosterOne-disagrees flag is `!sisMayHaveContact` (client badge must match server count); office rows (isSyncProtected) skip bulk-assign; mutation+audit in one tx.
 - [Kiosk room source & bulk import](kiosk-room-source.md) — kiosk room = teacher record (`staff_defaults`), NOT `class_sections`; bulk teacher match: email safe, display-name ambiguous=unmatched, strip CSV BOM.
 - [PBIS Invisible Student tier windows](pbis-invisible-tier-windows.md) — invisible window is per-MTSS-tier (8/5/3); /pbis/needs-attention + Teacher Roster must compute invisibility identically or they disagree.
 - [Datalist picker matcher](datalist-picker-matcher.md) — input+datalist pickers: onChange matcher string MUST mirror the <option> value, else selection silently fails and id-gated submit buttons stay permanently disabled.

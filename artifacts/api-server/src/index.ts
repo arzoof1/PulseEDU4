@@ -27,6 +27,7 @@ import {
   seedStudentRetentionsIfEmpty,
   ensureDataImporterRollbackSchema,
   ensurePickupSchema,
+  ensurePickupOverrideAuditSchema,
   ensurePickupDemoFamily,
   ensureAstSchema,
   ensureKioskCardsSchema,
@@ -237,6 +238,7 @@ async function runSeed(): Promise<void> {
   // manual_roster_upload_enabled toggle. Idempotent — safe on every boot.
   await ensureDataImporterRollbackSchema();
   await ensurePickupSchema();
+  await ensurePickupOverrideAuditSchema();
   await ensurePickupDemoFamily();
   await ensureAstSchema();
   await ensureFeaturePlansSchema();

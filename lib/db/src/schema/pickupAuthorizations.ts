@@ -75,6 +75,33 @@ export const studentPickupAuthorizationsTable = pgTable(
     pickupNumber: text("pickup_number").notNull(),
     restrictedFrom: boolean("restricted_from").notNull().default(false),
     active: boolean("active").notNull().default(true),
+    // ---- Front-office manual override layer -----------------------------
+    // RosterOne (via ClassLink) is the system of record: the bulk-assign /
+    // SIS sync derives most rows from student_emergency_contacts. In edge
+    // cases the front office must override (add an adult RosterOne doesn't
+    // have yet, block a guardian on a same-day custody change, fix a label).
+    //
+    // `source` records HOW the row came to exist:
+    //   - sis    — derived from an emergency contact by bulk-assign (default).
+    //   - portal — issued to a parent-portal account.
+    //   - manual — created by hand at the front office.
+    // A row is SYNC-PROTECTED (bulk-assign must never rewrite/deactivate it)
+    // when source = 'manual' OR overrideReason IS NOT NULL (the office has
+    // deliberately touched an SIS-derived row). This is how "office wins
+    // until manually cleared" is enforced.
+    source: text("source").notNull().default("sis"),
+    // Required free-text justification captured whenever the office creates
+    // or edits an override. Mirrors the curb `restricted_override`
+    // justification discipline (>= 5 chars). Stored on the row (not just the
+    // audit log) so the reason is visible at a glance next to the tag.
+    overrideReason: text("override_reason"),
+    // staff.id of the office user who set the override, and when.
+    overrideBy: integer("override_by"),
+    overrideAt: timestamp("override_at", { withTimezone: true }),
+    // Temporary overrides carry an expiry; permanent overrides leave it NULL.
+    // The curb lookup ignores rows past expiry even before the sweep retires
+    // them, so an expired temporary tag stops working immediately.
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

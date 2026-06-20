@@ -7137,6 +7137,59 @@ export async function ensurePickupSchema(): Promise<void> {
     ALTER TABLE school_settings
       ADD COLUMN IF NOT EXISTS pickup_walked_out_display_seconds INTEGER NOT NULL DEFAULT 300
   `);
+
+  // ---- Front-office manual override layer (additive) ---------------------
+  // RosterOne (via ClassLink) is the system of record; these columns let the
+  // office override individual rows. A row is sync-protected (bulk-assign must
+  // never rewrite/deactivate it) when source = 'manual' OR override_reason IS
+  // NOT NULL. expires_at NULL = permanent override; a temporary override stops
+  // working at the curb the moment it passes expiry.
+  await db.execute(sql`
+    ALTER TABLE student_pickup_authorizations
+      ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'sis'
+  `);
+  await db.execute(sql`
+    ALTER TABLE student_pickup_authorizations
+      ADD COLUMN IF NOT EXISTS override_reason TEXT
+  `);
+  await db.execute(sql`
+    ALTER TABLE student_pickup_authorizations
+      ADD COLUMN IF NOT EXISTS override_by INTEGER
+  `);
+  await db.execute(sql`
+    ALTER TABLE student_pickup_authorizations
+      ADD COLUMN IF NOT EXISTS override_at TIMESTAMPTZ
+  `);
+  await db.execute(sql`
+    ALTER TABLE student_pickup_authorizations
+      ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ
+  `);
+  // Find active overrides / expired temporaries quickly for reconciliation.
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_auth_override_active ON student_pickup_authorizations(school_id, active) WHERE override_reason IS NOT NULL OR source = 'manual'`);
+}
+
+// ---------------------------------------------------------------------------
+// ensurePickupOverrideAuditSchema — append-only history of front-office
+// overrides to car-tag / rider / dismissal data (see schema comment in
+// lib/db/src/schema/pickupOverrideAudit.ts). Idempotent (IF NOT EXISTS).
+// ---------------------------------------------------------------------------
+export async function ensurePickupOverrideAuditSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pickup_override_audit (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      authorization_id INTEGER,
+      actor_staff_id INTEGER NOT NULL,
+      actor_display_name TEXT NOT NULL,
+      action TEXT NOT NULL,
+      reason TEXT,
+      detail TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_override_audit_by_school_date ON pickup_override_audit(school_id, created_at)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_override_audit_by_student ON pickup_override_audit(student_id)`);
 }
 
 // ---------------------------------------------------------------------------
