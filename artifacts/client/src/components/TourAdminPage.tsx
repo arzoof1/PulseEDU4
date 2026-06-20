@@ -991,8 +991,9 @@ function LeadDrawer({
                           key={i}
                           style={{
                             fontSize: 12,
-                            background: "rgba(37,99,235,0.18)",
-                            color: "#bfdbfe",
+                            background: "rgba(37,99,235,0.12)",
+                            color: "#1e40af",
+                            border: "1px solid rgba(37,99,235,0.25)",
                             borderRadius: 6,
                             padding: "3px 9px",
                           }}
