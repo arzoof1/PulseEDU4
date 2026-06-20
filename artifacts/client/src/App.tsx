@@ -22053,18 +22053,24 @@ function App() {
             Boolean(authUser?.isCounselor) ||
             Boolean(authUser?.isSocialWorker)
           }
-          // Mirrors server canManageDismissal: admin tier OR the
-          // cap_manage_dismissal capability (granted to non-admin
-          // front-office staff who run dismissal). Surfaces the inline
-          // dismissal-mode picker on the Student Profile header.
-          canManageDismissal={
-            Boolean(
-              authUser?.isAdmin ||
-                authUser?.isSuperUser ||
-                authUser?.isDistrictAdmin ||
-                authUser?.capManageDismissal,
-            )
-          }
+          // Mirrors server canManageDismissal() in lib/coreTeam.ts: admin /
+          // Core Team (BS, MTSS, school psych, district, super, assignable
+          // isCoreTeam) / counselor (school OR guidance) / front-office
+          // secretary (capManageDismissal). Surfaces the inline dismissal-mode
+          // picker on the Student Profile header (same gate as the Student
+          // Lookup entry path).
+          canManageDismissal={Boolean(
+            authUser?.isAdmin ||
+              authUser?.isSuperUser ||
+              authUser?.isDistrictAdmin ||
+              authUser?.isBehaviorSpecialist ||
+              authUser?.isMtssCoordinator ||
+              authUser?.isSchoolPsychologist ||
+              authUser?.isCoreTeam ||
+              authUser?.isCounselor ||
+              authUser?.isGuidanceCounselor ||
+              authUser?.capManageDismissal,
+          )}
           isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
           // Change-house affordance: mirrors the server-side
           // PATCH /students/:id/house gate (isCoreTeam). Wider than
