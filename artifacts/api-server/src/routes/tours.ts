@@ -58,6 +58,7 @@ import {
 import { buildTourBragSheetPdf } from "../lib/tourBragSheetPdf.js";
 import { buildTourLeaveBehindPdf } from "../lib/tourLeaveBehindPdf.js";
 import { buildTourRoadmapPdf } from "../lib/tourRoadmapPdf.js";
+import { buildTourRoadmapShortPdf } from "../lib/tourRoadmapShortPdf.js";
 import { buildTourNoteCatcherPdf } from "../lib/tourNoteCatcherPdf.js";
 import { mergePdfs } from "../lib/mergePdfs.js";
 import { genUrlSafeToken } from "../lib/urlSafeToken.js";
@@ -2113,6 +2114,52 @@ async function renderRoadmapPdf(
   });
 }
 
+async function renderRoadmapShortPdf(
+  schoolId: number,
+  lead: LeadRow,
+  id: number,
+  req: Request,
+): Promise<Buffer> {
+  const assignedTo = await resolveAssignedTo(schoolId, lead);
+  const page = await loadTourPage(schoolId);
+  // Same route as the full roadmap (family picks + always-include highlights,
+  // in page order) — but rendered as plain tick-boxes with no prep detail.
+  const selectedSet = new Set(lead.interestSelections ?? []);
+  const stops = (page?.checkpoints ?? [])
+    .filter((c) => selectedSet.has(c.key) || c.alwaysInclude === true)
+    .map((c) => ({
+      label: c.label,
+      familyRequested: selectedSet.has(c.key),
+      schoolHighlight: c.alwaysInclude === true,
+    }));
+  const docBranding = await loadDistrictDocumentBranding(schoolId);
+  const walk = await ensureWalkForLead(schoolId, id, lead.assignedStaffId);
+  const walkUrl = walkUrlFor(walk.token, req);
+  let walkQrPng: Buffer | null = null;
+  try {
+    walkQrPng = await QRCode.toBuffer(walkUrl, {
+      margin: 1,
+      width: 280,
+      errorCorrectionLevel: "M",
+    });
+  } catch {
+    walkQrPng = null; // never block the roadmap on QR rendering
+  }
+  return buildTourRoadmapShortPdf({
+    schoolName: await schoolName(schoolId),
+    familyName: lead.familyName,
+    tourScheduledAt: lead.tourScheduledAt,
+    assignedTo,
+    children: lead.children,
+    stops,
+    accentColor: page?.accentColor ?? "#0ea5a4",
+    walkQrPng,
+    walkUrl,
+    districtLogo: docBranding?.logo ?? null,
+    districtTagline: docBranding?.tagline ?? null,
+  });
+}
+
 async function renderNoteCatcherPdf(
   schoolId: number,
   lead: LeadRow,
@@ -2223,6 +2270,41 @@ router.get(
     res.setHeader(
       "Content-Disposition",
       `inline; filename="tour-roadmap-${id}.pdf"`,
+    );
+    res.send(pdf);
+  },
+);
+
+// GET /tours/requests/:id/roadmap-short.pdf — 1-page "quick roadmap": essential
+// family header + live-walk QR + plain tick-boxes (stop name only, ✓ requested /
+// ★ added). For a guide who doesn't need the full prep detail.
+router.get(
+  "/tours/requests/:id/roadmap-short.pdf",
+  requireStaff,
+  requireTourGuide,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const lead = await loadLeadForPdf(schoolId, id);
+    if (!lead) {
+      res.status(404).json({ error: "Lead not found" });
+      return;
+    }
+    if (!canAccessLead(staff, lead)) {
+      res.status(403).json({ error: "Not your assigned lead" });
+      return;
+    }
+    const pdf = await renderRoadmapShortPdf(schoolId, lead, id, req);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="tour-roadmap-1page-${id}.pdf"`,
     );
     res.send(pdf);
   },
