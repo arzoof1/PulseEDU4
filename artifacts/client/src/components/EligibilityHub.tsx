@@ -640,7 +640,7 @@ function ActivityDetail({
       ) : roster.length === 0 ? (
         <p style={{ color: "var(--muted, #6b7280)" }}>No students on this roster yet.</p>
       ) : (
-        <table className="table" style={{ width: "100%" }}>
+        <table className="table sticky-head" style={{ width: "100%" }}>
           <thead>
             <tr>
               <th>Name</th>

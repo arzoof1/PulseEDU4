@@ -767,6 +767,23 @@ td {
   color: var(--text);
 }
 
+/* Sticky table header: keeps the column labels visible on long, scrolling
+   tables (e.g. the Eligibility Hub roster). The global `table` rule sets
+   `overflow: hidden` for its rounded corners, which clips a `position: sticky`
+   <th> to the table box instead of letting it pin to the page — so we must
+   restore `overflow: visible` on the table itself. `top: 64px` parks the
+   header right below the sticky app header (same offset the sidebar uses). */
+.sticky-head {
+  overflow: visible !important;
+}
+
+.sticky-head thead th {
+  position: sticky;
+  top: 64px;
+  z-index: 3;
+  background: var(--surface-2);
+}
+
 tbody tr:last-child td {
   border-bottom: 0 !important;
 }
