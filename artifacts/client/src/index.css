@@ -767,19 +767,30 @@ td {
   color: var(--text);
 }
 
-/* Sticky table header: keeps the column labels visible on long, scrolling
-   tables (e.g. the Eligibility Hub roster). The global `table` rule sets
-   `overflow: hidden` for its rounded corners, which clips a `position: sticky`
-   <th> to the table box instead of letting it pin to the page — so we must
-   restore `overflow: visible` on the table itself. `top: 64px` parks the
-   header right below the sticky app header (same offset the sidebar uses). */
-.sticky-head {
+/* Sticky table header (e.g. the Eligibility Hub roster). Page-level sticky
+   does NOT work here: the surrounding `.card` sets `overflow-x: auto`, which
+   makes the card its own scroll container and pins a `position: sticky` <th>
+   to the card (which scrolls away) instead of the page. So we give the table
+   its own bounded scroll region — the header pins to the top of THIS wrapper
+   while the rows scroll under it. The wrapper carries the border + rounded
+   corners; the inner table drops its own (and must use `overflow: visible` so
+   the global `table { overflow: hidden }` can't clip the sticky <th>). */
+.sticky-scroll {
+  max-height: calc(100vh - 240px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.sticky-scroll > table {
+  border: 0 !important;
+  border-radius: 0;
   overflow: visible !important;
 }
 
-.sticky-head thead th {
+.sticky-scroll thead th {
   position: sticky;
-  top: 64px;
+  top: 0;
   z-index: 3;
   background: var(--surface-2);
 }
