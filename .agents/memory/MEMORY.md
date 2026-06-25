@@ -63,3 +63,4 @@
 - [Academic Evidence feature gate](academic-evidence-feature-gate.md) — per-school admin toggle must be enforced server-side on every staff+parent route (UI gating is bypassable); parentSnapshot reads heartbeat-settings table but flags live on school_settings — query both.
 - [Offline-first sync buffer](offline-sync-buffer.md) — full-state flush must snapshot what it sent and only clear dirty if buffer unchanged on return, or mid-flight edits are silently dropped.
 - [Pickup capability split](pickup-capability-split.md) — curb monitor (capCarRiderMonitor) ≠ tag mgmt (capManageDismissal/canManagePickup); a cap missing from StaffRolesMatrix PAGES is ungrantable except via Admin.
+- [Eligibility tenancy recipients](eligibility-tenancy-recipients.md) — secondary reads (notification recipients, joined parent tables, path-derived ids) each need their own school_id predicate, not just the driving table.

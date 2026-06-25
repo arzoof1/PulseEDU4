@@ -338,6 +338,31 @@ export function canManageEsign(staff: {
   return isAdminOrSuperUser(staff) || Boolean(staff.capManageEsign);
 }
 
+// Eligibility Hub management gate. Per product spec the management
+// audience (create activities, assign coaches, edit rosters/jersey
+// numbers, run the daily attendance upload, log parent notes, change
+// thresholds) is: admin tier + Core Team + Athletic Director + the
+// front-office secretary (`capManageDismissal` — the attendance-desk
+// secretary who runs the daily upload + logs parent notes). Assigned
+// coaches get a read-only view of their own rosters, enforced
+// per-activity inside the routes — they are NOT admitted by this gate.
+export function canManageEligibility(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  isBehaviorSpecialist?: boolean | null;
+  isMtssCoordinator?: boolean | null;
+  isSchoolPsychologist?: boolean | null;
+  isCoreTeam?: boolean | null;
+  isAthleticDirector?: boolean | null;
+  capManageDismissal?: boolean | null;
+}): boolean {
+  return (
+    isCoreTeam(staff) ||
+    Boolean(staff.isAthleticDirector || staff.capManageDismissal)
+  );
+}
+
 // Student photo manager gate. Per spec: admin / front-office staff /
 // core team (BS, MTSS, school psych, district admin, super user) /
 // counselor (school OR guidance) / social worker. We don't have a

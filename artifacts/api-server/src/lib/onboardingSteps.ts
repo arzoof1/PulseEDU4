@@ -501,6 +501,19 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
         sql`SELECT COUNT(*)::int AS c FROM parents WHERE school_id = ${schoolId}`,
       ),
   },
+  {
+    key: "eligibility",
+    phase: "Family & Outreach",
+    role: "admin",
+    label: "Eligibility Hub (athletics & activities)",
+    hint: "Set the school-wide attendance rules that decide whether a student can play or participate: the ineligibility threshold (absences that bench a student), the warning window (how close to the threshold triggers an early heads-up), the tardy-to-absence ratio, and the parent-note cap (excused-absence notes that offset the count, max 5/semester). Then create your activities (teams, clubs, band) and add rosters with jersey numbers. The daily attendance upload becomes the source of truth — each upload replaces totals for the current semester. Parents, coaches, and the principal are notified on threshold crossings.",
+    route: { kind: "section", target: "eligibility" },
+    autoCheck: (db, schoolId) =>
+      countGt0(
+        db,
+        sql`SELECT COUNT(*)::int AS c FROM eligibility_activities WHERE school_id = ${schoolId}`,
+      ),
+  },
 ];
 
 export const ONBOARDING_PHASES: OnboardingPhase[] = [

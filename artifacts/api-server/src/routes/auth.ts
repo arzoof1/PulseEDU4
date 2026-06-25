@@ -46,6 +46,7 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     isSocialWorker: row.isSocialWorker,
     isSchoolPsychologist: row.isSchoolPsychologist,
     isGuidanceCounselor: row.isGuidanceCounselor,
+    isAthleticDirector: row.isAthleticDirector,
     capStaffRoles: row.capStaffRoles,
     capManageRoles: row.capManageRoles,
     capManageDisplays: row.capManageDisplays,

@@ -98,6 +98,14 @@ export const staffTable = pgTable("staff", {
   // Currently identical to teacher view; broken out so reports and
   // future surfaces (incident logs, etc) can target it cleanly.
   isSro: boolean("is_sro").notNull().default(false),
+  // Athletic Director — owns the Eligibility Hub (athletics/clubs/activity
+  // participation eligibility). Can create activities, assign coaches, edit
+  // rosters + jersey numbers, run the daily attendance upload, log parent
+  // notes, change eligibility thresholds, and is on the warning/ineligible
+  // notification audience. ORed into canManageEligibility() in lib/coreTeam.ts.
+  isAthleticDirector: boolean("is_athletic_director")
+    .notNull()
+    .default(false),
   // Guardian / hall monitor / security aide. Same as teacher today.
   isGuardian: boolean("is_guardian").notNull().default(false),
 

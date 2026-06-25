@@ -75,6 +75,7 @@ export type FeatureSpec = {
     | "superFeatureParentPortal"
     | "superFeatureAst"
     | "superFeatureCompTime"
+    | "superFeatureEligibility"
     | null;
   quotas: QuotaSpec[];
 };
@@ -239,6 +240,14 @@ export const FEATURE_KEYS: FeatureSpec[] = [
     description:
       "Compensatory-time bank for non-exempt staff: 1.5x earn over 40h/wk, 240h cap, admin approval workflow that mirrors AST.",
     schoolSettingsKey: "superFeatureCompTime",
+    quotas: [],
+  },
+  {
+    key: "eligibility",
+    label: "Eligibility Hub",
+    description:
+      "Attendance-based participation eligibility for athletics, clubs, and activities: rosters, at-risk report, parent notes, daily upload, notifications.",
+    schoolSettingsKey: "superFeatureEligibility",
     quotas: [],
   },
 ];

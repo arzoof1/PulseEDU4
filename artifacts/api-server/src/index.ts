@@ -7,6 +7,7 @@ import {
   seedMtssPlansIfEmpty,
   seedTieredInterventionsIfEmpty,
   seedAcademicMinutesDemoIfEmpty,
+  seedEligibilityForSchool1,
   seedFastScoresIfEmpty,
   seedHousesIfEmpty,
   seedIreadyAndSciIfEmpty,
@@ -59,6 +60,7 @@ import {
   ensureFeaturePlansSchema,
   ensureClassComposerPlansSchema,
   ensureSchoolGradeSchema,
+  ensureEligibilitySchema,
   ensureClassComposerSkillClusterSchema,
   ensureStaffPasswordResetsSchema,
   seedBenchmarkDescriptions,
@@ -72,6 +74,7 @@ import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
 import { sendWeeklyHeartbeatEmails } from "./lib/weeklyHeartbeatEmail";
 import { runDueLotteryDraws } from "./lib/onTimeLottery";
+import { sendEligibilityWeeklyDigest } from "./lib/eligibilityNotify";
 import { startReminderScheduler } from "./lib/scheduler";
 import { runAstYearEndLapse } from "./cron/astLapse";
 import {
@@ -272,6 +275,11 @@ async function runSeed(): Promise<void> {
   // School Grade Estimated Calculator (Phase 1) — runs, history, manual
   // inputs, and survey-upload placeholder tables. Idempotent.
   await ensureSchoolGradeSchema();
+  // Eligibility Hub — activities/rosters/coaches, per-semester absence
+  // ledger, parent notes, upload audit, notification dedup ledger, plus
+  // school_settings threshold/semester columns + staff.is_athletic_director.
+  // Idempotent.
+  await ensureEligibilitySchema();
   // Staff self-service password reset token store. Idempotent.
   await ensureStaffPasswordResetsSchema();
   // Packet A — Per-school IANA timezone column on schools (pre-2026
@@ -385,6 +393,15 @@ async function runSeed(): Promise<void> {
   } catch (err) {
     logger.error({ err }, "[boot] district demo extras seed failed");
   }
+  // Eligibility Hub demo (school 1 only): 5 activities, jerseyed rosters, and
+  // per-student absence/tardy totals sampled from the district fake-attendance
+  // histogram. Idempotent (skipped once any activity exists). Own try/catch so
+  // it can never block boot.
+  try {
+    await seedEligibilityForSchool1();
+  } catch (err) {
+    logger.error({ err }, "[boot] eligibility demo seed failed");
+  }
 }
 
 // In production we MUST open the port within the platform's health-check
@@ -463,6 +480,53 @@ function startListening(): void {
           logger.info({ expr, tz }, "Daily digest scheduled");
         } catch (schedErr) {
           logger.error({ err: schedErr }, "Failed to schedule daily digest");
+        }
+
+        // Weekly Eligibility digest. Defaults to Monday 07:00 school local
+        // time. Override with ELIGIBILITY_DIGEST_CRON / ELIGIBILITY_DIGEST_TZ.
+        const eligExpr =
+          process.env.ELIGIBILITY_DIGEST_CRON ?? "0 7 * * 1";
+        const eligTz =
+          process.env.ELIGIBILITY_DIGEST_TZ ?? "America/New_York";
+        try {
+          cron.schedule(
+            eligExpr,
+            async () => {
+              try {
+                const results = await sendEligibilityWeeklyDigest(new Date());
+                for (const r of results) {
+                  if (r.status === "error") {
+                    logger.warn(
+                      { schoolId: r.schoolId, errorMsg: r.errorMsg },
+                      "Eligibility digest error for school",
+                    );
+                  }
+                }
+                logger.info(
+                  {
+                    schools: results.length,
+                    sent: results.filter((r) => r.status === "sent").length,
+                  },
+                  "Weekly eligibility digest fired",
+                );
+              } catch (cronErr) {
+                logger.error(
+                  { err: cronErr },
+                  "Weekly eligibility digest send failed",
+                );
+              }
+            },
+            { timezone: eligTz },
+          );
+          logger.info(
+            { expr: eligExpr, tz: eligTz },
+            "Weekly eligibility digest scheduled",
+          );
+        } catch (schedErr) {
+          logger.error(
+            { err: schedErr },
+            "Failed to schedule weekly eligibility digest",
+          );
         }
 
         // Weekly HeartBEAT email. Default Friday 16:00 school local time —

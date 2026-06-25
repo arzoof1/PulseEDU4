@@ -52,6 +52,10 @@ import {
   studentRetentionsTable,
   benchmarkDescriptionsTable,
   pulseBrainLabLessonsTable,
+  eligibilityActivitiesTable,
+  eligibilityActivityMembersTable,
+  eligibilityActivityCoachesTable,
+  eligibilityAbsencesTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, sql, and, inArray, isNull, asc, desc } from "drizzle-orm";
@@ -9250,5 +9254,421 @@ export async function ensureSchoolGradeSchema(): Promise<void> {
   `);
   await db.execute(
     sql`CREATE UNIQUE INDEX IF NOT EXISTS school_grade_surveys_school_year_survey_unique ON school_grade_surveys (school_id, school_year, survey)`,
+  );
+}
+
+// =============================================================================
+// Eligibility Hub schema (additive, idempotent). 7 tables + school_settings
+// threshold/semester columns + staff.is_athletic_director. Per project
+// convention we use CREATE TABLE / ALTER TABLE … IF NOT EXISTS at boot rather
+// than drizzle-kit push (which blocks on interactive rename prompts).
+// =============================================================================
+export async function ensureEligibilitySchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS eligibility_activities (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'athletics',
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_by_staff_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_activities_school_idx ON eligibility_activities (school_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS eligibility_activity_members (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      activity_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      jersey_number TEXT,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      added_by_staff_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_members_school_idx ON eligibility_activity_members (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_members_activity_idx ON eligibility_activity_members (activity_id)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS eligibility_members_activity_student_uq ON eligibility_activity_members (activity_id, student_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS eligibility_activity_coaches (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      activity_id INTEGER NOT NULL,
+      staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_coaches_school_idx ON eligibility_activity_coaches (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_coaches_activity_idx ON eligibility_activity_coaches (activity_id)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS eligibility_coaches_activity_staff_uq ON eligibility_activity_coaches (activity_id, staff_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS eligibility_absences (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      semester_label TEXT NOT NULL,
+      absence_total INTEGER NOT NULL DEFAULT 0,
+      days_tardy INTEGER NOT NULL DEFAULT 0,
+      last_upload_id INTEGER,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_absences_school_idx ON eligibility_absences (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS eligibility_absences_student_semester_uq ON eligibility_absences (school_id, student_id, semester_label)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS eligibility_parent_notes (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      semester_label TEXT NOT NULL,
+      reason TEXT,
+      note_date TEXT,
+      entered_by_staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_parent_notes_school_idx ON eligibility_parent_notes (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_parent_notes_student_semester_idx ON eligibility_parent_notes (school_id, student_id, semester_label)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS eligibility_uploads (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      semester_label TEXT NOT NULL,
+      uploaded_by_staff_id INTEGER NOT NULL,
+      filename TEXT,
+      row_count INTEGER NOT NULL DEFAULT 0,
+      matched_count INTEGER NOT NULL DEFAULT 0,
+      unmatched_count INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_uploads_school_idx ON eligibility_uploads (school_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS eligibility_notifications (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      semester_label TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      audience TEXT NOT NULL,
+      recipient TEXT,
+      status TEXT NOT NULL,
+      counted_absences INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_notifications_school_idx ON eligibility_notifications (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_notifications_student_idx ON eligibility_notifications (school_id, student_id)`,
+  );
+
+  // school_settings threshold + semester columns.
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS eligibility_ineligibility_threshold INTEGER NOT NULL DEFAULT 10`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS eligibility_warning_window_days INTEGER NOT NULL DEFAULT 4`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS eligibility_tardy_to_absence_ratio INTEGER NOT NULL DEFAULT 0`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS eligibility_parent_note_cap INTEGER NOT NULL DEFAULT 5`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS eligibility_district_ad_notify BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS eligibility_semester_label TEXT NOT NULL DEFAULT ''`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS eligibility_semester_start TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS eligibility_semester_end TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS feature_eligibility BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS super_feature_eligibility BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
+
+  // staff Athletic Director role flag.
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS is_athletic_director BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+}
+
+// =============================================================================
+// Eligibility Hub demo seed (Parrott / school 1 only).
+//
+// Creates 5 activities with realistic roster sizes, jersey numbers for sports
+// (blank for band/chorus), and per-student absence/tardy totals sampled from
+// the district's fake attendance histogram (Attendance_25-26). ~25% of each
+// roster get 0 absences; the rest are drawn from the histogram. Students may
+// repeat across teams. Current semester = "Spring 2026" (includes today,
+// June 2026). Fully idempotent: skipped once any activity exists for school 1.
+// =============================================================================
+
+// Absence + tardy histograms from the district fake attendance file
+// (value -> count). Used to weight the random sample so the demo data mirrors
+// a real attendance distribution rather than a flat random spread.
+const ELIG_ABSENCE_HIST: Record<number, number> = {
+  0: 12, 1: 12, 2: 9, 3: 13, 4: 18, 5: 13, 6: 10, 7: 16, 8: 18, 9: 20, 10: 30,
+  11: 21, 12: 14, 13: 23, 14: 16, 15: 12, 16: 12, 17: 12, 18: 14, 19: 13,
+  20: 5, 21: 11, 22: 12, 23: 6, 24: 8, 25: 4, 26: 12, 27: 7, 28: 3, 29: 8,
+  30: 9, 31: 8, 32: 2, 33: 5, 34: 4, 35: 8, 36: 2, 38: 3, 39: 2, 40: 1, 41: 1,
+  42: 3, 43: 1, 45: 1, 46: 2, 47: 1, 48: 1, 49: 1, 50: 1, 52: 2, 53: 1, 55: 1,
+  56: 2, 57: 1, 60: 1, 62: 2, 63: 1, 65: 1, 85: 1, 91: 1,
+};
+const ELIG_TARDY_HIST: Record<number, number> = {
+  0: 151, 1: 80, 2: 45, 3: 36, 4: 20, 5: 14, 6: 13, 7: 6, 8: 7, 9: 9, 10: 13,
+  11: 3, 12: 5, 13: 7, 14: 5, 15: 2, 16: 5, 17: 3, 18: 4, 19: 3, 20: 2, 21: 1,
+  22: 1, 23: 1, 24: 2, 27: 3, 28: 3, 30: 1, 32: 1, 33: 1, 34: 1, 35: 1, 39: 2,
+  45: 1, 59: 1, 67: 1,
+};
+
+function buildCumulative(
+  hist: Record<number, number>,
+): { values: number[]; cum: number[]; total: number } {
+  const values = Object.keys(hist)
+    .map(Number)
+    .sort((a, b) => a - b);
+  const cum: number[] = [];
+  let total = 0;
+  for (const v of values) {
+    total += hist[v];
+    cum.push(total);
+  }
+  return { values, cum, total };
+}
+
+function sampleFromHist(c: {
+  values: number[];
+  cum: number[];
+  total: number;
+}): number {
+  const r = Math.random() * c.total;
+  for (let i = 0; i < c.cum.length; i++) {
+    if (r < c.cum[i]) return c.values[i];
+  }
+  return c.values[c.values.length - 1];
+}
+
+function shuffleInPlace<T>(arr: T[]): T[] {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+export async function seedEligibilityForSchool1(): Promise<void> {
+  const SCHOOL_ID = 1;
+
+  // Idempotent: skip once any activity exists for this school.
+  const [existing] = await db
+    .select({ id: eligibilityActivitiesTable.id })
+    .from(eligibilityActivitiesTable)
+    .where(eq(eligibilityActivitiesTable.schoolId, SCHOOL_ID))
+    .limit(1);
+  if (existing) return;
+
+  // Confirm school 1 exists + has students.
+  const students = await db
+    .select({ studentId: studentsTable.studentId })
+    .from(studentsTable)
+    .where(eq(studentsTable.schoolId, SCHOOL_ID));
+  if (students.length === 0) {
+    logger.info("[seed] eligibility: no students for school 1, skipping");
+    return;
+  }
+  const pool = students.map((s) => s.studentId);
+
+  const SEMESTER = "Spring 2026";
+
+  // Current-semester settings (window includes June 2026 = "today").
+  await db
+    .update(schoolSettingsTable)
+    .set({
+      eligibilitySemesterLabel: SEMESTER,
+      eligibilitySemesterStart: "2026-01-06",
+      eligibilitySemesterEnd: "2026-06-30",
+    })
+    .where(eq(schoolSettingsTable.schoolId, SCHOOL_ID));
+
+  const teams: {
+    name: string;
+    category: string;
+    size: number;
+    jerseys: boolean;
+  }[] = [
+    { name: "Football", category: "athletics", size: 51, jerseys: true },
+    { name: "Volleyball", category: "athletics", size: 16, jerseys: true },
+    { name: "Band", category: "activity", size: 38, jerseys: false },
+    { name: "Chorus", category: "activity", size: 23, jerseys: false },
+    {
+      name: "Boys Varsity Basketball",
+      category: "athletics",
+      size: 15,
+      jerseys: true,
+    },
+  ];
+
+  const absCum = buildCumulative(ELIG_ABSENCE_HIST);
+  const tardyCum = buildCumulative(ELIG_TARDY_HIST);
+
+  // Track which unique students end up rostered (for the absence seed) and
+  // their per-student 0-absence flag (~25% of each roster gets a clean slate).
+  const rostered = new Set<string>();
+  const zeroAbsence = new Set<string>();
+
+  for (const team of teams) {
+    const [activity] = await db
+      .insert(eligibilityActivitiesTable)
+      .values({
+        schoolId: SCHOOL_ID,
+        name: team.name,
+        category: team.category,
+      })
+      .returning();
+
+    // Sample `size` distinct students for this team (students may repeat
+    // across teams, but not within a team). If the pool is smaller than the
+    // requested size, cap at the pool.
+    const picks = shuffleInPlace([...pool]).slice(
+      0,
+      Math.min(team.size, pool.length),
+    );
+    // ~25% of this roster get 0 absences.
+    const zeroCount = Math.round(picks.length * 0.25);
+    const zeroPicks = new Set(picks.slice(0, zeroCount));
+
+    // Assign jersey numbers (unique within the team) for sports.
+    const usedJerseys = new Set<number>();
+    let jerseyCounter = 0;
+    for (const sid of picks) {
+      let jersey: string | null = null;
+      if (team.jerseys) {
+        let n = 0;
+        // Pull a random 0-99 jersey, fall back to a sequential counter.
+        for (let tries = 0; tries < 50; tries++) {
+          n = Math.floor(Math.random() * 100);
+          if (!usedJerseys.has(n)) break;
+        }
+        if (usedJerseys.has(n)) {
+          while (usedJerseys.has(jerseyCounter)) jerseyCounter++;
+          n = jerseyCounter;
+        }
+        usedJerseys.add(n);
+        jersey = String(n);
+      }
+      await db
+        .insert(eligibilityActivityMembersTable)
+        .values({
+          schoolId: SCHOOL_ID,
+          activityId: activity.id,
+          studentId: sid,
+          jerseyNumber: jersey,
+        })
+        .onConflictDoNothing();
+
+      rostered.add(sid);
+      if (zeroPicks.has(sid)) zeroAbsence.add(sid);
+    }
+
+    // Assign up to 2 coaches per team from active staff (round-robin).
+    const coaches = await db
+      .select({ id: staffTable.id })
+      .from(staffTable)
+      .where(and(eq(staffTable.schoolId, SCHOOL_ID), eq(staffTable.active, true)))
+      .limit(40);
+    if (coaches.length > 0) {
+      const c1 = coaches[activity.id % coaches.length];
+      await db
+        .insert(eligibilityActivityCoachesTable)
+        .values({ schoolId: SCHOOL_ID, activityId: activity.id, staffId: c1.id })
+        .onConflictDoNothing();
+    }
+  }
+
+  // Seed per-student absence/tardy totals for everyone rostered. A student on
+  // multiple teams gets ONE row (per student/semester). The 0-absence flag
+  // wins if the student was a zero-pick on any team.
+  for (const sid of rostered) {
+    const absenceTotal = zeroAbsence.has(sid) ? 0 : sampleFromHist(absCum);
+    const daysTardy = sampleFromHist(tardyCum);
+    await db
+      .insert(eligibilityAbsencesTable)
+      .values({
+        schoolId: SCHOOL_ID,
+        studentId: sid,
+        semesterLabel: SEMESTER,
+        absenceTotal,
+        daysTardy,
+      })
+      .onConflictDoUpdate({
+        target: [
+          eligibilityAbsencesTable.schoolId,
+          eligibilityAbsencesTable.studentId,
+          eligibilityAbsencesTable.semesterLabel,
+        ],
+        set: { absenceTotal, daysTardy },
+      });
+  }
+
+  // Flag one admin as Athletic Director so the AD-gated surfaces have an owner.
+  const [admin] = await db
+    .select({ id: staffTable.id })
+    .from(staffTable)
+    .where(and(eq(staffTable.schoolId, SCHOOL_ID), eq(staffTable.isAdmin, true)))
+    .limit(1);
+  if (admin) {
+    await db
+      .update(staffTable)
+      .set({ isAthleticDirector: true })
+      .where(eq(staffTable.id, admin.id));
+  }
+
+  logger.info(
+    { rostered: rostered.size, teams: teams.length },
+    "[seed] eligibility demo seeded for school 1",
   );
 }

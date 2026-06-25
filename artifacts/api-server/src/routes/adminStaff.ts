@@ -75,6 +75,7 @@ const ROLE_FLAGS = [
   "isSro",
   "isGuardian",
   "isCoreTeam",
+  "isAthleticDirector",
 ] as const;
 type RoleFlag = (typeof ROLE_FLAGS)[number];
 
@@ -147,6 +148,7 @@ const STAFF_SELECT = {
   isSro: staffTable.isSro,
   isGuardian: staffTable.isGuardian,
   isCoreTeam: staffTable.isCoreTeam,
+  isAthleticDirector: staffTable.isAthleticDirector,
   exemptStatus: staffTable.exemptStatus,
   capHallPasses: staffTable.capHallPasses,
   capTardies: staffTable.capTardies,
@@ -261,6 +263,7 @@ function roleLabelsFor(s: StaffRow): string {
   if (s.isSocialWorker) labels.push("Social Worker");
   if (s.isIssTeacher) labels.push("ISS Teacher");
   if (s.isFrontOffice) labels.push("Front Office");
+  if (s.isAthleticDirector) labels.push("Athletic Director");
   if (s.isSro) labels.push("SRO");
   if (s.isGuardian) labels.push("Guardian/Monitor");
   if (s.isNonExemptRole) labels.push("Non-Exempt Staff");

@@ -39,6 +39,9 @@ import IssSettingsPage from "./components/IssSettingsPage";
 import PickupSettingsPage from "./components/PickupSettingsPage";
 import TourAdminPage, { TourLeadBanner } from "./components/TourAdminPage";
 import TicketingAdminPage from "./components/TicketingAdminPage";
+import EligibilityHub, {
+  EligibilitySettingsPanel,
+} from "./components/EligibilityHub";
 import SchoolGradeCalculatorPage from "./components/SchoolGradeCalculatorPage";
 import EsignManagerPage from "./components/EsignManagerPage";
 import PickupTagsPanel from "./components/PickupTagsPanel";
@@ -4759,6 +4762,7 @@ function App() {
     isSocialWorker?: boolean;
     isSchoolPsychologist?: boolean;
     isGuidanceCounselor?: boolean;
+    isAthleticDirector?: boolean;
     isNonExemptRole?: boolean;
     isFrontOffice?: boolean;
     isSro?: boolean;
@@ -4996,6 +5000,7 @@ function App() {
     | "classComposer"
     | "familyMessages"
     | "pulseDnaStudio"
+    | "eligibility"
     | "tileHome"
   >("hallPasses");
   // Tile Home is a full-screen launcher that takes over the viewport.
@@ -8755,6 +8760,20 @@ function App() {
     authUser?.isGuidanceCounselor === true ||
     authUser?.capManageDismissal === true ||
     authUser?.canApproveAst === true;
+  // Eligibility Hub gate — mirrors canManageEligibility() in
+  // lib/coreTeam.ts (Core Team OR Athletic Director OR front-office via
+  // capManageDismissal). Gated purely on this capability (like Event
+  // Tickets, no feature flag) to avoid the dual-gate blank-page trap.
+  const canManageEligibility =
+    isAdmin ||
+    authUser?.isDistrictAdmin === true ||
+    authUser?.isSuperUser === true ||
+    authUser?.isBehaviorSpecialist === true ||
+    authUser?.isMtssCoordinator === true ||
+    authUser?.isSchoolPsychologist === true ||
+    authUser?.isCoreTeam === true ||
+    authUser?.isAthleticDirector === true ||
+    authUser?.capManageDismissal === true;
   // Document e-Sign gate — mirrors canManageEsign() in lib/coreTeam.ts
   // (admin/SuperUser OR the assignable capManageEsign flag). Documents are
   // private to the creator; drives the Settings tile.
@@ -9139,6 +9158,9 @@ function App() {
     if (!canManageMtssPlans && activeSection === "mtssPlans") {
       setActiveSection("hallPasses");
     }
+    if (!canManageEligibility && activeSection === "eligibility") {
+      setActiveSection("hallPasses");
+    }
   }, [
     isAdmin,
     isEseCoord,
@@ -9148,6 +9170,7 @@ function App() {
     canManageBehaviorLists,
     canEditSchoolStore,
     canManageMtssPlans,
+    canManageEligibility,
     activeSection,
     // Phase 1E + Phase 2 bounce-backs added in this same effect body
     // need their gating predicates in the dep array, otherwise the
@@ -9804,6 +9827,13 @@ function App() {
       label: "Pickup Tags",
       description: "Print car-rider and walker dismissal tags.",
       emoji: "🎫",
+      group: "admin",
+    });
+    add(canManageEligibility, {
+      key: "eligibility",
+      label: "Eligibility Hub",
+      description: "Attendance eligibility for athletics, clubs, and activities.",
+      emoji: "🏅",
       group: "admin",
     });
 
@@ -10858,6 +10888,12 @@ function App() {
                 {isAdmin && renderNavItem(adminNavSections[1])}
                 {canApproveAst && renderNavItem(adminNavSections[2])}
                 {canApproveAst && renderNavItem(adminNavSections[3])}
+                {canManageEligibility &&
+                  renderNavItem({
+                    key: "eligibility",
+                    label: "Eligibility Hub",
+                    icon: IconClipboard,
+                  })}
               </NavGroup>
             )}
           </aside>
@@ -21156,6 +21192,14 @@ function App() {
         <PickupTagsPanel />
       )}
 
+      {activeSection === "eligibility" && canManageEligibility && (
+        <EligibilityHub />
+      )}
+
+      {activeSection === "settings" && canManageEligibility && settingsTile === "eligibility" && (
+        <EligibilitySettingsPanel />
+      )}
+
       {activeSection === "settings" && canManageSettings && settingsTile === "iss-settings" && (
         <IssSettingsPage />
       )}
@@ -21489,6 +21533,19 @@ function App() {
                 title: "Document e-Sign",
                 subtitle:
                   "Upload a PDF or image · share a signing link · collect the signed copy.",
+                group: "admin-tenancy",
+              });
+            }
+            // Eligibility — school-wide attendance rules for athletics/clubs:
+            // ineligibility threshold, warning window, tardy ratio, parent-note
+            // cap, semester window. District-default, set by admin/AD/SuperUser.
+            if (canManageEligibility) {
+              tiles.push({
+                id: "eligibility",
+                icon: "🏅",
+                title: "Eligibility Settings",
+                subtitle:
+                  "Attendance eligibility rules · threshold, warning window, tardy ratio, semester.",
                 group: "admin-tenancy",
               });
             }

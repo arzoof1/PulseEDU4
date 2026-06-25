@@ -293,6 +293,16 @@ const ROLE_PRESETS: {
     label: "Guardian",
     capabilities: [...TEACHER_BASELINE],
   },
+  // Athletic Director: manages the Eligibility Hub (activities, rosters,
+  // attendance uploads, at-risk reports, and the school-level eligibility
+  // settings) on top of the teacher baseline. The flag itself is what gates
+  // canManageEligibility() server-side; the page surfaces via the
+  // featureEligibility feature flag.
+  {
+    flag: "isAthleticDirector",
+    label: "Athletic Director",
+    capabilities: [...TEACHER_BASELINE],
+  },
 ];
 
 export default function StaffRolesMatrix({ currentUser }: Props) {

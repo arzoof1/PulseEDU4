@@ -356,6 +356,53 @@ export const schoolSettingsTable = pgTable(
   inRouteOverdueMinutes: integer("in_route_overdue_minutes")
     .notNull()
     .default(10),
+  // -----------------------------------------------------------------
+  // Eligibility Hub (attendance-based participation eligibility for
+  // athletics / clubs / activities). Thresholds are uniform school-wide
+  // across every activity (district default; set by district admin +
+  // Athletic Director + SuperUser).
+  //   eligibilityIneligibilityThreshold — counted absences at/above this
+  //     make a student INELIGIBLE.
+  //   eligibilityWarningWindowDays — when counted absences are within this
+  //     many of the threshold (and below it), the student is in the
+  //     WARNING zone.
+  //   eligibilityTardyToAbsenceRatio — every N tardies count as one
+  //     absence. 0 = tardies never roll into the absence count.
+  //   eligibilityParentNoteCap — max approved parent notes per student per
+  //     semester (each note excuses one absence).
+  //   eligibilityDistrictAdNotify — when true, the district AD is BCC'd on
+  //     warning / ineligible notifications.
+  //   eligibilitySemester* — the CURRENT semester label + date window. The
+  //     absence/note ledger is keyed by this label, so changing it starts
+  //     a clean count (old rows remain under the old label).
+  // -----------------------------------------------------------------
+  eligibilityIneligibilityThreshold: integer(
+    "eligibility_ineligibility_threshold",
+  )
+    .notNull()
+    .default(10),
+  eligibilityWarningWindowDays: integer("eligibility_warning_window_days")
+    .notNull()
+    .default(4),
+  eligibilityTardyToAbsenceRatio: integer("eligibility_tardy_to_absence_ratio")
+    .notNull()
+    .default(0),
+  eligibilityParentNoteCap: integer("eligibility_parent_note_cap")
+    .notNull()
+    .default(5),
+  eligibilityDistrictAdNotify: boolean("eligibility_district_ad_notify")
+    .notNull()
+    .default(false),
+  eligibilitySemesterLabel: text("eligibility_semester_label")
+    .notNull()
+    .default(""),
+  eligibilitySemesterStart: text("eligibility_semester_start"),
+  eligibilitySemesterEnd: text("eligibility_semester_end"),
+  // Eligibility Hub feature flag (two-tier, like the others above).
+  featureEligibility: boolean("feature_eligibility").notNull().default(true),
+  superFeatureEligibility: boolean("super_feature_eligibility")
+    .notNull()
+    .default(true),
   kioskWelcomeTemplate: text("kiosk_welcome_template")
     .notNull()
     .default("Welcome, {firstName}!"),
