@@ -510,6 +510,28 @@ function ActivityDetail({
     }
   };
 
+  // Client-generated CSV template so a coach can build an import file that
+  // matches the columns onBulkFile() looks for (SIS ID required, Jersey #
+  // optional). Triggered as an `a.download` from the current document — never
+  // a new-tab blob — so it works inside the Replit preview iframe.
+  const downloadSampleRoster = () => {
+    const csv = [
+      "SIS ID,Jersey #",
+      "534762,12",
+      "670337,7",
+      "983480,",
+    ].join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "eligibility-roster-template.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const addCoach = async () => {
     const staffId = Number(coachStaffId);
     if (!staffId) return;
@@ -628,7 +650,15 @@ function ActivityDetail({
               }}
             />
           </label>
+          <button type="button" className="btn" onClick={downloadSampleRoster}>
+            Download sample
+          </button>
         </div>
+        <p style={{ fontSize: 12, color: "var(--muted, #6b7280)", margin: "6px 0 0" }}>
+          File needs a <strong>SIS ID</strong> column (required) and an optional{" "}
+          <strong>Jersey #</strong> column — leave Jersey blank for band/chorus.
+          Download the sample to get the exact format.
+        </p>
         {bulkMsg && (
           <p style={{ fontSize: 13, color: "var(--muted, #6b7280)" }}>{bulkMsg}</p>
         )}
