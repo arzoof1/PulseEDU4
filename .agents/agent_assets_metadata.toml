@@ -390,3 +390,9 @@ id = "cdXEvB-Ze2T-T8KwiLnjw"
 uri = "file://docs/school-tours-live-tour-capture-MIGRATION.md"
 type = "text"
 title = "School Tours — Live Tour Capture: Production Migration Report"
+
+[[outputs]]
+id = "WbOKnP93r2ffwXzWivx4z"
+uri = "file://docs/dev-changes-2026-06-19_to_2026-06-25.md"
+type = "text"
+title = "Developer Changes Pack — June 19–25, 2026"
