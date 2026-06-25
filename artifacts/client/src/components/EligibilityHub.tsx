@@ -637,8 +637,43 @@ function ActivityDetail({
           >
             Add
           </button>
-          <label className="btn" style={{ cursor: "pointer" }}>
-            Bulk upload (.xlsx/.csv)
+        </div>
+
+        <div style={{ marginTop: 14 }}>
+          <p
+            style={{
+              fontSize: 12,
+              fontWeight: 600,
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              color: "var(--muted, #6b7280)",
+              margin: "0 0 6px",
+            }}
+          >
+            Or add many at once
+          </p>
+          <label className="upload-dropzone">
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            <span className="upload-dropzone-text">
+              Bulk upload roster
+              <span className="upload-dropzone-sub">
+                Click to choose an .xlsx or .csv file
+              </span>
+            </span>
             <input
               type="file"
               accept=".xlsx,.xls,.csv"
@@ -650,18 +685,29 @@ function ActivityDetail({
               }}
             />
           </label>
-          <button type="button" className="btn" onClick={downloadSampleRoster}>
-            Download sample
-          </button>
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              alignItems: "center",
+              flexWrap: "wrap",
+              marginTop: 8,
+            }}
+          >
+            <button type="button" className="btn" onClick={downloadSampleRoster}>
+              Download sample
+            </button>
+            <span style={{ fontSize: 12, color: "var(--muted, #6b7280)" }}>
+              File needs a <strong>SIS ID</strong> column (required) and an
+              optional <strong>Jersey #</strong> column (blank for band/chorus).
+            </span>
+          </div>
+          {bulkMsg && (
+            <p style={{ fontSize: 13, color: "var(--muted, #6b7280)", marginTop: 6 }}>
+              {bulkMsg}
+            </p>
+          )}
         </div>
-        <p style={{ fontSize: 12, color: "var(--muted, #6b7280)", margin: "6px 0 0" }}>
-          File needs a <strong>SIS ID</strong> column (required) and an optional{" "}
-          <strong>Jersey #</strong> column — leave Jersey blank for band/chorus.
-          Download the sample to get the exact format.
-        </p>
-        {bulkMsg && (
-          <p style={{ fontSize: 13, color: "var(--muted, #6b7280)" }}>{bulkMsg}</p>
-        )}
       </div>
 
       {/* Roster table */}

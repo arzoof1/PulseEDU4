@@ -795,6 +795,43 @@ td {
   background: var(--surface-2);
 }
 
+/* Bulk-upload affordance: a dashed, clickable drop-zone so the file picker
+   reads unmistakably as "click here to upload a file" rather than blending in
+   with the row of ordinary buttons next to it. */
+.upload-dropzone {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 2px dashed var(--primary);
+  border-radius: var(--radius);
+  background: var(--primary-soft);
+  color: var(--primary);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.upload-dropzone:hover {
+  background: var(--surface-2);
+  border-color: var(--primary-hover, var(--primary));
+}
+
+.upload-dropzone-text {
+  display: flex;
+  flex-direction: column;
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+.upload-dropzone-sub {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--muted, #6b7280);
+}
+
 tbody tr:last-child td {
   border-bottom: 0 !important;
 }
