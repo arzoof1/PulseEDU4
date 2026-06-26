@@ -101,17 +101,19 @@ function isCoreTeam(s: typeof staffTable.$inferSelect): boolean {
 }
 
 // Returns the set of student business IDs (text) this staff member is
-// allowed to view at this school. Core team gets everyone; everyone else
-// gets their roster ∪ trusted-adult assignments.
+// allowed to view at this school. Core team AND school counselors get
+// everyone; everyone else gets their roster ∪ trusted-adult assignments.
 //
-// `coreTeamShortcut` short-circuits the union for performance — the watch-
-// list and profile callers test isCoreTeam first and pass true here, in
-// which case we return the full school set with a single query.
+// School counselors (guidance OR generic counselor) are granted school-wide
+// visibility here per the documented student-lookup contract — counselors are
+// expected to see any student's profile/schedule. This is intentionally
+// broader than the local `isCoreTeam` gate used by the insights dashboards,
+// which does NOT admit counselors.
 export async function getVisibleStudentIds(
   staff: typeof staffTable.$inferSelect,
   schoolId: number,
 ): Promise<{ ids: Set<string>; full: boolean }> {
-  if (isCoreTeam(staff)) {
+  if (isCoreTeam(staff) || staff.isCounselor || staff.isGuidanceCounselor) {
     // Full set marker — caller can skip the studentId filter entirely.
     return { ids: new Set(), full: true };
   }
