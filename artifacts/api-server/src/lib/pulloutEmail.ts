@@ -489,9 +489,12 @@ export async function sendPulloutDispatchEmail(
   const schoolName = settings?.schoolName ?? "PulseED";
   const fromName = settings?.fromName ?? schoolName;
 
+  // FLEID-safe: render the local SIS id, never the canonical student_id.
   const studentLabel = student
-    ? `${student.firstName} ${student.lastName} (${p.studentId})`
-    : p.studentId;
+    ? `${student.firstName} ${student.lastName}${
+        student.localSisId ? ` (ID ${student.localSisId})` : ""
+      }`
+    : "a student";
   const reasonText = (p.editedReason ?? p.reason).trim();
   const periodText = p.period ? `Period ${p.period}` : "Period n/a";
   const teacherText = p.referringTeacherName || "(unspecified)";
