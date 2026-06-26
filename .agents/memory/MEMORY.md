@@ -46,6 +46,7 @@
 - [Staff PATCH batched gating](staff-patch-batched-gating.md) — batched PATCH /admin/staff/:id must OMIT role flags/sensitive caps actor cant set AND self-revoked caps, or one bad field sinks the whole save.
 - [Teleprompter smooth scroll](teleprompter-smooth-scroll.md) — auto-scroll over the always-mounted, polling staff app must be a compositor WAAPI transform animation, not main-thread scrollTop/rAF (which pauses under re-render starvation).
 - [getUserMedia in preview iframe](getusermedia-in-preview-iframe.md) — Replit preview iframe DOES allow camera/mic + Web Speech; run media capture in-app, own-tab only as a blocked-camera fallback.
+- [Studio camera capture orientation](studio-camera-orientation.md) — recording orientation is a getUserMedia constraint (swap w/h for portrait), not CSS; re-acquire on rotation but never mid-recording/while reviewing.
 - [Preview iframe blocks dialogs](preview-iframe-blocked-dialogs.md) — sandboxed preview suppresses window.prompt/confirm/alert (silent no-op); use inline input + two-step confirm instead.
 - [mammoth in Vite (docx parse)](mammoth-vite-browser.md) — import the MAIN "mammoth" entry; Vite auto-swaps node-only internals via its package "browser" map. Don't import a separate browser bundle; types come from the main entry.
 - [Pickup adult-key model](pickup-adult-key.md) — student owns one base, adult gets letter A–H; adultKey groups across siblings (non-portal MUST include phone or families cross-link); base/letter must stay consistent with pickup_number.

@@ -169,27 +169,99 @@ export default function RecordingStudio({
     recordingRef.current = recording;
   }, [recording]);
 
-  // Acquire camera + mic once on mount.
-  useEffect(() => {
-    let cancelled = false;
-    async function init() {
+  // Whether the current viewport is portrait — drives the capture aspect so a
+  // phone/iPad records portrait when held vertically, landscape when sideways.
+  const isPortrait = useCallback(
+    () =>
+      window.matchMedia?.("(orientation: portrait)").matches ??
+      window.innerHeight > window.innerWidth,
+    [],
+  );
+
+  // The orientation the LIVE stream is currently captured in, so the rotation
+  // listener can skip re-acquiring when nothing actually changed.
+  const captureOrientationRef = useRef<"portrait" | "landscape" | null>(null);
+  // Guards against overlapping getUserMedia calls (rapid rotations).
+  const acquiringRef = useRef(false);
+
+  // Stop the mic-level meter (rAF loop + analyser + audio context).
+  const stopMeter = useCallback(() => {
+    if (meterRafRef.current != null) {
+      cancelAnimationFrame(meterRafRef.current);
+      meterRafRef.current = null;
+    }
+    analyserRef.current?.disconnect();
+    analyserRef.current = null;
+    if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
+      void audioCtxRef.current.close().catch(() => {});
+    }
+    audioCtxRef.current = null;
+  }, []);
+
+  // Tap the mic for a live level meter. The analyser is connected to the source
+  // ONLY (never to destination) so the user doesn't hear themselves. The rAF
+  // loop reads time-domain samples to compute RMS (meter fill) and peak (clip).
+  const startMeter = useCallback((s: MediaStream) => {
+    try {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const source = ctx.createMediaStreamSource(s);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.8;
+      source.connect(analyser);
+      audioCtxRef.current = ctx;
+      analyserRef.current = analyser;
+
+      const data = new Float32Array(analyser.fftSize);
+      const tick = () => {
+        const a = analyserRef.current;
+        if (!a || !mountedRef.current) return;
+        a.getFloatTimeDomainData(data);
+        let sumSquares = 0;
+        let peak = 0;
+        for (let i = 0; i < data.length; i++) {
+          const v = data[i];
+          sumSquares += v * v;
+          const abs = Math.abs(v);
+          if (abs > peak) peak = abs;
+        }
+        const rms = Math.sqrt(sumSquares / data.length);
+        // Scale RMS to a 0–1 meter range; ~0.5 RMS is already very hot.
+        const next = Math.min(1, rms * 2.2);
+        setLevel(next);
+        const now = Date.now();
+        if (peak >= 0.98) lastClipRef.current = now;
+        setClipping(now - lastClipRef.current < 1000);
+        meterRafRef.current = requestAnimationFrame(tick);
+      };
+      meterRafRef.current = requestAnimationFrame(tick);
+    } catch {
+      // Audio metering is best-effort; ignore failures.
+    }
+  }, []);
+
+  // Acquire (or re-acquire) the camera + mic for the given orientation. Captures
+  // in the device's current orientation — a phone/iPad held vertically records a
+  // portrait frame, not a cropped landscape one. Tears down any prior stream +
+  // meter first, then swaps the new stream in.
+  const acquireStream = useCallback(
+    async (portrait: boolean) => {
       if (!navigator.mediaDevices?.getUserMedia) {
         setMediaError(
           "This browser can't access the camera. Try the latest Chrome, Edge, or Safari.",
         );
         return;
       }
+      if (acquiringRef.current) return;
+      acquiringRef.current = true;
+      const longEdge = { ideal: 1280 };
+      const shortEdge = { ideal: 720 };
       try {
-        // Capture in the device's current orientation. A phone or iPad held
-        // vertically should record a portrait frame, not a cropped landscape
-        // one — so swap the ideal long/short edges when the viewport is
-        // portrait. (Hard-coding 1280x720 forced landscape on every device.)
-        const portrait =
-          typeof window !== "undefined" &&
-          (window.matchMedia?.("(orientation: portrait)").matches ??
-            window.innerHeight > window.innerWidth);
-        const longEdge = { ideal: 1280 };
-        const shortEdge = { ideal: 720 };
         const s = await navigator.mediaDevices.getUserMedia({
           video: {
             width: portrait ? shortEdge : longEdge,
@@ -198,61 +270,20 @@ export default function RecordingStudio({
           },
           audio: true,
         });
-        if (cancelled) {
+        if (!mountedRef.current) {
           s.getTracks().forEach((t) => t.stop());
           return;
         }
+        // Swap the live stream: stop the old meter + tracks, then attach new.
+        stopMeter();
+        streamRef.current?.getTracks().forEach((t) => t.stop());
         streamRef.current = s;
+        captureOrientationRef.current = portrait ? "portrait" : "landscape";
         setStream(s);
-
-        // Tap the mic for a live level meter. The analyser is connected to the
-        // source ONLY (never to destination) so the user does not hear
-        // themselves. The rAF loop reads time-domain samples to compute RMS
-        // (meter fill) and peak (clip detection).
-        try {
-          const AudioCtx =
-            window.AudioContext ||
-            (window as unknown as { webkitAudioContext?: typeof AudioContext })
-              .webkitAudioContext;
-          if (AudioCtx) {
-            const ctx = new AudioCtx();
-            const source = ctx.createMediaStreamSource(s);
-            const analyser = ctx.createAnalyser();
-            analyser.fftSize = 1024;
-            analyser.smoothingTimeConstant = 0.8;
-            source.connect(analyser);
-            audioCtxRef.current = ctx;
-            analyserRef.current = analyser;
-
-            const data = new Float32Array(analyser.fftSize);
-            const tick = () => {
-              const a = analyserRef.current;
-              if (!a || !mountedRef.current || cancelled) return;
-              a.getFloatTimeDomainData(data);
-              let sumSquares = 0;
-              let peak = 0;
-              for (let i = 0; i < data.length; i++) {
-                const v = data[i];
-                sumSquares += v * v;
-                const abs = Math.abs(v);
-                if (abs > peak) peak = abs;
-              }
-              const rms = Math.sqrt(sumSquares / data.length);
-              // Scale RMS to a 0–1 meter range; ~0.5 RMS is already very hot.
-              const next = Math.min(1, rms * 2.2);
-              setLevel(next);
-              const now = Date.now();
-              if (peak >= 0.98) lastClipRef.current = now;
-              setClipping(now - lastClipRef.current < 1000);
-              meterRafRef.current = requestAnimationFrame(tick);
-            };
-            meterRafRef.current = requestAnimationFrame(tick);
-          }
-        } catch {
-          // Audio metering is best-effort; ignore failures.
-        }
+        setMediaError(null);
+        startMeter(s);
       } catch (err) {
-        if (cancelled) return;
+        if (!mountedRef.current) return;
         const name = (err as DOMException)?.name;
         setMediaError(
           name === "NotAllowedError" || name === "SecurityError"
@@ -261,24 +292,41 @@ export default function RecordingStudio({
               ? "No camera or microphone was found on this device."
               : "Couldn't start the camera. Please check your device and try again.",
         );
+      } finally {
+        acquiringRef.current = false;
       }
-    }
-    void init();
+    },
+    [startMeter, stopMeter],
+  );
+
+  // Acquire camera + mic on mount (in the current orientation).
+  useEffect(() => {
+    mountedRef.current = true;
+    void acquireStream(isPortrait());
     return () => {
-      cancelled = true;
       streamRef.current?.getTracks().forEach((t) => t.stop());
-      if (meterRafRef.current != null) {
-        cancelAnimationFrame(meterRafRef.current);
-        meterRafRef.current = null;
-      }
-      analyserRef.current?.disconnect();
-      analyserRef.current = null;
-      if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
-        void audioCtxRef.current.close().catch(() => {});
-      }
-      audioCtxRef.current = null;
+      stopMeter();
     };
-  }, []);
+  }, [acquireStream, isPortrait, stopMeter]);
+
+  // Live re-acquisition: when the device rotates, re-open the camera in the new
+  // orientation so the frame follows the device. Skipped while recording (never
+  // swap the stream mid-take) or while reviewing a finished clip.
+  useEffect(() => {
+    const onOrientation = () => {
+      if (recordingRef.current || recordedUrlRef.current) return;
+      const want = isPortrait() ? "portrait" : "landscape";
+      if (captureOrientationRef.current === want) return;
+      void acquireStream(want === "portrait");
+    };
+    const mq = window.matchMedia?.("(orientation: portrait)");
+    mq?.addEventListener?.("change", onOrientation);
+    window.addEventListener("orientationchange", onOrientation);
+    return () => {
+      mq?.removeEventListener?.("change", onOrientation);
+      window.removeEventListener("orientationchange", onOrientation);
+    };
+  }, [acquireStream, isPortrait]);
 
   // Attach the live stream to the preview element.
   useEffect(() => {
