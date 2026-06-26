@@ -557,8 +557,6 @@ function ScheduleSection({ studentId }: { studentId: string }) {
       period: number;
       courseName: string;
       teacherName: string;
-      room: string;
-      phoneExt: string;
     }>
   >([]);
 
@@ -581,8 +579,6 @@ function ScheduleSection({ studentId }: { studentId: string }) {
             period: number;
             courseName: string;
             teacherName: string;
-            room: string;
-            phoneExt: string;
           }>;
         };
         if (cancelled) return;
@@ -636,8 +632,6 @@ function ScheduleSection({ studentId }: { studentId: string }) {
                   <th>Period</th>
                   <th>Course</th>
                   <th>Teacher</th>
-                  <th>Room</th>
-                  <th>Ext.</th>
                 </tr>
               </thead>
               <tbody>
@@ -646,8 +640,6 @@ function ScheduleSection({ studentId }: { studentId: string }) {
                     <td>{s.period}</td>
                     <td>{s.courseName}</td>
                     <td>{s.teacherName || "—"}</td>
-                    <td>{s.room || "—"}</td>
-                    <td>{s.phoneExt || "—"}</td>
                   </tr>
                 ))}
               </tbody>

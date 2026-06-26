@@ -140,8 +140,6 @@ router.get(
         period: classSectionsTable.period,
         courseName: classSectionsTable.courseName,
         teacherName: staffTable.displayName,
-        room: staffTable.defaultRoom,
-        phoneExt: staffTable.workExtension,
       })
       .from(sectionRosterTable)
       .innerJoin(
@@ -167,8 +165,6 @@ router.get(
         period: r.period,
         courseName: r.courseName,
         teacherName: r.teacherName ?? "",
-        room: r.room ?? "",
-        phoneExt: r.phoneExt ?? "",
       })),
     });
   },

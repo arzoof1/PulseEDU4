@@ -410,6 +410,16 @@ function HeartbeatNoteCard({ studentId }: { studentId: string }) {
             </button>
           )}
           <button
+            className="btn-secondary"
+            disabled={loading || saving || note.length === 0}
+            onClick={() => {
+              setNote("");
+              setSavedAt(null);
+            }}
+          >
+            Clear
+          </button>
+          <button
             className="btn-primary"
             disabled={loading || saving || !dirty}
             onClick={save}
