@@ -4690,6 +4690,449 @@ function InsightsBackBar({ onBack }: { onBack: () => void }) {
   );
 }
 
+// ----- Classroom Intervention per-student report (Core Team) -----
+// Picks a student, then renders the admin report from
+// GET /api/interventions/student-report/:studentId — every negative behavior
+// (across all teachers), every intervention logged (by teacher) with its
+// derived outcome, and a per-intervention "what's worked" effectiveness summary.
+type CIReportSearchRow = {
+  studentId: string;
+  localSisId?: string | null;
+  firstName: string;
+  lastName: string;
+  grade?: string | null;
+};
+type CIReport = {
+  windowDays: number;
+  student: {
+    studentId: string;
+    firstName: string;
+    lastName: string;
+    localSisId?: string | null;
+  };
+  behaviors: Array<{
+    reason: string;
+    staffName: string;
+    note?: string | null;
+    createdAt: string;
+  }>;
+  interventions: Array<{
+    interventionType: string;
+    behaviorReason?: string | null;
+    note?: string | null;
+    staffName: string;
+    createdAt: string;
+    outcome: "worked" | "recurred" | "pending" | "na";
+  }>;
+  summary: Record<
+    string,
+    { used: number; worked: number; recurred: number; pending: number }
+  >;
+};
+
+function OutcomePill({
+  outcome,
+}: {
+  outcome: "worked" | "recurred" | "pending" | "na";
+}) {
+  const map = {
+    worked: { label: "Worked", bg: "#d1fae5", fg: "#047857" },
+    recurred: { label: "Recurred", bg: "#fef3c7", fg: "#92400e" },
+    pending: { label: "Pending", bg: "#e5e7eb", fg: "#374151" },
+    na: { label: "—", bg: "transparent", fg: "#9ca3af" },
+  } as const;
+  const m = map[outcome];
+  return (
+    <span
+      style={{
+        fontSize: 11,
+        fontWeight: 600,
+        color: m.fg,
+        background: m.bg,
+        borderRadius: 999,
+        padding: outcome === "na" ? 0 : "1px 8px",
+      }}
+    >
+      {m.label}
+    </span>
+  );
+}
+
+function ClassroomInterventionReport() {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<CIReportSearchRow[]>([]);
+  const [picked, setPicked] = useState<CIReportSearchRow | null>(null);
+  const [report, setReport] = useState<CIReport | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Debounced student search.
+  useEffect(() => {
+    if (picked) return;
+    const term = q.trim();
+    if (!term) {
+      setResults([]);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      authFetch(`/api/student-lookup/search?q=${encodeURIComponent(term)}`)
+        .then((r) => (r.ok ? r.json() : { students: [] }))
+        .then((j: { students?: CIReportSearchRow[] }) => {
+          if (!cancelled) setResults(j.students ?? []);
+        })
+        .catch(() => {});
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [q, picked]);
+
+  // Load the report when a student is picked.
+  useEffect(() => {
+    if (!picked) {
+      setReport(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    authFetch(
+      `/api/interventions/student-report/${encodeURIComponent(
+        picked.studentId,
+      )}`,
+    )
+      .then(async (r) => {
+        if (!r.ok) throw new Error("Could not load the report.");
+        return r.json();
+      })
+      .then((j: CIReport) => {
+        if (!cancelled) setReport(j);
+      })
+      .catch((e) => {
+        if (!cancelled)
+          setError(e instanceof Error ? e.message : "Something went wrong.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [picked]);
+
+  const fmtDate = (iso: string) => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime())
+      ? iso
+      : d.toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+  };
+
+  return (
+    <div
+      style={{
+        marginTop: "1.5rem",
+        borderTop: "1px solid #e5e7eb",
+        paddingTop: "1.25rem",
+      }}
+    >
+      <h3 style={{ margin: "0 0 0.25rem" }}>Per-student report</h3>
+      <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
+        See every behavior a student has had (across all teachers), every
+        intervention that's been tried, and what's actually worked.
+      </p>
+
+      {!picked && (
+        <div style={{ maxWidth: "32rem", position: "relative" }}>
+          <input
+            type="text"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search student by name or ID…"
+            style={{ width: "100%" }}
+          />
+          {results.length > 0 && (
+            <div
+              style={{
+                border: "1px solid #d1d5db",
+                borderRadius: 8,
+                marginTop: 4,
+                maxHeight: 240,
+                overflowY: "auto",
+                background: "white",
+              }}
+            >
+              {results.map((s) => (
+                <button
+                  key={s.studentId}
+                  type="button"
+                  onClick={() => {
+                    setPicked(s);
+                    setResults([]);
+                    setQ("");
+                  }}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "8px 10px",
+                    border: "none",
+                    borderBottom: "1px solid #f3f4f6",
+                    background: "white",
+                    cursor: "pointer",
+                    fontSize: 14,
+                  }}
+                >
+                  {s.lastName}, {s.firstName}
+                  {s.localSisId ? (
+                    <span
+                      style={{
+                        color: "#6b7280",
+                        fontFamily: "ui-monospace, monospace",
+                        fontSize: 12,
+                      }}
+                    >
+                      {" "}
+                      · ID {s.localSisId}
+                    </span>
+                  ) : null}
+                  {s.grade ? (
+                    <span style={{ color: "#6b7280", fontSize: 12 }}>
+                      {" "}
+                      · Gr {s.grade}
+                    </span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {picked && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            marginBottom: "1rem",
+          }}
+        >
+          <strong>
+            {picked.lastName}, {picked.firstName}
+          </strong>
+          {picked.localSisId ? (
+            <span
+              style={{
+                color: "#6b7280",
+                fontFamily: "ui-monospace, monospace",
+                fontSize: 12,
+              }}
+            >
+              ID {picked.localSisId}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              setPicked(null);
+              setReport(null);
+            }}
+            style={{ marginLeft: "auto" }}
+          >
+            Change student
+          </button>
+        </div>
+      )}
+
+      {loading && <div style={{ color: "#6b7280" }}>Loading report…</div>}
+      {error && <div style={{ color: "crimson" }}>{error}</div>}
+
+      {report && !loading && (
+        <div style={{ display: "grid", gap: "1.5rem" }}>
+          {/* What's worked summary */}
+          <div>
+            <h4 style={{ margin: "0 0 0.5rem" }}>
+              What's worked{" "}
+              <span
+                style={{
+                  fontWeight: 400,
+                  fontSize: 12,
+                  color: "#6b7280",
+                }}
+              >
+                (recurrence window: {report.windowDays} days)
+              </span>
+            </h4>
+            {Object.keys(report.summary).length === 0 ? (
+              <div style={{ color: "var(--muted, #666)" }}>
+                No interventions logged yet.
+              </div>
+            ) : (
+              <table
+                className="pulse-table"
+                style={{
+                  width: "100%",
+                  borderCollapse: "collapse",
+                  maxWidth: "40rem",
+                }}
+              >
+                <thead>
+                  <tr
+                    style={{
+                      borderBottom: "1px solid #ccc",
+                      textAlign: "left",
+                    }}
+                  >
+                    <th style={{ padding: "0.4rem" }}>Intervention</th>
+                    <th style={{ padding: "0.4rem" }}>Times tried</th>
+                    <th style={{ padding: "0.4rem" }}>Worked</th>
+                    <th style={{ padding: "0.4rem" }}>Recurred</th>
+                    <th style={{ padding: "0.4rem" }}>Pending</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(report.summary)
+                    .sort((a, b) => b[1].worked - a[1].worked)
+                    .map(([name, s]) => (
+                      <tr
+                        key={name}
+                        style={{ borderBottom: "1px solid #eee" }}
+                      >
+                        <td style={{ padding: "0.4rem" }}>{name}</td>
+                        <td style={{ padding: "0.4rem" }}>{s.used}</td>
+                        <td
+                          style={{
+                            padding: "0.4rem",
+                            color: "#047857",
+                            fontWeight: 600,
+                          }}
+                        >
+                          {s.worked}
+                        </td>
+                        <td style={{ padding: "0.4rem", color: "#92400e" }}>
+                          {s.recurred}
+                        </td>
+                        <td style={{ padding: "0.4rem", color: "#6b7280" }}>
+                          {s.pending}
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {/* Interventions by teacher */}
+          <div>
+            <h4 style={{ margin: "0 0 0.5rem" }}>Interventions logged</h4>
+            {report.interventions.length === 0 ? (
+              <div style={{ color: "var(--muted, #666)" }}>None yet.</div>
+            ) : (
+              <table
+                className="pulse-table"
+                style={{ width: "100%", borderCollapse: "collapse" }}
+              >
+                <thead>
+                  <tr
+                    style={{
+                      borderBottom: "1px solid #ccc",
+                      textAlign: "left",
+                    }}
+                  >
+                    <th style={{ padding: "0.4rem" }}>Date</th>
+                    <th style={{ padding: "0.4rem" }}>Intervention</th>
+                    <th style={{ padding: "0.4rem" }}>For behavior</th>
+                    <th style={{ padding: "0.4rem" }}>Teacher</th>
+                    <th style={{ padding: "0.4rem" }}>Outcome</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.interventions.map((iv, i) => (
+                    <tr key={i} style={{ borderBottom: "1px solid #eee" }}>
+                      <td style={{ padding: "0.4rem", whiteSpace: "nowrap" }}>
+                        {fmtDate(iv.createdAt)}
+                      </td>
+                      <td style={{ padding: "0.4rem" }}>
+                        {iv.interventionType}
+                        {iv.note ? (
+                          <div
+                            style={{ fontSize: 12, color: "#6b7280" }}
+                          >
+                            {iv.note}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td style={{ padding: "0.4rem", color: "#6b7280" }}>
+                        {iv.behaviorReason ?? "—"}
+                      </td>
+                      <td style={{ padding: "0.4rem" }}>{iv.staffName}</td>
+                      <td style={{ padding: "0.4rem" }}>
+                        <OutcomePill outcome={iv.outcome} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {/* Behaviors across teachers */}
+          <div>
+            <h4 style={{ margin: "0 0 0.5rem" }}>Behaviors</h4>
+            {report.behaviors.length === 0 ? (
+              <div style={{ color: "var(--muted, #666)" }}>None yet.</div>
+            ) : (
+              <table
+                className="pulse-table"
+                style={{ width: "100%", borderCollapse: "collapse" }}
+              >
+                <thead>
+                  <tr
+                    style={{
+                      borderBottom: "1px solid #ccc",
+                      textAlign: "left",
+                    }}
+                  >
+                    <th style={{ padding: "0.4rem" }}>Date</th>
+                    <th style={{ padding: "0.4rem" }}>Behavior</th>
+                    <th style={{ padding: "0.4rem" }}>Logged by</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.behaviors.map((b, i) => (
+                    <tr key={i} style={{ borderBottom: "1px solid #eee" }}>
+                      <td style={{ padding: "0.4rem", whiteSpace: "nowrap" }}>
+                        {fmtDate(b.createdAt)}
+                      </td>
+                      <td style={{ padding: "0.4rem" }}>
+                        {b.reason}
+                        {b.note ? (
+                          <div
+                            style={{ fontSize: 12, color: "#6b7280" }}
+                          >
+                            {b.note}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td style={{ padding: "0.4rem" }}>{b.staffName}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   // Apply per-school branding (header gradient, logo) to the document root
   // so any component reading var(--brand-header-bg) retints automatically.
@@ -20546,6 +20989,8 @@ function App() {
               </tbody>
             </table>
           )}
+
+          {isCoreTeamMember && <ClassroomInterventionReport />}
         </section>
       )}
 

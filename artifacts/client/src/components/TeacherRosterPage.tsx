@@ -1423,6 +1423,360 @@ function BqPills({ row }: { row: RosterRow }) {
   );
 }
 
+// ----- Quick Log (behavior + classroom interventions) -----
+// Lightweight types for the roster quick-log modal. Behaviors come from the
+// existing negative `pbis_reasons`; interventions from `intervention_types`.
+type NegBehavior = { id: number; name: string; defaultPoints: number };
+type IvType = { id: number; name: string; category?: string | null };
+type EffByType = Record<
+  string,
+  { worked: number; recurred: number; pending: number }
+>;
+
+// Self-contained roster quick-log form. Lets any signed-in teacher record a
+// low-level behavior + the classroom intervention(s) they tried in one shot,
+// reusing POST /api/pbis (negative) and POST /api/interventions (with the new
+// behaviorReason link). Shows "what's worked before" effectiveness for the
+// selected student+behavior so the teacher can pick a proven intervention.
+function QuickLogForm({
+  studentId,
+  studentName,
+  localSisId,
+  behaviors,
+  interventionTypes,
+  onSaved,
+  onCancel,
+}: {
+  studentId: string;
+  studentName: string;
+  localSisId?: string | null;
+  behaviors: NegBehavior[];
+  interventionTypes: IvType[];
+  onSaved: () => void;
+  onCancel: () => void;
+}) {
+  const [behaviorId, setBehaviorId] = useState<number | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [note, setNote] = useState("");
+  const [eff, setEff] = useState<EffByType | null>(null);
+  const [effLoading, setEffLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectedBehavior =
+    behaviors.find((b) => b.id === behaviorId) ?? null;
+
+  // Load "what's worked before" for this student + behavior whenever the
+  // selected behavior changes. School-wide across teachers.
+  useEffect(() => {
+    setEff(null);
+    if (!selectedBehavior) return;
+    let cancelled = false;
+    setEffLoading(true);
+    authFetch(
+      `/api/interventions/effectiveness?studentId=${encodeURIComponent(
+        studentId,
+      )}&behaviorReason=${encodeURIComponent(selectedBehavior.name)}`,
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { byType?: EffByType } | null) => {
+        if (!cancelled && j) setEff(j.byType ?? {});
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setEffLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [behaviorId, studentId, selectedBehavior]);
+
+  function toggleIv(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const canSubmit = Boolean(selectedBehavior) && selected.size > 0 && !submitting;
+
+  async function submit() {
+    if (!selectedBehavior || selected.size === 0) return;
+    setSubmitting(true);
+    setError(null);
+    const trimmedNote = note.trim() || undefined;
+    try {
+      // Single atomic write — the server records the behavior + every selected
+      // intervention in one transaction, so a partial failure can't leave a
+      // behavior without its interventions (or vice versa).
+      const res = await authFetch("/api/interventions/quick-log", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId,
+          reasonId: selectedBehavior.id,
+          interventionTypeIds: [...selected],
+          note: trimmedNote,
+        }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        throw new Error(
+          (j && typeof j.error === "string" && j.error) ||
+            "Could not save. Please try again.",
+        );
+      }
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div>
+      <div style={{ marginBottom: 14 }}>
+        <h3 style={{ margin: "0 0 2px", fontSize: 18 }}>
+          Log behavior &amp; intervention
+        </h3>
+        <div style={{ fontSize: 13, color: "#6b7280" }}>
+          {studentName}
+          {localSisId ? (
+            <span style={{ fontFamily: "ui-monospace, monospace" }}>
+              {" "}
+              · ID {localSisId}
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      {/* Behavior */}
+      <label
+        style={{
+          display: "block",
+          fontSize: 13,
+          fontWeight: 600,
+          color: "#374151",
+          marginBottom: 6,
+        }}
+      >
+        Behavior
+      </label>
+      <select
+        value={behaviorId ?? ""}
+        onChange={(e) => {
+          setBehaviorId(e.target.value ? Number(e.target.value) : null);
+          setSelected(new Set());
+        }}
+        style={{
+          width: "100%",
+          padding: "8px 10px",
+          borderRadius: 8,
+          border: "1px solid #d1d5db",
+          fontSize: 14,
+          marginBottom: 16,
+        }}
+      >
+        <option value="">Select a behavior…</option>
+        {behaviors.map((b) => (
+          <option key={b.id} value={b.id}>
+            {b.name}
+          </option>
+        ))}
+      </select>
+      {behaviors.length === 0 && (
+        <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 16 }}>
+          No negative behaviors are configured yet. An admin can add them under
+          PBIS reasons.
+        </div>
+      )}
+
+      {/* Interventions */}
+      <label
+        style={{
+          display: "block",
+          fontSize: 13,
+          fontWeight: 600,
+          color: "#374151",
+          marginBottom: 6,
+        }}
+      >
+        Intervention(s) tried
+        {selectedBehavior && effLoading && (
+          <span style={{ fontWeight: 400, color: "#9ca3af" }}>
+            {" "}
+            · checking what's worked…
+          </span>
+        )}
+      </label>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+          maxHeight: 260,
+          overflowY: "auto",
+          border: "1px solid #e5e7eb",
+          borderRadius: 8,
+          padding: 8,
+          marginBottom: 16,
+        }}
+      >
+        {interventionTypes.length === 0 && (
+          <div style={{ fontSize: 12, color: "#9ca3af" }}>
+            No intervention types are configured yet.
+          </div>
+        )}
+        {interventionTypes.map((iv) => {
+          const stats = eff?.[iv.name];
+          const worked = stats?.worked ?? 0;
+          const recurred = stats?.recurred ?? 0;
+          const checked = selected.has(iv.id);
+          return (
+            <label
+              key={iv.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "6px 8px",
+                borderRadius: 6,
+                cursor: "pointer",
+                background: checked ? "#ecfdf5" : "transparent",
+                border: checked
+                  ? "1px solid #a7f3d0"
+                  : "1px solid transparent",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={() => toggleIv(iv.id)}
+              />
+              <span style={{ flex: 1, fontSize: 14, color: "#111827" }}>
+                {iv.name}
+              </span>
+              {selectedBehavior && worked > 0 && (
+                <span
+                  title={`Worked ${worked}× before for this student (behavior did not recur within the window)`}
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: "#047857",
+                    background: "#d1fae5",
+                    borderRadius: 999,
+                    padding: "1px 8px",
+                  }}
+                >
+                  ✓ Worked {worked}×
+                </span>
+              )}
+              {selectedBehavior && worked === 0 && recurred > 0 && (
+                <span
+                  title={`Behavior recurred within the window ${recurred}× after this intervention`}
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: "#92400e",
+                    background: "#fef3c7",
+                    borderRadius: 999,
+                    padding: "1px 8px",
+                  }}
+                >
+                  recurred {recurred}×
+                </span>
+              )}
+            </label>
+          );
+        })}
+      </div>
+
+      {/* Note */}
+      <label
+        style={{
+          display: "block",
+          fontSize: 13,
+          fontWeight: 600,
+          color: "#374151",
+          marginBottom: 6,
+        }}
+      >
+        Note (optional)
+      </label>
+      <textarea
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        rows={2}
+        placeholder="Context, what you observed…"
+        style={{
+          width: "100%",
+          padding: "8px 10px",
+          borderRadius: 8,
+          border: "1px solid #d1d5db",
+          fontSize: 14,
+          resize: "vertical",
+          marginBottom: 16,
+        }}
+      />
+
+      {error && (
+        <div
+          style={{
+            fontSize: 13,
+            color: "#b91c1c",
+            background: "#fee2e2",
+            borderRadius: 8,
+            padding: "8px 10px",
+            marginBottom: 12,
+          }}
+        >
+          {error}
+        </div>
+      )}
+
+      <div
+        style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}
+      >
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={submitting}
+          style={{
+            padding: "8px 14px",
+            borderRadius: 8,
+            border: "1px solid #d1d5db",
+            background: "white",
+            fontSize: 14,
+            cursor: "pointer",
+          }}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!canSubmit}
+          style={{
+            padding: "8px 14px",
+            borderRadius: 8,
+            border: "none",
+            background: canSubmit ? "#4f46e5" : "#c7d2fe",
+            color: "white",
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: canSubmit ? "pointer" : "not-allowed",
+          }}
+        >
+          {submitting ? "Saving…" : "Log it"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function TeacherRosterPage({
   isCoreTeam,
   defaultTeacherId,
@@ -1681,6 +2035,56 @@ export default function TeacherRosterPage({
     studentId: string;
     studentName: string;
   } | null>(null);
+
+  // ----- Quick Log modal (behavior + intervention) -----
+  const [logModal, setLogModal] = useState<{
+    studentId: string;
+    studentName: string;
+    localSisId?: string | null;
+  } | null>(null);
+  const [negBehaviors, setNegBehaviors] = useState<NegBehavior[]>([]);
+  const [ivTypes, setIvTypes] = useState<IvType[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    authFetch("/api/pbis-reasons")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: unknown) => {
+        if (cancelled || !Array.isArray(rows)) return;
+        setNegBehaviors(
+          rows
+            .filter(
+              (r) =>
+                r &&
+                r.polarity === "negative" &&
+                r.active !== false,
+            )
+            .map((r) => ({
+              id: r.id,
+              name: r.name,
+              defaultPoints: Number(r.defaultPoints) || 1,
+            })),
+        );
+      })
+      .catch(() => {});
+    authFetch("/api/intervention-types")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: unknown) => {
+        if (cancelled || !Array.isArray(rows)) return;
+        setIvTypes(
+          rows
+            .filter((r) => r && r.active !== false)
+            .map((r) => ({
+              id: r.id,
+              name: r.name,
+              category: r.category ?? null,
+            })),
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const periodOptions = data?.availablePeriods ?? [];
 
@@ -2664,6 +3068,35 @@ export default function TeacherRosterPage({
                           <span>Spider</span>
                         </button>
                       )}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setLogModal({
+                            studentId: row.studentId,
+                            studentName: `${row.firstName} ${row.lastName}`,
+                            localSisId: row.localSisId,
+                          })
+                        }
+                        title={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
+                        aria-label={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          border: "1px solid #fbcfe8",
+                          background: "#fdf2f8",
+                          color: "#9d174d",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          lineHeight: 1.2,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span aria-hidden="true">📝</span>
+                        <span>Log</span>
+                      </button>
                       {sepSectionId != null && (() => {
                         const n = sepCountByStudent.get(row.studentId) ?? 0;
                         // Two-state icon per the product spec:
@@ -2870,6 +3303,47 @@ export default function TeacherRosterPage({
                 refresh();
               }}
               onCancel={() => setTier3Modal(null)}
+            />
+          </div>
+        </div>
+      )}
+      {logModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.45)",
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "center",
+            padding: "3vh 16px",
+            overflowY: "auto",
+            zIndex: 1000,
+          }}
+          onClick={() => setLogModal(null)}
+        >
+          <div
+            style={{
+              background: "white",
+              borderRadius: 10,
+              padding: "1.25rem",
+              maxWidth: 560,
+              width: "100%",
+              boxShadow: "0 20px 50px rgba(0,0,0,0.25)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <QuickLogForm
+              studentId={logModal.studentId}
+              studentName={logModal.studentName}
+              localSisId={logModal.localSisId}
+              behaviors={negBehaviors}
+              interventionTypes={ivTypes}
+              onSaved={() => {
+                setLogModal(null);
+                refresh();
+              }}
+              onCancel={() => setLogModal(null)}
             />
           </div>
         </div>

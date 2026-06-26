@@ -3282,6 +3282,16 @@ export async function ensureHeartbeatNoteSchema(): Promise<void> {
   );
 }
 
+// Classroom intervention entries — additive `behavior_reason` snapshot column
+// that ties a logged intervention to the behavior it addressed (drives the
+// "what has worked before for this student" effectiveness insight). Additive
+// + nullable so existing standalone intervention logs are untouched.
+export async function ensureInterventionEntriesSchema(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE intervention_entries ADD COLUMN IF NOT EXISTS behavior_reason TEXT`,
+  );
+}
+
 // School Tours — public brag page + lead pipeline. Idempotent CREATE TABLE
 // IF NOT EXISTS at boot (same pattern as the rest of the module schemas).
 export async function ensureToursSchema(): Promise<void> {
@@ -3669,6 +3679,7 @@ export async function seedFastScoresIfEmpty() {
   await ensureFastScoresSchema();
   await ensureBenchmarkReteachLogSchema();
   await ensureHeartbeatNoteSchema();
+  await ensureInterventionEntriesSchema();
   await ensureSchoolSettingsFeatureFlagsSchema();
   await ensureAdminHubSchema();
   await ensureTierPresetsSchema();
