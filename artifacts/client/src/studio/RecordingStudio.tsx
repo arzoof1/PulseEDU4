@@ -180,8 +180,22 @@ export default function RecordingStudio({
         return;
       }
       try {
+        // Capture in the device's current orientation. A phone or iPad held
+        // vertically should record a portrait frame, not a cropped landscape
+        // one — so swap the ideal long/short edges when the viewport is
+        // portrait. (Hard-coding 1280x720 forced landscape on every device.)
+        const portrait =
+          typeof window !== "undefined" &&
+          (window.matchMedia?.("(orientation: portrait)").matches ??
+            window.innerHeight > window.innerWidth);
+        const longEdge = { ideal: 1280 };
+        const shortEdge = { ideal: 720 };
         const s = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
+          video: {
+            width: portrait ? shortEdge : longEdge,
+            height: portrait ? longEdge : shortEdge,
+            facingMode: "user",
+          },
           audio: true,
         });
         if (cancelled) {
