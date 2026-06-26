@@ -1,4 +1,5 @@
 import { getUncachableResendClient } from "./resendClient.js";
+import { formatFromHeader } from "./emailFrom.js";
 import { logger } from "./logger.js";
 
 // Build the absolute URL the parent will click in the invite email. Order:
@@ -96,7 +97,7 @@ export async function sendParentInviteEmail(args: SendInviteArgs): Promise<{
 </html>`;
 
   const result = await client.emails.send({
-    from: fromName ? `${fromName} <${fromEmail}>` : fromEmail,
+    from: formatFromHeader(fromName, fromEmail),
     to,
     subject: subjectLead,
     text,

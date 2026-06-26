@@ -7,6 +7,7 @@ import {
 } from "@workspace/db";
 import { and, eq, or } from "drizzle-orm";
 import { getUncachableResendClient } from "./resendClient";
+import { formatFromHeader } from "./emailFrom";
 
 // Tiny HTML escaper used when interpolating staff-supplied free text
 // (e.g. parent_message authored in the Verify modal) into the HTML
@@ -143,7 +144,7 @@ export async function sendPulloutArrivalEmail(
 
   try {
     const { client, fromEmail } = await getUncachableResendClient();
-    const fromHeader = `${fromName} <${fromEmail}>`;
+    const fromHeader = formatFromHeader(fromName, fromEmail);
     const sendRes = await client.emails.send({
       from: fromHeader,
       to: parentEmail,
@@ -287,7 +288,7 @@ export async function sendPulloutSendToIssEmail(
 
   try {
     const { client, fromEmail } = await getUncachableResendClient();
-    const fromHeader = `${fromName} <${fromEmail}>`;
+    const fromHeader = formatFromHeader(fromName, fromEmail);
     const sendRes = await client.emails.send({
       from: fromHeader,
       to: parentEmail,
@@ -389,7 +390,7 @@ export async function sendPulloutReturnEmail(
     `<p>${signature.replace(/\n/g, "<br>")}</p>`;
   try {
     const { client, fromEmail } = await getUncachableResendClient();
-    const fromHeader = `${fromName} <${fromEmail}>`;
+    const fromHeader = formatFromHeader(fromName, fromEmail);
     const sendRes = await client.emails.send({
       from: fromHeader,
       to: parentEmail,
@@ -519,7 +520,7 @@ export async function sendPulloutDispatchEmail(
   const recipientStr = recipients.join(", ");
   try {
     const { client, fromEmail } = await getUncachableResendClient();
-    const fromHeader = `${fromName} <${fromEmail}>`;
+    const fromHeader = formatFromHeader(fromName, fromEmail);
     const sendRes = await client.emails.send({
       from: fromHeader,
       to: recipients,

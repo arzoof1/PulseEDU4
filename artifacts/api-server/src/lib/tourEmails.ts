@@ -1,4 +1,5 @@
 import { getUncachableResendClient } from "./resendClient.js";
+import { formatFromHeader } from "./emailFrom.js";
 import { logger } from "./logger.js";
 
 // Email side of the School Tours notify flow. Two messages:
@@ -126,7 +127,7 @@ export async function sendFamilyAckEmail(
         sig,
       )}</p>`;
     const result = await client.emails.send({
-      from: args.fromName ? `${args.fromName} <${fromEmail}>` : fromEmail,
+      from: formatFromHeader(args.fromName, fromEmail),
       to: args.to,
       subject: `We got your tour request — ${args.schoolName}`,
       html: shell("Thanks for reaching out!", body),
