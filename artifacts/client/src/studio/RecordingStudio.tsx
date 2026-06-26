@@ -943,7 +943,7 @@ export default function RecordingStudio({
           ref={prompterRef}
           style={{
             position: "absolute",
-            top: portrait ? "3.6rem" : "1.4rem",
+            top: portrait ? "3.3rem" : "1.4rem",
             left: portrait ? 0 : "1.5rem",
             right: portrait ? 0 : "auto",
             width: portrait ? "auto" : `${promptWidth}%`,
@@ -967,7 +967,7 @@ export default function RecordingStudio({
               whiteSpace: "pre-wrap",
               color: "#fff",
               textShadow: "0 2px 12px rgba(0,0,0,0.95), 0 0 3px rgba(0,0,0,0.85)",
-              maxWidth: portrait ? `${promptWidth}%` : "100%",
+              maxWidth: "100%",
               willChange: "transform",
               backfaceVisibility: "hidden",
               transform: "translateZ(0)",
