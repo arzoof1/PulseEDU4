@@ -1,5 +1,5 @@
 // Public, unauthenticated SMS opt-in disclosure and policy page.
-// Required for AWS SNS toll-free / 10DLC registration review — reviewers
+// Required for Twilio A2P 10DLC / toll-free registration review — reviewers
 // must be able to open this URL without signing in.
 // Mounted at /sms-policy by main.tsx.
 
@@ -86,8 +86,8 @@ export default function SmsPolicyPage() {
             PulseEDU may send automated text messages to parents, guardians,
             and school staff on behalf of participating schools. This page
             describes what messages are sent, how you opt in, and how you can
-            opt out. Message delivery is provided through Amazon Web Services
-            (AWS) Simple Notification Service (SNS).
+            opt out. Message delivery is provided through Twilio, a messaging
+            service provider, on behalf of your school.
           </p>
 
           <h2 style={sectionTitle}>Who sends the messages?</h2>
