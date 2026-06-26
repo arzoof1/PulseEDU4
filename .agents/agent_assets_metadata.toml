@@ -396,3 +396,9 @@ id = "WbOKnP93r2ffwXzWivx4z"
 uri = "file://docs/dev-changes-2026-06-19_to_2026-06-25.md"
 type = "text"
 title = "Developer Changes Pack — June 19–25, 2026"
+
+[[outputs]]
+id = "CqCcd6vmMM5c3QYnByXyT"
+uri = "file://docs/migration-report-2026-06-26.md"
+type = "text"
+title = "Dev Migration Report — 2026-06-26"
