@@ -20,6 +20,7 @@
 ## Flows
 
 **Wired to SMS today** (go live automatically once enabled):
+- **Request Pullout dispatch alerts → staff** ([routes/pullouts.ts](artifacts/api-server/src/routes/pullouts.ts) → [lib/pulloutSms.ts](artifacts/api-server/src/lib/pulloutSms.ts)) — the documented "Text alerts for Request Pullout" use case (texts active admin/dean/MTSS/ISS staff with a cell phone, mirroring the dispatch email)
 - Overdue hall-pass alerts → **staff** ([cron/inRouteOverdue.ts](artifacts/api-server/src/cron/inRouteOverdue.ts))
 - School-tour lead alerts → **staff** ([routes/tours.ts](artifacts/api-server/src/routes/tours.ts))
 
