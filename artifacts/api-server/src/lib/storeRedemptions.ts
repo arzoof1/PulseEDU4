@@ -651,15 +651,14 @@ export async function cancelRedemption(opts: {
 
 // --------------------------------------------------------------------------
 // listRedemptions — Core Team queue/history. Joins the student for display
-// fields. NEVER returns the FLEID as a display field — `localSisId` is the
-// only id meant for rendering; `studentId` is included solely as a join /
-// React key (callers must not render it).
+// fields. NEVER returns the FLEID — not even as a hidden join/key field;
+// `localSisId` is the only student id that leaves the server. Callers key
+// rows off the redemption `id`.
 // --------------------------------------------------------------------------
 export interface RedemptionListRow {
   id: number;
   itemId: number;
   itemName: string;
-  studentId: string;
   localSisId: string | null;
   studentName: string;
   grade: number | null;
@@ -691,7 +690,6 @@ export async function listRedemptions(opts: {
       id: schoolStoreRedemptionsTable.id,
       itemId: schoolStoreRedemptionsTable.itemId,
       itemName: schoolStoreRedemptionsTable.itemName,
-      studentId: schoolStoreRedemptionsTable.studentId,
       localSisId: studentsTable.localSisId,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
@@ -722,7 +720,6 @@ export async function listRedemptions(opts: {
     id: r.id,
     itemId: r.itemId,
     itemName: r.itemName,
-    studentId: r.studentId,
     localSisId: r.localSisId ?? null,
     studentName:
       r.firstName || r.lastName

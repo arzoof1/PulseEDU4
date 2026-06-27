@@ -143,6 +143,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     onTimeLotteryLabel,
     onTimeLotteryBonusPoints,
     onTimeLotteryRevealLeadMinutes,
+    schoolStoreInventoryMode,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -399,6 +400,47 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.pbisNegativeAffectsTotal = pbisNegativeAffectsTotal;
+  }
+
+  // School Store inventory mode — `simple` (in-stock boolean) vs `quantity`
+  // (tracked on-hand counts). School-wide PBIS-store policy, so it shares the
+  // admin / PBIS coordinator / behavior specialist gate. Validated enum.
+  if (schoolStoreInventoryMode !== undefined) {
+    if (
+      schoolStoreInventoryMode !== "simple" &&
+      schoolStoreInventoryMode !== "quantity"
+    ) {
+      res.status(400).json({
+        error: "schoolStoreInventoryMode must be 'simple' or 'quantity'",
+      });
+      return;
+    }
+    const staffId = req.staffId;
+    let allowed = false;
+    if (staffId) {
+      const [s] = await db
+        .select()
+        .from(staffTable)
+        .where(eq(staffTable.id, staffId));
+      if (
+        s &&
+        s.active &&
+        (s.isSuperUser ||
+          s.isAdmin ||
+          s.isPbisCoordinator ||
+          s.isBehaviorSpecialist)
+      ) {
+        allowed = true;
+      }
+    }
+    if (!allowed) {
+      res.status(403).json({
+        error:
+          "Only admin, PBIS coordinator, or behavior specialist may change this",
+      });
+      return;
+    }
+    updates.schoolStoreInventoryMode = schoolStoreInventoryMode;
   }
 
   // -----------------------------------------------------------------

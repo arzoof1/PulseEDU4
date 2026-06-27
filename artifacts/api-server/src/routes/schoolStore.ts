@@ -526,8 +526,10 @@ router.get("/school-store/wallet/:studentId", async (req, res) => {
     return;
   }
   const wallet = await computeWallet(schoolId, studentId);
+  // NEVER echo the FLEID (path-param `studentId`) back in the body. The
+  // caller already holds the id it queried with; the response carries only
+  // the display-safe `localSisId`.
   res.json({
-    studentId,
     localSisId: display.localSisId,
     studentName: display.studentName,
     ...wallet,
