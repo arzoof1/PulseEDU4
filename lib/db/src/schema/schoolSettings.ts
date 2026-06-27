@@ -62,6 +62,14 @@ export const schoolSettingsTable = pgTable(
   pbisColdPeriodMultiple: integer("pbis_cold_period_multiple")
     .notNull()
     .default(5),
+  // Classroom-intervention effectiveness window (days). A logged intervention
+  // counts as having WORKED if the behavior it targeted does not recur for that
+  // student within this many days; if it recurs inside the window it RECURRED;
+  // before the window elapses it is PENDING. School-configurable on the
+  // Negative Behaviors tab. Default 14.
+  interventionEffectivenessDays: integer("intervention_effectiveness_days")
+    .notNull()
+    .default(14),
   // School Tours — SMS notification scope. 'all' sends a text for every tour
   // alert (new lead, lead assigned, …); 'urgent' limits texts to time-
   // sensitive alerts only (the alert helper passes a tier and standard alerts

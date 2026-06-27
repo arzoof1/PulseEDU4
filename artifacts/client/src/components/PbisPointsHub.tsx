@@ -56,6 +56,7 @@ type Reason = {
 
 type SchoolSettings = {
   pbisNegativeAffectsTotal: boolean;
+  interventionEffectivenessDays: number;
 };
 
 type NoteTemplate = {
@@ -3352,6 +3353,43 @@ export function SettingsView({
     }
   }
 
+  // Draft value for the effectiveness-window input (kept separate so the user
+  // can type freely; committed on blur / Enter). Synced when settings load.
+  const [windowDraft, setWindowDraft] = useState<string>("");
+  useEffect(() => {
+    if (settings) setWindowDraft(String(settings.interventionEffectivenessDays));
+  }, [settings?.interventionEffectivenessDays]);
+
+  async function saveEffectivenessDays(raw: string) {
+    if (!settings) return;
+    const prev = settings.interventionEffectivenessDays;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 1 || n > 90) {
+      setWindowDraft(String(prev));
+      setErr("Effectiveness window must be a whole number of days (1–90).");
+      return;
+    }
+    if (n === prev) return;
+    setSettings((s) => (s ? { ...s, interventionEffectivenessDays: n } : s));
+    try {
+      const res = await authFetch("/api/school-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ interventionEffectivenessDays: n }),
+      });
+      if (!res.ok) throw new Error("Save failed");
+      const json = (await res.json()) as SchoolSettings;
+      setSettings(json);
+      setErr(null);
+    } catch {
+      setSettings((s) =>
+        s ? { ...s, interventionEffectivenessDays: prev } : s,
+      );
+      setWindowDraft(String(prev));
+      setErr("Could not save setting. Try again.");
+    }
+  }
+
   // Apply scope + search + polarity + archive filter, group by category
   // preserving category order = first-seen order in the underlying list.
   const filtered = useMemo(() => {
@@ -3662,6 +3700,92 @@ export function SettingsView({
               label="Subtract from total"
             />
           )}
+        </div>
+      )}
+
+      {/* Intervention effectiveness window */}
+      {settings && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "space-between",
+            gap: "1rem",
+            padding: "0.85rem 1rem",
+            background: "#eff6ff",
+            border: "1px solid #bfdbfe",
+            borderRadius: "0.5rem",
+            marginBottom: "1rem",
+          }}
+        >
+          <div style={{ maxWidth: "42rem" }}>
+            <div style={{ fontWeight: 600, color: "#1e3a8a" }}>
+              Intervention effectiveness window
+            </div>
+            <div
+              style={{
+                fontSize: "0.85rem",
+                color: "#1e40af",
+                marginTop: "0.2rem",
+                lineHeight: 1.45,
+              }}
+            >
+              When a teacher logs an intervention for a negative behavior,
+              PulseEDU automatically grades whether it{" "}
+              <strong>worked</strong>. If the same behavior does{" "}
+              <strong>not</strong> happen again for that student within this many
+              days, the intervention is marked <strong>Worked&nbsp;✓</strong>. If
+              the behavior comes back inside the window, it is marked{" "}
+              <strong>Recurred&nbsp;↻</strong>. While the window is still open it
+              shows as <strong>Pending</strong>. Teachers never grade this by
+              hand — these outcomes appear on the per-student Classroom
+              Intervention Report and as the “what’s worked before” badges shown
+              while logging.
+              <br />
+              <em>
+                Shorter windows (e.g. 7 days) judge interventions faster but are
+                stricter; longer windows (e.g. 21–30 days) give an intervention
+                more time to prove it stuck. 14 days is the default.
+              </em>
+            </div>
+          </div>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.4rem",
+              whiteSpace: "nowrap",
+              color: "#1e3a8a",
+              fontWeight: 600,
+              fontSize: "0.9rem",
+            }}
+          >
+            <input
+              type="number"
+              min={1}
+              max={90}
+              step={1}
+              value={windowDraft}
+              disabled={!canEdit}
+              onChange={(e) => setWindowDraft(e.target.value)}
+              onBlur={(e) => saveEffectivenessDays(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+              style={{
+                width: "4.5rem",
+                padding: "0.4rem 0.5rem",
+                border: "1px solid #93c5fd",
+                borderRadius: "0.4rem",
+                fontSize: "0.95rem",
+                textAlign: "center",
+                background: canEdit ? "#fff" : "#f1f5f9",
+              }}
+            />
+            days
+          </label>
         </div>
       )}
 

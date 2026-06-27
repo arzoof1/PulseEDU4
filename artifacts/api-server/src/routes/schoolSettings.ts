@@ -115,6 +115,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     pbisInvisibleDaysTier3,
     pbisReasonImbalancePct,
     pbisColdPeriodMultiple,
+    interventionEffectivenessDays,
     pbisNegativeAffectsTotal,
     schoolWideExpectationAcronym,
     schoolWideExpectationLetters,
@@ -286,6 +287,14 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       20,
       "pbisColdPeriodMultiple",
     ),
+    // Classroom-intervention effectiveness window. 1..90 days.
+    intRange(
+      "interventionEffectivenessDays",
+      interventionEffectivenessDays,
+      1,
+      90,
+      "interventionEffectivenessDays",
+    ),
     // FAST history visibility (Phase 1 of Historical FAST work).
     // 2..5 — minimum 2 so the trajectory chip always has at least
     // a prior year to compare against; 5 cap matches the FAST launch
@@ -319,6 +328,38 @@ router.put("/school-settings", async (req, res): Promise<void> => {
   ]) {
     if (err) {
       res.status(400).json({ error: err });
+      return;
+    }
+  }
+
+  // The intervention effectiveness window is a school-wide PBIS policy. Only
+  // admins / PBIS coordinators / behavior specialists may change it — same gate
+  // as `pbisNegativeAffectsTotal`. `intRange` above already wrote the value into
+  // `updates`, so reject here (before the DB write) for unprivileged staff.
+  if (interventionEffectivenessDays !== undefined) {
+    const staffId = req.staffId;
+    let allowed = false;
+    if (staffId) {
+      const [s] = await db
+        .select()
+        .from(staffTable)
+        .where(eq(staffTable.id, staffId));
+      if (
+        s &&
+        s.active &&
+        (s.isSuperUser ||
+          s.isAdmin ||
+          s.isPbisCoordinator ||
+          s.isBehaviorSpecialist)
+      ) {
+        allowed = true;
+      }
+    }
+    if (!allowed) {
+      res.status(403).json({
+        error:
+          "Only admin, PBIS coordinator, or behavior specialist may change this",
+      });
       return;
     }
   }

@@ -31,9 +31,24 @@ const router: IRouter = Router();
 
 // "What has worked before for this student" effectiveness window. An
 // intervention counts as having WORKED if the behavior it targeted did not
-// recur for that student within this many days after it was logged. Kept as a
-// constant (not a school setting) to stay within the additive-DB scope.
-const EFFECTIVENESS_WINDOW_DAYS = 14;
+// recur for that student within this many days after it was logged. The window
+// is school-configurable on the Negative Behaviors tab
+// (school_settings.intervention_effectiveness_days); this is the fallback used
+// when a school has no row / unset value.
+const DEFAULT_EFFECTIVENESS_WINDOW_DAYS = 14;
+
+// Resolve the per-school effectiveness window (days), falling back to the
+// default when no setting is present.
+async function effectivenessWindowDays(schoolId: number): Promise<number> {
+  const [row] = await db
+    .select({ days: schoolSettingsTable.interventionEffectivenessDays })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
+  const n = row?.days;
+  return typeof n === "number" && Number.isInteger(n) && n > 0
+    ? n
+    : DEFAULT_EFFECTIVENESS_WINDOW_DAYS;
+}
 
 type Outcome = "worked" | "recurred" | "pending";
 
@@ -51,11 +66,9 @@ function deriveOutcome(
   interventionCreatedAt: string,
   behaviorTimestamps: string[],
   nowIso: string,
+  windowDays: number,
 ): Outcome {
-  const windowEnd = addDaysIso(
-    interventionCreatedAt,
-    EFFECTIVENESS_WINDOW_DAYS,
-  );
+  const windowEnd = addDaysIso(interventionCreatedAt, windowDays);
   const recurred = behaviorTimestamps.some(
     (t) => t > interventionCreatedAt && t <= windowEnd,
   );
@@ -402,13 +415,14 @@ router.get(
       .map((b) => b.createdAt)
       .filter((t): t is string => Boolean(t));
 
+    const windowDays = await effectivenessWindowDays(schoolId);
     const nowIso = new Date().toISOString();
     const byType: Record<
       string,
       { worked: number; recurred: number; pending: number }
     > = {};
     for (const iv of interventions) {
-      const outcome = deriveOutcome(iv.createdAt, behaviorTs, nowIso);
+      const outcome = deriveOutcome(iv.createdAt, behaviorTs, nowIso, windowDays);
       const slot = (byType[iv.interventionType] ??= {
         worked: 0,
         recurred: 0,
@@ -417,7 +431,7 @@ router.get(
       slot[outcome] += 1;
     }
 
-    res.json({ windowDays: EFFECTIVENESS_WINDOW_DAYS, byType });
+    res.json({ windowDays, byType });
   },
 );
 
@@ -509,6 +523,7 @@ router.get(
       tsByReason.set(b.reason, arr);
     }
 
+    const windowDays = await effectivenessWindowDays(schoolId);
     const nowIso = new Date().toISOString();
     const interventions = interventionRows.map((iv) => {
       const outcome: Outcome | "na" = iv.behaviorReason
@@ -516,6 +531,7 @@ router.get(
             iv.createdAt,
             tsByReason.get(iv.behaviorReason) ?? [],
             nowIso,
+            windowDays,
           )
         : "na";
       return { ...iv, outcome };
@@ -537,7 +553,7 @@ router.get(
     }
 
     res.json({
-      windowDays: EFFECTIVENESS_WINDOW_DAYS,
+      windowDays,
       student,
       behaviors,
       interventions,

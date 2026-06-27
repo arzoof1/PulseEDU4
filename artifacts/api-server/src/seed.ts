@@ -1941,6 +1941,11 @@ export async function ensureAdminHubSchema() {
     sql`ALTER TABLE iss_attendance_day ADD COLUMN IF NOT EXISTS marked_served BOOLEAN NOT NULL DEFAULT FALSE`,
   );
 
+  // Classroom-intervention effectiveness window (days). Additive; default 14.
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS intervention_effectiveness_days INTEGER NOT NULL DEFAULT 14`,
+  );
+
   // ISS daily seat capacity + soft/hard behavior on school_settings.
   await db.execute(
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS iss_daily_capacity INTEGER`,
