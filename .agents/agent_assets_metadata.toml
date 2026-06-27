@@ -402,3 +402,9 @@ id = "CqCcd6vmMM5c3QYnByXyT"
 uri = "file://docs/migration-report-2026-06-26.md"
 type = "text"
 title = "Dev Migration Report — 2026-06-26"
+
+[[outputs]]
+id = "3R_5zdi8bEZsHF50UPDwa"
+uri = "file://docs/sidebar-role-aware-nav-migration.md"
+type = "text"
+title = "Sidebar Role-Aware Nav — Developer Migration Doc"
