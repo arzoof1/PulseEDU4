@@ -712,31 +712,64 @@ function RequestPulloutSection({
           ) : (
             <div
               style={{
-                display: "grid",
-                gridTemplateColumns:
-                  "repeat(auto-fill, minmax(180px, 1fr))",
-                gap: "0.25rem 0.75rem",
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "0.5rem",
               }}
             >
-              {activeInterventions.map((t) => (
-                <label
-                  key={t.id}
-                  style={{
-                    display: "flex",
-                    gap: 6,
-                    alignItems: "center",
-                    fontSize: "0.9rem",
-                    cursor: "pointer",
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedInterventionIds.has(t.id)}
-                    onChange={() => toggleIntervention(t.id)}
-                  />
-                  <span>{t.name}</span>
-                </label>
-              ))}
+              {activeInterventions.map((t) => {
+                const on = selectedInterventionIds.has(t.id);
+                return (
+                  <label
+                    key={t.id}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "0.35rem 0.7rem",
+                      borderRadius: 999,
+                      border: `1px solid ${on ? "var(--accent, #2563eb)" : "#cbd5e1"}`,
+                      background: on ? "var(--accent, #2563eb)" : "#fff",
+                      color: on ? "#fff" : "#334155",
+                      fontSize: "0.85rem",
+                      fontWeight: on ? 600 : 500,
+                      lineHeight: 1.2,
+                      cursor: "pointer",
+                      userSelect: "none",
+                      transition:
+                        "background 120ms ease, border-color 120ms ease, color 120ms ease",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={() => toggleIntervention(t.id)}
+                      style={{
+                        position: "absolute",
+                        width: 1,
+                        height: 1,
+                        padding: 0,
+                        margin: -1,
+                        overflow: "hidden",
+                        clip: "rect(0 0 0 0)",
+                        whiteSpace: "nowrap",
+                        border: 0,
+                      }}
+                    />
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        fontSize: "0.85rem",
+                        lineHeight: 1,
+                        opacity: on ? 1 : 0.55,
+                      }}
+                    >
+                      {on ? "✓" : "+"}
+                    </span>
+                    <span>{t.name}</span>
+                  </label>
+                );
+              })}
             </div>
           )}
           {otherSelected && (
