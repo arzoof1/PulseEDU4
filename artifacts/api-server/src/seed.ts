@@ -333,6 +333,104 @@ const HOUSE_DEFAULTS = [
 // (created before this column existed) that admins haven't customised.
 const HOUSE_ICON_POOL = ["Crown", "Shield", "Flame", "Star", "Bird", "Sparkles"];
 
+// -----------------------------------------------------------------------------
+// Communication Log + Call Initiative — family-contact logging, bad-number
+// flags routed to front office, and "call all families" campaigns. CREATE TABLE
+// IF NOT EXISTS at boot (drizzle-kit push can't apply non-interactively per the
+// project gotchas). Idempotent; safe to re-run every boot. Default
+// communication types are seeded lazily per-school on first GET, not here.
+// -----------------------------------------------------------------------------
+export async function ensureCommunicationSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS communication_types (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS communication_types_school_id_name_unique ON communication_types (school_id, name)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS communication_logs (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      who_contacted TEXT,
+      outcome TEXT NOT NULL,
+      tone TEXT NOT NULL DEFAULT 'neutral',
+      note TEXT,
+      staff_id INTEGER NOT NULL,
+      staff_name TEXT NOT NULL,
+      contacted_at TIMESTAMPTZ NOT NULL,
+      logged_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS communication_logs_school_student_idx ON communication_logs (school_id, student_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS communication_logs_school_contacted_idx ON communication_logs (school_id, contacted_at)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS bad_number_flags (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      contact_slot INTEGER NOT NULL,
+      contact_label TEXT,
+      bad_phone TEXT,
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      flagged_by_staff_id INTEGER NOT NULL,
+      flagged_by_name TEXT NOT NULL,
+      flagged_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      corrected_phone TEXT,
+      resolved_by_staff_id INTEGER,
+      resolved_by_name TEXT,
+      resolved_at TIMESTAMPTZ,
+      note TEXT
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS bad_number_flags_school_status_idx ON bad_number_flags (school_id, status)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS bad_number_flags_school_student_idx ON bad_number_flags (school_id, student_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS call_initiatives (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      start_date TEXT NOT NULL,
+      window_days INTEGER NOT NULL DEFAULT 14,
+      responsible_period INTEGER NOT NULL DEFAULT 1,
+      completion_rule TEXT NOT NULL DEFAULT 'balanced',
+      attempts_required INTEGER NOT NULL DEFAULT 2,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_by_staff_id INTEGER,
+      created_by_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS call_initiatives_school_active_idx ON call_initiatives (school_id, active)`,
+  );
+
+  // capManageContactInfo — front-office capability for the bad-number
+  // "Contact Info Fixes" queue. Additive boolean on staff; default FALSE.
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS cap_manage_contact_info BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+}
+
 export async function ensureHousesSchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS houses (

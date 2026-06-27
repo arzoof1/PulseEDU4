@@ -2492,6 +2492,20 @@ export default function StudentProfile({
   >([]);
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
+  // Family communication timeline (read-only). Loaded in a parallel fetch keyed
+  // to the student so switching students never shows stale rows.
+  const [commLogs, setCommLogs] = useState<
+    Array<{
+      id: number;
+      type: string;
+      whoContacted: string | null;
+      outcome: string;
+      tone: string;
+      note: string | null;
+      staffName: string;
+      contactedAt: string;
+    }>
+  >([]);
   // Inline demographics editor — closed by default. When opened it
   // hydrates from the loaded profile; Save PATCHes only the changed
   // fields so the server-side merge stays minimal.
@@ -2606,6 +2620,25 @@ export default function StudentProfile({
       .then((j: { emergencyContacts?: typeof emergencyContacts } | null) => {
         if (cancelled || !j) return;
         setEmergencyContacts(j.emergencyContacts ?? []);
+      })
+      .catch(() => {
+        /* non-fatal — block just stays empty */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setCommLogs([]);
+    authFetch(
+      `/api/communications/student/${encodeURIComponent(studentId)}`,
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { logs?: typeof commLogs } | null) => {
+        if (cancelled || !j) return;
+        setCommLogs(j.logs ?? []);
       })
       .catch(() => {
         /* non-fatal — block just stays empty */
@@ -3921,6 +3954,88 @@ export default function StudentProfile({
               </ul>
             </div>
           )}
+        </Card>
+      </div>
+
+      <div style={{ order: 2, minWidth: 0 }}>
+        <Card title="Family Communication" empty={commLogs.length === 0}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.6rem",
+            }}
+          >
+            {commLogs.map((l) => {
+              const toneColor =
+                l.tone === "positive"
+                  ? "#16a34a"
+                  : l.tone === "concern"
+                    ? "#dc2626"
+                    : "#64748b";
+              const toneLabel =
+                l.tone === "positive"
+                  ? "Positive"
+                  : l.tone === "concern"
+                    ? "Concern"
+                    : "Neutral";
+              const when = new Date(l.contactedAt);
+              const whenLabel = Number.isNaN(when.getTime())
+                ? l.contactedAt
+                : when.toLocaleString("en-US", {
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                    hour: "numeric",
+                    minute: "2-digit",
+                  });
+              return (
+                <div
+                  key={l.id}
+                  style={{
+                    borderLeft: `3px solid ${toneColor}`,
+                    paddingLeft: "0.6rem",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "0.85rem",
+                      fontWeight: 700,
+                      color: "#0f172a",
+                    }}
+                  >
+                    {l.type} · {l.outcome}
+                    <span
+                      style={{
+                        marginLeft: "0.5rem",
+                        fontSize: "0.72rem",
+                        fontWeight: 700,
+                        color: toneColor,
+                      }}
+                    >
+                      {toneLabel}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: "0.78rem", color: "#6b7280" }}>
+                    {whenLabel}
+                    {l.whoContacted ? ` · to ${l.whoContacted}` : ""} · by{" "}
+                    {l.staffName}
+                  </div>
+                  {l.note && (
+                    <div
+                      style={{
+                        fontSize: "0.82rem",
+                        color: "#334155",
+                        marginTop: "0.15rem",
+                      }}
+                    >
+                      {l.note}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </Card>
       </div>
 

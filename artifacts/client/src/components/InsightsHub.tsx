@@ -32,7 +32,8 @@ export type InsightsTileId =
   | "instructionalCoverage"
   | "classComposer"
   | "algebraPlacement"
-  | "reteachActivity";
+  | "reteachActivity"
+  | "contactRate";
 
 export type InsightsGroupId = "domains" | "actions" | "monitoring";
 

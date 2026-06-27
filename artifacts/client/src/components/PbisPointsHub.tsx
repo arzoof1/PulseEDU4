@@ -4,6 +4,7 @@ import StudentPhoto from "./StudentPhoto";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 import InterventionTypesAdmin from "./InterventionTypesAdmin";
 import PulloutReasonsAdmin from "./PulloutReasonsAdmin";
+import DictateButton, { appendDictated } from "./DictateButton";
 
 // =============================================================================
 // PBIS Points Hub
@@ -113,7 +114,7 @@ type IvType = {
 
 // Color-first entry mode. "choose" shows the green/red picker; the others
 // render the positive award hub or the negative behavior+intervention flow.
-type Mode = "choose" | "positive" | "negative";
+type Mode = "choose" | "positive" | "negative" | "communication";
 
 const TAB_LABELS: { key: Tab; label: string }[] = [
   { key: "classes", label: "Classes" },
@@ -162,6 +163,7 @@ export default function PbisPointsHub() {
   const [mode, setMode] = useState<Mode>("choose");
   const [interventionTypes, setInterventionTypes] = useState<IvType[]>([]);
   const [loggingNegFor, setLoggingNegFor] = useState<Student | null>(null);
+  const [loggingCommFor, setLoggingCommFor] = useState<Student | null>(null);
 
   // Clear bulk selection whenever the visible roster changes (period filter
   // or admin's teacher picker). Otherwise a teacher could "Select all" in
@@ -544,6 +546,7 @@ export default function PbisPointsHub() {
               setAwardingFor(null);
               setBulkOpen(false);
               setLoggingNegFor(null);
+              setLoggingCommFor(null);
             }}
             style={{
               background: "none",
@@ -602,6 +605,63 @@ export default function PbisPointsHub() {
               activePeriod={activePeriod}
               onChangePeriod={setActivePeriod}
               onSelectStudent={setLoggingNegFor}
+              teachers={canViewAllTeachers ? teachers : null}
+              selectedTeacherId={selectedTeacherId}
+              onChangeTeacher={setSelectedTeacherId}
+              selectedIds={selectedIds}
+              onToggleSelect={() => {}}
+              onSelectMany={() => {}}
+              onUnselectMany={() => {}}
+              onClearSelection={() => {}}
+              onOpenBulk={() => {}}
+              hideBulk
+            />
+          </>
+        ))}
+
+      {mode === "communication" &&
+        (loading ? (
+          <div
+            style={{ padding: "2rem", textAlign: "center", color: "#64748b" }}
+          >
+            Loading…
+          </div>
+        ) : errorMsg ? (
+          <div
+            style={{
+              padding: "1rem",
+              background: "#fee2e2",
+              color: "#991b1b",
+              borderRadius: "0.4rem",
+              margin: "1rem 0",
+            }}
+          >
+            {errorMsg}
+          </div>
+        ) : (
+          <>
+            <div
+              style={{
+                margin: "0 0 1rem",
+                padding: "0.6rem 0.85rem",
+                background: "#eff6ff",
+                border: "1px solid #bfdbfe",
+                borderRadius: "0.5rem",
+                color: "#1e40af",
+                fontSize: "0.9rem",
+                fontWeight: 600,
+              }}
+            >
+              Pick a student to log a call, email, or message home to their
+              family.
+            </div>
+            <ClassesView
+              sections={visibleSectionsForTeacher}
+              students={students}
+              totals={totals}
+              activePeriod={activePeriod}
+              onChangePeriod={setActivePeriod}
+              onSelectStudent={setLoggingCommFor}
               teachers={canViewAllTeachers ? teachers : null}
               selectedTeacherId={selectedTeacherId}
               onChangeTeacher={setSelectedTeacherId}
@@ -775,6 +835,14 @@ export default function PbisPointsHub() {
           }}
         />
       )}
+
+      {loggingCommFor && (
+        <CommunicationLogModal
+          student={loggingCommFor}
+          onClose={() => setLoggingCommFor(null)}
+          onSaved={() => setLoggingCommFor(null)}
+        />
+      )}
     </section>
   );
 }
@@ -788,7 +856,7 @@ export default function PbisPointsHub() {
 function ModeChooser({
   onPick,
 }: {
-  onPick: (m: "positive" | "negative") => void;
+  onPick: (m: "positive" | "negative" | "communication") => void;
 }) {
   const base: React.CSSProperties = {
     flex: "1 1 220px",
@@ -851,6 +919,689 @@ function ModeChooser({
           Log a behavior &amp; intervention tried
         </span>
       </button>
+      <button
+        type="button"
+        onClick={() => onPick("communication")}
+        style={{
+          ...base,
+          background: "linear-gradient(135deg,#2563eb,#1d4ed8)",
+          boxShadow: "0 8px 22px rgba(37,99,235,0.32)",
+        }}
+      >
+        <span style={{ fontSize: "2.75rem", lineHeight: 1, fontWeight: 800 }}>
+          ☎
+        </span>
+        <span style={{ fontSize: "1.4rem", fontWeight: 800 }}>
+          Communication Log
+        </span>
+        <span
+          style={{ fontSize: "0.9rem", opacity: 0.92, textAlign: "center" }}
+        >
+          Log a call, email, or message home
+        </span>
+      </button>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Communication Log modal — log a call, email, or message home to a family.
+// Auto-loads the student's family contacts (primary guardian + emergency),
+// captures Type / Who / Outcome / Tone / optional backdated time + voice notes,
+// and POSTs to /api/communications.
+// -----------------------------------------------------------------------------
+
+type CommType = { id: number; name: string; active: boolean };
+type CommFamilyContact = {
+  contactSlot: number;
+  name: string;
+  relationship: string | null;
+  phone: string | null;
+  phoneLabel: string | null;
+  email: string | null;
+  badFlag: {
+    id: number;
+    status: string;
+    reason: string;
+    correctedPhone: string | null;
+  } | null;
+};
+
+const COMM_OUTCOMES = [
+  "Reached",
+  "Left message",
+  "No answer",
+  "Wrong number",
+  "Inbound",
+];
+const COMM_TONES: { value: string; label: string; color: string }[] = [
+  { value: "positive", label: "Positive", color: "#16a34a" },
+  { value: "neutral", label: "Neutral", color: "#64748b" },
+  { value: "concern", label: "Concern", color: "#dc2626" },
+];
+
+// Convert a Date to the value a <input type="datetime-local"> expects
+// (local time, no timezone suffix): YYYY-MM-DDTHH:mm.
+function toLocalInput(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours(),
+  )}:${pad(d.getMinutes())}`;
+}
+
+export type CommLogStudent = Student;
+
+export function CommunicationLogModal({
+  student,
+  onClose,
+  onSaved,
+}: {
+  student: Student;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [types, setTypes] = useState<CommType[]>([]);
+  const [contacts, setContacts] = useState<CommFamilyContact[]>([]);
+  const [loadingFamily, setLoadingFamily] = useState(true);
+
+  const [type, setType] = useState("");
+  const [whoContacted, setWhoContacted] = useState("");
+  const [outcome, setOutcome] = useState("Reached");
+  const [tone, setTone] = useState("positive");
+  const [note, setNote] = useState("");
+  const [backdate, setBackdate] = useState(false);
+  const [contactedAt, setContactedAt] = useState(() => toLocalInput(new Date()));
+
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Inline "Flag bad number" — which contact slot has its reason picker open,
+  // and which slots have been flagged this session (optimistic).
+  const [flagOpenSlot, setFlagOpenSlot] = useState<number | null>(null);
+  const [flaggingSlot, setFlaggingSlot] = useState<number | null>(null);
+
+  async function flagBadNumber(c: CommFamilyContact, reason: string) {
+    setFlaggingSlot(c.contactSlot);
+    try {
+      const res = await authFetch("/api/communications/bad-number-flag", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: student.studentId,
+          contactSlot: c.contactSlot,
+          reason,
+          badPhone: c.phone,
+          contactLabel: c.relationship
+            ? `${c.name} (${c.relationship})`
+            : c.name,
+        }),
+      });
+      if (res.ok) {
+        setContacts((prev) =>
+          prev.map((x) =>
+            x.contactSlot === c.contactSlot
+              ? {
+                  ...x,
+                  badFlag: {
+                    id: 0,
+                    status: "open",
+                    reason,
+                    correctedPhone: null,
+                  },
+                }
+              : x,
+          ),
+        );
+      }
+    } catch {
+      /* non-fatal */
+    } finally {
+      setFlaggingSlot(null);
+      setFlagOpenSlot(null);
+    }
+  }
+
+  // Load editable communication types (seeds Phone/Email/Parent Square lazily).
+  useEffect(() => {
+    let cancelled = false;
+    authFetch("/api/communication-types")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { types?: CommType[] } | null) => {
+        if (cancelled || !j?.types) return;
+        const active = j.types.filter((t) => t.active);
+        setTypes(active);
+        setType((prev) => prev || active[0]?.name || "");
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load the student's family contacts.
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingFamily(true);
+    authFetch(`/api/communications/family/${encodeURIComponent(student.studentId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { contacts?: CommFamilyContact[] } | null) => {
+        if (cancelled) return;
+        const list = j?.contacts ?? [];
+        setContacts(list);
+        // Default "Who contacted" to the primary guardian when present.
+        setWhoContacted((prev) => prev || list[0]?.name || "");
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoadingFamily(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [student.studentId]);
+
+  const noteOver = note.length > 1000;
+  const canSubmit = !!type && COMM_OUTCOMES.includes(outcome) && !noteOver && !submitting;
+
+  async function submit() {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await authFetch("/api/communications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: student.studentId,
+          type,
+          ...(whoContacted.trim() ? { whoContacted: whoContacted.trim() } : {}),
+          outcome,
+          tone,
+          ...(note.trim() ? { note: note.trim() } : {}),
+          ...(backdate ? { contactedAt: new Date(contactedAt).toISOString() } : {}),
+        }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(
+          (j && typeof j.error === "string" && j.error) ||
+            "Could not save. Please try again.",
+        );
+      }
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const labelStyle: React.CSSProperties = {
+    display: "block",
+    fontSize: "0.8rem",
+    fontWeight: 700,
+    color: "#334155",
+    marginBottom: "0.3rem",
+  };
+  const inputStyle: React.CSSProperties = {
+    width: "100%",
+    padding: "0.55rem 0.6rem",
+    borderRadius: "0.5rem",
+    border: "1px solid #cbd5e1",
+    fontSize: "0.95rem",
+    background: "white",
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,23,42,0.5)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 50,
+        padding: "1rem",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "white",
+          borderRadius: 12,
+          width: "min(560px, 100%)",
+          maxHeight: "90vh",
+          overflowY: "auto",
+          boxShadow: "0 20px 50px rgba(0,0,0,0.3)",
+        }}
+      >
+        <div
+          style={{
+            padding: "1rem 1.25rem",
+            borderTop: "4px solid #2563eb",
+            borderBottom: "1px solid #f1f5f9",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "0.78rem",
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              color: "#2563eb",
+            }}
+          >
+            Communication Log
+          </div>
+          <div style={{ fontSize: "1.15rem", fontWeight: 700, color: "#0f172a" }}>
+            {student.firstName} {student.lastName}
+          </div>
+        </div>
+
+        <div style={{ padding: "1.25rem" }}>
+          {/* Family contacts card */}
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>Family contacts</label>
+            {loadingFamily ? (
+              <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
+                Loading contacts…
+              </div>
+            ) : contacts.length === 0 ? (
+              <div style={{ fontSize: "0.85rem", color: "#b45309" }}>
+                No family contacts on file for this student.
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.4rem",
+                }}
+              >
+                {contacts.map((c) => {
+                  const flagged = c.badFlag && c.badFlag.status !== "resolved";
+                  const corrected =
+                    c.badFlag &&
+                    c.badFlag.status === "resolved" &&
+                    c.badFlag.correctedPhone;
+                  const selected = whoContacted === c.name;
+                  const flagOpen = flagOpenSlot === c.contactSlot;
+                  return (
+                    <div
+                      key={c.contactSlot}
+                      style={{
+                        border: selected
+                          ? "1px solid #2563eb"
+                          : "1px solid #e2e8f0",
+                        background: selected ? "#eff6ff" : "#f8fafc",
+                        borderRadius: "0.5rem",
+                        padding: "0.5rem 0.65rem",
+                      }}
+                    >
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setWhoContacted(c.name)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ")
+                            setWhoContacted(c.name);
+                        }}
+                        style={{ cursor: "pointer", textAlign: "left" }}
+                      >
+                        <div
+                          style={{
+                            fontWeight: 700,
+                            fontSize: "0.9rem",
+                            color: "#0f172a",
+                          }}
+                        >
+                          {c.name}
+                          {c.relationship ? (
+                            <span
+                              style={{
+                                fontWeight: 500,
+                                color: "#64748b",
+                                marginLeft: "0.4rem",
+                              }}
+                            >
+                              {c.relationship}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div style={{ fontSize: "0.82rem", color: "#475569" }}>
+                          {c.phone ? (
+                            <span
+                              style={{
+                                textDecoration: flagged
+                                  ? "line-through"
+                                  : undefined,
+                                color: flagged ? "#dc2626" : undefined,
+                              }}
+                            >
+                              {c.phone}
+                            </span>
+                          ) : (
+                            <span style={{ color: "#94a3b8" }}>No phone</span>
+                          )}
+                          {corrected ? (
+                            <span
+                              style={{
+                                marginLeft: "0.5rem",
+                                color: "#16a34a",
+                                fontWeight: 600,
+                              }}
+                            >
+                              → {c.badFlag!.correctedPhone}
+                            </span>
+                          ) : null}
+                          {c.email ? (
+                            <span style={{ marginLeft: "0.5rem" }}>
+                              • {c.email}
+                            </span>
+                          ) : null}
+                          {flagged ? (
+                            <span
+                              style={{
+                                marginLeft: "0.5rem",
+                                fontWeight: 700,
+                                color: "#dc2626",
+                              }}
+                            >
+                              ⚠ Bad number
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                      {/* Flag bad number affordance */}
+                      {!flagged && c.phone ? (
+                        flagOpen ? (
+                          <div
+                            style={{
+                              marginTop: "0.4rem",
+                              display: "flex",
+                              flexWrap: "wrap",
+                              gap: "0.3rem",
+                              alignItems: "center",
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: "0.72rem",
+                                color: "#64748b",
+                              }}
+                            >
+                              Reason:
+                            </span>
+                            {[
+                              "Disconnected",
+                              "Not in service",
+                              "Wrong person",
+                              "Voicemail full",
+                              "Other",
+                            ].map((r) => (
+                              <button
+                                key={r}
+                                type="button"
+                                disabled={flaggingSlot === c.contactSlot}
+                                onClick={() => flagBadNumber(c, r)}
+                                style={{
+                                  fontSize: "0.72rem",
+                                  padding: "0.2rem 0.45rem",
+                                  borderRadius: "0.35rem",
+                                  border: "1px solid #fca5a5",
+                                  background: "#fef2f2",
+                                  color: "#b91c1c",
+                                  cursor: "pointer",
+                                }}
+                              >
+                                {r}
+                              </button>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => setFlagOpenSlot(null)}
+                              style={{
+                                fontSize: "0.72rem",
+                                padding: "0.2rem 0.45rem",
+                                borderRadius: "0.35rem",
+                                border: "1px solid #e2e8f0",
+                                background: "#fff",
+                                color: "#64748b",
+                                cursor: "pointer",
+                              }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setFlagOpenSlot(c.contactSlot)}
+                            style={{
+                              marginTop: "0.35rem",
+                              fontSize: "0.72rem",
+                              padding: 0,
+                              border: "none",
+                              background: "none",
+                              color: "#dc2626",
+                              cursor: "pointer",
+                              textDecoration: "underline",
+                            }}
+                          >
+                            Flag bad number
+                          </button>
+                        )
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Type */}
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>Type</label>
+            <select
+              value={type}
+              onChange={(e) => setType(e.target.value)}
+              style={inputStyle}
+            >
+              {types.length === 0 && <option value="">Loading…</option>}
+              {types.map((t) => (
+                <option key={t.id} value={t.name}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Who contacted */}
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>Who did you contact?</label>
+            <input
+              type="text"
+              value={whoContacted}
+              onChange={(e) => setWhoContacted(e.target.value)}
+              placeholder="Name of the person contacted"
+              style={inputStyle}
+            />
+          </div>
+
+          {/* Outcome */}
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>Outcome</label>
+            <select
+              value={outcome}
+              onChange={(e) => setOutcome(e.target.value)}
+              style={inputStyle}
+            >
+              {COMM_OUTCOMES.map((o) => (
+                <option key={o} value={o}>
+                  {o}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Tone */}
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>Tone</label>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              {COMM_TONES.map((t) => {
+                const on = tone === t.value;
+                return (
+                  <button
+                    key={t.value}
+                    type="button"
+                    onClick={() => setTone(t.value)}
+                    style={{
+                      flex: 1,
+                      padding: "0.5rem",
+                      borderRadius: "0.5rem",
+                      border: on
+                        ? `2px solid ${t.color}`
+                        : "1px solid #cbd5e1",
+                      background: on ? `${t.color}14` : "white",
+                      color: on ? t.color : "#475569",
+                      fontWeight: 700,
+                      fontSize: "0.88rem",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Date / time */}
+          <div style={{ marginBottom: "1rem" }}>
+            <label
+              style={{
+                ...labelStyle,
+                display: "flex",
+                alignItems: "center",
+                gap: "0.4rem",
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={backdate}
+                onChange={(e) => setBackdate(e.target.checked)}
+              />
+              Backdate this contact
+            </label>
+            {backdate ? (
+              <input
+                type="datetime-local"
+                value={contactedAt}
+                max={toLocalInput(new Date())}
+                onChange={(e) => setContactedAt(e.target.value)}
+                style={inputStyle}
+              />
+            ) : (
+              <div style={{ fontSize: "0.82rem", color: "#64748b" }}>
+                Logged with the current date and time.
+              </div>
+            )}
+          </div>
+
+          {/* Note + voice-to-text */}
+          <div style={{ marginBottom: "1rem" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: "0.3rem",
+              }}
+            >
+              <label style={{ ...labelStyle, marginBottom: 0 }}>Notes</label>
+              <DictateButton
+                onAppend={(chunk) =>
+                  setNote((prev) => appendDictated(prev, chunk))
+                }
+                borderColor="#bfdbfe"
+                inkSoft="#2563eb"
+              />
+            </div>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={3}
+              placeholder="What was discussed? (optional)"
+              style={{ ...inputStyle, resize: "vertical" }}
+            />
+            {noteOver && (
+              <div
+                style={{
+                  marginTop: "0.3rem",
+                  fontSize: "0.8rem",
+                  color: "#dc2626",
+                }}
+              >
+                Notes are too long (max 1000 characters).
+              </div>
+            )}
+          </div>
+
+          {error && (
+            <div
+              style={{
+                marginBottom: "1rem",
+                padding: "0.6rem 0.75rem",
+                background: "#fee2e2",
+                color: "#991b1b",
+                borderRadius: "0.5rem",
+                fontSize: "0.85rem",
+              }}
+            >
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: "0.6rem", justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                padding: "0.6rem 1rem",
+                borderRadius: "0.5rem",
+                border: "1px solid #cbd5e1",
+                background: "white",
+                color: "#475569",
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void submit()}
+              disabled={!canSubmit}
+              style={{
+                padding: "0.6rem 1.25rem",
+                borderRadius: "0.5rem",
+                border: "none",
+                background: canSubmit ? "#2563eb" : "#93c5fd",
+                color: "white",
+                fontWeight: 800,
+                cursor: canSubmit ? "pointer" : "not-allowed",
+              }}
+            >
+              {submitting ? "Saving…" : "Save communication"}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

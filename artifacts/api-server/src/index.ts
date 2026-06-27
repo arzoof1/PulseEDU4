@@ -42,6 +42,7 @@ import {
   ensureStudentPhotoColumns,
   ensureOnTimeTestModeColumns,
   ensureParentMessagesSchema,
+  ensureCommunicationSchema,
   ensurePulseDnaVideosSchema,
   ensureStudentLocalSisIdBackfill,
   ensureStudentAccommodationsBackfill,
@@ -295,6 +296,10 @@ async function runSeed(): Promise<void> {
   // acknowledge receipts (parent_messages + parent_message_recipients).
   // Idempotent.
   await ensureParentMessagesSchema();
+  // Communication Log + Call Initiative — family-contact logging, bad-number
+  // flags (front office), and "call all families" campaigns. Also adds
+  // staff.cap_manage_contact_info. Idempotent.
+  await ensureCommunicationSchema();
   // PulseDNA videos (Recording Studio) + parent_messages.video_id link.
   // Idempotent.
   await ensurePulseDnaVideosSchema();

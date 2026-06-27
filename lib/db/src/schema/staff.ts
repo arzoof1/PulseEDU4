@@ -207,6 +207,17 @@ export const staffTable = pgTable("staff", {
   // for front-office/volunteer guides who only need their own assigned tours.
   capTourGuide: boolean("cap_tour_guide").notNull().default(false),
 
+  // Contact Info Fixes — grants access to the front-office "Contact Info
+  // Fixes" queue where bad-number flags raised from the Communication Log
+  // land. The holder can enter a corrected phone number (an audited
+  // override that wins until overwritten) or dismiss the flag. Assignable
+  // to any front-office clerk / registrar without the rest of the admin
+  // surface; admins / SuperUser get it implicitly via the route gate
+  // (admin OR this flag).
+  capManageContactInfo: boolean("cap_manage_contact_info")
+    .notNull()
+    .default(false),
+
   // Comp Time (FLSA compensatory time) per-staff capabilities. Mirrors
   // the AST gate above so the role-management UI can sit them side by
   // side under "Time Tracking."

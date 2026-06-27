@@ -55,6 +55,7 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     capTourNotify: row.capTourNotify,
     capTourGuide: row.capTourGuide,
     capManageEsign: row.capManageEsign,
+    capManageContactInfo: row.capManageContactInfo,
     canApproveAst: row.canApproveAst,
     canApproveCompTime: row.canApproveCompTime,
     exemptStatus: row.exemptStatus,

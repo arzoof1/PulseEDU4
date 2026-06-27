@@ -115,6 +115,7 @@ import pulseBrainLabParentRouter from "./pulseBrainLabParent";
 import academicEvidenceRouter from "./academicEvidence";
 import academicEvidenceParentRouter from "./academicEvidenceParent";
 import { eligibilityRouter } from "./eligibility";
+import communicationsRouter from "./communications";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -302,5 +303,6 @@ router.use(pulseBrainLabParentRouter);
 router.use(academicEvidenceRouter);
 router.use(academicEvidenceParentRouter);
 router.use(eligibilityRouter);
+router.use(communicationsRouter);
 
 export default router;

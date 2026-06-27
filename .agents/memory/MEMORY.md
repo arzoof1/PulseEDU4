@@ -70,3 +70,4 @@
 - [school-settings PUT gating](school-settings-put-gating.md) — PUT /school-settings has no route-level admin guard; gate each school-WIDE field inline (intRange already wrote to updates, so 403+return before db.update).
 - [CSV export formula injection](csv-export-injection.md) — CSV cells must neutralize leading = + - @ tab CR (prefix apostrophe), not just quote delimiters; review flags it as security.
 - [Student report JSON+PDF parity](student-report-json-pdf-parity.md) — per-student Classroom Intervention Report: JSON + PDF share loadStudentReport(); both gated requireStaff+isCoreTeam; PDF uses localSisId only.
+- [Contact-rate escalation grouping](contact-rate-escalation.md) — per-teacher escalation emails must group/resolve by staff.id not displayName (names not unique → roster leak); school-scope the staff join too.

@@ -107,6 +107,7 @@ const CAP_FLAGS = [
   "capTourNotify",
   "capTourGuide",
   "capManageEsign",
+  "capManageContactInfo",
 ] as const;
 type CapFlag = (typeof CAP_FLAGS)[number];
 
@@ -177,6 +178,7 @@ const STAFF_SELECT = {
   capTourNotify: staffTable.capTourNotify,
   capTourGuide: staffTable.capTourGuide,
   capManageEsign: staffTable.capManageEsign,
+  capManageContactInfo: staffTable.capManageContactInfo,
   defaultRoom: staffTable.defaultRoom,
   houseId: staffTable.houseId,
   department: staffTable.department,

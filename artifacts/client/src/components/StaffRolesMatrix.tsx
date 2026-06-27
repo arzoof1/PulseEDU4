@@ -94,6 +94,7 @@ const PAGES: { key: BoolKey; label: string; group: string }[] = [
   { group: "Admin", key: "capTourNotify", label: "Tour Alerts" },
   { group: "Admin", key: "capTourGuide", label: "Tour Guide" },
   { group: "Admin", key: "capManageEsign", label: "e-Sign Documents" },
+  { group: "Admin", key: "capManageContactInfo", label: "Contact Info Fixes" },
 ];
 
 const TEACHER_BASELINE: BoolKey[] = [

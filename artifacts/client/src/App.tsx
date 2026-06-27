@@ -45,6 +45,13 @@ import EligibilityHub, {
 import SchoolGradeCalculatorPage from "./components/SchoolGradeCalculatorPage";
 import EsignManagerPage from "./components/EsignManagerPage";
 import PickupTagsPanel from "./components/PickupTagsPanel";
+import ContactFixesPage from "./components/ContactFixesPage";
+import ContactRatePage from "./components/ContactRatePage";
+import {
+  CallInitiativeBanner,
+  CallInitiativeWorklistModal,
+  CallInitiativeAdminPanel,
+} from "./components/CallInitiativePanel";
 import FastCoveragePage from "./components/FastCoveragePage";
 import CameraRegistryPage from "./components/CameraRegistryPage";
 import CreatePassModal from "./components/CreatePassModal";
@@ -3968,6 +3975,16 @@ const INSIGHTS_TILES: InsightsTile[] = [
     targetSection: "classComposer",
   },
   {
+    id: "contactRate",
+    icon: "☎️",
+    title: "Contact Rate",
+    subtitle:
+      "How many families have been contacted — last N days and YTD, positive vs. concern tone, plus a not-contacted worklist by responsible teacher. CSV + PDF, and email teachers with incomplete calls.",
+    phase: "Today",
+    group: "actions",
+    targetSection: "contactRate",
+  },
+  {
     id: "academics",
     icon: "📘",
     title: "Academics",
@@ -4128,7 +4145,7 @@ const INSIGHTS_TILES: InsightsTile[] = [
 // nav items render. Keep this in sync with the sidebar JSX below.
 const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
   administration: ["superUserHome", "featureLicensing", "districtAdmin"],
-  insights: ["insights", "insightsWatchlist", "myWatchList", "studentProfile", "classComposer"],
+  insights: ["insights", "insightsWatchlist", "myWatchList", "studentProfile", "classComposer", "contactRate"],
   recognition: [
     "pbis",
     "schoolStore",
@@ -5471,6 +5488,7 @@ function App() {
     capManageDismissal?: boolean;
     capTourNotify?: boolean;
     capManageEsign?: boolean;
+    capManageContactInfo?: boolean;
     canApproveAst?: boolean;
     canApproveCompTime?: boolean;
     exemptStatus?: string | null;
@@ -5485,6 +5503,7 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [staffUsers, setStaffUsers] = useState<string[]>([]);
   const [settingsTile, setSettingsTile] = useState<SettingsTileId | null>(null);
+  const [callWorklistOpen, setCallWorklistOpen] = useState(false);
   // True after the user clicked "Open" on a row in the Onboarding
   // Checklist. Drives the floating "← Back to Onboarding" banner that
   // overlays every page until the admin returns to the checklist (or
@@ -5695,7 +5714,9 @@ function App() {
     | "compAdmin"
     | "compInsights"
     | "pickupTags"
+    | "contactFixes"
     | "classComposer"
+    | "contactRate"
     | "familyMessages"
     | "pulseDnaStudio"
     | "eligibility"
@@ -9529,6 +9550,13 @@ function App() {
     authUser?.isCoreTeam === true ||
     authUser?.isAthleticDirector === true ||
     authUser?.capManageDismissal === true;
+  // Contact Info Fixes gate — front-office staff (capManageContactInfo) plus
+  // admin tier. Mirrors canManageContactInfo() server-side.
+  const canManageContactInfo =
+    isAdmin ||
+    authUser?.isSuperUser === true ||
+    authUser?.isDistrictAdmin === true ||
+    authUser?.capManageContactInfo === true;
   // Document e-Sign gate — mirrors canManageEsign() in lib/coreTeam.ts
   // (admin/SuperUser OR the assignable capManageEsign flag). Documents are
   // private to the creator; drives the Settings tile.
@@ -9794,6 +9822,32 @@ function App() {
     };
   }, [canVerifyPullouts, pendingPulloutsTick]);
 
+  // Open Contact Info Fixes count for the front-office nav badge. Polls so the
+  // office sees newly flagged bad numbers without a manual refresh.
+  const [contactFixesCount, setContactFixesCount] = useState<number>(0);
+  useEffect(() => {
+    if (!canManageContactInfo) {
+      setContactFixesCount(0);
+      return;
+    }
+    let cancelled = false;
+    const fetchCount = () => {
+      authFetch("/api/communications/contact-fixes/count")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j: { count?: number } | null) => {
+          if (cancelled || !j) return;
+          setContactFixesCount(j.count ?? 0);
+        })
+        .catch(() => {});
+    };
+    fetchCount();
+    const interval = setInterval(fetchCount, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [canManageContactInfo]);
+
   // Active pullout count for the ISS Dashboard badge (verified/enroute/arrived).
   const [activePulloutCount, setActivePulloutCount] = useState<number>(0);
   useEffect(() => {
@@ -10050,7 +10104,7 @@ function App() {
     // sidebar above the accordions) — kept out of this list to avoid
     // any chance of duplication if the legacy `baseNavSections` filter
     // ever gets re-consumed.
-    { key: "pbis", label: "PBIS Points", icon: IconStar },
+    { key: "pbis", label: "Classroom Interventions", icon: IconStar },
     // Read-only school-wide rewards catalog. Visible to every signed-in
     // staffer so teachers can browse what students can redeem. The
     // editable version lives inside the PBIS / BS / MTSS hubs.
@@ -10219,6 +10273,9 @@ function App() {
     }
     if (key === "activeKiosks" && activeKiosks.length > 0) {
       return <span style={badgeStyle}>{activeKiosks.length}</span>;
+    }
+    if (key === "contactFixes" && contactFixesCount > 0) {
+      return <span style={badgeStyle}>{contactFixesCount}</span>;
     }
     return null;
   };
@@ -10398,7 +10455,7 @@ function App() {
     });
     add(effectiveFeatures.Pbis && !isNonExemptOnly, {
       key: "pbis",
-      label: "PBIS Points",
+      label: "Classroom Interventions",
       description: "Award positive behavior points to students.",
       emoji: "⭐",
       group: "quick",
@@ -10588,6 +10645,13 @@ function App() {
       label: "Pickup Tags",
       description: "Print car-rider and walker dismissal tags.",
       emoji: "🎫",
+      group: "admin",
+    });
+    add(canManageContactInfo, {
+      key: "contactFixes",
+      label: "Contact Info Fixes",
+      description: "Correct family phone lines flagged as bad.",
+      emoji: "📇",
       group: "admin",
     });
     add(canManageEligibility, {
@@ -11676,6 +11740,18 @@ function App() {
           setSettingsTile("school-tours");
         }}
       />
+
+      {/* Call Initiative — per-teacher "call all families" nudge. Visible to
+          every staff member who may own a worklist; opens the worklist modal. */}
+      <CallInitiativeBanner
+        visible={Boolean(authUser)}
+        onOpen={() => setCallWorklistOpen(true)}
+      />
+      {callWorklistOpen && (
+        <CallInitiativeWorklistModal
+          onClose={() => setCallWorklistOpen(false)}
+        />
+      )}
 
       {activeSection === "spotlight" && (
         <SpotlightPanel
@@ -17153,7 +17229,12 @@ function App() {
         </section>
       </>)}
 
-      {activeSection === "pbis" && <PbisPointsHub />}
+      {activeSection === "pbis" && (
+        <>
+          {isCoreTeamMember && <CallInitiativeAdminPanel />}
+          <PbisPointsHub />
+        </>
+      )}
       {activeSection === "pulseBrainLab" && isBehaviorSpec && <PulseBrainLabHub />}
       {activeSection === "partneringWithParents" &&
         !isNonExemptOnly &&
@@ -22035,6 +22116,10 @@ function App() {
         <PickupTagsPanel />
       )}
 
+      {activeSection === "contactFixes" && canManageContactInfo && (
+        <ContactFixesPage />
+      )}
+
       {activeSection === "eligibility" && canManageEligibility && (
         <EligibilityHub />
       )}
@@ -22748,6 +22833,7 @@ function App() {
               return canViewAlgebraPlacementClient;
             if (t.id === "reteachActivity")
               return canViewReteachActivityClient;
+            if (t.id === "contactRate") return isCoreTeamMember;
             return true;
           })}
           onNavigate={(target) => setActiveSection(target as typeof activeSection)}
@@ -22758,6 +22844,10 @@ function App() {
         <IntensiveGroupComposerPage
           onBack={() => setActiveSection("insights")}
         />
+      )}
+
+      {activeSection === "contactRate" && isCoreTeamMember && (
+        <ContactRatePage onBack={() => setActiveSection("insights")} />
       )}
 
       {activeSection === "familyMessages" &&
