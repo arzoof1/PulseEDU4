@@ -298,6 +298,16 @@ export default function Dashboard({ me }: { me: ParentMe }) {
     sessionStorage.setItem("pulseed.parentTab", activeTab);
   }, [activeTab]);
 
+  // A persisted "rewards" tab (sessionStorage) can outlive the school's
+  // School Store license — or follow a sibling switch into a school where the
+  // store is off. Once we know the store is disabled, fall back to Home so we
+  // never strand the parent on a hidden, empty Rewards surface.
+  useEffect(() => {
+    if (activeTab === "rewards" && store && !store.enabled) {
+      setActiveTab("home");
+    }
+  }, [activeTab, store]);
+
   // Unread Family Messages count for the bottom-tab "Messages" badge. Family-
   // (parent-) scoped, not per-student, so it's independent of sibling switching.
   // We seed it from a lightweight count endpoint on mount + poll, and let the

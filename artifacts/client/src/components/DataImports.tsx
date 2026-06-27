@@ -1172,6 +1172,7 @@ export default function DataImports({
     fast_scores: "FAST",
     fast_prior_year: "FAST",
     fast_florida: "FLORIDA",
+    points_migration: "POINTS",
   };
   const echoWord = KIND_ECHO_WORDS[kind];
 
@@ -2282,6 +2283,13 @@ export default function DataImports({
                       // download bar below is conditionally hidden for
                       // this kind via the `sample` null-check.
                       fast_florida: null as unknown as {
+                        file: string;
+                        label: string;
+                      },
+                      // Points migration files are exports from another PBIS
+                      // platform (LiveSchool/ClassDojo/etc.) — admins supply
+                      // their own, so there is no sample to ship.
+                      points_migration: null as unknown as {
                         file: string;
                         label: string;
                       },

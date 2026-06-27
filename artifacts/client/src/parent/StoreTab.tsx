@@ -221,6 +221,10 @@ export default function StoreTab({
     );
   }
   if (!data) return null;
+  // School Store license is off for this school — render nothing. Dashboard
+  // also flips away from this tab, but guard here too so a disabled store can
+  // never paint a zeroed wallet/empty catalog.
+  if (!data.enabled) return null;
 
   const { wallet, items, orders } = data;
 

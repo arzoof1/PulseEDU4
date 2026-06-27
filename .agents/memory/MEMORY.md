@@ -74,4 +74,5 @@
 - [Contact-rate escalation grouping](contact-rate-escalation.md) — per-teacher escalation emails must group/resolve by staff.id not displayName (names not unique → roster leak); school-scope the staff join too.
 - [Sidebar NavGroup item relocation](sidebar-navgroup-relocation.md) — moving a gated sidebar item between NavGroups needs 3 lockstep edits: broaden the destination `show<Group>` flag to a superset of the item gate, move the `NAV_GROUP_OWNERSHIP` key, keep the per-item gate verbatim.
 - [Generic JSX babel crash](generic-jsx-babel-metadata.md) — `<Comp<T> ...>` typechecks but blanks the Replit Vite dev page (Babel metadata plugin can't parse it); drop the type arg, let props infer T.
+- [Parent-authed object/image proxy](parent-authed-object-proxy.md) — parents can't use staff object route; stream school-scoped images via a parent proxy + blob (no <img src> in iframe); license-gated persisted tabs need both-end fallback.
 - [School Store redemption engine](school-store-redemption-engine.md) — derived wallet; all balance/stock writes lock per-(school,student) then re-read + status-guarded update; restore stock from stock_held col, not status.
