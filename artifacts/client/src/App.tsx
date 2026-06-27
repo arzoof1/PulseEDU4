@@ -17513,7 +17513,9 @@ function App() {
           every endpoint via canManageStoreFulfillment; the nav item + this
           render are gated on canFulfillStore to match. */}
       {activeSection === "schoolStoreFulfillment" && canFulfillStore && (
-        <SchoolStoreFulfillmentView />
+        <SchoolStoreFulfillmentView
+          isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
+        />
       )}
 
       {(activeSection === "pbisRecent" || activeSection === "pbisReports") && (<>

@@ -110,7 +110,11 @@ function fmtDate(iso: string): string {
   });
 }
 
-export default function SchoolStoreFulfillmentView() {
+export default function SchoolStoreFulfillmentView({
+  isAdmin = false,
+}: {
+  isAdmin?: boolean;
+}) {
   const [tab, setTab] = useState<"distribution" | "log">("distribution");
 
   // Shared catalog (item filter + labels).
@@ -143,6 +147,8 @@ export default function SchoolStoreFulfillmentView() {
         </p>
       </div>
 
+      {isAdmin && <NotifyToggle />}
+
       <div style={{ display: "flex", gap: "0.5rem" }}>
         {(["distribution", "log"] as const).map((t) => (
           <button
@@ -169,6 +175,152 @@ export default function SchoolStoreFulfillmentView() {
       ) : (
         <LogPanel catalog={catalog} />
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Family-notification toggle (school-admin half of the three-tier gate).
+//
+// Self-contained: GETs /api/school-settings to read both halves, PUTs only the
+// admin half (featureSchoolStoreNotify). The district half
+// (superFeatureSchoolStoreNotify) is set by SuperUsers via feature-licensing —
+// when it's off the admin switch is LOCKED (disabled + hint), because the
+// server rejects an admin-enable while the district half is off anyway.
+// ---------------------------------------------------------------------------
+function NotifyToggle() {
+  const [loading, setLoading] = useState(true);
+  const [districtOn, setDistrictOn] = useState(false);
+  const [adminOn, setAdminOn] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await authFetch("/api/school-settings", {
+          cache: "no-store",
+        });
+        if (!r.ok) return;
+        const data = (await r.json()) as {
+          featureSchoolStoreNotify?: boolean;
+          superFeatureSchoolStoreNotify?: boolean;
+        };
+        if (cancelled) return;
+        setDistrictOn(Boolean(data.superFeatureSchoolStoreNotify));
+        setAdminOn(Boolean(data.featureSchoolStoreNotify));
+      } catch {
+        /* swallow — toggle stays in its default (off) display */
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const locked = !districtOn;
+
+  async function toggle() {
+    if (locked || saving) return;
+    const next = !adminOn;
+    setSaving(true);
+    setError(null);
+    setAdminOn(next); // optimistic
+    try {
+      const r = await authFetch("/api/school-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ featureSchoolStoreNotify: next }),
+      });
+      if (!r.ok) {
+        setAdminOn(!next); // revert
+        setError(
+          r.status === 403
+            ? "You don't have permission to change this."
+            : "Couldn't save — try again.",
+        );
+      }
+    } catch {
+      setAdminOn(!next);
+      setError("Couldn't save — try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) return null;
+
+  return (
+    <div
+      style={{
+        border: "1px solid var(--border, #e2e8f0)",
+        borderRadius: 12,
+        padding: "0.85rem 1rem",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "1rem",
+        background: "var(--surface, #f8fafc)",
+      }}
+    >
+      <div>
+        <div style={{ fontWeight: 600, color: "var(--text, #0f172a)" }}>
+          Email families when a store item is fulfilled
+        </div>
+        <div
+          style={{
+            margin: "0.2rem 0 0",
+            fontSize: "0.85rem",
+            color: "var(--muted, #64748b)",
+          }}
+        >
+          {locked
+            ? "Locked — your district hasn't enabled this notification yet."
+            : "Families with a HeartBEAT account get a short heads-up that their child's reward is ready."}
+          {error ? (
+            <span style={{ color: "#b91c1c", marginLeft: "0.4rem" }}>
+              {error}
+            </span>
+          ) : null}
+        </div>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={adminOn && !locked}
+        aria-label="Email families when a store item is fulfilled"
+        disabled={locked || saving}
+        onClick={() => void toggle()}
+        style={{
+          flexShrink: 0,
+          width: 48,
+          height: 28,
+          borderRadius: 999,
+          border: "none",
+          position: "relative",
+          cursor: locked || saving ? "not-allowed" : "pointer",
+          opacity: locked ? 0.5 : 1,
+          background: adminOn && !locked ? "#16a34a" : "#cbd5e1",
+          transition: "background 0.15s",
+        }}
+      >
+        <span
+          style={{
+            position: "absolute",
+            top: 3,
+            left: adminOn && !locked ? 23 : 3,
+            width: 22,
+            height: 22,
+            borderRadius: "50%",
+            background: "#fff",
+            transition: "left 0.15s",
+            boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
+          }}
+        />
+      </button>
     </div>
   );
 }

@@ -202,6 +202,14 @@ export const schoolSettingsTable = pgTable(
   featureAcademicEvidence: boolean("feature_academic_evidence")
     .notNull()
     .default(true),
+  // School Store fulfillment notification (email families when a redeemed
+  // store item is fulfilled). NEW opt-in feature: BOTH halves default FALSE
+  // so no family email goes out until the district enables it AND the school
+  // admin turns it on — a deliberate deviation from the default(true)
+  // convention because this sends external email.
+  featureSchoolStoreNotify: boolean("feature_school_store_notify")
+    .notNull()
+    .default(false),
   superFeatureFamilyComm: boolean("super_feature_family_comm").notNull().default(true),
   superFeaturePbis: boolean("super_feature_pbis").notNull().default(true),
   superFeatureSchoolStore: boolean("super_feature_school_store").notNull().default(true),
@@ -233,6 +241,11 @@ export const schoolSettingsTable = pgTable(
   superFeatureCompTime: boolean("super_feature_comp_time")
     .notNull()
     .default(true),
+  // SuperUser/district half of the School Store fulfillment notification.
+  // Defaults FALSE — the district must explicitly license it (plan/override).
+  superFeatureSchoolStoreNotify: boolean("super_feature_school_store_notify")
+    .notNull()
+    .default(false),
   // -----------------------------------------------------------------
   // Time Tracking nuances (governs both AST + Comp Time so a school
   // configures workweek once for the whole "Time Tracking" surface).

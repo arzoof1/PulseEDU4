@@ -20,6 +20,7 @@ export const FEATURE_KEYS = [
   "FamilyComm",
   "Pbis",
   "SchoolStore",
+  "SchoolStoreNotify",
   "Accommodations",
   "LogIntervention",
   "RequestPullout",

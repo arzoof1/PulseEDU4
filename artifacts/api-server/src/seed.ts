@@ -1914,6 +1914,21 @@ export async function ensureSchoolSettingsFeatureFlagsSchema() {
       ),
     );
   }
+  // School Store fulfillment family-notification gate. BOTH halves default
+  // FALSE (opt-in) — emailing families must be deliberately enabled at the
+  // district level AND by the school admin, so these can't ride the
+  // DEFAULT TRUE loop above.
+  const falseDefaultCols = [
+    "feature_school_store_notify",
+    "super_feature_school_store_notify",
+  ];
+  for (const col of falseDefaultCols) {
+    await db.execute(
+      sql.raw(
+        `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS ${col} BOOLEAN NOT NULL DEFAULT FALSE`,
+      ),
+    );
+  }
   // Advisory tier-preset pointer (nullable). Stored as plain integer —
   // no FK so deleting a preset doesn't cascade to school_settings.
   await db.execute(

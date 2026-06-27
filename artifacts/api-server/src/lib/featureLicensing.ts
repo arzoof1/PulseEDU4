@@ -76,6 +76,7 @@ export type FeatureSpec = {
     | "superFeatureAst"
     | "superFeatureCompTime"
     | "superFeatureEligibility"
+    | "superFeatureSchoolStoreNotify"
     | null;
   quotas: QuotaSpec[];
 };
@@ -115,6 +116,14 @@ export const FEATURE_KEYS: FeatureSpec[] = [
     label: "School Store",
     description: "School-wide PBIS rewards catalog.",
     schoolSettingsKey: "superFeatureSchoolStore",
+    quotas: [],
+  },
+  {
+    key: "schoolStoreNotify",
+    label: "School Store Fulfillment Notify",
+    description:
+      "Email families when a redeemed School Store item is fulfilled.",
+    schoolSettingsKey: "superFeatureSchoolStoreNotify",
     quotas: [],
   },
   {

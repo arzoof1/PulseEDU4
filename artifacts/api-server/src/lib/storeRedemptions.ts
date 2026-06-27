@@ -24,6 +24,7 @@ import {
 } from "@workspace/db";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { isCoreTeam } from "./coreTeam.js";
+import { notifyFamilyOfFulfillment } from "./storeFulfillmentNotify.js";
 
 // Statuses whose points are currently HELD against the wallet.
 const HELD_STATUSES = ["pending", "fulfilled"] as const;
@@ -590,7 +591,7 @@ export async function fulfillRedemption(opts: {
   const { schoolId, redemptionId, staffId, deliverTeacherName, deliverPeriod } =
     opts;
 
-  return db.transaction(async (tx) => {
+  const result: RedeemResult = await db.transaction(async (tx) => {
     // Lock the owning student so a concurrent cancel can't slip in between
     // our read and the write (which would let us overwrite a cancelled row
     // back to fulfilled, leaving stock/points inconsistent).
@@ -652,6 +653,21 @@ export async function fulfillRedemption(opts: {
     }
     return { ok: true, redemption: updated[0] };
   });
+
+  // Fire-and-forget the family notification AFTER the transaction commits, so
+  // a rolled-back fulfill never emails. Gating + recipient resolution + RESEND
+  // failures are all handled inside notifyFamilyOfFulfillment (never throws).
+  // Both the single-row and bulk-log fulfill paths funnel through here.
+  if (result.ok) {
+    void notifyFamilyOfFulfillment({
+      schoolId,
+      studentId: result.redemption.studentId,
+      itemName: result.redemption.itemName,
+      deliverTeacherName: result.redemption.deliverTeacherName,
+    });
+  }
+
+  return result;
 }
 
 // --------------------------------------------------------------------------
