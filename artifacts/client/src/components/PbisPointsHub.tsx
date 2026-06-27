@@ -185,6 +185,24 @@ export default function PbisPointsHub() {
     me?.isBehaviorSpecialist
   );
 
+  // The Settings tab manages school-wide PBIS settings, so it only surfaces
+  // for admins/SuperUser and the PBIS coordinator / behavior & MTSS
+  // specialists. Plain teachers never see it. The two store tabs (School
+  // Store / Classroom Store) have moved to the Recognition sidebar group,
+  // so they're filtered out of the in-hub tab bar entirely.
+  const canSeeSettingsTab = !!(
+    me?.isSuperUser ||
+    me?.isAdmin ||
+    me?.isBehaviorSpecialist ||
+    me?.isMtssCoordinator ||
+    me?.isPbisCoordinator
+  );
+  const visibleTabs = TAB_LABELS.filter((t) => {
+    if (t.key === "rubric" || t.key === "rewards") return false;
+    if (t.key === "settings") return canSeeSettingsTab;
+    return true;
+  });
+
   // ---- Initial data load
   useEffect(() => {
     let cancelled = false;
@@ -678,14 +696,16 @@ export default function PbisPointsHub() {
 
       {mode === "positive" && (
         <>
-      <TabBar tab={tab} onChange={setTab} />
+      <TabBar tab={tab} onChange={setTab} labels={visibleTabs} />
 
       <HowToUseHelp title="How to use PBIS Points">
         <HowToSection title="What this hub is">
           One page for awarding points, browsing the rewards catalogs,
-          and (if you have permission) editing the rubric and store
-          inventory. Use the tab bar above to switch between awarding,
-          recent activity, the Classroom Store, and the School Store.
+          recent activity, and reports. Use the tab bar above to switch
+          between them. The reward catalogs now live in the Recognition
+          menu: <strong>School Store</strong> (school-wide, read-only for
+          teachers) and <strong>Classroom Store</strong> (your own private
+          list).
         </HowToSection>
         <RoleSection for="teacher" title="Awarding points (teachers)">
           <ul style={howtoListStyle}>
@@ -762,7 +782,7 @@ export default function PbisPointsHub() {
           onClearSelection={() => setSelectedIds(new Set())}
           onOpenBulk={() => setBulkOpen(true)}
         />
-      ) : tab === "settings" ? (
+      ) : tab === "settings" && canSeeSettingsTab ? (
         <SettingsView
           me={me}
           reasons={reasons}
@@ -5696,7 +5716,7 @@ function StoreView({
 
 // Per-teacher Classroom Store: each staffer manages their own catalog. Any
 // signed-in staffer can add to their own list (server enforces ownership).
-function ClassroomStoreView() {
+export function ClassroomStoreView() {
   return (
     <StoreView
       config={{

@@ -112,6 +112,7 @@ import HousesPanel, { HouseLogosPanel } from "./components/HousesPanel";
 import PbisPointsHub, {
   SchoolWidePbisAdminView,
   SchoolStoreView,
+  ClassroomStoreView,
   ManageListsView,
 } from "./components/PbisPointsHub";
 import PulseBrainLabHub from "./components/pulseBrainLab/PulseBrainLabHub";
@@ -3971,6 +3972,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "houseRankings",
     "schoolStore",
     "schoolStoreManage",
+    "classroomStore",
     "pbisHub",
     "pbisRecent",
     "pbisReports",
@@ -5615,6 +5617,7 @@ function App() {
     | "pbisHub"
     | "schoolStore"
     | "schoolStoreManage"
+    | "classroomStore"
     | "accommodations"
     | "ese"
     | "pbisLists"
@@ -10081,6 +10084,9 @@ function App() {
     // staffer so teachers can browse what students can redeem. The
     // editable version lives inside the PBIS / BS / MTSS hubs.
     { key: "schoolStore", label: "School Store", icon: IconStar },
+    // Per-teacher Classroom Store. Each staffer manages their own catalog;
+    // private to the logged-in teacher (server enforces ownership).
+    { key: "classroomStore", label: "Classroom Store", icon: IconStar },
     { key: "accommodations", label: "Accommodations", icon: IconClipboard },
     { key: "logIntervention", label: "Log Intervention", icon: IconClipboard },
     { key: "myInterventions", label: "My Interventions", icon: IconClipboard },
@@ -10494,6 +10500,17 @@ function App() {
       key: "schoolStore",
       label: "School Store",
       description: "Browse the school-wide PBIS reward catalog.",
+      emoji: "🎁",
+      group: "recognition",
+    });
+    // Per-teacher Classroom Store. Optional and private to the logged-in
+    // teacher — any signed-in staffer can build their own reward list
+    // (server enforces ownership). Hidden for non-exempt-only staff, same
+    // as School Store.
+    add(!isNonExemptOnly, {
+      key: "classroomStore",
+      label: "Classroom Store",
+      description: "Build your own list of rewards students can redeem.",
       emoji: "🎁",
       group: "recognition",
     });
@@ -11538,21 +11555,26 @@ function App() {
                     label: "House Rankings",
                     icon: IconStar,
                   })}
-                {/* Phase 2 (hub fold): the standalone read-only School
-                    Store row is only shown to staff who CANNOT open the
-                    PBIS Hub. Everyone with canAccessPbisHub also has
-                    canEditSchoolStore (identical role set), so they reach
-                    the store via the Hub's "School Store" manage tile —
-                    the sidebar row is redundant for them. Non-hub staff
-                    (regular teachers) keep this row as their only catalog
-                    entry point, so no access is removed. The schoolStore
-                    activeSection + Recognition force-expand ownership stay
-                    intact for deep links. */}
+                {/* Both reward catalogs now live here in Recognition (they
+                    used to be tabs inside the PBIS Points hub). School Store
+                    is the read-only school-wide catalog, shown to every
+                    non-exempt staffer; the editable version still opens from
+                    the BS / MTSS hub manage tiles. */}
                 {effectiveFeatures.SchoolStore &&
-                  !canAccessPbisHub &&
+                  !isNonExemptOnly &&
                   renderNavItem({
                     key: "schoolStore",
                     label: "School Store",
+                    icon: IconStar,
+                  })}
+                {/* Classroom Store — per-teacher, private to the logged-in
+                    staffer (server enforces ownership). Optional: any teacher
+                    can build their own reward list. Hidden for non-exempt-only
+                    staff, same as School Store. */}
+                {!isNonExemptOnly &&
+                  renderNavItem({
+                    key: "classroomStore",
+                    label: "Classroom Store",
                     icon: IconStar,
                   })}
                 {canAccessPbisHub && pbisHubNavSections.map(renderNavItem)}
@@ -17394,6 +17416,11 @@ function App() {
           controls. The editable surface lives in the PBIS / BS / MTSS
           hubs. */}
       {activeSection === "schoolStore" && <SchoolStoreView canEdit={false} />}
+
+      {/* Per-teacher Classroom Store — moved out of the PBIS Hub tab bar into
+          the Recognition sidebar group. Private to the logged-in teacher;
+          ownership is enforced server-side. */}
+      {activeSection === "classroomStore" && <ClassroomStoreView />}
 
       {/* Editable School Store — opened from the BS hub or MTSS hub
           tile. canEditSchoolStore mirrors the server's requireWriteAccess
