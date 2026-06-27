@@ -418,6 +418,11 @@ export default function Dashboard({ me }: { me: ParentMe }) {
       return;
     }
     let cancelled = false;
+    // Clear the previous student's payload up front so a sibling switch can
+    // never flash the prior child's wallet/catalog/orders while the new
+    // request is in flight (StoreTab shows its loading state only when
+    // data is null).
+    setStore(null);
     setStoreLoading(true);
     setStoreError("");
     (async () => {
