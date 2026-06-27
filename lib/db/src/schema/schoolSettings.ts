@@ -116,6 +116,14 @@ export const schoolSettingsTable = pgTable(
   pbisNegativeAffectsTotal: boolean("pbis_negative_affects_total")
     .notNull()
     .default(false),
+  // School Store inventory mode — how item availability is tracked.
+  //   "simple"   → each item has a manual in/out-of-stock toggle.
+  //   "quantity" → each item tracks a quantity-on-hand that decrements on
+  //                redemption and restores on cancellation.
+  // Default "simple" so existing catalogs keep working without setup.
+  schoolStoreInventoryMode: text("school_store_inventory_mode")
+    .notNull()
+    .default("simple"),
   // Finder ("Where is this student right now?") — show the "Absent today"
   // banner when the student's attendance day is marked absent. Off by
   // default because attendance currently arrives from the SIS on a delay

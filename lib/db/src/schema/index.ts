@@ -55,6 +55,7 @@ export * from "./studentAttendanceDay";
 export * from "./weatherDay";
 export * from "./classroomStoreItems";
 export * from "./schoolStoreItems";
+export * from "./schoolStoreRedemptions";
 export * from "./studentMtssPlans";
 export * from "./mtssFastSuggestionDismissals";
 export * from "./studentTrustedAdults";
