@@ -18371,8 +18371,8 @@ function App() {
           },
           {
             key: "interventions",
-            label: "Edit Log Intervention",
-            desc: "Edit the list of interventions offered to students.",
+            label: "Manage Intervention List",
+            desc: "Add, edit, or remove the interventions teachers can pick when logging.",
             color: "#7c3aed",
             show: canManageBehaviorLists,
           },
