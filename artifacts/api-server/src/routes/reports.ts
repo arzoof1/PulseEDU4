@@ -23,9 +23,27 @@ import {
   studentsTable,
   hallPassesTable,
   pbisEntriesTable,
+  housesTable,
 } from "@workspace/db";
 import { and, eq, isNull, inArray, sql, desc } from "drizzle-orm";
+import PDFDocument from "pdfkit";
 import { requireSchool } from "../lib/scope.js";
+import { computeWalletsForSchool } from "../lib/storeRedemptions.js";
+
+// Neutralize CSV formula injection: a cell starting with = + - @ (or a control
+// char) can execute in Excel/Sheets. Prefix with an apostrophe and always quote.
+function csvCell(value: unknown): string {
+  let s = value == null ? "" : String(value);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+// Parse a positive-integer query param, or null when absent/invalid.
+function intParam(v: unknown): number | null {
+  if (typeof v !== "string" || !v.trim()) return null;
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
 
 const router: IRouter = Router();
 
@@ -748,6 +766,426 @@ router.get("/reports/pbis", requireStaff, async (req, res) => {
       points: r.points,
       staffName: r.staffName,
     })),
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PBIS Points balance report (roster of lifetime EARNED + current BANK balance)
+//   GET /api/reports/pbis-wallets?houseId=&sectionId=&teacherStaffId=&format=
+// Shows, per student, lifetime points earned alongside their spendable bank
+// balance (available = earned - held). Filterable by house, class section, or
+// teacher. Exports as JSON (default), CSV (?format=csv), or PDF (?format=pdf).
+//
+// Auth scope:
+//   - admin / ESE / PBIS coordinator: school-wide; all filters honored.
+//   - other staff: forced to their OWN roster (students in sections they
+//     teach); house/teacher filters ignored, sectionId must be one of theirs.
+//
+// FLEID boundary: the canonical students.student_id is NEVER rendered — only
+// students.local_sis_id (shown as "—" when absent).
+// Filter options for the PBIS Wallets report. Self-contained so the report UI
+// does not depend on the PBIS Hub's section/teacher props (which are loaded
+// under a narrower admin scope that excludes PBIS coordinators). Mirrors the
+// report's own privilege gate so options match what the report will honor:
+//   - privileged (admin/ESE/PBIS coordinator): all school sections + teachers.
+//   - other staff: only the sections they teach.
+router.get("/reports/pbis-wallets/options", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+
+  const isPrivileged =
+    staff.isSuperUser ||
+    staff.isAdmin ||
+    staff.isEseCoordinator ||
+    staff.isPbisCoordinator;
+
+  const sectionRows = await db
+    .select({
+      id: classSectionsTable.id,
+      period: classSectionsTable.period,
+      courseName: classSectionsTable.courseName,
+      teacherStaffId: classSectionsTable.teacherStaffId,
+    })
+    .from(classSectionsTable)
+    .where(
+      isPrivileged
+        ? and(
+            eq(classSectionsTable.schoolId, schoolId),
+            eq(classSectionsTable.isPlanning, false),
+          )
+        : and(
+            eq(classSectionsTable.schoolId, schoolId),
+            eq(classSectionsTable.isPlanning, false),
+            eq(classSectionsTable.teacherStaffId, staff.id),
+          ),
+    );
+
+  const teacherIds = Array.from(
+    new Set(sectionRows.map((s) => s.teacherStaffId)),
+  );
+  const teacherRows = teacherIds.length
+    ? await db
+        .select({ id: staffTable.id, displayName: staffTable.displayName })
+        .from(staffTable)
+        .where(
+          and(
+            eq(staffTable.schoolId, schoolId),
+            inArray(staffTable.id, teacherIds),
+          ),
+        )
+    : [];
+  const teacherNameById = new Map(
+    teacherRows.map((t) => [t.id, t.displayName]),
+  );
+
+  res.json({
+    privileged: isPrivileged,
+    teachers: teacherRows
+      .map((t) => ({ id: t.id, name: t.displayName }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    sections: sectionRows
+      .map((s) => ({
+        id: s.id,
+        period: s.period,
+        courseName: s.courseName,
+        teacherStaffId: s.teacherStaffId,
+        teacherName: teacherNameById.get(s.teacherStaffId) ?? "",
+      }))
+      .sort((a, b) => (a.period ?? 0) - (b.period ?? 0)),
+  });
+});
+
+router.get("/reports/pbis-wallets", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+
+  const isPrivileged =
+    staff.isSuperUser ||
+    staff.isAdmin ||
+    staff.isEseCoordinator ||
+    staff.isPbisCoordinator;
+
+  const houseIdFilter = intParam(req.query.houseId);
+  const sectionIdFilter = intParam(req.query.sectionId);
+  const teacherStaffIdFilter = intParam(req.query.teacherStaffId);
+  const format =
+    typeof req.query.format === "string"
+      ? req.query.format.toLowerCase()
+      : "json";
+
+  // Resolve the set of section IDs whose roster defines the eligible students.
+  // null = no class/teacher restriction (school-wide, privileged only).
+  let restrictSectionIds: number[] | null = null;
+
+  if (!isPrivileged) {
+    // Non-privileged staff are pinned to the sections they teach. They may
+    // narrow to a single one of their own sections, but never see another
+    // teacher's roster, another house, or the whole school.
+    const ownSections = await db
+      .select({ id: classSectionsTable.id })
+      .from(classSectionsTable)
+      .where(
+        and(
+          eq(classSectionsTable.schoolId, schoolId),
+          eq(classSectionsTable.teacherStaffId, staff.id),
+        ),
+      );
+    const ownIds = ownSections.map((s) => s.id);
+    if (sectionIdFilter !== null) {
+      if (!ownIds.includes(sectionIdFilter)) {
+        res
+          .status(403)
+          .json({ error: "You may only report on your own classes." });
+        return;
+      }
+      restrictSectionIds = [sectionIdFilter];
+    } else {
+      restrictSectionIds = ownIds;
+    }
+  } else {
+    // Privileged: class and/or teacher filters both narrow via sections.
+    if (sectionIdFilter !== null) {
+      restrictSectionIds = [sectionIdFilter];
+    } else if (teacherStaffIdFilter !== null) {
+      const tSections = await db
+        .select({ id: classSectionsTable.id })
+        .from(classSectionsTable)
+        .where(
+          and(
+            eq(classSectionsTable.schoolId, schoolId),
+            eq(classSectionsTable.teacherStaffId, teacherStaffIdFilter),
+          ),
+        );
+      restrictSectionIds = tSections.map((s) => s.id);
+    }
+  }
+
+  // Turn the section restriction into a concrete studentId allow-list. An
+  // empty restriction means "no eligible students" — return an empty report
+  // rather than silently widening to the whole school.
+  let rosterStudentIds: Set<string> | null = null;
+  if (restrictSectionIds !== null) {
+    if (restrictSectionIds.length === 0) {
+      rosterStudentIds = new Set();
+    } else {
+      const rosterRows = await db
+        .select({ studentId: sectionRosterTable.studentId })
+        .from(sectionRosterTable)
+        .where(
+          and(
+            eq(sectionRosterTable.schoolId, schoolId),
+            inArray(sectionRosterTable.sectionId, restrictSectionIds),
+          ),
+        );
+      rosterStudentIds = new Set(rosterRows.map((r) => r.studentId));
+    }
+  }
+
+  // House filter is privileged-only (non-privileged never reach here with one).
+  const effectiveHouseId = isPrivileged ? houseIdFilter : null;
+
+  // Load the candidate students (school-scoped, optional house filter).
+  const studentConds = [eq(studentsTable.schoolId, schoolId)];
+  if (effectiveHouseId !== null) {
+    studentConds.push(eq(studentsTable.houseId, effectiveHouseId));
+  }
+  const studentRows = await db
+    .select({
+      studentId: studentsTable.studentId,
+      localSisId: studentsTable.localSisId,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      grade: studentsTable.grade,
+      houseId: studentsTable.houseId,
+    })
+    .from(studentsTable)
+    .where(and(...studentConds));
+
+  // House names for labeling.
+  const houseRows = await db
+    .select({ id: housesTable.id, name: housesTable.name })
+    .from(housesTable)
+    .where(eq(housesTable.schoolId, schoolId));
+  const houseNameById = new Map(houseRows.map((h) => [h.id, h.name]));
+
+  // Batch wallet read (agrees with computeWallet for every student).
+  const wallets = await computeWalletsForSchool(schoolId);
+
+  const rows = studentRows
+    .filter((s) => rosterStudentIds === null || rosterStudentIds.has(s.studentId))
+    .map((s) => {
+      const w = wallets.get(s.studentId) ?? {
+        earned: 0,
+        spent: 0,
+        available: 0,
+      };
+      return {
+        localSisId: s.localSisId ?? null,
+        studentName:
+          `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || "—",
+        grade: s.grade,
+        houseName: s.houseId != null ? (houseNameById.get(s.houseId) ?? null) : null,
+        earned: w.earned,
+        spent: w.spent,
+        available: w.available,
+      };
+    })
+    .sort(
+      (a, b) =>
+        b.available - a.available || a.studentName.localeCompare(b.studentName),
+    );
+
+  const houseLabel =
+    effectiveHouseId !== null
+      ? (houseNameById.get(effectiveHouseId) ?? `House #${effectiveHouseId}`)
+      : null;
+  const teacherLabel =
+    isPrivileged && teacherStaffIdFilter !== null
+      ? (
+          await db
+            .select({ name: staffTable.displayName })
+            .from(staffTable)
+            .where(
+              and(
+                eq(staffTable.id, teacherStaffIdFilter),
+                eq(staffTable.schoolId, schoolId),
+              ),
+            )
+        )[0]?.name ?? `Staff #${teacherStaffIdFilter}`
+      : null;
+
+  const scopeBits: string[] = [];
+  if (houseLabel) scopeBits.push(`House: ${houseLabel}`);
+  if (teacherLabel) scopeBits.push(`Teacher: ${teacherLabel}`);
+  if (sectionIdFilter !== null) scopeBits.push(`Class section #${sectionIdFilter}`);
+  if (!isPrivileged) scopeBits.push("Your classes");
+  const scopeText = scopeBits.length ? scopeBits.join(" · ") : "School-wide";
+
+  // ---- CSV ----
+  if (format === "csv") {
+    const header = [
+      "Student",
+      "SIS ID",
+      "Grade",
+      "House",
+      "Earned (lifetime)",
+      "Spent (held)",
+      "Bank (available)",
+    ]
+      .map(csvCell)
+      .join(",");
+    const body = rows
+      .map((r) =>
+        [
+          r.studentName,
+          r.localSisId ?? "—",
+          r.grade ?? "",
+          r.houseName ?? "—",
+          r.earned,
+          r.spent,
+          r.available,
+        ]
+          .map(csvCell)
+          .join(","),
+      )
+      .join("\r\n");
+    const stamp = todayIsoDate();
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="pbis-points-report-${stamp}.csv"`,
+    );
+    res.send(`${header}\r\n${body}\r\n`);
+    return;
+  }
+
+  // ---- PDF ----
+  if (format === "pdf") {
+    const stamp = todayIsoDate();
+    const doc = new PDFDocument({ size: "LETTER", margin: 40 });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="pbis-points-report-${stamp}.pdf"`,
+    );
+    doc.pipe(res);
+
+    doc.fontSize(16).fillColor("#0f172a").text("PBIS Points Report");
+    doc
+      .fontSize(10)
+      .fillColor("#475569")
+      .text(`${scopeText}  ·  ${stamp}  ·  ${rows.length} students`);
+    doc.moveDown(0.6);
+
+    // Column layout (content x: 40..572 on LETTER with 40pt margins).
+    const cols = {
+      name: 40,
+      sis: 182,
+      grade: 255,
+      house: 290,
+      earned: 402,
+      spent: 456,
+      bank: 506,
+    };
+    const rightEdges = { earned: 454, spent: 502, bank: 570 };
+    const bottomY = doc.page.height - 50;
+
+    const drawHeader = () => {
+      const y = doc.y;
+      doc.fontSize(9).fillColor("#0f172a");
+      doc.text("Student", cols.name, y, { width: 138 });
+      doc.text("SIS ID", cols.sis, y, { width: 70 });
+      doc.text("Gr", cols.grade, y, { width: 30 });
+      doc.text("House", cols.house, y, { width: 108 });
+      doc.text("Earned", cols.earned, y, {
+        width: rightEdges.earned - cols.earned,
+        align: "right",
+      });
+      doc.text("Spent", cols.spent, y, {
+        width: rightEdges.spent - cols.spent,
+        align: "right",
+      });
+      doc.text("Bank", cols.bank, y, {
+        width: rightEdges.bank - cols.bank,
+        align: "right",
+      });
+      doc
+        .moveTo(40, y + 13)
+        .lineTo(572, y + 13)
+        .strokeColor("#cbd5e1")
+        .stroke();
+      doc.y = y + 18;
+    };
+
+    drawHeader();
+    doc.fontSize(9);
+    for (const r of rows) {
+      if (doc.y > bottomY) {
+        doc.addPage();
+        drawHeader();
+        doc.fontSize(9);
+      }
+      const y = doc.y;
+      doc.fillColor("#0f172a");
+      doc.text(r.studentName, cols.name, y, { width: 138, ellipsis: true });
+      doc.fillColor("#475569");
+      doc.text(r.localSisId ?? "—", cols.sis, y, { width: 70 });
+      doc.text(r.grade != null ? String(r.grade) : "—", cols.grade, y, {
+        width: 30,
+      });
+      doc.text(r.houseName ?? "—", cols.house, y, {
+        width: 108,
+        ellipsis: true,
+      });
+      doc.fillColor("#0f172a");
+      doc.text(String(r.earned), cols.earned, y, {
+        width: rightEdges.earned - cols.earned,
+        align: "right",
+      });
+      doc.text(String(r.spent), cols.spent, y, {
+        width: rightEdges.spent - cols.spent,
+        align: "right",
+      });
+      doc.fillColor("#15803d");
+      doc.text(String(r.available), cols.bank, y, {
+        width: rightEdges.bank - cols.bank,
+        align: "right",
+      });
+      doc.y = y + 15;
+    }
+
+    if (rows.length === 0) {
+      doc
+        .fillColor("#64748b")
+        .text("No students match these filters.", 40, doc.y + 6);
+    }
+
+    doc.end();
+    return;
+  }
+
+  // ---- JSON (default) ----
+  res.json({
+    scope: scopeText,
+    appliedFilters: {
+      houseId: effectiveHouseId,
+      houseName: houseLabel,
+      sectionId: sectionIdFilter,
+      teacherStaffId: isPrivileged ? teacherStaffIdFilter : null,
+      teacherName: teacherLabel,
+      privileged: isPrivileged,
+    },
+    totals: {
+      students: rows.length,
+      earned: rows.reduce((a, r) => a + r.earned, 0),
+      spent: rows.reduce((a, r) => a + r.spent, 0),
+      available: rows.reduce((a, r) => a + r.available, 0),
+    },
+    rows,
   });
 });
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import StudentPhoto from "./StudentPhoto";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
@@ -886,6 +886,8 @@ export default function PbisPointsHub({
         // intentionally disabled here for everyone (including admins) — use
         // the BS hub, MTSS hub, or the "School Store" admin section instead.
         <SchoolStoreView canEdit={false} />
+      ) : tab === "reports" ? (
+        <PbisPointsReportView me={me} />
       ) : (
         <ComingSoon tab={tab} />
       )}
@@ -7036,6 +7038,418 @@ function StoreItemModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PBIS Points Report — roster of lifetime EARNED points alongside current BANK
+// balance (available), filterable by house / class / teacher, exportable as
+// CSV and PDF. Backed by GET /api/reports/pbis-wallets. Privileged staff
+// (admin / ESE / PBIS coord / SuperUser) get the school-wide + house + teacher
+// filters; plain teachers are pinned server-side to their own roster.
+// ---------------------------------------------------------------------------
+type WalletReportRow = {
+  localSisId: string | null;
+  studentName: string;
+  grade: number | null;
+  houseName: string | null;
+  earned: number;
+  spent: number;
+  available: number;
+};
+type WalletReport = {
+  scope: string;
+  totals: {
+    students: number;
+    earned: number;
+    spent: number;
+    available: number;
+  };
+  rows: WalletReportRow[];
+};
+type HouseOpt = { id: number; name: string };
+type TeacherOpt = { id: number; name: string };
+type SectionOpt = {
+  id: number;
+  period: number;
+  courseName: string;
+  teacherStaffId: number;
+  teacherName: string;
+};
+
+function PbisPointsReportView({ me }: { me: Me | null }) {
+  const isPrivileged = !!(
+    me?.isSuperUser ||
+    me?.isAdmin ||
+    me?.isEseCoordinator ||
+    me?.isPbisCoordinator
+  );
+
+  const [houses, setHouses] = useState<HouseOpt[]>([]);
+  const [teacherOpts, setTeacherOpts] = useState<TeacherOpt[]>([]);
+  const [sectionOpts, setSectionOpts] = useState<SectionOpt[]>([]);
+  const [houseId, setHouseId] = useState<string>("");
+  const [teacherStaffId, setTeacherStaffId] = useState<string>("");
+  const [sectionId, setSectionId] = useState<string>("");
+  const [report, setReport] = useState<WalletReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState<"csv" | "pdf" | null>(null);
+
+  // House options (privileged only — plain teachers can't filter by house).
+  useEffect(() => {
+    if (!isPrivileged) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authFetch("/api/houses");
+        if (!r.ok) return;
+        const j = (await r.json()) as { houses?: HouseOpt[] };
+        if (!cancelled) setHouses(j.houses ?? []);
+      } catch {
+        /* non-critical */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isPrivileged]);
+
+  // Filter options (teachers + sections) scoped to the viewer's report
+  // privilege server-side — privileged get the whole school, others get only
+  // their own sections. Self-contained so this view does not depend on the
+  // hub's narrower section/teacher props.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authFetch("/api/reports/pbis-wallets/options");
+        if (!r.ok) return;
+        const j = (await r.json()) as {
+          teachers?: TeacherOpt[];
+          sections?: SectionOpt[];
+        };
+        if (!cancelled) {
+          setTeacherOpts(j.teachers ?? []);
+          setSectionOpts(j.sections ?? []);
+        }
+      } catch {
+        /* non-critical */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Class options — narrowed to the selected teacher when one is picked.
+  const classOptions = useMemo(() => {
+    const base =
+      isPrivileged && teacherStaffId
+        ? sectionOpts.filter(
+            (s) => s.teacherStaffId === Number(teacherStaffId),
+          )
+        : sectionOpts;
+    return [...base].sort(
+      (a, b) =>
+        a.teacherName.localeCompare(b.teacherName) ||
+        String(a.period).localeCompare(String(b.period)),
+    );
+  }, [sectionOpts, teacherStaffId, isPrivileged]);
+
+  // If the selected class no longer belongs to the selected teacher, clear it.
+  useEffect(() => {
+    if (sectionId && !classOptions.some((s) => String(s.id) === sectionId)) {
+      setSectionId("");
+    }
+  }, [classOptions, sectionId]);
+
+  const buildQuery = useCallback(() => {
+    const p = new URLSearchParams();
+    if (isPrivileged && houseId) p.set("houseId", houseId);
+    if (isPrivileged && teacherStaffId) p.set("teacherStaffId", teacherStaffId);
+    if (sectionId) p.set("sectionId", sectionId);
+    return p;
+  }, [isPrivileged, houseId, teacherStaffId, sectionId]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const qs = buildQuery().toString();
+      const r = await authFetch(
+        `/api/reports/pbis-wallets${qs ? `?${qs}` : ""}`,
+        { cache: "no-store" },
+      );
+      if (!r.ok) {
+        setError("Could not load the points report.");
+        return;
+      }
+      setReport((await r.json()) as WalletReport);
+    } catch {
+      setError("Could not load the points report.");
+    } finally {
+      setLoading(false);
+    }
+  }, [buildQuery]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function download(format: "csv" | "pdf") {
+    setDownloading(format);
+    try {
+      const qs = buildQuery();
+      qs.set("format", format);
+      const r = await authFetch(`/api/reports/pbis-wallets?${qs.toString()}`);
+      if (!r.ok) {
+        setError(`Download failed (${r.status}).`);
+        return;
+      }
+      const blob = await r.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const dispo = r.headers.get("content-disposition") || "";
+      const match = /filename="?([^"]+)"?/i.exec(dispo);
+      const filename =
+        match?.[1] ||
+        `pbis-points-report-${new Date().toISOString().slice(0, 10)}.${format}`;
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objUrl);
+    } catch (e) {
+      setError(`Download failed: ${String((e as Error)?.message ?? e)}`);
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  const selectStyle: React.CSSProperties = {
+    padding: "0.4rem 0.6rem",
+    borderRadius: 8,
+    border: "1px solid var(--border, #e2e8f0)",
+    background: "var(--card, #fff)",
+    color: "var(--text, #0f172a)",
+  };
+  const btnStyle: React.CSSProperties = {
+    padding: "0.45rem 0.85rem",
+    borderRadius: 8,
+    border: "1px solid var(--border, #e2e8f0)",
+    background: "var(--card, #fff)",
+    color: "var(--text, #0f172a)",
+    fontWeight: 600,
+    cursor: "pointer",
+  };
+  const numTd: React.CSSProperties = {
+    padding: "10px 12px",
+    textAlign: "right",
+    whiteSpace: "nowrap",
+  };
+  const card: React.CSSProperties = {
+    background: "var(--card, #fff)",
+    border: "1px solid var(--border, #e2e8f0)",
+    borderRadius: 12,
+    padding: "1rem",
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+      <p style={{ margin: 0, color: "var(--muted, #64748b)", fontSize: "0.9rem" }}>
+        Lifetime points <strong>earned</strong> alongside each student's current
+        spendable <strong>bank</strong> balance. Filter, then export for
+        conferences or admin review.
+      </p>
+
+      <div
+        style={{
+          display: "flex",
+          gap: "0.75rem",
+          flexWrap: "wrap",
+          alignItems: "flex-end",
+        }}
+      >
+        {isPrivileged && (
+          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontSize: "0.78rem", color: "var(--muted, #64748b)" }}>
+              House
+            </span>
+            <select
+              value={houseId}
+              onChange={(e) => setHouseId(e.target.value)}
+              style={selectStyle}
+            >
+              <option value="">All houses</option>
+              {houses.map((h) => (
+                <option key={h.id} value={String(h.id)}>
+                  {h.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {isPrivileged && (
+          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontSize: "0.78rem", color: "var(--muted, #64748b)" }}>
+              Teacher
+            </span>
+            <select
+              value={teacherStaffId}
+              onChange={(e) => setTeacherStaffId(e.target.value)}
+              style={selectStyle}
+            >
+              <option value="">All teachers</option>
+              {teacherOpts.map((t) => (
+                <option key={t.id} value={String(t.id)}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: "0.78rem", color: "var(--muted, #64748b)" }}>
+            Class
+          </span>
+          <select
+            value={sectionId}
+            onChange={(e) => setSectionId(e.target.value)}
+            style={selectStyle}
+          >
+            <option value="">All classes</option>
+            {classOptions.map((s) => (
+              <option key={s.id} value={String(s.id)}>
+                {isPrivileged ? `${s.teacherName} · ` : ""}P{s.period}
+                {s.courseName ? ` · ${s.courseName}` : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div style={{ display: "flex", gap: "0.5rem", marginLeft: "auto" }}>
+          <button
+            type="button"
+            style={{ ...btnStyle, opacity: downloading ? 0.6 : 1 }}
+            disabled={!!downloading || loading}
+            onClick={() => void download("csv")}
+          >
+            {downloading === "csv" ? "…" : "Export CSV"}
+          </button>
+          <button
+            type="button"
+            style={{ ...btnStyle, opacity: downloading ? 0.6 : 1 }}
+            disabled={!!downloading || loading}
+            onClick={() => void download("pdf")}
+          >
+            {downloading === "pdf" ? "…" : "Export PDF"}
+          </button>
+        </div>
+      </div>
+
+      {loading ? (
+        <p style={{ color: "var(--muted, #64748b)" }}>Loading…</p>
+      ) : error ? (
+        <div style={card}>
+          <p style={{ margin: 0, color: "#b91c1c" }}>{error}</p>
+        </div>
+      ) : !report || report.rows.length === 0 ? (
+        <div style={card}>
+          <p style={{ margin: 0 }}>No students match these filters.</p>
+        </div>
+      ) : (
+        <>
+          <div
+            style={{
+              display: "flex",
+              gap: "1rem",
+              flexWrap: "wrap",
+              color: "var(--muted, #64748b)",
+              fontSize: "0.85rem",
+            }}
+          >
+            <span>
+              <strong style={{ color: "var(--text, #0f172a)" }}>
+                {report.totals.students}
+              </strong>{" "}
+              students · {report.scope}
+            </span>
+            <span>
+              Earned:{" "}
+              <strong style={{ color: "var(--text, #0f172a)" }}>
+                {report.totals.earned}
+              </strong>
+            </span>
+            <span>
+              Bank:{" "}
+              <strong style={{ color: "#15803d" }}>
+                {report.totals.available}
+              </strong>
+            </span>
+          </div>
+          <div style={{ ...card, padding: 0, overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr
+                  style={{
+                    textAlign: "left",
+                    color: "var(--muted, #64748b)",
+                    fontSize: "0.82rem",
+                  }}
+                >
+                  <th style={{ padding: "10px 12px" }}>Student</th>
+                  <th style={{ padding: "10px 12px" }}>SIS ID</th>
+                  <th style={{ padding: "10px 12px", textAlign: "right" }}>Gr</th>
+                  <th style={{ padding: "10px 12px" }}>House</th>
+                  <th style={{ padding: "10px 12px", textAlign: "right" }}>
+                    Earned
+                  </th>
+                  <th style={{ padding: "10px 12px", textAlign: "right" }}>
+                    Spent
+                  </th>
+                  <th style={{ padding: "10px 12px", textAlign: "right" }}>
+                    Bank
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.rows.map((r, i) => (
+                  <tr
+                    key={`${r.localSisId ?? "x"}-${i}`}
+                    style={{ borderTop: "1px solid var(--border, #e2e8f0)" }}
+                  >
+                    <td style={{ padding: "10px 12px" }}>{r.studentName}</td>
+                    <td
+                      style={{
+                        padding: "10px 12px",
+                        color: "var(--muted, #64748b)",
+                      }}
+                    >
+                      {r.localSisId ?? "—"}
+                    </td>
+                    <td style={numTd}>{r.grade ?? "—"}</td>
+                    <td style={{ padding: "10px 12px" }}>
+                      {r.houseName ?? "—"}
+                    </td>
+                    <td style={numTd}>{r.earned}</td>
+                    <td
+                      style={{ ...numTd, color: "var(--muted, #64748b)" }}
+                    >
+                      {r.spent}
+                    </td>
+                    <td style={{ ...numTd, fontWeight: 700, color: "#15803d" }}>
+                      {r.available}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }

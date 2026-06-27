@@ -166,6 +166,79 @@ export async function computeWallet(
   return { earned, spent, available: earned - spent };
 }
 
+// Batch wallet read for an ENTIRE school in three set-based queries instead of
+// N per-student round-trips. Reuses the exact same tables, voided/held filters,
+// and HELD_STATUSES as computeEarned/computeHeld so the result is guaranteed to
+// agree with computeWallet for every student. Returns a Map keyed by studentId;
+// a student absent from the map has earned 0 / spent 0 (caller should treat a
+// missing entry as a zeroed wallet).
+export async function computeWalletsForSchool(
+  schoolId: number,
+): Promise<Map<string, StudentWallet>> {
+  const [entryRows, migrationRows, heldRows] = await Promise.all([
+    db
+      .select({
+        studentId: pbisEntriesTable.studentId,
+        total: sql<number>`coalesce(sum(${pbisEntriesTable.points}), 0)::int`,
+      })
+      .from(pbisEntriesTable)
+      .where(
+        and(
+          eq(pbisEntriesTable.schoolId, schoolId),
+          isNull(pbisEntriesTable.voidedAt),
+        ),
+      )
+      .groupBy(pbisEntriesTable.studentId),
+    db
+      .select({
+        studentId: pbisPointMigrationsTable.studentId,
+        total: sql<number>`coalesce(sum(${pbisPointMigrationsTable.points}), 0)::int`,
+      })
+      .from(pbisPointMigrationsTable)
+      .where(
+        and(
+          eq(pbisPointMigrationsTable.schoolId, schoolId),
+          isNull(pbisPointMigrationsTable.voidedAt),
+        ),
+      )
+      .groupBy(pbisPointMigrationsTable.studentId),
+    db
+      .select({
+        studentId: schoolStoreRedemptionsTable.studentId,
+        total: sql<number>`coalesce(sum(${schoolStoreRedemptionsTable.pointsSpent}), 0)::int`,
+      })
+      .from(schoolStoreRedemptionsTable)
+      .where(
+        and(
+          eq(schoolStoreRedemptionsTable.schoolId, schoolId),
+          inArray(schoolStoreRedemptionsTable.status, [...HELD_STATUSES]),
+        ),
+      )
+      .groupBy(schoolStoreRedemptionsTable.studentId),
+  ]);
+
+  const earned = new Map<string, number>();
+  for (const r of entryRows) {
+    earned.set(r.studentId, (earned.get(r.studentId) ?? 0) + (r.total ?? 0));
+  }
+  for (const r of migrationRows) {
+    earned.set(r.studentId, (earned.get(r.studentId) ?? 0) + (r.total ?? 0));
+  }
+  const spent = new Map<string, number>();
+  for (const r of heldRows) {
+    spent.set(r.studentId, r.total ?? 0);
+  }
+
+  const out = new Map<string, StudentWallet>();
+  const ids = new Set<string>([...earned.keys(), ...spent.keys()]);
+  for (const id of ids) {
+    const e = earned.get(id) ?? 0;
+    const s = spent.get(id) ?? 0;
+    out.set(id, { earned: e, spent: s, available: e - s });
+  }
+  return out;
+}
+
 // Serialize all balance-affecting work for one student.
 async function lockStudent(
   ex: Executor,
