@@ -104,6 +104,7 @@ import HousesPanel, { HouseLogosPanel } from "./components/HousesPanel";
 import PbisPointsHub, {
   SchoolWidePbisAdminView,
   SchoolStoreView,
+  ManageListsView,
 } from "./components/PbisPointsHub";
 import PulseBrainLabHub from "./components/pulseBrainLab/PulseBrainLabHub";
 import PartneringWithParentsHub from "./components/academicEvidence/PartneringWithParentsHub";
@@ -5375,6 +5376,7 @@ function App() {
     | "accommodations"
     | "ese"
     | "pbisLists"
+    | "manageLists"
     | "interventions"
     | "trustedAdultInterventions"
     | "logIntervention"
@@ -9370,6 +9372,12 @@ function App() {
     isBehaviorSpec ||
     authUser?.isMtssCoordinator === true ||
     authUser?.isDean === true;
+  // Narrower gate for the combined "Manage Lists" view, which also exposes the
+  // negative-behavior list (/pbis-reasons admits only admin / BS / MTSS — no
+  // dean). Excluding dean keeps every visible sub-tab fully writable so the
+  // negative-behaviors tab never 403s.
+  const canManageAllPbisLists =
+    isAdmin || isBehaviorSpec || authUser?.isMtssCoordinator === true;
   const isIssTeacher = authUser?.isIssTeacher === true || isAdmin;
   const isDean = authUser?.isDean === true || isAdmin;
   const isMtss = authUser?.isMtssCoordinator === true || isAdmin;
@@ -18320,6 +18328,7 @@ function App() {
           | "issDashboard"
           | "issReporting"
           | "behaviorReview"
+          | "manageLists"
           | "interventions"
           | "trustedAdultInterventions"
           | "hallPassMgmt"
@@ -18368,6 +18377,13 @@ function App() {
             color: "#dc2626",
             show: canReviewPullouts,
             badge: unreviewedPulloutCount,
+          },
+          {
+            key: "manageLists",
+            label: "Manage Lists",
+            desc: "Negative behaviors, interventions, and pullout reasons — all in one place.",
+            color: "#475569",
+            show: canManageAllPbisLists,
           },
           {
             key: "interventions",
@@ -20899,6 +20915,28 @@ function App() {
             </button>
           </div>
           <SchoolWidePbisAdminView />
+        </section>
+      )}
+
+      {activeSection === "manageLists" && canManageAllPbisLists && (
+        <section className="card">
+          <div className="section-header-bar-teal" />
+          <div className="section-header-band-hub">
+            <button
+              type="button"
+              className="back-button-purple"
+              style={{ marginBottom: 0 }}
+              onClick={() => setActiveSection("behaviorSpecialist")}
+            >
+              ← Back
+            </button>
+          </div>
+          <h2 style={{ marginBottom: "0.25rem" }}>Manage Lists</h2>
+          <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
+            Edit the negative behaviors, interventions, and pullout reasons your
+            school uses. Changes apply everywhere these lists appear.
+          </p>
+          <ManageListsView />
         </section>
       )}
 

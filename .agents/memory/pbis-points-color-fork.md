@@ -26,24 +26,32 @@ split — positive award modals get `positiveReasons`, the negative modal gets
 `/api/pbis`; refresh roster totals by refetching `/api/pbis`
 (`refreshTotals()`).
 
-## Manage Lists tab (admin-only)
+## Manage Lists — lives on the Behavior Specialist hub (NOT the PBIS hub)
 
-The hub also has an admin-only top-level tab **"Manage Lists"** (appended to
-`TAB_LABELS` via `visibleTabs` when `canManageLists`) grouping three sub-tabs:
-Negative Behaviors / Interventions / Pullout Reasons. `ManageListsView` renders
-them: Negative Behaviors reuses `SettingsView` with the new optional
-`initialFilter` prop set to `"negative"`; Interventions/Pullout Reasons are
-self-contained CRUD components (`InterventionTypesAdmin`,
-`PulloutReasonsAdmin`) hitting the SAME endpoints as App.tsx Site Management
-(intentionally NOT extracted from App.tsx's deeply-coupled inline JSX).
+The PBIS Points entry chooser shows ONLY the Positive/Negative buttons. The
+"Manage Lists" admin surface lives as a **tile on the Behavior Specialist hub**
+(App.tsx `behaviorSpecialist` hub → `manageLists` tile → `activeSection ===
+"manageLists"` section rendering `<ManageListsView/>`). It groups three
+sub-tabs: Negative Behaviors / Interventions / Pullout Reasons.
 
-**Why `canManageLists` excludes dean:** it is the INTERSECTION of the three
-server write gates. `/intervention-types` + `/pullout-reasons` admit
-admin/BS/MTSS/dean, but the negative-behavior list (`/pbis-reasons`
-school-scope) admits admin/BS/MTSS only. Gating the whole tab on the narrower
-set guarantees every visible sub-tab is fully writable (no dean-only 403 on the
-Negative Behaviors sub-tab). Server still enforces all writes.
+`ManageListsView` (exported from `PbisPointsHub.tsx`) is **self-contained**: it
+fetches its own `/api/auth/me` + `/api/pbis-reasons?scope=school` +
+`/api/pbis-note-templates?scope=school` (mirrors `SchoolWidePbisAdminView`) and
+owns its sub-tab state — it takes NO props. Negative Behaviors reuses
+`SettingsView` with `lockedScope="school"` + `initialFilter="negative"`;
+Interventions/Pullout Reasons are self-contained CRUD components
+(`InterventionTypesAdmin`, `PulloutReasonsAdmin`) hitting the SAME endpoints as
+App.tsx Site Management (intentionally NOT extracted from App.tsx's
+deeply-coupled inline JSX).
 
-**How to apply:** if you add a 4th sub-tab with a looser server gate, keep
-`canManageLists` as the intersection (or split per-sub-tab visibility) — don't
-widen it past the most restrictive sub-tab's write gate.
+**Why the gate excludes dean:** the combined view exposes the negative-behavior
+list, and `/pbis-reasons` (school-scope writes) admits admin/BS/MTSS only —
+`/intervention-types` + `/pullout-reasons` also admit dean. So the tile + section
+gate on `canManageAllPbisLists` (admin/BS/MTSS), NOT the broader
+`canManageBehaviorLists` (which includes dean), so no dean hits a 403 on the
+Negative Behaviors sub-tab. Server still enforces all writes.
+
+**How to apply:** keep the tile `show` and the section render guard on the SAME
+gate. If you add a 4th sub-tab with a looser server gate, keep the gate as the
+intersection (or split per-sub-tab visibility) — don't widen it past the most
+restrictive sub-tab's write gate.

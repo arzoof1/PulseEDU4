@@ -15,13 +15,7 @@ import PulloutReasonsAdmin from "./PulloutReasonsAdmin";
 // is the first real implementation.
 // =============================================================================
 
-type Tab =
-  | "classes"
-  | "rubric"
-  | "rewards"
-  | "reports"
-  | "settings"
-  | "manageLists";
+type Tab = "classes" | "rubric" | "rewards" | "reports" | "settings";
 
 type Section = {
   id: number;
@@ -118,7 +112,7 @@ type IvType = {
 
 // Color-first entry mode. "choose" shows the green/red picker; the others
 // render the positive award hub or the negative behavior+intervention flow.
-type Mode = "choose" | "positive" | "negative" | "manageLists";
+type Mode = "choose" | "positive" | "negative";
 
 const TAB_LABELS: { key: Tab; label: string }[] = [
   { key: "classes", label: "Classes" },
@@ -187,23 +181,6 @@ export default function PbisPointsHub() {
     me?.isMtssCoordinator ||
     me?.isBehaviorSpecialist
   );
-
-  // Who may edit the shared lists (negative behaviors, interventions, pullout
-  // reasons). This is the INTERSECTION of the three server write gates: the
-  // negative-behavior list (/pbis-reasons) only admits admin / BS / MTSS
-  // (no dean), so we use that narrower set here to ensure every visible
-  // sub-tab is fully writable. The server still enforces writes regardless.
-  const canManageLists = !!(
-    me?.isSuperUser ||
-    me?.isAdmin ||
-    me?.isBehaviorSpecialist ||
-    me?.isMtssCoordinator
-  );
-
-  // Sub-tab within the Manage Lists view (reached from the entry chooser).
-  const [manageListsTab, setManageListsTab] = useState<
-    "behaviors" | "interventions" | "pullouts"
-  >("behaviors");
 
   // ---- Initial data load
   useEffect(() => {
@@ -555,12 +532,7 @@ export default function PbisPointsHub() {
         </div>
       </div>
 
-      {mode === "choose" && (
-        <ModeChooser
-          onPick={(m) => setMode(m)}
-          canManageLists={canManageLists}
-        />
-      )}
+      {mode === "choose" && <ModeChooser onPick={(m) => setMode(m)} />}
 
       {mode !== "choose" && (
         <div style={{ marginBottom: "0.75rem" }}>
@@ -642,18 +614,6 @@ export default function PbisPointsHub() {
             />
           </>
         ))}
-
-      {mode === "manageLists" && canManageLists && (
-        <ManageListsView
-          me={me}
-          reasons={reasons}
-          onReasonsChanged={setReasons}
-          templates={noteTemplates}
-          onTemplatesChanged={setNoteTemplates}
-          subTab={manageListsTab}
-          onChangeSubTab={setManageListsTab}
-        />
-      )}
 
       {mode === "positive" && (
         <>
@@ -826,10 +786,8 @@ export default function PbisPointsHub() {
 // flow from the negative behavior+intervention flow.
 function ModeChooser({
   onPick,
-  canManageLists,
 }: {
-  onPick: (m: "positive" | "negative" | "manageLists") => void;
-  canManageLists: boolean;
+  onPick: (m: "positive" | "negative") => void;
 }) {
   const base: React.CSSProperties = {
     flex: "1 1 220px",
@@ -892,27 +850,6 @@ function ModeChooser({
           Log a behavior &amp; intervention tried
         </span>
       </button>
-      {canManageLists && (
-        <button
-          type="button"
-          onClick={() => onPick("manageLists")}
-          style={{
-            ...base,
-            background: "linear-gradient(135deg,#475569,#334155)",
-            boxShadow: "0 8px 22px rgba(51,65,85,0.32)",
-          }}
-        >
-          <span style={{ fontSize: "2.4rem", lineHeight: 1 }}>⚙️</span>
-          <span style={{ fontSize: "1.4rem", fontWeight: 800 }}>
-            Manage Lists
-          </span>
-          <span
-            style={{ fontSize: "0.9rem", opacity: 0.92, textAlign: "center" }}
-          >
-            Edit negative behaviors, interventions &amp; pullout reasons
-          </span>
-        </button>
-      )}
     </div>
   );
 }
@@ -3851,23 +3788,48 @@ export function SettingsView({
 // negative classroom behaviors, the intervention list, and pullout reasons.
 // Each is rendered behind a sub-tab so the top tab bar stays tidy.
 // =============================================================================
-function ManageListsView({
-  me,
-  reasons,
-  onReasonsChanged,
-  templates,
-  onTemplatesChanged,
-  subTab,
-  onChangeSubTab,
-}: {
-  me: Me | null;
-  reasons: Reason[];
-  onReasonsChanged: (next: Reason[]) => void;
-  templates: NoteTemplate[];
-  onTemplatesChanged: (next: NoteTemplate[]) => void;
-  subTab: "behaviors" | "interventions" | "pullouts";
-  onChangeSubTab: (t: "behaviors" | "interventions" | "pullouts") => void;
-}) {
+export function ManageListsView() {
+  const [me, setMe] = useState<Me | null>(null);
+  const [reasons, setReasons] = useState<Reason[]>([]);
+  const [templates, setTemplates] = useState<NoteTemplate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [subTab, setSubTab] = useState<
+    "behaviors" | "interventions" | "pullouts"
+  >("behaviors");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setErrorMsg(null);
+      try {
+        const [meRes, reasonsRes, tplRes] = await Promise.all([
+          authFetch("/api/auth/me"),
+          authFetch("/api/pbis-reasons?scope=school"),
+          authFetch("/api/pbis-note-templates?scope=school"),
+        ]);
+        if (!meRes.ok) throw new Error("Failed to load your account");
+        if (!reasonsRes.ok) throw new Error("Failed to load PBIS reasons");
+        if (cancelled) return;
+        setMe((await meRes.json()) as Me);
+        setReasons((await reasonsRes.json()) as Reason[]);
+        if (tplRes.ok) {
+          setTemplates((await tplRes.json()) as NoteTemplate[]);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setErrorMsg(err instanceof Error ? err.message : "Failed to load");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const SUBTABS: {
     key: "behaviors" | "interventions" | "pullouts";
     label: string;
@@ -3876,6 +3838,28 @@ function ManageListsView({
     { key: "interventions", label: "Interventions" },
     { key: "pullouts", label: "Pullout Reasons" },
   ];
+
+  if (loading) {
+    return (
+      <div style={{ padding: "2rem", textAlign: "center", color: "#64748b" }}>
+        Loading…
+      </div>
+    );
+  }
+  if (errorMsg) {
+    return (
+      <div
+        style={{
+          padding: "1rem",
+          background: "#fee2e2",
+          color: "#991b1b",
+          borderRadius: "0.4rem",
+        }}
+      >
+        {errorMsg}
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -3893,7 +3877,7 @@ function ManageListsView({
             <button
               key={key}
               type="button"
-              onClick={() => onChangeSubTab(key)}
+              onClick={() => setSubTab(key)}
               style={{
                 padding: "0.45rem 0.9rem",
                 borderRadius: "999px",
@@ -3915,9 +3899,10 @@ function ManageListsView({
         <SettingsView
           me={me}
           reasons={reasons}
-          onReasonsChanged={onReasonsChanged}
+          onReasonsChanged={setReasons}
           templates={templates}
-          onTemplatesChanged={onTemplatesChanged}
+          onTemplatesChanged={setTemplates}
+          lockedScope="school"
           initialFilter="negative"
         />
       ) : subTab === "interventions" ? (
@@ -5474,10 +5459,6 @@ function ComingSoon({ tab }: { tab: Tab }) {
     settings: {
       title: "Settings",
       body: "Configure how PBIS Points behaves in your classroom — per-class caps, default reasons, parent visibility.",
-    },
-    manageLists: {
-      title: "Manage Lists",
-      body: "Manage the negative-behavior, intervention, and pullout-reason lists used across PBIS Points.",
     },
   };
   const { title, body } = labels[tab];
