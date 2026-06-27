@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import StudentPhoto from "./StudentPhoto";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
+import InterventionTypesAdmin from "./InterventionTypesAdmin";
+import PulloutReasonsAdmin from "./PulloutReasonsAdmin";
 
 // =============================================================================
 // PBIS Points Hub
@@ -13,7 +15,13 @@ import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowTo
 // is the first real implementation.
 // =============================================================================
 
-type Tab = "classes" | "rubric" | "rewards" | "reports" | "settings";
+type Tab =
+  | "classes"
+  | "rubric"
+  | "rewards"
+  | "reports"
+  | "settings"
+  | "manageLists";
 
 type Section = {
   id: number;
@@ -93,6 +101,7 @@ type Me = {
   isMtssCoordinator?: boolean;
   isBehaviorSpecialist?: boolean;
   isPbisCoordinator?: boolean;
+  isDean?: boolean;
 };
 
 type Teacher = { id: number; name: string };
@@ -177,6 +186,32 @@ export default function PbisPointsHub() {
     me?.isEseCoordinator ||
     me?.isMtssCoordinator ||
     me?.isBehaviorSpecialist
+  );
+
+  // Who may edit the shared lists (negative behaviors, interventions, pullout
+  // reasons). This is the INTERSECTION of the three server write gates: the
+  // negative-behavior list (/pbis-reasons) only admits admin / BS / MTSS
+  // (no dean), so we use that narrower set here to ensure every visible
+  // sub-tab is fully writable. The server still enforces writes regardless.
+  const canManageLists = !!(
+    me?.isSuperUser ||
+    me?.isAdmin ||
+    me?.isBehaviorSpecialist ||
+    me?.isMtssCoordinator
+  );
+
+  // Sub-tab within the Manage Lists tab.
+  const [manageListsTab, setManageListsTab] = useState<
+    "behaviors" | "interventions" | "pullouts"
+  >("behaviors");
+
+  // Visible top-level tabs — the admin-only Manage Lists tab is appended last.
+  const visibleTabs = useMemo(
+    () =>
+      canManageLists
+        ? [...TAB_LABELS, { key: "manageLists" as Tab, label: "Manage Lists" }]
+        : TAB_LABELS,
+    [canManageLists],
   );
 
   // ---- Initial data load
@@ -614,7 +649,7 @@ export default function PbisPointsHub() {
 
       {mode === "positive" && (
         <>
-      <TabBar tab={tab} onChange={setTab} />
+      <TabBar tab={tab} onChange={setTab} labels={visibleTabs} />
 
       <HowToUseHelp title="How to use PBIS Points">
         <HowToSection title="What this hub is">
@@ -713,6 +748,16 @@ export default function PbisPointsHub() {
         // intentionally disabled here for everyone (including admins) — use
         // the BS hub, MTSS hub, or the "School Store" admin section instead.
         <SchoolStoreView canEdit={false} />
+      ) : tab === "manageLists" && canManageLists ? (
+        <ManageListsView
+          me={me}
+          reasons={reasons}
+          onReasonsChanged={setReasons}
+          templates={noteTemplates}
+          onTemplatesChanged={setNoteTemplates}
+          subTab={manageListsTab}
+          onChangeSubTab={setManageListsTab}
+        />
       ) : (
         <ComingSoon tab={tab} />
       )}
@@ -1228,9 +1273,11 @@ function NegativeLogModal({
 function TabBar({
   tab,
   onChange,
+  labels = TAB_LABELS,
 }: {
   tab: Tab;
   onChange: (t: Tab) => void;
+  labels?: { key: Tab; label: string }[];
 }) {
   return (
     <div
@@ -1242,7 +1289,7 @@ function TabBar({
         flexWrap: "wrap",
       }}
     >
-      {TAB_LABELS.map(({ key, label }) => {
+      {labels.map(({ key, label }) => {
         const active = key === tab;
         return (
           <button
@@ -3248,6 +3295,7 @@ export function SettingsView({
   templates,
   onTemplatesChanged,
   lockedScope,
+  initialFilter = "all",
 }: {
   me: Me | null;
   reasons: Reason[];
@@ -3258,6 +3306,9 @@ export function SettingsView({
   // Used by the BS Hub and MTSS Coordinator Hub to expose a school-wide-only
   // editor without bringing the entire teacher workflow with it.
   lockedScope?: "school" | "teacher";
+  // Default polarity filter. The Manage Lists tab opens this editor pre-filtered
+  // to "negative" so admins land directly on the negative-behavior list.
+  initialFilter?: "all" | "positive" | "negative";
 }) {
   const [viewScope, setViewScope] = useState<"school" | "teacher">(
     lockedScope ?? "teacher",
@@ -3293,7 +3344,9 @@ export function SettingsView({
   }, [reasons]);
 
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<"all" | "positive" | "negative">("all");
+  const [filter, setFilter] = useState<"all" | "positive" | "negative">(
+    initialFilter,
+  );
   const [showArchived, setShowArchived] = useState(false);
   const [editing, setEditing] = useState<Reason | "new" | null>(null);
   const [saving, setSaving] = useState(false);
@@ -3767,6 +3820,89 @@ export function SettingsView({
           onSave={saveBehavior}
           saving={saving}
         />
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// ManageListsView — admin-only tab grouping the three editable list surfaces:
+// negative classroom behaviors, the intervention list, and pullout reasons.
+// Each is rendered behind a sub-tab so the top tab bar stays tidy.
+// =============================================================================
+function ManageListsView({
+  me,
+  reasons,
+  onReasonsChanged,
+  templates,
+  onTemplatesChanged,
+  subTab,
+  onChangeSubTab,
+}: {
+  me: Me | null;
+  reasons: Reason[];
+  onReasonsChanged: (next: Reason[]) => void;
+  templates: NoteTemplate[];
+  onTemplatesChanged: (next: NoteTemplate[]) => void;
+  subTab: "behaviors" | "interventions" | "pullouts";
+  onChangeSubTab: (t: "behaviors" | "interventions" | "pullouts") => void;
+}) {
+  const SUBTABS: {
+    key: "behaviors" | "interventions" | "pullouts";
+    label: string;
+  }[] = [
+    { key: "behaviors", label: "Negative Behaviors" },
+    { key: "interventions", label: "Interventions" },
+    { key: "pullouts", label: "Pullout Reasons" },
+  ];
+
+  return (
+    <div>
+      <div
+        style={{
+          display: "flex",
+          gap: "0.4rem",
+          flexWrap: "wrap",
+          marginBottom: "1rem",
+        }}
+      >
+        {SUBTABS.map(({ key, label }) => {
+          const active = key === subTab;
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => onChangeSubTab(key)}
+              style={{
+                padding: "0.45rem 0.9rem",
+                borderRadius: "999px",
+                border: active ? "1px solid #0e7490" : "1px solid #cbd5e1",
+                background: active ? "#0e7490" : "white",
+                color: active ? "white" : "#475569",
+                fontSize: "0.9rem",
+                fontWeight: active ? 600 : 500,
+                cursor: "pointer",
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {subTab === "behaviors" ? (
+        <SettingsView
+          me={me}
+          reasons={reasons}
+          onReasonsChanged={onReasonsChanged}
+          templates={templates}
+          onTemplatesChanged={onTemplatesChanged}
+          initialFilter="negative"
+        />
+      ) : subTab === "interventions" ? (
+        <InterventionTypesAdmin />
+      ) : (
+        <PulloutReasonsAdmin />
       )}
     </div>
   );
@@ -5317,6 +5453,10 @@ function ComingSoon({ tab }: { tab: Tab }) {
     settings: {
       title: "Settings",
       body: "Configure how PBIS Points behaves in your classroom — per-class caps, default reasons, parent visibility.",
+    },
+    manageLists: {
+      title: "Manage Lists",
+      body: "Manage the negative-behavior, intervention, and pullout-reason lists used across PBIS Points.",
     },
   };
   const { title, body } = labels[tab];

@@ -25,3 +25,25 @@ split — positive award modals get `positiveReasons`, the negative modal gets
 `negativeReasons`. Negative entries are written by the quick-log endpoint, not
 `/api/pbis`; refresh roster totals by refetching `/api/pbis`
 (`refreshTotals()`).
+
+## Manage Lists tab (admin-only)
+
+The hub also has an admin-only top-level tab **"Manage Lists"** (appended to
+`TAB_LABELS` via `visibleTabs` when `canManageLists`) grouping three sub-tabs:
+Negative Behaviors / Interventions / Pullout Reasons. `ManageListsView` renders
+them: Negative Behaviors reuses `SettingsView` with the new optional
+`initialFilter` prop set to `"negative"`; Interventions/Pullout Reasons are
+self-contained CRUD components (`InterventionTypesAdmin`,
+`PulloutReasonsAdmin`) hitting the SAME endpoints as App.tsx Site Management
+(intentionally NOT extracted from App.tsx's deeply-coupled inline JSX).
+
+**Why `canManageLists` excludes dean:** it is the INTERSECTION of the three
+server write gates. `/intervention-types` + `/pullout-reasons` admit
+admin/BS/MTSS/dean, but the negative-behavior list (`/pbis-reasons`
+school-scope) admits admin/BS/MTSS only. Gating the whole tab on the narrower
+set guarantees every visible sub-tab is fully writable (no dean-only 403 on the
+Negative Behaviors sub-tab). Server still enforces all writes.
+
+**How to apply:** if you add a 4th sub-tab with a looser server gate, keep
+`canManageLists` as the intersection (or split per-sub-tab visibility) — don't
+widen it past the most restrictive sub-tab's write gate.
