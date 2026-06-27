@@ -70,7 +70,7 @@ const card: React.CSSProperties = {
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   pending_approval: { label: "Needs approval", color: "#b45309" },
-  pending: { label: "Ready to prep", color: "#d97706" },
+  pending: { label: "Ready to prep", color: "#7c3aed" },
   fulfilled: { label: "Fulfilled", color: "#15803d" },
   cancelled: { label: "Cancelled", color: "#6b7280" },
 };
@@ -97,6 +97,17 @@ function StatusPill({ status }: { status: string }) {
 
 function idLabel(localSisId: string | null): string {
   return localSisId ?? "—";
+}
+
+function fmtDate(iso: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 export default function SchoolStoreFulfillmentView() {
@@ -144,7 +155,7 @@ export default function SchoolStoreFulfillmentView() {
               border: "1px solid var(--border, #e2e8f0)",
               cursor: "pointer",
               fontWeight: 600,
-              background: tab === t ? "#d97706" : "transparent",
+              background: tab === t ? "#7c3aed" : "transparent",
               color: tab === t ? "#fff" : "var(--text, #0f172a)",
             }}
           >
@@ -310,7 +321,7 @@ function DistributionPanel() {
                 border: "none",
                 borderRadius: 8,
                 cursor: "pointer",
-                background: active ? "rgba(217,119,6,0.12)" : "transparent",
+                background: active ? "rgba(147,51,234,0.12)" : "transparent",
                 color: "var(--text, #0f172a)",
                 fontWeight: active ? 700 : 500,
               }}
@@ -324,7 +335,7 @@ function DistributionPanel() {
               </span>
               <span
                 style={{
-                  background: "#d97706",
+                  background: "#7c3aed",
                   color: "#fff",
                   borderRadius: 999,
                   fontSize: "0.72rem",
@@ -619,6 +630,7 @@ function LogPanel({ catalog }: { catalog: CatalogItem[] }) {
                 <th style={{ padding: "10px 12px" }}>SIS ID</th>
                 <th style={{ padding: "10px 12px" }}>Item</th>
                 <th style={{ padding: "10px 12px", textAlign: "right" }}>Pts</th>
+                <th style={{ padding: "10px 12px" }}>Date</th>
                 <th style={{ padding: "10px 12px" }}>Status</th>
                 <th style={{ padding: "10px 12px" }}>Deliver to</th>
                 <th style={{ padding: "10px 12px", textAlign: "right" }}></th>
@@ -643,6 +655,15 @@ function LogPanel({ catalog }: { catalog: CatalogItem[] }) {
                   <td style={{ padding: "10px 12px" }}>{r.itemName}</td>
                   <td style={{ padding: "10px 12px", textAlign: "right" }}>
                     {r.pointsSpent}
+                  </td>
+                  <td
+                    style={{
+                      padding: "10px 12px",
+                      whiteSpace: "nowrap",
+                      color: "var(--muted, #64748b)",
+                    }}
+                  >
+                    {fmtDate(r.createdAt)}
                   </td>
                   <td style={{ padding: "10px 12px" }}>
                     <StatusPill status={r.status} />

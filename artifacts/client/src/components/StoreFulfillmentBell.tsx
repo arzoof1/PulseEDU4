@@ -27,13 +27,13 @@ function ensureStyles(): void {
     @keyframes storeBellGlow {
       0%, 100% {
         box-shadow:
-          0 0 0 0 rgba(245, 158, 11, 0.55),
-          0 0 14px 3px rgba(245, 158, 11, 0.35);
+          0 0 0 0 rgba(147, 51, 234, 0.55),
+          0 0 14px 3px rgba(147, 51, 234, 0.35);
       }
       50% {
         box-shadow:
-          0 0 0 6px rgba(245, 158, 11, 0),
-          0 0 22px 6px rgba(245, 158, 11, 0.7);
+          0 0 0 6px rgba(147, 51, 234, 0),
+          0 0 22px 6px rgba(147, 51, 234, 0.7);
       }
     }
     .store-bell-btn {
@@ -108,8 +108,8 @@ export default function StoreFulfillmentBell({
         display: "inline-flex",
         alignItems: "center",
         gap: 6,
-        background: "rgba(245, 158, 11, 0.12)",
-        border: "1px solid rgba(245, 158, 11, 0.6)",
+        background: "rgba(147, 51, 234, 0.12)",
+        border: "1px solid rgba(147, 51, 234, 0.6)",
         cursor: "pointer",
         padding: "0.3rem 0.65rem",
         fontSize: "1rem",
@@ -132,7 +132,7 @@ export default function StoreFulfillmentBell({
           position: "absolute",
           top: -4,
           right: -4,
-          background: "#d97706",
+          background: "#7c3aed",
           color: "white",
           fontSize: "0.7rem",
           padding: "1px 5px",
