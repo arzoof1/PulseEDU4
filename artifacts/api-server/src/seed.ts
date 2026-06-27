@@ -459,6 +459,14 @@ export async function ensureHousesSchema() {
   await db.execute(
     sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS house_id INTEGER`,
   );
+  // Student portal (ClassLink district SSO) — link key + last-login stamp.
+  // Additive nullable columns; IF NOT EXISTS keeps re-runs harmless.
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS sso_external_id TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS last_portal_login_at TEXT`,
+  );
   // staff.house_id — teachers/staff can belong to a house too (printed on
   // their kiosk activation card and any future "your house" surfaces).
   await db.execute(

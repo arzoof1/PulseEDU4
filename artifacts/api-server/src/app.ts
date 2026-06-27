@@ -17,6 +17,11 @@ declare global {
       // router-level middleware inside parentAuth.ts (NOT by the global
       // staff middleware below) so the two identity systems stay isolated.
       parentId?: number | null;
+      // Student identity for the student HeartBEAT portal (ClassLink SSO).
+      // The NUMERIC students.id row id (never the FLEID). Resolved by a
+      // router-level middleware inside studentAuth.ts / studentPortal.ts,
+      // kept isolated from the staff + parent identity systems.
+      studentId?: number | null;
       // The active school for this request. For most staff this is their
       // home school (staff.school_id). SuperUsers can override per-session
       // via POST /api/tenancy/switch-school. null when unauthenticated.
@@ -41,6 +46,17 @@ declare global {
 declare module "express-session" {
   interface SessionData {
     activeSchoolId?: number;
+    // Set when a student signs into their personal HeartBEAT portal via
+    // ClassLink SSO (or the guarded demo login). NUMERIC students.id.
+    studentId?: number;
+    // CSRF state for the in-flight student ClassLink SSO authorize→callback
+    // round-trip. Set on /student-auth/sso/start, verified + cleared on
+    // /student-auth/sso/callback.
+    studentSsoState?: string;
+    // The school the student began the SSO flow for. Carried across the
+    // authorize→callback round-trip so the callback can scope the roster
+    // lookup to a SINGLE tenant (identifiers are not globally unique).
+    studentSsoSchoolId?: number;
   }
 }
 

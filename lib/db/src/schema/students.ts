@@ -83,6 +83,17 @@ export const studentsTable = pgTable("students", {
   // student columns). Nullable until a note is first written.
   heartbeatNoteUpdatedBy: integer("heartbeat_note_updated_by"),
   heartbeatNoteUpdatedAt: text("heartbeat_note_updated_at"),
+  // ----- Student portal (ClassLink district SSO) -------------------------
+  // Stable external identity returned by the district SSO provider
+  // (ClassLink OIDC `sub` / OneRoster sourcedId). Stamped on first SSO
+  // login to LINK this roster-sourced student row to their SSO identity, so
+  // subsequent logins resolve straight to the student. Nullable: most rows
+  // never sign in (only enrolled middle/high students with district
+  // credentials do). Match is school-scoped — not globally unique.
+  ssoExternalId: text("sso_external_id"),
+  // Last time this student signed into their personal HeartBEAT portal
+  // (ISO string, app-managed column convention). Nullable until first login.
+  lastPortalLoginAt: text("last_portal_login_at"),
 });
 
 export type StudentRow = typeof studentsTable.$inferSelect;
