@@ -3,6 +3,27 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Class Sign-Ins roll-call — date + teacher + period filters.**
+  The kiosk class-sign-in roll-call panel (`RollCallPanel.tsx`, backed
+  by `GET /api/class-signins/today`) gained a top filter bar: a **date
+  picker** (defaults to today, capped at today) so staff can review any
+  prior day, a **Teacher dropdown** (populated from teachers present
+  that day), a **Period dropdown**, and the existing free-text
+  name/student-id search. Period is **inferred server-side** from each
+  sign-in's time-of-day against the school's default+active bell
+  schedule (`loadDefaultBellPeriods` + `hhmmInTz` + `periodForTime` in
+  `routes/kiosk.ts`); the `class_signins` ledger stores no period, so
+  rows outside any period window (or when no default schedule exists)
+  show "—" and the Period dropdown disables. The endpoint now accepts
+  an optional `?date=YYYY-MM-DD` (strictly validated to reject
+  normalized/invalid dates, school-IANA-tz day window via
+  `startOfDayUtc` + a 36h re-floor for the exclusive upper bound) and
+  returns `{periodNumber, periodName}` per row plus a canonical date
+  string. The client resets the teacher/period selection if the chosen
+  value disappears after a date change. **Entirely read-only**: it never
+  touches the scan/write path or the on-time points ledger
+  (`attendance_checkins`) — points-on-scan behavior is unchanged.
+  `requireAdmin` gate preserved.
 - **Feature Licensing — Starter / Starter Plus plans + dependency
   highlighting.** Seeded two new plans (`starter`, `starter_plus`) via
   `ensureFeaturePlansSchema` (`INSERT ... ON CONFLICT DO NOTHING`;

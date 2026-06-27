@@ -37,7 +37,7 @@ import {
   ObjectStorageService,
   ObjectNotFoundError,
 } from "../lib/objectStorage.js";
-import { and, eq, inArray, isNull, gt, desc, sql, ne, asc, like, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, gt, gte, lt, desc, sql, ne, asc, like, or } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
@@ -1940,25 +1940,62 @@ async function activateForTeacher(args: {
 // Substitute {firstName}/{lastName}/{house}/{grade} into a template
 // string. Unknown placeholders are left as-is so a typo in School
 // Settings is visible to whoever's editing it, not silently dropped.
-// Phase 4 — GET /api/class-signins/today
-// Staff-facing roll-call list: today's class sign-ins for the
+// Phase 4 — GET /api/class-signins/today[?date=YYYY-MM-DD]
+// Staff-facing roll-call list: a day's class sign-ins for the
 // current school, joined to students + the staff who owned the
 // kiosk activation at sign-in time (the "teacher" of the room).
-// Today is computed in the school's local timezone via the
-// canonical DEFAULT_SCHOOL_TZ constant — same approach as the AST
-// + lapse cron flows.
+// The day defaults to today and is computed in the school's own
+// IANA timezone (schools.timezone); an optional ?date= lets staff
+// look back at any prior day. Each row also carries an INFERRED
+// bell-schedule period, derived from the sign-in's time-of-day
+// against the school's default bell schedule (the class_signins
+// ledger itself stores no period). READ-ONLY: this endpoint never
+// writes and is wholly separate from the on-time points ledger
+// (attendance_checkins) — filtering here cannot affect points.
 router.get(
   "/class-signins/today",
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
-    // Local-midnight cutoff in the school's own IANA timezone (now
-    // sourced from schools.timezone — see getSchoolTimezone). Uses
-    // the shared startOfDayUtc helper which round-trips through Intl
-    // to avoid the spring-forward hour gap.
     const tz = await getSchoolTimezone(schoolId);
-    const startOfDay = startOfDayUtc(new Date(), tz);
+    // Resolve the requested day. A valid ?date=YYYY-MM-DD anchors on
+    // noon UTC of that date (safe for US timezones) so startOfDayUtc
+    // lands on the intended calendar day; otherwise default to today.
+    const dateParam =
+      typeof req.query.date === "string" ? req.query.date.trim() : "";
+    const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateParam);
+    let anchor = new Date();
+    if (dm) {
+      const y = Number(dm[1]);
+      const mo = Number(dm[2]);
+      const d = Number(dm[3]);
+      const cand = new Date(Date.UTC(y, mo - 1, d, 12, 0, 0));
+      // Reject normalized/invalid dates (e.g. 2026-02-31 → Mar 3) by
+      // round-tripping the parsed parts; fall back to today otherwise.
+      if (
+        cand.getUTCFullYear() === y &&
+        cand.getUTCMonth() === mo - 1 &&
+        cand.getUTCDate() === d
+      ) {
+        anchor = cand;
+      }
+    }
+    const startOfDay = startOfDayUtc(anchor, tz);
+    // Next local midnight (add 36h then re-floor to absorb any DST hop).
+    const endOfDay = startOfDayUtc(
+      new Date(startOfDay.getTime() + 36 * 60 * 60 * 1000),
+      tz,
+    );
+    const dateStr = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(startOfDay);
+
+    const periods = await loadDefaultBellPeriods(schoolId);
+
     const rows = await db
       .select({
         id: classSigninsTable.id,
@@ -1981,13 +2018,98 @@ router.get(
       .where(
         and(
           eq(classSigninsTable.schoolId, schoolId),
-          gt(classSigninsTable.signedInAt, startOfDay),
+          gte(classSigninsTable.signedInAt, startOfDay),
+          lt(classSigninsTable.signedInAt, endOfDay),
         ),
       )
       .orderBy(asc(classSigninsTable.signedInAt));
-    res.json({ signins: rows });
+
+    const signins = rows.map((r) => {
+      const p = r.signedInAt
+        ? periodForTime(periods, hhmmInTz(r.signedInAt, tz))
+        : null;
+      return {
+        ...r,
+        periodNumber: p?.periodNumber ?? null,
+        periodName: p?.name ?? "",
+      };
+    });
+    res.json({ signins, date: dateStr });
   },
 );
+
+// Phase 4 (date+period filters) — load the school's default+active
+// bell-schedule periods once, normalized to HH:MM bounds, for
+// inferring a sign-in's period from its time-of-day. Best-effort:
+// any error or missing schedule yields an empty list (period renders
+// blank, never blocks the roll-call list).
+async function loadDefaultBellPeriods(
+  schoolId: number,
+): Promise<
+  { periodNumber: number; name: string; start: string; end: string }[]
+> {
+  try {
+    const [schedule] = await db
+      .select({ id: bellSchedulesTable.id })
+      .from(bellSchedulesTable)
+      .where(
+        and(
+          eq(bellSchedulesTable.schoolId, schoolId),
+          eq(bellSchedulesTable.isDefault, true),
+          eq(bellSchedulesTable.active, true),
+        ),
+      );
+    if (!schedule) return [];
+    const periods = await db
+      .select({
+        periodNumber: bellSchedulePeriodsTable.periodNumber,
+        name: bellSchedulePeriodsTable.name,
+        startTime: bellSchedulePeriodsTable.startTime,
+        endTime: bellSchedulePeriodsTable.endTime,
+      })
+      .from(bellSchedulePeriodsTable)
+      .where(eq(bellSchedulePeriodsTable.scheduleId, schedule.id));
+    return periods
+      .map((p) => ({
+        periodNumber: p.periodNumber ?? 0,
+        name:
+          p.name ?? (p.periodNumber != null ? `Period ${p.periodNumber}` : ""),
+        start: (p.startTime ?? "").slice(0, 5),
+        end: (p.endTime ?? "").slice(0, 5),
+      }))
+      .filter((p) => p.start && p.end);
+  } catch {
+    return [];
+  }
+}
+
+// HH:MM for a timestamp in the given IANA timezone (NOT the server
+// clock). Normalizes the "24" midnight quirk some runtimes emit.
+function hhmmInTz(d: Date, tz: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(d);
+  let hh = parts.find((p) => p.type === "hour")?.value ?? "00";
+  const mm = parts.find((p) => p.type === "minute")?.value ?? "00";
+  if (hh === "24") hh = "00";
+  return `${hh.padStart(2, "0")}:${mm.padStart(2, "0")}`;
+}
+
+// First period whose [start, end) window contains hhmm; null if none.
+function periodForTime(
+  periods: { periodNumber: number; name: string; start: string; end: string }[],
+  hhmm: string,
+): { periodNumber: number; name: string } | null {
+  for (const p of periods) {
+    if (hhmm >= p.start && hhmm < p.end) {
+      return { periodNumber: p.periodNumber, name: p.name };
+    }
+  }
+  return null;
+}
 
 function substituteWelcome(
   template: string,
