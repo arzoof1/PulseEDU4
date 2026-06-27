@@ -11191,6 +11191,16 @@ function App() {
           effectiveFeatures.Pbis ||
           effectiveFeatures.SchoolStore ||
           canAccessPbisHub;
+        // Phase 5 — role-aware nav: this flag must be the EXACT disjunction of
+        // every item gate rendered inside the Student Support group below, so
+        // the group appears precisely for roles that have at least one item in
+        // it (never an empty header, and never suppressing an item a role is
+        // authorized for). Previously it omitted canEditSafetyPlanClient
+        // (Guidance Counselor / School Psychologist could reach Safety Plans
+        // only if another term happened to be true) and isDistrictAdmin (the
+        // Log ODR / Investigations items admit District Admin). Adding the
+        // missing terms only ever REVEALS an already-authorized item — it
+        // removes no access. Keep in lockstep with the item gates below.
         const showBehaviorSupport =
           effectiveFeatures.LogIntervention ||
           effectiveFeatures.RequestPullout ||
@@ -11199,19 +11209,33 @@ function App() {
           canViewIssDashboard ||
           canReviewPullouts ||
           canManageMtssPlans ||
+          canEditSafetyPlanClient ||
+          canAccessMtssHub ||
+          isDistrictAdmin ||
+          isDean ||
           (canManageBehaviorLists && !isBehaviorSpec);
         const showSpecialPrograms =
           effectiveFeatures.Accommodations || isEseCoord;
-        // canManageBellSchedules covers admin/superuser/mtss/behaviorSpec.
-        // The "Interventions" behavior-lists editor moved into this group;
-        // its viewers are (canManageBehaviorLists && !isBehaviorSpec) =
-        // MTSS coordinators (already covered via isMtss) + Deans (NOT
-        // otherwise in this group). Add that clause so Deans keep their
-        // config item. Each item below stays individually gated, so this
-        // only ever reveals items a user is already authorized for.
+        // Phase 5 — role-aware nav: like showBehaviorSupport, this must be the
+        // EXACT disjunction of every item gate rendered inside the Admin &
+        // Settings group below. The old flag (bell schedules || admin ||
+        // behavior-lists) suppressed the group for roles that hold ONLY a
+        // narrower admin capability — e.g. a teacher granted capStaffRoles
+        // (canManageStaffRoles) or cap_manage_displays (canManageDisplays), a
+        // District Admin (canManageSettings / canApproveAst), an AST approver
+        // (canApproveAst), or an Eligibility manager (canManageEligibility) —
+        // even though those items were gated visible inside. Adding the missing
+        // terms only REVEALS items the role is already authorized for; it
+        // removes no access. Keep in lockstep with the item gates below.
         const showSchoolAdmin =
-          canManageBellSchedules ||
           isAdmin ||
+          canManageStaffRoles ||
+          canManageBellSchedules ||
+          canManageDisplays ||
+          canAccessMtssHub ||
+          canManageSettings ||
+          canApproveAst ||
+          canManageEligibility ||
           (canManageBehaviorLists && !isBehaviorSpec);
         // Phase 2 polish — per-user namespace for the NavGroup accordion
         // localStorage so two staff sharing the same browser don't inherit

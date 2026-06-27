@@ -144,3 +144,31 @@ unpin. **How to apply:** don't assume a 4a-style group home exists for every
 shortcut; the Tile Home is a legitimate permanent home, but only if its tile
 gate is a superset of the pin gate. The first architect pass FAILED because it
 only grepped grouped `renderNavItem` calls and missed the Tile Home launcher.
+
+## Role-aware nav = exact disjunction of children (Phase 5)
+
+"Role-aware nav with zero access loss" has ONE provably-safe lever: make each
+group's `show<Group>` visibility flag the EXACT disjunction (OR) of every
+per-item gate rendered inside that group. Then a group appears precisely when
+≥1 item inside is visible — no empty header (show broader than children) and no
+suppressed-but-authorized item (show narrower than children).
+
+**Why:** the appealing "shrink the sidebar by hiding things a role can technically
+see today" inherently REMOVES access → violates a no-damage constraint. The only
+change that's access-non-decreasing is fixing show-flag/children mismatches.
+A NARROWER-than-children show flag is a real bug: the role has the item gated
+visible but the group header is hidden, so it's unreachable from the sidebar.
+Broadening to the exact OR only ever REVEALS an already-authorized item (strict
+superset) — it never removes access.
+
+**How to apply:** audit each group's show flag against the union of its rendered
+children's gates. Found two narrower-than-children (suppression) cases:
+showBehaviorSupport omitted `canEditSafetyPlanClient` (Guidance Counselor /
+School Psych → Safety Plans) + `isDistrictAdmin`/`isDean` (Log ODR /
+Investigations); showSchoolAdmin omitted `canManageStaffRoles` (per-staff
+capStaffRoles), `canManageDisplays` (cap_manage_displays), `canManageSettings`
+(District Admin), `canApproveAst`, `canManageEligibility`, `canAccessMtssHub`.
+This is a show-flag-only edit: no items move, NAV_GROUP_OWNERSHIP unchanged
+(ownership only needs lockstep when items MOVE groups), 800px strip untouched.
+A redundant OR term that can only ADD coverage is safe to keep — don't remove it
+just for "exact union" tidiness when a no-damage constraint is in force.
