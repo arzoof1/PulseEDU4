@@ -281,17 +281,8 @@ function ClassComposerBanner({
 }
 
 export default function AdminHubPage({
-  onOpenAstQueue,
-  onOpenCompQueue,
   onOpenClassComposer,
 }: {
-  // Optional deep-link to the AST admin queue. When provided, the AST
-  // pending-count tile becomes clickable. Wired by App.tsx.
-  onOpenAstQueue?: () => void;
-  // Optional deep-link to the Comp Time admin queue. Same pattern as
-  // AST — the tile is silent for non-approvers and shows the pending
-  // count for approvers.
-  onOpenCompQueue?: () => void;
   // Optional deep-link to Insights → Class Composer. When provided,
   // the post-PM nudge banner's "View suggested groupings" button
   // navigates there.
@@ -309,8 +300,6 @@ export default function AdminHubPage({
     description: string;
     subjects: string[];
   }>>([]);
-  const [astPending, setAstPending] = useState<number | null>(null);
-  const [compPending, setCompPending] = useState<number | null>(null);
   const [showModal, setShowModal] = useState<null | "iss" | "oss">(null);
   const [issDetail, setIssDetail] = useState<{
     id: number;
@@ -320,12 +309,10 @@ export default function AdminHubPage({
 
   const reload = useCallback(async () => {
     try {
-      const [r1, r2, r3, r4, r5, r6, r7] = await Promise.all([
+      const [r1, r2, r3, r4, r5] = await Promise.all([
         authFetch("/api/admin-hub/recent?limit=20"),
         authFetch("/api/admin-hub/acknowledgements"),
         authFetch("/api/pickup/reconciliation"),
-        authFetch("/api/ast/admin-pending-count"),
-        authFetch("/api/comp/admin-pending-count"),
         authFetch("/api/intensive-groups/pm-readiness"),
         authFetch("/api/intensive-groups/skillcluster-banners"),
       ]);
@@ -335,23 +322,6 @@ export default function AdminHubPage({
       const d2 = (await r2.json()) as AckResp;
       setRecent(d1.rows);
       setAck(d2);
-      // AST count is best-effort. 403 (non-AST-approver staff who can
-      // still use the Admin Hub for ISS/OSS) is silently ignored.
-      if (r4.ok) {
-        const d4 = (await r4.json()) as { total?: number };
-        setAstPending(typeof d4.total === "number" ? d4.total : 0);
-      } else {
-        setAstPending(null);
-      }
-      // Comp Time pending count. Same best-effort treatment as AST
-      // — the route returns { count: 0 } for non-approvers rather
-      // than 403, so r5.ok should virtually always be true.
-      if (r5.ok) {
-        const d5 = (await r5.json()) as { count?: number };
-        setCompPending(typeof d5.count === "number" ? d5.count : 0);
-      } else {
-        setCompPending(null);
-      }
       // Reconciliation is best-effort; admins without curb access still
       // see the rest of the hub. (canRunCurb covers admin already, so a
       // 403 here would only happen on a misconfigured tenant.)
@@ -363,13 +333,13 @@ export default function AdminHubPage({
       // PM readiness is admin/Core-Team gated server-side; 403 just
       // means the signed-in staff can't manage groupings, so the
       // banner stays hidden for them. Any other error: silent.
-      if (r6.ok) {
-        setPmReadiness((await r6.json()) as PmReadinessResp);
+      if (r4.ok) {
+        setPmReadiness((await r4.json()) as PmReadinessResp);
       } else {
         setPmReadiness(null);
       }
-      if (r7.ok) {
-        const d7 = (await r7.json()) as {
+      if (r5.ok) {
+        const d5 = (await r5.json()) as {
           banners: Array<{
             pmWindow: string;
             token: string;
@@ -378,7 +348,7 @@ export default function AdminHubPage({
             subjects: string[];
           }>;
         };
-        setSkillclusterBanners(d7.banners ?? []);
+        setSkillclusterBanners(d5.banners ?? []);
       } else {
         setSkillclusterBanners([]);
       }
@@ -632,102 +602,6 @@ export default function AdminHubPage({
       ))}
 
       <ReconciliationTile data={reconciliation} />
-
-      {astPending !== null && (
-        <button
-          type="button"
-          onClick={() => onOpenAstQueue?.()}
-          disabled={!onOpenAstQueue}
-          style={{
-            ...card,
-            textAlign: "left",
-            cursor: onOpenAstQueue ? "pointer" : "default",
-            background: astPending > 0 ? "#fff7ed" : "var(--surface, #fff)",
-            borderColor: astPending > 0 ? "#fed7aa" : "var(--border, #e5e7eb)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-          }}
-        >
-          <div>
-            <h3 style={{ margin: 0 }}>⏱ AST: {astPending}</h3>
-            <div
-              style={{
-                color: "var(--text-subtle, #64748b)",
-                fontSize: 13,
-                marginTop: 2,
-              }}
-            >
-              {astPending === 0
-                ? "No pending Alternate Schedule Time approvals."
-                : `${astPending} pending Alternate Schedule Time approval${astPending === 1 ? "" : "s"}. Click to review.`}
-            </div>
-          </div>
-          {astPending > 0 && (
-            <span
-              style={{
-                background: "#ea580c",
-                color: "white",
-                borderRadius: 999,
-                padding: "4px 12px",
-                fontWeight: 700,
-                fontSize: 14,
-              }}
-            >
-              {astPending}
-            </span>
-          )}
-        </button>
-      )}
-
-      {compPending !== null && compPending >= 0 && (
-        <button
-          type="button"
-          onClick={() => onOpenCompQueue?.()}
-          disabled={!onOpenCompQueue}
-          style={{
-            ...card,
-            textAlign: "left",
-            cursor: onOpenCompQueue ? "pointer" : "default",
-            background: compPending > 0 ? "#fff7ed" : "var(--surface, #fff)",
-            borderColor: compPending > 0 ? "#fed7aa" : "var(--border, #e5e7eb)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-          }}
-        >
-          <div>
-            <h3 style={{ margin: 0 }}>⏱ Comp Time: {compPending}</h3>
-            <div
-              style={{
-                color: "var(--text-subtle, #64748b)",
-                fontSize: 13,
-                marginTop: 2,
-              }}
-            >
-              {compPending === 0
-                ? "No pending Comp Time approvals."
-                : `${compPending} pending Comp Time approval${compPending === 1 ? "" : "s"}. Click to review.`}
-            </div>
-          </div>
-          {compPending > 0 && (
-            <span
-              style={{
-                background: "#ea580c",
-                color: "white",
-                borderRadius: 999,
-                padding: "4px 12px",
-                fontWeight: 700,
-                fontSize: 14,
-              }}
-            >
-              {compPending}
-            </span>
-          )}
-        </button>
-      )}
 
       <div style={card}>
         <h3 style={{ marginTop: 0 }}>Recent assignments</h3>

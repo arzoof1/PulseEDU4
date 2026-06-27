@@ -10249,6 +10249,59 @@ function App() {
     Boolean(authUser?.isAdmin) ||
     Boolean(authUser?.isSuperUser) ||
     Boolean(authUser?.isDistrictAdmin);
+
+  // Pending AST approvals count for the "AST Approvals" sidebar badge.
+  // Polls so an approver notices new requests without opening the page.
+  // The route returns { count } and { count: 0 } for non-approvers.
+  const [astPendingCount, setAstPendingCount] = useState<number>(0);
+  useEffect(() => {
+    if (!canApproveAst) {
+      setAstPendingCount(0);
+      return;
+    }
+    let cancelled = false;
+    const fetchCount = () => {
+      authFetch("/api/ast/admin-pending-count")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j: { count?: number } | null) => {
+          if (cancelled || !j) return;
+          setAstPendingCount(j.count ?? 0);
+        })
+        .catch(() => {});
+    };
+    fetchCount();
+    const interval = setInterval(fetchCount, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [canApproveAst]);
+
+  // Pending Comp Time approvals count for the "Comp Time Approvals" badge.
+  const [compPendingCount, setCompPendingCount] = useState<number>(0);
+  useEffect(() => {
+    if (!canApproveCompTime) {
+      setCompPendingCount(0);
+      return;
+    }
+    let cancelled = false;
+    const fetchCount = () => {
+      authFetch("/api/comp/admin-pending-count")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j: { count?: number } | null) => {
+          if (cancelled || !j) return;
+          setCompPendingCount(j.count ?? 0);
+        })
+        .catch(() => {});
+    };
+    fetchCount();
+    const interval = setInterval(fetchCount, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [canApproveCompTime]);
+
   const bellScheduleNavSections: NavSection[] = [
     { key: "bellSchedule", label: "Bell Schedule", icon: IconClock },
   ];
@@ -10300,6 +10353,12 @@ function App() {
     }
     if (key === "contactFixes" && contactFixesCount > 0) {
       return <span style={badgeStyle}>{contactFixesCount}</span>;
+    }
+    if (key === "astAdmin" && astPendingCount > 0) {
+      return <span style={badgeStyle}>{astPendingCount}</span>;
+    }
+    if (key === "compAdmin" && compPendingCount > 0) {
+      return <span style={badgeStyle}>{compPendingCount}</span>;
     }
     return null;
   };
@@ -11896,6 +11955,8 @@ function App() {
                 {isAdmin && renderNavItem(adminNavSections[1])}
                 {canApproveAst && renderNavItem(adminNavSections[2])}
                 {canApproveAst && renderNavItem(adminNavSections[3])}
+                {canApproveCompTime && renderNavItem(adminNavSections[4])}
+                {canApproveCompTime && renderNavItem(adminNavSections[5])}
                 {canManageEligibility &&
                   renderNavItem({
                     key: "eligibility",
@@ -22231,14 +22292,6 @@ function App() {
 
       {activeSection === "adminHub" && (
         <AdminHubPage
-          onOpenCompQueue={
-            canApproveCompTime
-              ? () => setActiveSection("compAdmin")
-              : undefined
-          }
-          onOpenAstQueue={
-            canApproveAst ? () => setActiveSection("astAdmin") : undefined
-          }
           onOpenClassComposer={
             canAccessMtssHub
               ? () => setActiveSection("classComposer")
