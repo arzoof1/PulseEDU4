@@ -5998,6 +5998,10 @@ function App() {
   const [newIntervName, setNewIntervName] = useState("");
   const [newIntervCategory, setNewIntervCategory] = useState("Classroom");
   const [newIntervRequiresNote, setNewIntervRequiresNote] = useState(false);
+  const [editingIntervId, setEditingIntervId] = useState<number | null>(null);
+  const [editIntervName, setEditIntervName] = useState("");
+  const [editIntervCategory, setEditIntervCategory] = useState("");
+  const [editIntervRequiresNote, setEditIntervRequiresNote] = useState(false);
 
   // Pullout Reasons master list (managed by admin or behavior specialist)
   type PulloutReason = {
@@ -7997,6 +8001,59 @@ function App() {
       }
       setNewIntervName("");
       setNewIntervRequiresNote(false);
+      loadInterventionTypes();
+    } catch (e) {
+      setIntervListMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const startEditIntervention = (i: {
+    id: number;
+    name: string;
+    category: string;
+    requiresNote: boolean;
+  }) => {
+    setIntervListMsg("");
+    setEditingIntervId(i.id);
+    setEditIntervName(i.name);
+    setEditIntervCategory(i.category);
+    setEditIntervRequiresNote(i.requiresNote);
+  };
+
+  const cancelEditIntervention = () => {
+    setEditingIntervId(null);
+    setEditIntervName("");
+    setEditIntervCategory("");
+    setEditIntervRequiresNote(false);
+  };
+
+  const saveInterventionEdit = async (id: number) => {
+    const name = editIntervName.trim();
+    if (!name) {
+      setIntervListMsg("Name is required.");
+      return;
+    }
+    setIntervListMsg("");
+    try {
+      const res = await authFetch(`/api/intervention-types/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          category: editIntervCategory.trim() || "Classroom",
+          requiresNote: editIntervRequiresNote,
+        }),
+      });
+      if (res.status === 401) {
+        throw new Error(
+          "Your session expired. Please refresh the page (or open it in a new tab) and sign in again.",
+        );
+      }
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `HTTP ${res.status}`);
+      }
+      cancelEditIntervention();
       loadInterventionTypes();
     } catch (e) {
       setIntervListMsg(e instanceof Error ? e.message : String(e));
@@ -20954,38 +21011,95 @@ function App() {
                       ? a.name.localeCompare(b.name)
                       : a.category.localeCompare(b.category),
                   )
-                  .map((i) => (
-                    <tr key={i.id} style={{ borderBottom: "1px solid #eee" }}>
-                      <td style={{ padding: "0.4rem" }}>{i.category}</td>
-                      <td style={{ padding: "0.4rem" }}>{i.name}</td>
-                      <td style={{ padding: "0.4rem" }}>
-                        {i.requiresNote ? "Yes" : "No"}
-                      </td>
-                      <td style={{ padding: "0.4rem" }}>
-                        {i.active ? "Yes" : "No"}
-                      </td>
-                      <td style={{ padding: "0.4rem" }}>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            toggleInterventionActive(i.id, !i.active)
-                          }
-                        >
-                          {i.active ? "Deactivate" : "Activate"}
-                        </button>{" "}
-                        <button
-                          type="button"
-                          onClick={() => deleteInterventionType(i.id, i.name)}
-                          style={{
-                            color: "crimson",
-                            borderColor: "crimson",
-                          }}
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  .map((i) =>
+                    editingIntervId === i.id ? (
+                      <tr key={i.id} style={{ borderBottom: "1px solid #eee" }}>
+                        <td style={{ padding: "0.4rem" }}>
+                          <input
+                            type="text"
+                            value={editIntervCategory}
+                            onChange={(e) =>
+                              setEditIntervCategory(e.target.value)
+                            }
+                            placeholder="Classroom"
+                            style={{ width: "100%" }}
+                          />
+                        </td>
+                        <td style={{ padding: "0.4rem" }}>
+                          <input
+                            type="text"
+                            value={editIntervName}
+                            onChange={(e) => setEditIntervName(e.target.value)}
+                            placeholder="Intervention name"
+                            style={{ width: "100%" }}
+                          />
+                        </td>
+                        <td style={{ padding: "0.4rem" }}>
+                          <input
+                            type="checkbox"
+                            checked={editIntervRequiresNote}
+                            onChange={(e) =>
+                              setEditIntervRequiresNote(e.target.checked)
+                            }
+                          />
+                        </td>
+                        <td style={{ padding: "0.4rem" }}>
+                          {i.active ? "Yes" : "No"}
+                        </td>
+                        <td style={{ padding: "0.4rem" }}>
+                          <button
+                            type="button"
+                            onClick={() => saveInterventionEdit(i.id)}
+                          >
+                            Save
+                          </button>{" "}
+                          <button
+                            type="button"
+                            onClick={cancelEditIntervention}
+                          >
+                            Cancel
+                          </button>
+                        </td>
+                      </tr>
+                    ) : (
+                      <tr key={i.id} style={{ borderBottom: "1px solid #eee" }}>
+                        <td style={{ padding: "0.4rem" }}>{i.category}</td>
+                        <td style={{ padding: "0.4rem" }}>{i.name}</td>
+                        <td style={{ padding: "0.4rem" }}>
+                          {i.requiresNote ? "Yes" : "No"}
+                        </td>
+                        <td style={{ padding: "0.4rem" }}>
+                          {i.active ? "Yes" : "No"}
+                        </td>
+                        <td style={{ padding: "0.4rem" }}>
+                          <button
+                            type="button"
+                            onClick={() => startEditIntervention(i)}
+                          >
+                            Edit
+                          </button>{" "}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              toggleInterventionActive(i.id, !i.active)
+                            }
+                          >
+                            {i.active ? "Deactivate" : "Activate"}
+                          </button>{" "}
+                          <button
+                            type="button"
+                            onClick={() => deleteInterventionType(i.id, i.name)}
+                            style={{
+                              color: "crimson",
+                              borderColor: "crimson",
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ),
+                  )}
               </tbody>
             </table>
           )}
