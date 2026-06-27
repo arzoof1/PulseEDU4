@@ -61,3 +61,35 @@ empty "Recognition" header. Fix: make the flag exactly the OR of its children's 
 (`effectiveFeatures.SchoolStore || canAccessPbisHub`). **How to apply:** whenever you
 add/remove/move a row in a group, re-derive that group's `show*` as the disjunction of
 the surviving rows' gates.
+
+## Healing a split workflow / promoting an unrendered nav-section (Phase 3)
+
+When one workflow is split across two sidebar GROUPS, give the missing piece a
+sidebar row in the group that already holds the rest of the workflow — don't move
+everything into a new group. Concretely: MTSS plan management (mtssPlans,
+interventionReports) lived in the behaviorSupport group, but the MTSS Coordinator
+hub (mtssCoordinator + its mtssTemplates sub-page) had NO sidebar row (only an
+Insights Hub page tile). Fix = render the already-defined-but-unused
+`mtssCoordNavSections` inside behaviorSupport, gated `canAccessMtssHub` (the page's
+own gate), and move mtssCoordinator+mtssTemplates ownership from insights →
+behaviorSupport. academicsTrajectory stayed in insights (it's a dashboard, not the
+plan workflow).
+
+**Why two gates matter here:** `canAccessMtssHub` (SU/Admin/MTSS/BehaviorSpec) is a
+strict SUBSET of `canManageMtssPlans` (adds PbisCoord), and showBehaviorSupport
+already ORs canManageMtssPlans — so the new row can never appear in a hidden group,
+and the row gate == page-render gate means zero widen/narrow. ALWAYS check the new
+row's gate against the group's `show*` superset before adding it.
+
+**Parallel-discovery convention (don't fight it):** a page reachable from BOTH a
+sidebar row AND a hub tile is owned (force-expand) by whichever group holds the
+SIDEBAR ROW; the hub tile is just discovery. So when you promote a hub sub-page to a
+sidebar row, move its NAV_GROUP_OWNERSHIP entry to the new group even though the old
+hub still launches it. **How to apply:** after any such move, re-audit that every
+activeSection key is owned by exactly ONE group (zero = no force-expand, two =
+wrong group wins).
+
+**Naming is an owner decision:** the target IA calls this group "Student Support"
+but it's still labeled "Academic and Behavior Supports" — renaming was deferred as
+an explicit open decision (muscle-memory cost). Don't unilaterally rename nav groups
+during a structural consolidation.

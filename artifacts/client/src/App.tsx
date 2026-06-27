@@ -3978,6 +3978,12 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "logIntervention",
     "mtssPlans",
     "interventionReports",
+    // Phase 3 (heal MTSS split): the MTSS Coordinator hub + its Templates
+    // sub-page moved here from the Insights group so the whole MTSS
+    // workflow force-expands the same (Academic and Behavior Supports)
+    // group where the coordinator's sidebar row now lives.
+    "mtssCoordinator",
+    "mtssTemplates",
     "requestPullout",
     "behaviorSpecialist",
     "trustedAdultInterventions",
@@ -3993,19 +3999,18 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
   // gives the user *some* group context when they're on that page.
   schoolAdmin: ["bellSchedule", "activeKiosks", "kioskCards", "settings", "hallPassMgmt"],
 };
-// Insights launches mtssCoordinator/mtssTemplates as sub-pages (via tile
-// launchers in InsightsHub); they have no direct sidebar item, so they
-// belong to the Insights group for force-expand purposes. mtssPlans and
-// interventionReports were promoted to direct sidebar items inside the
-// Academic and Behavior Supports group, so their ownership now lives
-// there (see behaviorSupport above) — not here.
+// Phase 3 (heal MTSS split): mtssCoordinator + its mtssTemplates sub-page
+// moved to the behaviorSupport group (above) — the coordinator hub now has a
+// direct sidebar row there alongside mtssPlans + interventionReports, so the
+// whole MTSS workflow force-expands one group. The InsightsHub still launches
+// them as parallel-discovery tiles (same convention as mtssPlans), but
+// force-expand ownership follows the sidebar row. academicsTrajectory stays
+// here — it's an Insights dashboard, not part of the plan workflow.
 NAV_GROUP_OWNERSHIP.insights = [
   "insights",
   "insightsWatchlist",
   "myWatchList",
   "studentProfile",
-  "mtssCoordinator",
-  "mtssTemplates",
   "academicsTrajectory",
 ];
 // Trusted Adults admin lives in the School Admin nav group alongside
@@ -11390,6 +11395,19 @@ function App() {
                     label: "Intervention Reports",
                     icon: IconClipboard,
                   })}
+                {/* Phase 3 (heal MTSS split): the MTSS Coordinator hub used
+                    to be reachable ONLY as an Insights Hub tile, while the
+                    plans/reports it drives lived here — one workflow, two
+                    groups. Give the coordinator hub a direct sidebar row
+                    alongside MTSS Plans + Intervention Reports so all MTSS
+                    tiering is in one place. Gate is canAccessMtssHub (exactly
+                    the mtssCoordinator page-render gate), which is a SUBSET of
+                    canManageMtssPlans, so this group is already visible to
+                    everyone who sees this row. The Insights Hub tile stays as
+                    a parallel discovery path (same convention as mtssPlans);
+                    force-expand ownership now lives on behaviorSupport. */}
+                {canAccessMtssHub &&
+                  mtssCoordNavSections.map(renderNavItem)}
                 {/* Request Pullout was promoted to Quick Access — kept
                     out of Behavior Support to avoid duplication. */}
                 {isBehaviorSpec &&
