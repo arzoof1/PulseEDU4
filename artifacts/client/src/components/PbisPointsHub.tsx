@@ -97,6 +97,20 @@ type Me = {
 
 type Teacher = { id: number; name: string };
 
+// Classroom intervention types (the "Intervention(s) tried" list). Used by the
+// Negative-behavior logging path, which mirrors the Teacher Roster quick-log.
+type IvType = {
+  id: number;
+  name: string;
+  category: string;
+  requiresNote: boolean;
+  active: boolean;
+};
+
+// Color-first entry mode. "choose" shows the green/red picker; the others
+// render the positive award hub or the negative behavior+intervention flow.
+type Mode = "choose" | "positive" | "negative";
+
 const TAB_LABELS: { key: Tab; label: string }[] = [
   { key: "classes", label: "Classes" },
   { key: "rubric", label: "School Store" },
@@ -137,6 +151,13 @@ export default function PbisPointsHub() {
   // Bulk selection — set of studentIds checked across all sections.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
+  // Color-first entry: teacher picks Positive or Negative before anything else.
+  // Positive = the existing award hub; Negative = pick a student then log a
+  // behavior + the intervention(s) tried (same write path as the Teacher
+  // Roster quick-log).
+  const [mode, setMode] = useState<Mode>("choose");
+  const [interventionTypes, setInterventionTypes] = useState<IvType[]>([]);
+  const [loggingNegFor, setLoggingNegFor] = useState<Student | null>(null);
 
   // Clear bulk selection whenever the visible roster changes (period filter
   // or admin's teacher picker). Otherwise a teacher could "Select all" in
@@ -178,13 +199,14 @@ export default function PbisPointsHub() {
           meJson.isEseCoordinator
         );
 
-        const [schedRes, studRes, reasonsRes, pbisRes, tplRes] =
+        const [schedRes, studRes, reasonsRes, pbisRes, tplRes, ivRes] =
           await Promise.all([
             authFetch(adminScope ? "/api/schedule?all=1" : "/api/schedule"),
             authFetch("/api/students"),
             authFetch("/api/pbis-reasons"),
             authFetch("/api/pbis"),
             authFetch("/api/pbis-note-templates"),
+            authFetch("/api/intervention-types"),
           ]);
         if (!schedRes.ok) throw new Error("Failed to load class schedule");
         if (!studRes.ok) throw new Error("Failed to load students");
@@ -199,6 +221,7 @@ export default function PbisPointsHub() {
         const tplJson = tplRes.ok
           ? ((await tplRes.json()) as NoteTemplate[])
           : [];
+        const ivJson = ivRes.ok ? ((await ivRes.json()) as IvType[]) : [];
 
         if (cancelled) return;
 
@@ -210,6 +233,7 @@ export default function PbisPointsHub() {
         setStudents(studJson);
         setReasons(reasonsJson.filter((r) => r.active));
         setNoteTemplates(tplJson);
+        setInterventionTypes(ivJson.filter((i) => i.active));
 
         // Default the teacher picker to the viewer when they have any
         // sections; otherwise pick the first teacher alphabetically so the
@@ -262,6 +286,18 @@ export default function PbisPointsHub() {
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [sections]);
+
+  // Split reasons by polarity. Positive feeds the green award hub; negative
+  // feeds the red behavior-logging flow. This is what visually separates the
+  // two paths the user asked for.
+  const positiveReasons = useMemo(
+    () => reasons.filter((r) => r.polarity === "positive"),
+    [reasons],
+  );
+  const negativeReasons = useMemo(
+    () => reasons.filter((r) => r.polarity === "negative"),
+    [reasons],
+  );
 
   // Sections to display in the Classes tab — narrowed to the selected
   // teacher (or all of the viewer's own when not admin).
@@ -448,6 +484,25 @@ export default function PbisPointsHub() {
     });
   }
 
+  // Refetch PBIS totals after a negative behavior is logged (the quick-log
+  // endpoint writes a negative entry server-side), so the roster badges stay
+  // accurate without a full page reload.
+  async function refreshTotals() {
+    try {
+      const res = await authFetch("/api/pbis");
+      if (!res.ok) return;
+      const rows = (await res.json()) as PbisEntry[];
+      const t = new Map<string, number>();
+      for (const e of rows) {
+        if (e.voidedAt) continue;
+        t.set(e.studentId, (t.get(e.studentId) ?? 0) + e.points);
+      }
+      setTotals(t);
+    } catch {
+      // ignore — totals will refresh on next full load
+    }
+  }
+
   return (
     <section className="card">
       <div className="section-header-bar-teal" />
@@ -474,6 +529,91 @@ export default function PbisPointsHub() {
         </div>
       </div>
 
+      {mode === "choose" && <ModeChooser onPick={(m) => setMode(m)} />}
+
+      {mode !== "choose" && (
+        <div style={{ marginBottom: "0.75rem" }}>
+          <button
+            type="button"
+            onClick={() => {
+              setMode("choose");
+              setAwardingFor(null);
+              setBulkOpen(false);
+              setLoggingNegFor(null);
+            }}
+            style={{
+              background: "none",
+              border: "none",
+              color: "#0e7490",
+              fontSize: "0.9rem",
+              fontWeight: 600,
+              cursor: "pointer",
+              padding: 0,
+            }}
+          >
+            ← Back to Positive / Negative
+          </button>
+        </div>
+      )}
+
+      {mode === "negative" &&
+        (loading ? (
+          <div
+            style={{ padding: "2rem", textAlign: "center", color: "#64748b" }}
+          >
+            Loading…
+          </div>
+        ) : errorMsg ? (
+          <div
+            style={{
+              padding: "1rem",
+              background: "#fee2e2",
+              color: "#991b1b",
+              borderRadius: "0.4rem",
+              margin: "1rem 0",
+            }}
+          >
+            {errorMsg}
+          </div>
+        ) : (
+          <>
+            <div
+              style={{
+                margin: "0 0 1rem",
+                padding: "0.6rem 0.85rem",
+                background: "#fef2f2",
+                border: "1px solid #fecaca",
+                borderRadius: "0.5rem",
+                color: "#991b1b",
+                fontSize: "0.9rem",
+                fontWeight: 600,
+              }}
+            >
+              Pick a student to log a behavior and the intervention(s) you tried.
+            </div>
+            <ClassesView
+              sections={visibleSectionsForTeacher}
+              students={students}
+              totals={totals}
+              activePeriod={activePeriod}
+              onChangePeriod={setActivePeriod}
+              onSelectStudent={setLoggingNegFor}
+              teachers={canViewAllTeachers ? teachers : null}
+              selectedTeacherId={selectedTeacherId}
+              onChangeTeacher={setSelectedTeacherId}
+              selectedIds={selectedIds}
+              onToggleSelect={() => {}}
+              onSelectMany={() => {}}
+              onUnselectMany={() => {}}
+              onClearSelection={() => {}}
+              onOpenBulk={() => {}}
+              hideBulk
+            />
+          </>
+        ))}
+
+      {mode === "positive" && (
+        <>
       <TabBar tab={tab} onChange={setTab} />
 
       <HowToUseHelp title="How to use PBIS Points">
@@ -576,11 +716,13 @@ export default function PbisPointsHub() {
       ) : (
         <ComingSoon tab={tab} />
       )}
+        </>
+      )}
 
       {awardingFor && (
         <AwardModal
           student={awardingFor}
-          reasons={reasons}
+          reasons={positiveReasons}
           templates={noteTemplates}
           onSaveTemplate={saveNoteTemplate}
           onClose={() => setAwardingFor(null)}
@@ -600,7 +742,7 @@ export default function PbisPointsHub() {
         <BulkAwardModal
           studentIds={Array.from(selectedIds)}
           students={students}
-          reasons={reasons}
+          reasons={positiveReasons}
           templates={noteTemplates}
           onSaveTemplate={saveNoteTemplate}
           onClose={() => setBulkOpen(false)}
@@ -616,6 +758,19 @@ export default function PbisPointsHub() {
           }}
         />
       )}
+
+      {loggingNegFor && (
+        <NegativeLogModal
+          student={loggingNegFor}
+          behaviors={negativeReasons}
+          interventionTypes={interventionTypes}
+          onClose={() => setLoggingNegFor(null)}
+          onSaved={() => {
+            setLoggingNegFor(null);
+            void refreshTotals();
+          }}
+        />
+      )}
     </section>
   );
 }
@@ -623,6 +778,452 @@ export default function PbisPointsHub() {
 // -----------------------------------------------------------------------------
 // Sub-components
 // -----------------------------------------------------------------------------
+
+// Color-first entry screen. Two large buttons separate the positive award
+// flow from the negative behavior+intervention flow.
+function ModeChooser({
+  onPick,
+}: {
+  onPick: (m: "positive" | "negative") => void;
+}) {
+  const base: React.CSSProperties = {
+    flex: "1 1 220px",
+    minHeight: 170,
+    border: "none",
+    borderRadius: 16,
+    cursor: "pointer",
+    padding: "1.5rem",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "0.5rem",
+    color: "white",
+  };
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: "1rem",
+        flexWrap: "wrap",
+        padding: "1.5rem 0 0.75rem",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => onPick("positive")}
+        style={{
+          ...base,
+          background: "linear-gradient(135deg,#16a34a,#15803d)",
+          boxShadow: "0 8px 22px rgba(22,163,74,0.32)",
+        }}
+      >
+        <span style={{ fontSize: "2.75rem", lineHeight: 1, fontWeight: 800 }}>
+          +
+        </span>
+        <span style={{ fontSize: "1.4rem", fontWeight: 800 }}>Positive</span>
+        <span
+          style={{ fontSize: "0.9rem", opacity: 0.92, textAlign: "center" }}
+        >
+          Award PBIS recognition points
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => onPick("negative")}
+        style={{
+          ...base,
+          background: "linear-gradient(135deg,#dc2626,#b91c1c)",
+          boxShadow: "0 8px 22px rgba(220,38,38,0.32)",
+        }}
+      >
+        <span style={{ fontSize: "2.75rem", lineHeight: 1, fontWeight: 800 }}>
+          −
+        </span>
+        <span style={{ fontSize: "1.4rem", fontWeight: 800 }}>Negative</span>
+        <span
+          style={{ fontSize: "0.9rem", opacity: 0.92, textAlign: "center" }}
+        >
+          Log a behavior &amp; intervention tried
+        </span>
+      </button>
+    </div>
+  );
+}
+
+// Negative behavior logger. Mirrors the Teacher Roster quick-log: choose the
+// behavior (a negative PBIS reason), check the intervention(s) tried, add an
+// optional note, and submit atomically to /api/interventions/quick-log.
+function NegativeLogModal({
+  student,
+  behaviors,
+  interventionTypes,
+  onClose,
+  onSaved,
+}: {
+  student: Student;
+  behaviors: Reason[];
+  interventionTypes: IvType[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [behaviorId, setBehaviorId] = useState<number | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [note, setNote] = useState("");
+  const [eff, setEff] = useState<Record<
+    string,
+    { worked: number; recurred: number }
+  > | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectedBehavior = behaviors.find((b) => b.id === behaviorId) ?? null;
+
+  // Pull per-intervention effectiveness history for this student + behavior so
+  // the teacher can see what has worked before (same endpoint the roster uses).
+  useEffect(() => {
+    setEff(null);
+    if (!selectedBehavior) return;
+    let cancelled = false;
+    authFetch(
+      `/api/interventions/effectiveness?studentId=${encodeURIComponent(
+        student.studentId,
+      )}&behaviorReason=${encodeURIComponent(selectedBehavior.name)}`,
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then(
+        (
+          j: {
+            byType?: Record<string, { worked: number; recurred: number }>;
+          } | null,
+        ) => {
+          if (!cancelled && j) setEff(j.byType ?? {});
+        },
+      )
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [behaviorId, student.studentId, selectedBehavior]);
+
+  function toggleIv(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const noteOver = note.length > 500;
+  const canSubmit =
+    !!selectedBehavior && selected.size > 0 && !noteOver && !submitting;
+
+  async function submit() {
+    if (!selectedBehavior || selected.size === 0) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await authFetch("/api/interventions/quick-log", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: student.studentId,
+          reasonId: selectedBehavior.id,
+          interventionTypeIds: [...selected],
+          ...(note.trim() ? { note: note.trim() } : {}),
+        }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(
+          (j && typeof j.error === "string" && j.error) ||
+            "Could not save. Please try again.",
+        );
+      }
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // Group intervention types by category for a tidy checklist.
+  const ivByCategory = useMemo(() => {
+    const m = new Map<string, IvType[]>();
+    for (const iv of interventionTypes) {
+      const k = iv.category || "Other";
+      if (!m.has(k)) m.set(k, []);
+      m.get(k)!.push(iv);
+    }
+    return Array.from(m.entries());
+  }, [interventionTypes]);
+
+  const labelStyle: React.CSSProperties = {
+    display: "block",
+    fontSize: "0.8rem",
+    fontWeight: 700,
+    color: "#334155",
+    marginBottom: "0.3rem",
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,23,42,0.5)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 50,
+        padding: "1rem",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "white",
+          borderRadius: 12,
+          width: "min(560px, 100%)",
+          maxHeight: "90vh",
+          overflowY: "auto",
+          boxShadow: "0 20px 50px rgba(0,0,0,0.3)",
+        }}
+      >
+        <div
+          style={{
+            padding: "1rem 1.25rem",
+            borderTop: "4px solid #dc2626",
+            borderBottom: "1px solid #f1f5f9",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "0.78rem",
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              color: "#dc2626",
+            }}
+          >
+            Log negative behavior
+          </div>
+          <div
+            style={{ fontSize: "1.15rem", fontWeight: 700, color: "#0f172a" }}
+          >
+            {student.firstName} {student.lastName}
+          </div>
+        </div>
+
+        <div style={{ padding: "1.25rem" }}>
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>Behavior</label>
+            <select
+              value={behaviorId ?? ""}
+              onChange={(e) =>
+                setBehaviorId(e.target.value ? Number(e.target.value) : null)
+              }
+              style={{
+                width: "100%",
+                padding: "0.55rem 0.6rem",
+                borderRadius: "0.5rem",
+                border: "1px solid #cbd5e1",
+                fontSize: "0.95rem",
+                background: "white",
+              }}
+            >
+              <option value="">Select a behavior…</option>
+              {behaviors.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+            {behaviors.length === 0 && (
+              <div
+                style={{
+                  marginTop: "0.4rem",
+                  fontSize: "0.8rem",
+                  color: "#b45309",
+                }}
+              >
+                No negative behaviors configured yet. Add some under Settings →
+                Categories &amp; reasons.
+              </div>
+            )}
+          </div>
+
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>Intervention(s) tried</label>
+            {interventionTypes.length === 0 ? (
+              <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
+                No intervention types configured yet.
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.75rem",
+                }}
+              >
+                {ivByCategory.map(([cat, items]) => (
+                  <div key={cat}>
+                    <div
+                      style={{
+                        fontSize: "0.72rem",
+                        fontWeight: 700,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.04em",
+                        color: "#94a3b8",
+                        marginBottom: "0.3rem",
+                      }}
+                    >
+                      {cat}
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: "0.4rem",
+                      }}
+                    >
+                      {items.map((iv) => {
+                        const on = selected.has(iv.id);
+                        const stat = eff?.[iv.name];
+                        return (
+                          <button
+                            key={iv.id}
+                            type="button"
+                            onClick={() => toggleIv(iv.id)}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "0.35rem",
+                              padding: "0.4rem 0.6rem",
+                              borderRadius: "999px",
+                              border: on
+                                ? "1px solid #0e7490"
+                                : "1px solid #cbd5e1",
+                              background: on ? "#0e7490" : "white",
+                              color: on ? "white" : "#334155",
+                              fontSize: "0.85rem",
+                              fontWeight: 600,
+                              cursor: "pointer",
+                            }}
+                          >
+                            {on ? "✓ " : ""}
+                            {iv.name}
+                            {stat && (stat.worked > 0 || stat.recurred > 0) && (
+                              <span
+                                style={{
+                                  fontSize: "0.72rem",
+                                  fontWeight: 700,
+                                  color: on ? "rgba(255,255,255,0.85)" : "#64748b",
+                                }}
+                                title="Past results for this student + behavior"
+                              >
+                                ({stat.worked}✓/{stat.recurred}↻)
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>Note (optional)</label>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={3}
+              placeholder="What happened? (optional)"
+              style={{
+                width: "100%",
+                padding: "0.55rem 0.6rem",
+                borderRadius: "0.5rem",
+                border: noteOver ? "1px solid #dc2626" : "1px solid #cbd5e1",
+                fontSize: "0.92rem",
+                resize: "vertical",
+                fontFamily: "inherit",
+              }}
+            />
+            {noteOver && (
+              <div style={{ fontSize: "0.78rem", color: "#dc2626" }}>
+                Note must be 500 characters or fewer.
+              </div>
+            )}
+          </div>
+
+          {error && (
+            <div
+              style={{
+                marginBottom: "0.75rem",
+                padding: "0.5rem 0.7rem",
+                background: "#fee2e2",
+                color: "#991b1b",
+                borderRadius: "0.4rem",
+                fontSize: "0.85rem",
+              }}
+            >
+              {error}
+            </div>
+          )}
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: "0.6rem",
+            }}
+          >
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                padding: "0.55rem 1rem",
+                borderRadius: "0.5rem",
+                border: "1px solid #cbd5e1",
+                background: "white",
+                color: "#334155",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={submit}
+              disabled={!canSubmit}
+              style={{
+                padding: "0.55rem 1.1rem",
+                borderRadius: "0.5rem",
+                border: "none",
+                background: canSubmit ? "#dc2626" : "#fca5a5",
+                color: "white",
+                fontWeight: 700,
+                cursor: canSubmit ? "pointer" : "not-allowed",
+              }}
+            >
+              {submitting ? "Saving…" : "Log behavior"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function TabBar({
   tab,
@@ -686,6 +1287,7 @@ function ClassesView({
   onUnselectMany,
   onClearSelection,
   onOpenBulk,
+  hideBulk = false,
 }: {
   sections: Section[];
   students: Student[];
@@ -703,6 +1305,9 @@ function ClassesView({
   onUnselectMany: (ids: string[]) => void;
   onClearSelection: () => void;
   onOpenBulk: () => void;
+  // When true (negative-logging picker) the bulk-award UI is suppressed —
+  // negatives are logged one student at a time with their interventions.
+  hideBulk?: boolean;
 }) {
   // Build the period filter from the actual periods present in the schedule.
   const periods = useMemo(() => {
@@ -871,7 +1476,7 @@ function ClassesView({
                   · {sectionStudents.length} students
                 </span>
                 <div style={{ flex: 1 }} />
-                {sectionStudents.length > 0 && (
+                {!hideBulk && sectionStudents.length > 0 && (
                   <button
                     type="button"
                     onClick={() => {
@@ -926,6 +1531,7 @@ function ClassesView({
                       onClick={() => onSelectStudent(s)}
                       selected={selectedIds.has(s.studentId)}
                       onToggleSelect={() => onToggleSelect(s.studentId)}
+                      hideBulk={hideBulk}
                     />
                   ))}
                 </div>
@@ -937,7 +1543,7 @@ function ClassesView({
       </>)}
 
       {/* Floating bulk-award action bar — shows whenever 1+ students are picked. */}
-      {selectedIds.size > 0 && (
+      {!hideBulk && selectedIds.size > 0 && (
         <div
           style={{
             position: "sticky",
@@ -1030,12 +1636,14 @@ function StudentCard({
   onClick,
   selected,
   onToggleSelect,
+  hideBulk = false,
 }: {
   student: Student;
   total: number;
   onClick: () => void;
   selected: boolean;
   onToggleSelect: () => void;
+  hideBulk?: boolean;
 }) {
   // Color the bottom badge by point bucket. Green = positive momentum,
   // amber = a couple of points, gray = none yet.
@@ -1069,34 +1677,36 @@ function StudentCard({
       }}
     >
       {/* Checkbox in top-right — its own click target, doesn't trigger award */}
-      <label
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          position: "absolute",
-          top: "0.3rem",
-          right: "0.35rem",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          width: "1.4rem",
-          height: "1.4rem",
-          cursor: "pointer",
-          zIndex: 1,
-        }}
-        title={selected ? "Deselect" : "Select for bulk award"}
-      >
-        <input
-          type="checkbox"
-          checked={selected}
-          onChange={onToggleSelect}
+      {!hideBulk && (
+        <label
+          onClick={(e) => e.stopPropagation()}
           style={{
-            width: "1rem",
-            height: "1rem",
+            position: "absolute",
+            top: "0.3rem",
+            right: "0.35rem",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: "1.4rem",
+            height: "1.4rem",
             cursor: "pointer",
-            accentColor: "#0e7490",
+            zIndex: 1,
           }}
-        />
-      </label>
+          title={selected ? "Deselect" : "Select for bulk award"}
+        >
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSelect}
+            style={{
+              width: "1rem",
+              height: "1rem",
+              cursor: "pointer",
+              accentColor: "#0e7490",
+            }}
+          />
+        </label>
+      )}
       <button
         type="button"
         onClick={onClick}

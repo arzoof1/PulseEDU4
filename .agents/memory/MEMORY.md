@@ -65,4 +65,5 @@
 - [Offline-first sync buffer](offline-sync-buffer.md) — full-state flush must snapshot what it sent and only clear dirty if buffer unchanged on return, or mid-flight edits are silently dropped.
 - [Pickup capability split](pickup-capability-split.md) — curb monitor (capCarRiderMonitor) ≠ tag mgmt (capManageDismissal/canManagePickup); a cap missing from StaffRolesMatrix PAGES is ungrantable except via Admin.
 - [Eligibility tenancy recipients](eligibility-tenancy-recipients.md) — secondary reads (notification recipients, joined parent tables, path-derived ids) each need their own school_id predicate, not just the driving table.
+- [PBIS Points color-first fork](pbis-points-color-fork.md) — hub entry splits Positive(award, positiveReasons) vs Negative(quick-log behavior+intervention, negativeReasons); negatives write via /api/interventions/quick-log not /api/pbis.
 - [PBIS write milestone parity](pbis-write-milestone-parity.md) — any endpoint inserting pbis_entries directly must also run processMilestonesForStudent (from lib/pbisMilestones, NOT @workspace/db) or milestone side-effects drift.
