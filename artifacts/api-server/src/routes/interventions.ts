@@ -792,11 +792,31 @@ router.get(
         doc.page.width - doc.page.margins.left - doc.page.margins.right;
       const bottomY = doc.page.height - doc.page.margins.bottom;
       const cols: Array<{ label: string; w: number }> = [
-        { label: "Behavior", w: tableW * 0.38 },
-        { label: "Date", w: tableW * 0.17 },
-        { label: "Subject", w: tableW * 0.2 },
-        { label: "Teacher", w: tableW * 0.25 },
+        { label: "Behavior", w: tableW * 0.26 },
+        { label: "Intervention tried", w: tableW * 0.26 },
+        { label: "Date", w: tableW * 0.14 },
+        { label: "Subject", w: tableW * 0.16 },
+        { label: "Teacher", w: tableW * 0.18 },
       ];
+
+      // Correlate each behavior to the intervention(s) tried for it. Quick-log
+      // writes the behavior and its interventions in one transaction sharing the
+      // same createdAt, staffName, studentId, and behaviorReason — so an exact
+      // (createdAt|reason|teacher) key reunites them per incident. Interventions
+      // logged separately (no matching key) simply don't attach here.
+      const ivByKey = new Map<string, string[]>();
+      for (const iv of data.interventions) {
+        const key = `${iv.createdAt}|${iv.behaviorReason ?? ""}|${iv.staffName ?? ""}`;
+        const arr = ivByKey.get(key) ?? [];
+        arr.push(iv.interventionType);
+        ivByKey.set(key, arr);
+      }
+      const ivFor = (b: { createdAt: string; reason: string; staffName: string | null }) => {
+        const list = ivByKey.get(
+          `${b.createdAt}|${b.reason ?? ""}|${b.staffName ?? ""}`,
+        );
+        return list && list.length ? list.join(", ") : "—";
+      };
       const pad = 4;
       const colX = (i: number) =>
         tableX + cols.slice(0, i).reduce((a, c) => a + c.w, 0);
@@ -876,7 +896,13 @@ router.get(
       drawHeaderRow();
       sorted.forEach((b, idx) => {
         drawCellRow(
-          [b.reason, fmt(b.createdAt), subjectFor(b.staffName), b.staffName ?? "—"],
+          [
+            b.reason,
+            ivFor(b),
+            fmt(b.createdAt),
+            subjectFor(b.staffName),
+            b.staffName ?? "—",
+          ],
           idx % 2 === 1,
         );
         if (includeNotes && b.note) drawNoteRow(b.note);
