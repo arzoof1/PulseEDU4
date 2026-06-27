@@ -33,6 +33,7 @@ import {
   ensureAstSchema,
   ensureKioskCardsSchema,
   ensureHallPassPriorityBypassColumn,
+  ensureHallPassAllowlistSchema,
   ensureOneWayPassSchema,
   ensureKioskWelcomeSchema,
   ensurePbisInvisibleTierColumns,
@@ -252,6 +253,9 @@ async function runSeed(): Promise<void> {
   await ensureKioskCardsSchema();
   // "Go now" line-bypass audit flag on hall_passes. Additive + idempotent.
   await ensureHallPassPriorityBypassColumn();
+  // Hall-pass allowlist overhaul: restroom-area + gender + school_wide_default
+  // on locations, and a SIS-safe staff_id on teacher_destination_allowlist.
+  await ensureHallPassAllowlistSchema();
   // One-way pass lifecycle: arrived_at/ended_by/overdue_alerted_at on
   // hall_passes, in_route_overdue_minutes on school_settings, and the
   // staff_received_locations coverage table. Additive + idempotent.

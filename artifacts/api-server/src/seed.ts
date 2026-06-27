@@ -7904,6 +7904,92 @@ export async function ensureHallPassPriorityBypassColumn(): Promise<void> {
 }
 
 // -----------------------------------------------------------------------------
+// Hall-pass allowlist overhaul (bulk, school-managed flow).
+//
+// (1) Restroom-area model on `locations`: restroom_area + gender let the boys +
+//     girls variants of one part of the building be assigned together.
+// (2) school_wide_default flags facilities (office/clinic/nurse) granted to
+//     EVERY teacher automatically — unioned on top of the per-teacher list.
+// (3) teacher_destination_allowlist gains a canonical, SIS-safe staff_id (the
+//     allowlist used to be keyed by display name, which orphaned on rename).
+//     We backfill staff_id from an UNAMBIGUOUS within-school name match and add
+//     a partial unique index so future writes upsert cleanly. Ambiguous
+//     duplicate names are left null (the email-based CSV importer disambiguates
+//     them); reads fall back to staff_name for those legacy rows.
+// All additive + idempotent — safe on every boot.
+// -----------------------------------------------------------------------------
+export async function ensureHallPassAllowlistSchema(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE locations ADD COLUMN IF NOT EXISTS restroom_area TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE locations ADD COLUMN IF NOT EXISTS gender TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE locations ADD COLUMN IF NOT EXISTS school_wide_default BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE teacher_destination_allowlist ADD COLUMN IF NOT EXISTS staff_id INTEGER`,
+  );
+  // Backfill staff_id only where the display name resolves to EXACTLY ONE
+  // active staff row in the same school. Ambiguous names stay null on purpose.
+  await db.execute(sql`
+    UPDATE teacher_destination_allowlist tda
+       SET staff_id = s.id
+      FROM staff s
+     WHERE s.school_id = tda.school_id
+       AND s.display_name = tda.staff_name
+       AND tda.staff_id IS NULL
+       AND (
+         SELECT count(*) FROM staff s2
+          WHERE s2.school_id = tda.school_id
+            AND s2.display_name = tda.staff_name
+       ) = 1
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS tda_school_staffid_dest_unique ON teacher_destination_allowlist (school_id, staff_id, destination_location_id) WHERE staff_id IS NOT NULL`,
+  );
+  // Bulk CSV round-trip rollback ledger. Each commit captures a per-teacher
+  // "before" snapshot (the destination location ids the teacher had) so a
+  // single click can restore the exact prior allowlist for every teacher the
+  // upload touched. prior_json shape: { [staffName]: { staffId, locationIds } }.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS teacher_allowlist_import_batches (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      created_by INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      applied_count INTEGER NOT NULL DEFAULT 0,
+      rolled_back_at TIMESTAMPTZ,
+      prior_json JSONB NOT NULL DEFAULT '{}'::jsonb
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS tda_import_batches_school_idx
+      ON teacher_allowlist_import_batches (school_id, created_at DESC)
+  `);
+  // Zone rules (Phase 3): map an inclusive room-NUMBER range to a restroom area
+  // name. Drives template pre-fill (suggested area for each teacher's room) and
+  // one-click auto-assign-all. Area name is a soft reference (resolved against
+  // locations.restroom_area at apply time), so no FK.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS teacher_allowlist_zone_rules (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      room_from INTEGER NOT NULL,
+      room_to INTEGER NOT NULL,
+      restroom_area TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS tda_zone_rules_school_idx
+      ON teacher_allowlist_zone_rules (school_id, sort_order)
+  `);
+}
+
+// -----------------------------------------------------------------------------
 // One-way hall pass lifecycle (destination check-in).
 //
 // Non-restroom passes become one-way: leave origin -> "in route" -> received

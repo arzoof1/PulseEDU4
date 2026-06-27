@@ -5430,6 +5430,34 @@ function App() {
   const [teacherAllowlistMap, setTeacherAllowlistMap] = useState<
     Record<string, string[]>
   >({});
+  // Re-fetch the whole allowlist map from the server. Used after a bulk CSV
+  // commit/rollback rewrites many teachers at once.
+  const reloadTeacherAllowlist = () => {
+    authFetch("/api/teacher-allowlist")
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data: { staffName: string; destinationName: string }[]) => {
+        const map: Record<string, string[]> = {};
+        for (const row of Array.isArray(data) ? data : []) {
+          if (!map[row.staffName]) map[row.staffName] = [];
+          map[row.staffName].push(row.destinationName);
+        }
+        for (const k of Object.keys(map)) {
+          map[k].sort((a, b) => a.localeCompare(b));
+        }
+        setTeacherAllowlistMap(map);
+      })
+      .catch((err) =>
+        console.error("Failed to reload teacher allowlist:", err),
+      );
+  };
+  // Restroom-area groups + school-wide facility defaults for the allowlist
+  // grid and the Create-Pass "near" grouping.
+  const [restroomAreas, setRestroomAreas] = useState<
+    { area: string; memberNames: string[] }[]
+  >([]);
+  const [schoolWideDefaultNames, setSchoolWideDefaultNames] = useState<
+    string[]
+  >([]);
   const [editingPassId, setEditingPassId] = useState<number | null>(null);
   const [editEndedAt, setEditEndedAt] = useState<string>("");
   const [editCreatedAt, setEditCreatedAt] = useState<string>("");
@@ -7335,6 +7363,30 @@ function App() {
       )
       .catch((err) =>
         console.error("Failed to load teacher allowlist:", err),
+      );
+
+    authFetch("/api/teacher-allowlist/meta")
+      .then((res) => (res.ok ? res.json() : null))
+      .then(
+        (
+          data: {
+            restroomAreas?: { area: string; memberNames: string[] }[];
+            schoolWideDefaults?: string[];
+          } | null,
+        ) => {
+          if (!data) return;
+          setRestroomAreas(
+            Array.isArray(data.restroomAreas) ? data.restroomAreas : [],
+          );
+          setSchoolWideDefaultNames(
+            Array.isArray(data.schoolWideDefaults)
+              ? data.schoolWideDefaults
+              : [],
+          );
+        },
+      )
+      .catch((err) =>
+        console.error("Failed to load teacher allowlist meta:", err),
       );
 
     loadRestroomAccess();
@@ -12321,7 +12373,12 @@ function App() {
         staffUsers={staffUsers}
         staffDefaults={staffDefaults}
         canChangeTeacher={isCoreTeamMember}
-        nearDestinations={teacherAllowlistMap[currentStaffUser] ?? []}
+        nearDestinations={[
+          ...new Set([
+            ...(teacherAllowlistMap[currentStaffUser] ?? []),
+            ...schoolWideDefaultNames,
+          ]),
+        ]}
         bypassContactAck={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
         restroomAccessEnabled={restroomAccessEnabled}
         restroomNames={restroomNames}
@@ -24583,7 +24640,10 @@ function App() {
           })()}
           allowlistMap={teacherAllowlistMap}
           onChange={setTeacherAllowlistMap}
+          onReload={reloadTeacherAllowlist}
           onEditLocations={() => setSettingsTile("locations")}
+          restroomAreas={restroomAreas}
+          schoolWideDefaults={schoolWideDefaultNames}
         />
         )}
         {settingsTile === "locations" && (

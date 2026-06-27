@@ -37,10 +37,11 @@ import {
   ObjectStorageService,
   ObjectNotFoundError,
 } from "../lib/objectStorage.js";
-import { and, eq, inArray, isNull, gt, desc, sql, ne, asc, like } from "drizzle-orm";
+import { and, eq, inArray, isNull, gt, desc, sql, ne, asc, like, or } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
+import { loadSchoolWideDefaults } from "../lib/restroomAreas.js";
 import { getSchoolTimezone, startOfDayUtc } from "../lib/schoolYear.js";
 import { loadBrandingForSchool } from "./schoolBranding.js";
 import {
@@ -704,25 +705,40 @@ router.get("/kiosk/destinations/:token", async (req, res) => {
             ),
           )
       : Promise.resolve([] as { id: number }[]),
-    actStaff?.displayName
-      ? db
-          .select({
-            id: teacherDestinationAllowlistTable.destinationLocationId,
-          })
-          .from(teacherDestinationAllowlistTable)
-          .where(
-            and(
-              eq(teacherDestinationAllowlistTable.schoolId, act.schoolId),
-              eq(
-                teacherDestinationAllowlistTable.staffName,
-                actStaff.displayName,
-              ),
-            ),
-          )
-      : Promise.resolve([] as { id: number }[]),
+    // SIS-safe match: prefer the canonical staff_id (rename-proof); fall back
+    // to the legacy null-staffId name match so un-backfilled rows still resolve.
+    db
+      .select({
+        id: teacherDestinationAllowlistTable.destinationLocationId,
+      })
+      .from(teacherDestinationAllowlistTable)
+      .where(
+        and(
+          eq(teacherDestinationAllowlistTable.schoolId, act.schoolId),
+          or(
+            eq(teacherDestinationAllowlistTable.staffId, act.staffId),
+            actStaff?.displayName
+              ? and(
+                  isNull(teacherDestinationAllowlistTable.staffId),
+                  eq(
+                    teacherDestinationAllowlistTable.staffName,
+                    actStaff.displayName,
+                  ),
+                )
+              : sql`false`,
+          ),
+        ),
+      ),
   ]);
   const roomPairDestIds = roomPairRows.map((r) => r.id);
   const teacherDestIds = teacherRows.map((r) => r.id);
+
+  // School-wide facility defaults (office/clinic/nurse) are granted to EVERY
+  // teacher automatically — they are unioned on top of whatever the precedence
+  // below resolves, so facilities never need an allowlist row and never
+  // disappear when a teacher curates a narrow list.
+  const schoolWideDefaults = await loadSchoolWideDefaults(act.schoolId);
+  const schoolWideDefaultIds = schoolWideDefaults.map((d) => d.id);
 
   // Precedence (teacher list is AUTHORITATIVE when set):
   //   1. If the activating teacher HAS a per-teacher allowlist (set via the
@@ -733,11 +749,11 @@ router.get("/kiosk/destinations/:token", async (req, res) => {
   //   3. If that's also empty, show every student-visible non-classroom
   //      destination so day-one kiosks aren't empty.
   // Keep this precedence in sync with the POST /kiosk pass-creation check.
-  let allIds: number[];
+  let resolvedIds: number[];
   if (teacherDestIds.length > 0) {
-    allIds = Array.from(new Set(teacherDestIds));
+    resolvedIds = teacherDestIds;
   } else if (roomPairDestIds.length > 0) {
-    allIds = Array.from(new Set(roomPairDestIds));
+    resolvedIds = roomPairDestIds;
   } else {
     const defaults = await db
       .select({ id: locationsTable.id })
@@ -751,8 +767,12 @@ router.get("/kiosk/destinations/:token", async (req, res) => {
           ne(locationsTable.kind, "classroom"),
         ),
       );
-    allIds = defaults.map((r) => r.id);
+    resolvedIds = defaults.map((r) => r.id);
   }
+  // School-wide facility defaults are ALWAYS unioned on top of the resolved set
+  // (even when a teacher curated a narrow list) so office/clinic/nurse never
+  // need an allowlist row and never vanish from the kiosk.
+  const allIds = Array.from(new Set([...resolvedIds, ...schoolWideDefaultIds]));
 
   if (allIds.length === 0) {
     res.json({ originRoom: act.room, destinations: [] });
@@ -1139,26 +1159,45 @@ router.post("/kiosk/hall-passes", async (req, res) => {
   //      non-classroom destination (mirror of the show-all default).
   // Resolve the activating teacher's per-staff allowlist first so we can both
   // check membership and detect whether they've set a list at all.
-  let teacherDestIdSet = new Set<number>();
-  if (actStaff?.displayName) {
-    const rows = await db
-      .select({
-        destinationLocationId:
-          teacherDestinationAllowlistTable.destinationLocationId,
-      })
-      .from(teacherDestinationAllowlistTable)
-      .where(
-        and(
-          eq(teacherDestinationAllowlistTable.schoolId, act.schoolId),
-          eq(teacherDestinationAllowlistTable.staffName, actStaff.displayName),
+  // SIS-safe match: prefer canonical staff_id, fall back to the legacy
+  // null-staffId name match. Mirrors GET /kiosk/destinations/:token.
+  const teacherRows = await db
+    .select({
+      destinationLocationId:
+        teacherDestinationAllowlistTable.destinationLocationId,
+    })
+    .from(teacherDestinationAllowlistTable)
+    .where(
+      and(
+        eq(teacherDestinationAllowlistTable.schoolId, act.schoolId),
+        or(
+          eq(teacherDestinationAllowlistTable.staffId, act.staffId),
+          actStaff?.displayName
+            ? and(
+                isNull(teacherDestinationAllowlistTable.staffId),
+                eq(
+                  teacherDestinationAllowlistTable.staffName,
+                  actStaff.displayName,
+                ),
+              )
+            : sql`false`,
         ),
-      );
-    teacherDestIdSet = new Set(rows.map((r) => r.destinationLocationId));
-  }
+      ),
+    );
+  const teacherDestIdSet = new Set(
+    teacherRows.map((r) => r.destinationLocationId),
+  );
   const teacherHasList = teacherDestIdSet.size > 0;
 
+  // School-wide facility defaults are granted to everyone — short-circuit allow
+  // regardless of the teacher list / room matrix. Mirrors the GET union.
+  const schoolWideDefaults = await loadSchoolWideDefaults(act.schoolId);
+  const schoolWideDefaultIds = new Set(schoolWideDefaults.map((d) => d.id));
+
   let allowed: boolean;
-  if (teacherHasList) {
+  if (schoolWideDefaultIds.has(dest.id)) {
+    allowed = true;
+  } else if (teacherHasList) {
     allowed = teacherDestIdSet.has(dest.id);
   } else {
     const originPairRows = await db

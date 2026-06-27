@@ -3,6 +3,50 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Hall Pass — bulk teacher destination management (3 phases)** — replaced the
+  cumbersome 187-row teacher destination allow-list grid with a bulk,
+  school-managed flow while keeping the grid as the manual edge-case editor.
+  **Phase 1 (model):** added `restroom_area` / `gender` / `school_wide_default`
+  to `locations` and `staff_id` to `teacher_destination_allowlist` (boot
+  migration in `ensureHallPassAllowlistSchema`). The data layer now keys grants
+  by stable `staffId` (display-name fallback only for legacy null rows;
+  `resolveStaffIdByName` for the still-name-addressed grid). **Restroom areas**
+  bundle the boys+girls variant rows — assigning the area once expands to both
+  grants (`restroomAreas.ts`: `loadRestroomAreas`,
+  `resolveDestinationsToLocationIds`). **Facilities** flagged
+  `school_wide_default` are granted to every teacher and kept out of the upload
+  (`loadSchoolWideDefaults`). Kiosk/hall-pass destination precedence preserved
+  (teacher allowlist authoritative over the room matrix; staffId preferred over
+  name). LocationsAdmin gained area/gender/school-wide editing. **Phase 2 (CSV
+  round-trip):** `GET /teacher-allowlist/template` returns one pre-filled row
+  per active teacher (Teacher · LOCKED email matcher · Room · Restroom Area);
+  the client builds the CSV with formula-injection-neutralized cells
+  (`csvCell`). `POST /teacher-allowlist/bulk` does preview (`commit:false`) then
+  commit (`commit:true`) — matched by **email** (display name only when
+  unambiguous), replaces only listed teachers, preserves their non-restroom
+  grants, and loudly surfaces unmatched teachers + unknown areas.
+  `GET /teacher-allowlist/bulk/last` + `POST /bulk/:batchId/rollback` provide
+  one-click undo via a new ledger table `teacher_allowlist_import_batches`
+  (`prior_json` = a **staffId-keyed array** of `{staffId, staffName,
+  locationIds}` snapshots so duplicate display names each restore correctly).
+  **Phase 3 (zone rules):** refactored the bulk apply into a shared
+  `computeAndApplyBulk(schoolId, createdBy, rawRows, commit)`; added
+  `teacher_allowlist_zone_rules` (inclusive room-NUMBER range → restroom area,
+  first match wins by `sort_order`) with `GET` / `PUT` (replace-all)
+  `/teacher-allowlist/zone-rules` and `POST /zone-rules/auto-assign`
+  (preview/commit). Auto-assign builds rows from every active teacher's room
+  (via `staff_defaults.default_location_name`, keyed staffId then name) →
+  zone-suggested area, then calls `computeAndApplyBulk` so it shares the
+  preview/commit + rollback batch path. The template pre-fill now falls back to
+  the zone suggestion when a teacher has no single current restroom area. Client
+  `TeacherAllowlistAdmin.tsx` gained the bulk panel (download/upload/preview/
+  commit/undo) and a collapsible zone-rule editor (room from/to → area datalist)
+  + "Auto-assign all from rules" reusing the bulk preview/commit UI. All
+  endpoints `requireAdmin()` + `requireSchool()`; every read/write `school_id`
+  scoped; no FLEID leak. Architect-flagged severe bug fixed pre-merge: the
+  rollback snapshot was name-keyed (would clobber same-name teachers) → now a
+  staffId-keyed array.
+
 - **Classroom Intervention Report — evaluate-by-teacher + exports** — the
   per-student admin report (Core Team only) now has a **Teacher** dropdown
   filter (defaults to **All teachers**); records always sort by teacher name

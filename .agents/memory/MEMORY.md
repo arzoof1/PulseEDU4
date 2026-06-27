@@ -81,3 +81,4 @@
 - [Parent-authed object/image proxy](parent-authed-object-proxy.md) — parents can't use staff object route; stream school-scoped images via a parent proxy + blob (no <img src> in iframe); license-gated persisted tabs need both-end fallback.
 - [School Store redemption engine](school-store-redemption-engine.md) — derived wallet; all balance/stock writes lock per-(school,student) then re-read + status-guarded update; restore stock from stock_held col, not status.
 - [PBIS point-awarding staff](pbis-point-awarding-staff.md) — quiet-staff alert + Staff Active tile measure teachers ∪ active non-teaching awarders; both endpoints must share the population (numerator ⊆ denominator).
+- [Teacher allowlist bulk + zone rules](teacher-allowlist-bulk.md) — CSV bulk + zone auto-assign share computeAndApplyBulk; rollback snapshot MUST stay staffId-keyed array (names not unique) or same-name teachers clobber each other's undo.
