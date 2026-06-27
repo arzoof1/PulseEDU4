@@ -4759,6 +4759,48 @@ function OutcomePill({
   );
 }
 
+// Segmented control to switch the Intervention Reports page between the MTSS
+// plan-fidelity view (Tier 2/3 trends) and the per-student Classroom report.
+function InterventionReportTabs({
+  value,
+  onChange,
+}: {
+  value: "mtss" | "classroom";
+  onChange: (v: "mtss" | "classroom") => void;
+}) {
+  const tab = (active: boolean): React.CSSProperties => ({
+    padding: "6px 14px",
+    borderRadius: 8,
+    border: active ? "1px solid #2563eb" : "1px solid #cbd5e1",
+    background: active ? "#2563eb" : "white",
+    color: active ? "white" : "#334155",
+    fontWeight: 600,
+    cursor: "pointer",
+    fontSize: "0.85rem",
+  });
+  return (
+    <div
+      className="mtss-reports-no-print"
+      style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
+    >
+      <button
+        type="button"
+        style={tab(value === "mtss")}
+        onClick={() => onChange("mtss")}
+      >
+        MTSS Plan Fidelity
+      </button>
+      <button
+        type="button"
+        style={tab(value === "classroom")}
+        onClick={() => onChange("classroom")}
+      >
+        Classroom (per-student)
+      </button>
+    </div>
+  );
+}
+
 function ClassroomInterventionReport() {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<CIReportSearchRow[]>([]);
@@ -5170,6 +5212,11 @@ function App() {
   const [mtssReportsPlanTitle, setMtssReportsPlanTitle] = useState<
     string | null
   >(null);
+  // Intervention Reports has two views: MTSS plan fidelity (Tier 2/3) and the
+  // per-student Classroom report. Core Team toggles between them with a tab.
+  const [interventionReportTab, setInterventionReportTab] = useState<
+    "mtss" | "classroom"
+  >("mtss");
   const [interventionLauncherInitial, setInterventionLauncherInitial] =
     useState<{
       studentId: string | null;
@@ -22793,9 +22840,51 @@ function App() {
               setActiveSection("mtssPlans");
             }}
           />
+        ) : interventionReportTab === "classroom" && isCoreTeamMember ? (
+          <section className="card">
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                marginBottom: 12,
+                flexWrap: "wrap",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setActiveSection("mtssCoordinator")}
+                style={{
+                  padding: "6px 12px",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 6,
+                  background: "white",
+                  cursor: "pointer",
+                }}
+              >
+                ← Back
+              </button>
+              <h1 style={{ margin: 0, fontSize: "1.4rem" }}>
+                Intervention Reports
+              </h1>
+              <InterventionReportTabs
+                value={interventionReportTab}
+                onChange={setInterventionReportTab}
+              />
+            </div>
+            <ClassroomInterventionReport />
+          </section>
         ) : (
           <MtssReportsPage
             onBack={() => setActiveSection("mtssCoordinator")}
+            headerExtra={
+              isCoreTeamMember ? (
+                <InterventionReportTabs
+                  value={interventionReportTab}
+                  onChange={setInterventionReportTab}
+                />
+              ) : undefined
+            }
           />
         )
       )}

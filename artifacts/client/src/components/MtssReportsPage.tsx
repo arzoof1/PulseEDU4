@@ -22,7 +22,7 @@ import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowTo
 // "Print" uses the browser print dialog plus a print stylesheet
 // that strips away the chrome (filters, back button, etc.) so the
 // resulting PDF is presentation-ready.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ResponsiveContainer,
   LineChart,
@@ -164,6 +164,8 @@ interface Props {
   planId?: number;
   // Optional: pre-known plan title, used while the summary is loading.
   initialPlanTitle?: string;
+  // Optional control rendered next to the title (e.g. the report-type tabs).
+  headerExtra?: ReactNode;
 }
 
 // ---------------- helpers ----------------
@@ -269,6 +271,7 @@ export default function MtssReportsPage({
   onBack,
   planId,
   initialPlanTitle,
+  headerExtra,
 }: Props) {
   const isPerPlan = planId != null;
 
@@ -643,6 +646,7 @@ export default function MtssReportsPage({
                 }`
               : "MTSS Reports"}
           </h1>
+          {headerExtra}
         </div>
         <HowToUseHelp title="How to use MTSS Reports">
           <HowToSection title="What this page is">
