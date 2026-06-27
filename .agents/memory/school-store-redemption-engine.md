@@ -7,13 +7,15 @@ description: How the PBIS School Store points wallet + redemption lifecycle stay
 
 The points **wallet is derived, not stored**: `available = SUM(non-voided pbis_entries.points) − SUM(school_store_redemptions.pointsSpent WHERE status IN (pending,fulfilled))`. There is no mutable balance row.
 
-**Rule: every balance- or stock-affecting write must serialize on a per-(school,student) `pg_advisory_xact_lock`, and must read the redemption row's authoritative state AFTER acquiring the lock — never decide on a pre-lock snapshot.**
-**Why:** approve/cancel/fulfill originally read status before locking → two concurrent approves both saw `pending_approval` and double-decremented stock; approve-then-cancel could cancel without restoring stock. Use `lockRedemptionStudent()` (reads studentId, locks, caller re-reads), then a status-guarded `UPDATE ... WHERE status = <expected>` returning 0 rows ⇒ `invalid_state`.
-**How to apply:** any NEW lifecycle transition (e.g. partial-refund, expire) must follow the same lock→re-read→status-guarded-update shape. Restock/refund logic lives only inside that locked section.
+**Rule: every balance- or stock-affecting write must serialize on a per-(school,student) advisory lock, read the row's state AFTER locking, and commit via a status-guarded conditional update (0 rows ⇒ invalid_state) — never decide on a pre-lock snapshot.**
+**Why:** reading status before locking let two concurrent approves both see `pending_approval` and double-decrement stock, and let approve-then-cancel cancel without restoring stock.
+**How to apply:** any NEW lifecycle transition (partial-refund, expire, etc.) follows the same lock→re-read→guarded-update shape; restock/refund logic lives only inside the locked section.
 
 **Rule: restore stock on cancel from the `stock_held` column, NOT from status.**
 **Why:** stock is only decremented in `quantity` inventory mode once points are held; `simple` mode never decrements. Restoring based on "status was pending/fulfilled" over-restores in simple mode and after a mode switch. `stock_held` records whether THIS row actually took a unit, so restore is exact. Keep `pointsRefunded` (audit flag) separate from the stock decision.
 
 **Inventory modes** live on `schoolSettings.schoolStoreInventoryMode` (`simple` = inStock boolean; `quantity` = quantityOnHand, null qty = untracked/always-available). `requiresApproval` items create `pending_approval` rows that hold NO points and NO stock until a staff member approves.
 
-**Access:** catalog writes = `hasStoreWriteAccess` (super/admin/BS/MTSS/PBIS-coord); fulfillment queue + wallet read = `canManageStoreFulfillment` (isCoreTeam || PBIS-coord) OR write-access. Wallet/list responses carry `localSisId` for display; `studentId` (FLEID) is join-key only, never rendered.
+**Access:** catalog writes = super/admin/BS/MTSS/PBIS-coord; fulfillment queue + wallet read = Core Team || PBIS-coord || catalog-write.
+
+**FLEID rule (review-blocking, learned the hard way):** the redemption row is `studentId`-keyed (FLEID), so EVERY response shape — wallet, list, AND each redeem/approve/fulfill/cancel mutation ack — must strip `studentId` and return `localSisId` (+ name) instead. A raw `res.json(row)` or `res.json(result.redemption)` leaks the FLEID. Sanitize at the single response helper, not per-endpoint. "Comment says don't render it" does NOT satisfy the contract — it must not leave the server.

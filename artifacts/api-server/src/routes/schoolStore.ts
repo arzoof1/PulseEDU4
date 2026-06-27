@@ -50,13 +50,24 @@ function redeemErrorStatus(code: string): number {
   }
 }
 
-function sendRedeemResult(
+// Sanitize a raw redemption row for the wire. The FLEID (`studentId`) must
+// NEVER leave the server — strip it and attach the display-safe `localSisId`
+// + student name (looked up school-scoped). Everything else on the row is
+// non-PII operational state the Core Team UI needs.
+async function sendRedeemResult(
   res: import("express").Response,
+  schoolId: number,
   result: RedeemResult,
   okStatus = 200,
 ) {
   if (result.ok) {
-    res.status(okStatus).json(result.redemption);
+    const { studentId, ...rest } = result.redemption;
+    const display = await getStudentDisplay(schoolId, studentId);
+    res.status(okStatus).json({
+      ...rest,
+      localSisId: display?.localSisId ?? null,
+      studentName: display?.studentName ?? "Unknown student",
+    });
     return;
   }
   res
@@ -559,7 +570,7 @@ router.post("/school-store/:id/redeem", async (req, res) => {
     itemId,
     actor: { type: "staff", id: staff.id },
   });
-  sendRedeemResult(res, result, 201);
+  await sendRedeemResult(res, schoolId, result, 201);
 });
 
 // ---- LIST REDEMPTIONS (Core Team) ----
@@ -603,7 +614,7 @@ router.post("/school-store/redemptions/:rid/approve", async (req, res) => {
     redemptionId: rid,
     staffId: staff.id,
   });
-  sendRedeemResult(res, result);
+  await sendRedeemResult(res, schoolId, result);
 });
 
 // ---- FULFILL (Core Team) ----
@@ -628,7 +639,7 @@ router.post("/school-store/redemptions/:rid/fulfill", async (req, res) => {
     deliverTeacherName,
     deliverPeriod,
   });
-  sendRedeemResult(res, result);
+  await sendRedeemResult(res, schoolId, result);
 });
 
 // ---- CANCEL / REFUND (Core Team) ----
@@ -648,7 +659,7 @@ router.post("/school-store/redemptions/:rid/cancel", async (req, res) => {
     staffId: staff.id,
     reason,
   });
-  sendRedeemResult(res, result);
+  await sendRedeemResult(res, schoolId, result);
 });
 
 export default router;
