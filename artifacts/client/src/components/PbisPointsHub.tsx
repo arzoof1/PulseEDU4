@@ -118,7 +118,7 @@ type IvType = {
 
 // Color-first entry mode. "choose" shows the green/red picker; the others
 // render the positive award hub or the negative behavior+intervention flow.
-type Mode = "choose" | "positive" | "negative";
+type Mode = "choose" | "positive" | "negative" | "manageLists";
 
 const TAB_LABELS: { key: Tab; label: string }[] = [
   { key: "classes", label: "Classes" },
@@ -200,19 +200,10 @@ export default function PbisPointsHub() {
     me?.isMtssCoordinator
   );
 
-  // Sub-tab within the Manage Lists tab.
+  // Sub-tab within the Manage Lists view (reached from the entry chooser).
   const [manageListsTab, setManageListsTab] = useState<
     "behaviors" | "interventions" | "pullouts"
   >("behaviors");
-
-  // Visible top-level tabs — the admin-only Manage Lists tab is appended last.
-  const visibleTabs = useMemo(
-    () =>
-      canManageLists
-        ? [...TAB_LABELS, { key: "manageLists" as Tab, label: "Manage Lists" }]
-        : TAB_LABELS,
-    [canManageLists],
-  );
 
   // ---- Initial data load
   useEffect(() => {
@@ -564,7 +555,12 @@ export default function PbisPointsHub() {
         </div>
       </div>
 
-      {mode === "choose" && <ModeChooser onPick={(m) => setMode(m)} />}
+      {mode === "choose" && (
+        <ModeChooser
+          onPick={(m) => setMode(m)}
+          canManageLists={canManageLists}
+        />
+      )}
 
       {mode !== "choose" && (
         <div style={{ marginBottom: "0.75rem" }}>
@@ -647,9 +643,21 @@ export default function PbisPointsHub() {
           </>
         ))}
 
+      {mode === "manageLists" && canManageLists && (
+        <ManageListsView
+          me={me}
+          reasons={reasons}
+          onReasonsChanged={setReasons}
+          templates={noteTemplates}
+          onTemplatesChanged={setNoteTemplates}
+          subTab={manageListsTab}
+          onChangeSubTab={setManageListsTab}
+        />
+      )}
+
       {mode === "positive" && (
         <>
-      <TabBar tab={tab} onChange={setTab} labels={visibleTabs} />
+      <TabBar tab={tab} onChange={setTab} />
 
       <HowToUseHelp title="How to use PBIS Points">
         <HowToSection title="What this hub is">
@@ -748,16 +756,6 @@ export default function PbisPointsHub() {
         // intentionally disabled here for everyone (including admins) — use
         // the BS hub, MTSS hub, or the "School Store" admin section instead.
         <SchoolStoreView canEdit={false} />
-      ) : tab === "manageLists" && canManageLists ? (
-        <ManageListsView
-          me={me}
-          reasons={reasons}
-          onReasonsChanged={setReasons}
-          templates={noteTemplates}
-          onTemplatesChanged={setNoteTemplates}
-          subTab={manageListsTab}
-          onChangeSubTab={setManageListsTab}
-        />
       ) : (
         <ComingSoon tab={tab} />
       )}
@@ -828,8 +826,10 @@ export default function PbisPointsHub() {
 // flow from the negative behavior+intervention flow.
 function ModeChooser({
   onPick,
+  canManageLists,
 }: {
-  onPick: (m: "positive" | "negative") => void;
+  onPick: (m: "positive" | "negative" | "manageLists") => void;
+  canManageLists: boolean;
 }) {
   const base: React.CSSProperties = {
     flex: "1 1 220px",
@@ -892,6 +892,27 @@ function ModeChooser({
           Log a behavior &amp; intervention tried
         </span>
       </button>
+      {canManageLists && (
+        <button
+          type="button"
+          onClick={() => onPick("manageLists")}
+          style={{
+            ...base,
+            background: "linear-gradient(135deg,#475569,#334155)",
+            boxShadow: "0 8px 22px rgba(51,65,85,0.32)",
+          }}
+        >
+          <span style={{ fontSize: "2.4rem", lineHeight: 1 }}>⚙️</span>
+          <span style={{ fontSize: "1.4rem", fontWeight: 800 }}>
+            Manage Lists
+          </span>
+          <span
+            style={{ fontSize: "0.9rem", opacity: 0.92, textAlign: "center" }}
+          >
+            Edit negative behaviors, interventions &amp; pullout reasons
+          </span>
+        </button>
+      )}
     </div>
   );
 }
