@@ -7876,6 +7876,57 @@ export async function ensureFeaturePlansSchema() {
        AND features <> ${JSON.stringify(enterpriseFeatures)}::jsonb
   `);
 
+  // Seed curated tier plans: "Starter" and "Starter Plus". Unlike the
+  // enterprise plan above, these are STARTING POINTS an admin is expected to
+  // tailor in the Feature Licensing editor — so we only INSERT ... ON CONFLICT
+  // DO NOTHING (seed once) and deliberately do NOT fold/overwrite the features
+  // on later boots. Re-writing them every boot would clobber an admin's edits.
+  //
+  // Starter = day-to-day operations bundle. Bell Schedule is included because
+  // both Tardy Pass (lost-instruction minutes) and the period-aware Hall Pass
+  // queue depend on it; Data Imports is included so a school with no SIS feed
+  // can still load its roster (which Hall Passes / Tardies point at).
+  const starterFeatures: Record<string, true> = {
+    hallPasses: true,
+    tardyPass: true,
+    displays: true,
+    bellSchedule: true,
+    dataImports: true,
+  };
+  // Starter Plus = Starter plus the features that complete its soft
+  // dependencies: PBIS + Houses light up recognition and the signage
+  // house-standings tile; Family Communication is the parent-notification
+  // delivery channel; Parent Portal turns on the parent-facing surfaces.
+  const starterPlusFeatures: Record<string, true> = {
+    ...starterFeatures,
+    pbis: true,
+    houses: true,
+    familyComm: true,
+    parentPortal: true,
+  };
+  await db.execute(sql`
+    INSERT INTO plans (key, label, description, features, quotas)
+    VALUES (
+      'starter',
+      'Starter',
+      'Core school-operations bundle: Hall Passes, Tardy Pass, Signage, Bell Schedule, and Data Imports.',
+      ${JSON.stringify(starterFeatures)}::jsonb,
+      '{}'::jsonb
+    )
+    ON CONFLICT (key) DO NOTHING
+  `);
+  await db.execute(sql`
+    INSERT INTO plans (key, label, description, features, quotas)
+    VALUES (
+      'starter_plus',
+      'Starter Plus',
+      'Everything in Starter plus PBIS, Houses, Family Communication, and the Parent Portal.',
+      ${JSON.stringify(starterPlusFeatures)}::jsonb,
+      '{}'::jsonb
+    )
+    ON CONFLICT (key) DO NOTHING
+  `);
+
   // Backfill: any school still on plan_id IS NULL gets the enterprise
   // plan so the runtime behavior is unchanged after this migration.
   await db.execute(sql`
