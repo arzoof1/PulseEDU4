@@ -66,6 +66,15 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     isCoreTeam: row.isCoreTeam,
     isConfidentialSecretary: row.isConfidentialSecretary,
     defaultRoom: row.defaultRoom,
+    // Per-teacher opt-in: the Classroom Store is hidden by default and a
+    // teacher reveals it from a toggle. Stored in ui_prefs (no migration);
+    // surfaced here so the client can gate the nav item + hub view in one
+    // place off authUser without a second fetch.
+    classroomStoreEnabled: !!(
+      row.uiPrefs &&
+      typeof row.uiPrefs === "object" &&
+      (row.uiPrefs as Record<string, unknown>).classroomStoreEnabled === true
+    ),
   };
 }
 

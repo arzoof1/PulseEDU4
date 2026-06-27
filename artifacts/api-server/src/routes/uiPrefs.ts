@@ -98,6 +98,58 @@ async function loadPrefsIfActive(
   return {};
 }
 
+// --------- Classroom Store per-teacher opt-in ---------------------------
+
+// Top-level key inside staff.ui_prefs. The Classroom Store is hidden by
+// default for every teacher; a teacher reveals it (sidebar nav item + hub
+// view) by flipping this to true from the in-hub toggle. Default false.
+const CLASSROOM_STORE_ENABLED_KEY = "classroomStoreEnabled";
+
+router.get(
+  "/me/ui-prefs/classroom-store-enabled",
+  async (req, res): Promise<void> => {
+    const staffId = req.staffId;
+    if (!staffId) {
+      res.status(401).json({ error: "Not signed in" });
+      return;
+    }
+    const prefs = await loadPrefsIfActive(staffId);
+    if (prefs === null) {
+      res.status(401).json({ error: "Not signed in" });
+      return;
+    }
+    res.json({ enabled: prefs[CLASSROOM_STORE_ENABLED_KEY] === true });
+  },
+);
+
+router.put(
+  "/me/ui-prefs/classroom-store-enabled",
+  async (req, res): Promise<void> => {
+    const staffId = req.staffId;
+    if (!staffId) {
+      res.status(401).json({ error: "Not signed in" });
+      return;
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (typeof body.enabled !== "boolean") {
+      res.status(400).json({ error: "enabled must be a boolean" });
+      return;
+    }
+    // Read-modify-write to preserve other top-level keys in ui_prefs.
+    const prefs = await loadPrefsIfActive(staffId);
+    if (prefs === null) {
+      res.status(401).json({ error: "Not signed in" });
+      return;
+    }
+    const next = { ...prefs, [CLASSROOM_STORE_ENABLED_KEY]: body.enabled };
+    await db
+      .update(staffTable)
+      .set({ uiPrefs: next })
+      .where(eq(staffTable.id, staffId));
+    res.json({ enabled: body.enabled });
+  },
+);
+
 router.get(
   "/me/ui-prefs/equity-subgroup-order",
   async (req, res): Promise<void> => {

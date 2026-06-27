@@ -124,10 +124,22 @@ const TAB_LABELS: { key: Tab; label: string }[] = [
   { key: "settings", label: "Settings" },
 ];
 
-export default function PbisPointsHub() {
+export default function PbisPointsHub({
+  classroomStoreEnabled = false,
+  onSetClassroomStoreEnabled,
+}: {
+  // Per-teacher Classroom Store opt-in, owned by App (authUser). When the
+  // setter is provided, the hub renders a self-serve toggle so a teacher can
+  // reveal/hide the Classroom Store (sidebar item + view) for themselves.
+  classroomStoreEnabled?: boolean;
+  onSetClassroomStoreEnabled?: (next: boolean) => Promise<void>;
+} = {}) {
   const [tab, setTab] = useState<Tab>("classes");
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Classroom Store toggle UI state (local to the toggle card below).
+  const [storeToggleBusy, setStoreToggleBusy] = useState(false);
+  const [storeToggleErr, setStoreToggleErr] = useState<string | null>(null);
 
   const [me, setMe] = useState<Me | null>(null);
   const [sections, setSections] = useState<Section[]>([]);
@@ -552,6 +564,83 @@ export default function PbisPointsHub() {
           one place.
         </div>
       </div>
+
+      {/* Per-teacher Classroom Store opt-in. The Classroom Store is hidden by
+          default for everyone; this self-serve toggle lets a teacher reveal it
+          (Recognition sidebar item + the store view) just for themselves. */}
+      {onSetClassroomStoreEnabled && (
+        <div
+          style={{
+            margin: "0.85rem 0",
+            padding: "0.7rem 0.9rem",
+            border: "1px solid var(--border)",
+            borderRadius: "0.5rem",
+            background: "#f8fafc",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "1rem",
+            flexWrap: "wrap",
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 700, fontSize: "0.95rem" }}>
+              Classroom Store
+            </div>
+            <div style={{ fontSize: "0.82rem", color: "#475569" }}>
+              {classroomStoreEnabled
+                ? "On — your private rewards list appears in the Recognition menu."
+                : "Off — turn it on to build your own private list of rewards students can redeem."}
+            </div>
+            {storeToggleErr && (
+              <div
+                style={{
+                  fontSize: "0.8rem",
+                  color: "#b91c1c",
+                  marginTop: 2,
+                }}
+              >
+                {storeToggleErr}
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            disabled={storeToggleBusy}
+            onClick={async () => {
+              setStoreToggleErr(null);
+              setStoreToggleBusy(true);
+              try {
+                await onSetClassroomStoreEnabled(!classroomStoreEnabled);
+              } catch {
+                setStoreToggleErr("Couldn't update — please try again.");
+              } finally {
+                setStoreToggleBusy(false);
+              }
+            }}
+            style={{
+              padding: "0.4rem 0.9rem",
+              borderRadius: "0.4rem",
+              border: classroomStoreEnabled
+                ? "1px solid #cbd5e1"
+                : "1px solid #0e7490",
+              background: classroomStoreEnabled ? "white" : "#0e7490",
+              color: classroomStoreEnabled ? "#334155" : "white",
+              fontSize: "0.85rem",
+              fontWeight: 600,
+              cursor: storeToggleBusy ? "default" : "pointer",
+              opacity: storeToggleBusy ? 0.6 : 1,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {storeToggleBusy
+              ? "Saving…"
+              : classroomStoreEnabled
+                ? "Turn off"
+                : "Turn on"}
+          </button>
+        </div>
+      )}
 
       {mode === "choose" && <ModeChooser onPick={(m) => setMode(m)} />}
 

@@ -5457,6 +5457,11 @@ function App() {
     isGuardian?: boolean;
     isCoreTeam?: boolean;
     isConfidentialSecretary?: boolean;
+    // Per-teacher opt-in for the Classroom Store. Default false (hidden);
+    // a teacher flips it on from the PBIS Points hub toggle, which reveals
+    // the Recognition sidebar item + the Classroom Store view. Persisted in
+    // staff.ui_prefs server-side and surfaced via /api/auth/me.
+    classroomStoreEnabled?: boolean;
     capStaffRoles?: boolean;
     capManageRoles?: boolean;
     capManageDisplays?: boolean;
@@ -9879,6 +9884,34 @@ function App() {
     };
   }, [canReviewPullouts, unreviewedPulloutsTick]);
 
+  // Per-teacher Classroom Store opt-in. Hidden by default; the teacher
+  // enables it from the toggle in the PBIS Points hub. Gates the sidebar
+  // nav item, the Tile Home tile, and the page render below.
+  const classroomStoreEnabled = Boolean(authUser?.classroomStoreEnabled);
+  // PUT the new value, then mirror it into authUser so the sidebar/tile/view
+  // react immediately without a /api/auth/me round-trip. Throws on failure so
+  // the toggle can surface an error and revert.
+  const setClassroomStoreEnabled = async (next: boolean): Promise<void> => {
+    const res = await authFetch("/api/me/ui-prefs/classroom-store-enabled", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: next }),
+    });
+    if (!res.ok) {
+      throw new Error("Failed to update Classroom Store preference");
+    }
+    setAuthUser((u) => (u ? { ...u, classroomStoreEnabled: next } : u));
+  };
+
+  // If the Classroom Store gets disabled while it is the active view (e.g.
+  // toggled off, or a stale deep link), bounce to a safe default so the main
+  // pane never goes blank. Mirrors the other reset guards below.
+  useEffect(() => {
+    if (!classroomStoreEnabled && activeSection === "classroomStore") {
+      setActiveSection("hallPasses");
+    }
+  }, [classroomStoreEnabled, activeSection]);
+
   useEffect(() => {
     if (!canManageSettings && activeSection === "settings") {
       setActiveSection("hallPasses");
@@ -10515,7 +10548,7 @@ function App() {
     // teacher — any signed-in staffer can build their own reward list
     // (server enforces ownership). Hidden for non-exempt-only staff, same
     // as School Store.
-    add(!isNonExemptOnly, {
+    add(!isNonExemptOnly && classroomStoreEnabled, {
       key: "classroomStore",
       label: "Classroom Store",
       description: "Build your own list of rewards students can redeem.",
@@ -11598,6 +11631,7 @@ function App() {
                     can build their own reward list. Hidden for non-exempt-only
                     staff, same as School Store. */}
                 {!isNonExemptOnly &&
+                  classroomStoreEnabled &&
                   renderNavItem({
                     key: "classroomStore",
                     label: "Classroom Store",
@@ -17381,7 +17415,10 @@ function App() {
       {activeSection === "pbis" && (
         <>
           {isCoreTeamMember && <CallInitiativeAdminPanel />}
-          <PbisPointsHub />
+          <PbisPointsHub
+            classroomStoreEnabled={classroomStoreEnabled}
+            onSetClassroomStoreEnabled={setClassroomStoreEnabled}
+          />
         </>
       )}
       {activeSection === "pulseBrainLab" && isBehaviorSpec && <PulseBrainLabHub />}
@@ -17446,7 +17483,9 @@ function App() {
       {/* Per-teacher Classroom Store — moved out of the PBIS Hub tab bar into
           the Recognition sidebar group. Private to the logged-in teacher;
           ownership is enforced server-side. */}
-      {activeSection === "classroomStore" && <ClassroomStoreView />}
+      {activeSection === "classroomStore" && classroomStoreEnabled && (
+        <ClassroomStoreView />
+      )}
 
       {/* Editable School Store — opened from the BS hub or MTSS hub
           tile. canEditSchoolStore mirrors the server's requireWriteAccess
