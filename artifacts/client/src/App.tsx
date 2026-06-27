@@ -17473,12 +17473,14 @@ function App() {
         </>
       )}
 
-      {/* Read-only School Store catalog — sidebar entry visible to every
-          signed-in staffer. Always renders with canEdit=false so even
-          admins/BS/MTSS/PBIS coords browsing here don't get edit
-          controls. The editable surface lives in the PBIS / BS / MTSS
-          hubs. */}
-      {activeSection === "schoolStore" && <SchoolStoreView canEdit={false} />}
+      {/* School Store catalog — sidebar entry visible to every signed-in
+          staffer. Eligible managers (admin / BS / MTSS / PBIS coord, via
+          canEditSchoolStore — same gate as the hub tile) get the add/edit
+          controls right here, since the store now lives in the sidebar;
+          everyone else sees the read-only catalog. */}
+      {activeSection === "schoolStore" && (
+        <SchoolStoreView canEdit={canEditSchoolStore} />
+      )}
 
       {/* Per-teacher Classroom Store — moved out of the PBIS Hub tab bar into
           the Recognition sidebar group. Private to the logged-in teacher;
