@@ -15,6 +15,7 @@ import {
   schoolStoreRedemptionsTable,
   schoolSettingsTable,
   pbisEntriesTable,
+  pbisPointMigrationsTable,
   studentsTable,
   staffTable,
   type SchoolStoreRedemptionRow,
@@ -110,7 +111,24 @@ async function computeEarned(
         isNull(pbisEntriesTable.voidedAt),
       ),
     );
-  return row?.total ?? 0;
+  // Carried-over balances imported from another PBIS platform (the
+  // store-only migration path) live in pbis_point_migrations — spendable
+  // here but deliberately invisible to houses/leaderboards. The "count as
+  // earned" migration path instead writes pbis_entries, so those points are
+  // already in the SUM above and must NOT be added again here.
+  const [migrated] = await ex
+    .select({
+      total: sql<number>`coalesce(sum(${pbisPointMigrationsTable.points}), 0)::int`,
+    })
+    .from(pbisPointMigrationsTable)
+    .where(
+      and(
+        eq(pbisPointMigrationsTable.schoolId, schoolId),
+        eq(pbisPointMigrationsTable.studentId, studentId),
+        isNull(pbisPointMigrationsTable.voidedAt),
+      ),
+    );
+  return (row?.total ?? 0) + (migrated?.total ?? 0);
 }
 
 // Points currently held against the wallet (pending + fulfilled).

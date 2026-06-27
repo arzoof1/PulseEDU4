@@ -35,6 +35,10 @@ import {
   studentImportSnapshotsTable,
   schoolSettingsTable,
   housesTable,
+  pbisEntriesTable,
+  pbisPointMigrationsTable,
+  pbisMilestonesTable,
+  pbisMilestoneEmailsTable,
 } from "@workspace/db";
 import { recommendNextHouse } from "./houses.js";
 import { eq, and, or, desc, sql, isNull, inArray, gte, lte, ilike } from "drizzle-orm";
@@ -1727,6 +1731,15 @@ type KindParseResult<T> =
   | { ok: true; value: T }
   | { ok: false; message: string };
 
+// Per-commit options carried in the request body for kinds that need a
+// runtime switch the CSV itself can't express. Currently only the PBIS
+// points-migration importer uses these (the "count as earned" toggle + a
+// free-text source label). Optional + ignored by every other kind.
+interface ImportCommitOptions {
+  countsTowardHouses?: boolean;
+  source?: string;
+}
+
 interface KindConfig<T = unknown> {
   validTargets: Set<string>;
   requiredFields: string[];
@@ -1737,12 +1750,15 @@ interface KindConfig<T = unknown> {
   ) => KindParseResult<T>;
   // Insert one chunk inside the caller's transaction. Returns the count
   // actually written (which may be < parsed.length for upsert-skip kinds
-  // like rosters where duplicate student_ids are no-ops).
+  // like rosters where duplicate student_ids are no-ops). `options` is the
+  // optional per-commit switch payload (only the points-migration kind
+  // reads it; all existing 4-arg implementations ignore the extra param).
   insertChunk: (
     tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
     parsed: T[],
     schoolId: number,
     jobId: number,
+    options?: ImportCommitOptions,
   ) => Promise<number>;
   // Rollback: delete every row this job inserted. Returns row count.
   rollback: (
@@ -3714,11 +3730,382 @@ router.post(
   },
 );
 
+// ---------------------------------------------------------------------------
+// PBIS point-balance migration — carry a student's existing reward balance
+// over from another PBIS platform (LiveSchool, etc.) when a school converts
+// to PulseEDU. Matched by local_sis_id (the only id a foreign vendor exports;
+// NEVER the FLEID), resolved to the canonical student_id at commit time.
+//
+// Destination chosen per-import via the `countsTowardHouses` option:
+//   false (default) → pbis_point_migrations ledger. Spendable in the School
+//     Store (computeEarned adds it) but EXCLUDED from house standings,
+//     leaderboards, and recognition counts.
+//   true            → real pbis_entries rows (stamped import_job_id) so the
+//     migrated points behave exactly like earned recognitions everywhere
+//     (houses, leaderboards, recognition totals) with zero house-code change.
+// Either way, rollback deletes by import_job_id from BOTH tables (only one
+// ever holds rows for a given job).
+// ---------------------------------------------------------------------------
+type ParsedPointsMigration = {
+  localSisId: string;
+  points: number;
+  // Filled in by precommitValidate once local_sis_id resolves to the
+  // canonical FLEID. Preview never sets it.
+  resolvedStudentId?: string;
+};
+
+// Resolve a batch of local_sis_id values to canonical student_ids within one
+// school. Case-insensitive. A local_sis_id that matches >1 student is
+// reported as ambiguous (and removed from the map) — we refuse to guess.
+async function resolveLocalSisIds(
+  schoolId: number,
+  localSisIds: string[],
+): Promise<{ map: Map<string, string>; ambiguous: Set<string> }> {
+  const wanted = new Set(
+    localSisIds.map((s) => s.trim().toLowerCase()).filter(Boolean),
+  );
+  const map = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  if (wanted.size === 0) return { map, ambiguous };
+  const rows = await db
+    .select({
+      studentId: studentsTable.studentId,
+      localSisId: studentsTable.localSisId,
+    })
+    .from(studentsTable)
+    .where(eq(studentsTable.schoolId, schoolId));
+  for (const r of rows) {
+    const key = (r.localSisId ?? "").trim().toLowerCase();
+    if (!key || !wanted.has(key)) continue;
+    if (map.has(key)) {
+      ambiguous.add(key);
+    } else {
+      map.set(key, r.studentId);
+    }
+  }
+  for (const k of ambiguous) map.delete(k);
+  return { map, ambiguous };
+}
+
+// Pre-seed milestone-email dedupe rows so a "count as earned" migration does
+// NOT trigger a belated milestone-email flood. processMilestonesForStudent is
+// recompute+dedupe based: without this, the next ordinary award would
+// retroactively fire every milestone the carried-over balance crossed. We
+// insert "skipped" dedupe rows for crossed milestones (onConflictDoNothing so
+// an already-sent milestone is left untouched) — threshold tracking stays
+// correct, but no emails go out for points earned on the prior platform.
+async function suppressMigratedMilestones(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  schoolId: number,
+  studentIds: string[],
+  nowIso: string,
+  jobId: number,
+): Promise<void> {
+  const milestones = await tx
+    .select({ points: pbisMilestonesTable.points })
+    .from(pbisMilestonesTable)
+    .where(
+      and(
+        eq(pbisMilestonesTable.active, true),
+        eq(pbisMilestonesTable.schoolId, schoolId),
+      ),
+    );
+  if (milestones.length === 0) return;
+  const seen = new Set<string>();
+  for (const sid of studentIds) {
+    if (seen.has(sid)) continue;
+    seen.add(sid);
+    const [row] = await tx
+      .select({
+        total: sql<number>`coalesce(sum(${pbisEntriesTable.points}), 0)::int`,
+      })
+      .from(pbisEntriesTable)
+      .where(
+        and(
+          eq(pbisEntriesTable.schoolId, schoolId),
+          eq(pbisEntriesTable.studentId, sid),
+          isNull(pbisEntriesTable.voidedAt),
+        ),
+      );
+    const total = row?.total ?? 0;
+    const crossed = milestones.filter((m) => total >= m.points);
+    if (crossed.length === 0) continue;
+    await tx
+      .insert(pbisMilestoneEmailsTable)
+      .values(
+        crossed.map((m) => ({
+          studentId: sid,
+          schoolId,
+          milestonePoints: m.points,
+          sentAt: nowIso,
+          emailTo: null,
+          status: "skipped" as const,
+          errorMsg: "Suppressed — PBIS balance migration",
+          importJobId: jobId,
+        })),
+      )
+      .onConflictDoNothing();
+  }
+}
+
+const POINTS_MIGRATION_CONFIG: KindConfig<ParsedPointsMigration> = {
+  validTargets: new Set(["local_sis_id", "points"]),
+  requiredFields: ["local_sis_id", "points"],
+  headerSynonyms: {
+    local_sis_id: [
+      "local_sis_id",
+      "local_id",
+      "sis_id",
+      "student_id",
+      "student_number",
+      "studentnumber",
+      "id",
+      "studentid",
+    ],
+    points: [
+      "points",
+      "balance",
+      "point_balance",
+      "points_balance",
+      "current_balance",
+      "available_points",
+      "total_points",
+    ],
+  },
+  parseRow(row, mapping) {
+    const target: Record<string, string> = {};
+    for (const [csvCol, tgt] of Object.entries(mapping)) {
+      target[tgt] = csvCol;
+    }
+    for (const req of this.requiredFields) {
+      if (!target[req]) {
+        return { ok: false, message: `Missing required column: ${req}` };
+      }
+    }
+    const localSisId = (row[target.local_sis_id] ?? "").toString().trim();
+    if (!localSisId) {
+      return { ok: false, message: "Empty value for local_sis_id" };
+    }
+    const rawPts = (row[target.points] ?? "")
+      .toString()
+      .trim()
+      .replace(/,/g, "");
+    if (!rawPts) {
+      return { ok: false, message: "Empty value for points" };
+    }
+    const pts = Number(rawPts);
+    if (!Number.isFinite(pts) || !Number.isInteger(pts)) {
+      return {
+        ok: false,
+        message: `Points must be a whole number: "${rawPts}"`,
+      };
+    }
+    if (pts < 0) {
+      return { ok: false, message: `Points cannot be negative: "${rawPts}"` };
+    }
+    if (pts > 1_000_000) {
+      return {
+        ok: false,
+        message: `Points value is implausibly large: "${rawPts}"`,
+      };
+    }
+    return { ok: true, value: { localSisId, points: pts } };
+  },
+  async previewExtras(parsedValues, schoolId) {
+    const { map } = await resolveLocalSisIds(
+      schoolId,
+      parsedValues.map((v) => v.localSisId),
+    );
+    let matched = 0;
+    let unmatched = 0;
+    let totalPoints = 0;
+    for (const v of parsedValues) {
+      if (map.has(v.localSisId.trim().toLowerCase())) {
+        matched++;
+        totalPoints += v.points;
+      } else {
+        unmatched++;
+      }
+    }
+    return { pointsMigration: { matched, unmatched, totalPoints } };
+  },
+  async precommitValidate(items, schoolId) {
+    const { map, ambiguous } = await resolveLocalSisIds(
+      schoolId,
+      items.map((i) => i.value.localSisId),
+    );
+    const kept: ParsedPointsMigration[] = [];
+    const rejected: Array<{
+      row: number;
+      message: string;
+      raw?: Record<string, string>;
+      code?: string;
+      bucket?: string;
+    }> = [];
+    // A balance migration must carry at most one row per student: two rows for
+    // the same student would double-credit (and the store-only UPSERT can't
+    // touch the same key twice in one statement). Reject every later duplicate.
+    const seenKeys = new Set<string>();
+    for (const { rowIndex, value, raw } of items) {
+      const key = value.localSisId.trim().toLowerCase();
+      if (seenKeys.has(key)) {
+        rejected.push({
+          row: rowIndex,
+          message: `Local SIS ID "${value.localSisId}" appears more than once in this file — keep a single balance row per student.`,
+          raw,
+          code: "duplicate_in_file",
+          bucket: value.localSisId,
+        });
+        continue;
+      }
+      if (ambiguous.has(key)) {
+        rejected.push({
+          row: rowIndex,
+          message: `Local SIS ID "${value.localSisId}" matches more than one student — resolve the duplicate in the roster before importing.`,
+          raw,
+          code: "ambiguous_student",
+          bucket: value.localSisId,
+        });
+        continue;
+      }
+      const studentId = map.get(key);
+      if (!studentId) {
+        rejected.push({
+          row: rowIndex,
+          message: `No student found with Local SIS ID "${value.localSisId}". Import the roster first, then re-run this migration.`,
+          raw,
+          code: "unknown_student",
+          bucket: value.localSisId,
+        });
+        continue;
+      }
+      seenKeys.add(key);
+      kept.push({ ...value, resolvedStudentId: studentId });
+    }
+    return { kept, rejected };
+  },
+  async insertChunk(tx, parsed, schoolId, jobId, options) {
+    if (parsed.length === 0) return 0;
+    const countsTowardHouses = options?.countsTowardHouses === true;
+    const source =
+      typeof options?.source === "string" && options.source.trim()
+        ? options.source.trim().slice(0, 80)
+        : "Imported balance";
+    const nowIso = new Date().toISOString();
+    // resolvedStudentId is guaranteed by precommitValidate (unresolved rows
+    // were rejected before reaching insertChunk), but filter defensively.
+    const rows = parsed.filter(
+      (p): p is ParsedPointsMigration & { resolvedStudentId: string } =>
+        typeof p.resolvedStudentId === "string",
+    );
+    if (rows.length === 0) return 0;
+
+    if (countsTowardHouses) {
+      // "Count as earned" → real PBIS recognitions. Houses, leaderboards,
+      // and recognition counts pick these up automatically because they all
+      // sum pbis_entries (computeEarned counts them too).
+      await tx.insert(pbisEntriesTable).values(
+        rows.map((p) => ({
+          schoolId,
+          studentId: p.resolvedStudentId,
+          reason: `${source} (carried-over PBIS balance)`,
+          points: p.points,
+          polarity: "positive",
+          staffId: null,
+          staffName: source,
+          createdAt: nowIso,
+          importJobId: jobId,
+        })),
+      );
+      await suppressMigratedMilestones(
+        tx,
+        schoolId,
+        rows.map((p) => p.resolvedStudentId),
+        nowIso,
+        jobId,
+      );
+    } else {
+      // Store-balance only → spendable wallet credit, invisible to houses.
+      // UPSERT on the unique (school, student) index so re-importing the same
+      // (or a corrected) balance file SETS the balance rather than stacking —
+      // the migration is idempotent. precommitValidate already rejected in-file
+      // duplicates, so a single statement never touches the same key twice.
+      await tx
+        .insert(pbisPointMigrationsTable)
+        .values(
+          rows.map((p) => ({
+            schoolId,
+            studentId: p.resolvedStudentId,
+            points: p.points,
+            source,
+            importJobId: jobId,
+            createdById: null,
+            createdByName: source,
+            createdAt: nowIso,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [
+            pbisPointMigrationsTable.schoolId,
+            pbisPointMigrationsTable.studentId,
+          ],
+          set: {
+            points: sql`excluded.points`,
+            source: sql`excluded.source`,
+            importJobId: sql`excluded.import_job_id`,
+            createdById: sql`excluded.created_by_id`,
+            createdByName: sql`excluded.created_by_name`,
+            createdAt: sql`excluded.created_at`,
+            voidedAt: null,
+          },
+        });
+    }
+    return rows.length;
+  },
+  async rollback(tx, jobId, schoolId) {
+    // A given job only ever wrote to ONE table, but deleting from both by
+    // import_job_id is safe (the other has no matching rows) and means
+    // rollback doesn't need to know which toggle was used.
+    const led = await tx
+      .delete(pbisPointMigrationsTable)
+      .where(
+        and(
+          eq(pbisPointMigrationsTable.importJobId, jobId),
+          eq(pbisPointMigrationsTable.schoolId, schoolId),
+        ),
+      );
+    const ent = await tx
+      .delete(pbisEntriesTable)
+      .where(
+        and(
+          eq(pbisEntriesTable.importJobId, jobId),
+          eq(pbisEntriesTable.schoolId, schoolId),
+        ),
+      );
+    // Remove the milestone-email suppression rows this import pre-seeded (only
+    // the "count as earned" path created any), so rolling back the migration
+    // doesn't permanently silence future legitimate milestone emails.
+    await tx
+      .delete(pbisMilestoneEmailsTable)
+      .where(
+        and(
+          eq(pbisMilestoneEmailsTable.importJobId, jobId),
+          eq(pbisMilestoneEmailsTable.schoolId, schoolId),
+        ),
+      );
+    return (
+      ((led as unknown as { rowCount?: number }).rowCount ?? 0) +
+      ((ent as unknown as { rowCount?: number }).rowCount ?? 0)
+    );
+  },
+};
+
 const KIND_CONFIGS: Record<string, KindConfig<any>> = {
   rosters: ROSTERS_CONFIG,
   behavior: BEHAVIOR_CONFIG,
   fast_scores: FAST_SCORES_CONFIG,
   fast_prior_year: FAST_PRIOR_YEAR_CONFIG,
+  points_migration: POINTS_MIGRATION_CONFIG,
 };
 
 // ---------------------------------------------------------------------------
@@ -3817,6 +4204,17 @@ function makeCommitHandler<T>(kind: string, config: KindConfig<T>) {
       req.body?.mapping && typeof req.body.mapping === "object"
         ? (req.body.mapping as Record<string, string>)
         : {};
+    const rawOptions = req.body?.options;
+    const options: ImportCommitOptions =
+      rawOptions && typeof rawOptions === "object" && !Array.isArray(rawOptions)
+        ? {
+            countsTowardHouses: rawOptions.countsTowardHouses === true,
+            source:
+              typeof rawOptions.source === "string"
+                ? rawOptions.source
+                : undefined,
+          }
+        : {};
     if (!csv.trim()) {
       res.status(400).json({ error: "CSV body is required" });
       return;
@@ -3907,6 +4305,7 @@ function makeCommitHandler<T>(kind: string, config: KindConfig<T>) {
           chunk,
           schoolId,
           job.id,
+          options,
         );
       }
       // For upsert-skip kinds (rosters), committedTotal can be < valid.length.
@@ -3998,6 +4397,16 @@ router.post(
   "/data-imports/fast_prior_year/commit",
   requireImporter(),
   makeCommitHandler("fast_prior_year", FAST_PRIOR_YEAR_CONFIG),
+);
+router.post(
+  "/data-imports/points_migration/preview",
+  requireImporter(),
+  makePreviewHandler("points_migration", POINTS_MIGRATION_CONFIG),
+);
+router.post(
+  "/data-imports/points_migration/commit",
+  requireImporter(),
+  makeCommitHandler("points_migration", POINTS_MIGRATION_CONFIG),
 );
 
 // Mapping templates. Once a school admin has correctly mapped a vendor's

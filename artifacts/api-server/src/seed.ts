@@ -3778,6 +3778,47 @@ export async function ensureStaffPasswordResetsSchema(): Promise<void> {
   );
 }
 
+// PBIS point-balance migration ledger + the import_job_id stamp on
+// pbis_entries (used by the "count as earned" migration path so its rows can
+// be rolled back by job). Additive + idempotent — direct SQL (drizzle-kit
+// push would block on interactive prompts), matching the ensure* boot pattern.
+export async function ensurePbisPointMigrationsSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pbis_point_migrations (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      points INTEGER NOT NULL,
+      source TEXT NOT NULL DEFAULT 'Imported balance',
+      import_job_id INTEGER,
+      created_by_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL,
+      voided_at TEXT
+    )
+  `);
+  // (school_id, student_id) is UNIQUE so the "store balance only" path can
+  // UPSERT one migration row per student (re-import = set balance, idempotent).
+  // Drop the earlier non-unique index if a prior boot created it.
+  await db.execute(
+    sql`DROP INDEX IF EXISTS pbis_point_migrations_school_student_idx`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS pbis_point_migrations_school_student_unique ON pbis_point_migrations (school_id, student_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pbis_point_migrations_import_job_idx ON pbis_point_migrations (import_job_id)`,
+  );
+  await db.execute(
+    sql`ALTER TABLE pbis_entries ADD COLUMN IF NOT EXISTS import_job_id INTEGER`,
+  );
+  // Lets a "count as earned" migration rollback delete exactly the milestone
+  // suppression rows it pre-seeded, keeping the import fully reversible.
+  await db.execute(
+    sql`ALTER TABLE pbis_milestone_emails ADD COLUMN IF NOT EXISTS import_job_id INTEGER`,
+  );
+}
+
 export async function seedFastScoresIfEmpty() {
   await ensureFastScoresSchema();
   await ensureBenchmarkReteachLogSchema();
@@ -3800,6 +3841,7 @@ export async function seedFastScoresIfEmpty() {
   await ensureTourWalksSchema();
   await ensureDisplayLiveControlSchema();
   await ensureTicketingSchema();
+  await ensurePbisPointMigrationsSchema();
   // FAST history visibility window (Phase 1 of Historical FAST work).
   // Default 3 years, hard-capped 2..5 by the route validator.
   await db.execute(

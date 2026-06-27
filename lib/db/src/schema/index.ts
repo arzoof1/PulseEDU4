@@ -3,6 +3,7 @@ export * from "./schools";
 export * from "./hallPasses";
 export * from "./tardies";
 export * from "./pbisEntries";
+export * from "./pbisPointMigrations";
 export * from "./supportNotes";
 export * from "./accommodationLogs";
 export * from "./recordEdits";

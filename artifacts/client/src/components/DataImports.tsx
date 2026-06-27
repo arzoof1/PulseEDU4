@@ -24,7 +24,8 @@ type Kind =
   | "behavior"
   | "fast_scores"
   | "fast_prior_year"
-  | "fast_florida";
+  | "fast_florida"
+  | "points_migration";
 type Scope = "school" | "district";
 
 type PreviewResponse = {
@@ -56,6 +57,12 @@ type PreviewResponse = {
   // District-scope preview only.
   perSchool?: Array<{ schoolId: number; schoolName: string; rows: number }>;
   districtSchoolCount?: number;
+  // points_migration only — local_sis_id match summary from previewExtras.
+  pointsMigration?: {
+    matched: number;
+    unmatched: number;
+    totalPoints: number;
+  };
   // Roster-scope preview only. Present when one or more CSV rows have
   // a house_name we couldn't match to this school's houses. Non-blocking
   // — those rows still commit, falling back to the smallest-house
@@ -182,6 +189,14 @@ const FAST_PRIOR_YEAR_TARGETS: TargetDef[] = [
   { value: "subject", label: "Subject (ela/reading or math)", required: true },
   { value: "prior_year_score", label: "Prior-year final scale score (last year's PM3)", required: true },
   { value: "prior_year_bq", label: "Prior-year bottom-quartile flag", required: false },
+];
+
+// PBIS point-balance migration targets — match by local_sis_id (the only
+// id a foreign PBIS vendor exports) and a current point balance. Resolved
+// to the canonical student row server-side; FLEID never leaves the server.
+const POINTS_MIGRATION_TARGETS: TargetDef[] = [
+  { value: "local_sis_id", label: "Local SIS ID", required: true },
+  { value: "points", label: "Point balance", required: true },
 ];
 
 // Per-kind metadata. Each kind exposes a label, the targets dictionary
@@ -567,6 +582,58 @@ const KIND_DEFS: Record<Kind, KindDef> = {
       "Pick the school year on the upload step — the current year plus the three preceding years are allowed (for prior-year back-fill).",
       "Rollback DELETEs every benchmark response stamped with this import job, plus any scale-score row the same job created. PM values written by an earlier job survive.",
       "12 MB file limit. Split by grade if the state export exceeds it.",
+    ],
+  },
+  points_migration: {
+    label: "PBIS point balances (migrate from another app)",
+    targetsFor: () => POINTS_MIGRATION_TARGETS,
+    supportsDistrict: false,
+    helpText:
+      "Carry over each student's existing PBIS point balance when your school switches to PulseEDU from LiveSchool, ClassDojo, Kickboard, etc. One row per student.",
+    description:
+      "Moving to PulseEDU from another PBIS platform? Export each student's current point balance from your old app and drop the file here so their balance follows them. Match is by Local SIS ID (the same student number on your roster) — import the roster first if you haven't. Each row is one (student, balance). On the commit step you choose how the migrated points behave: 'Store balance only' makes them spendable in the School Store but keeps them OUT of house standings, leaderboards, and recognition counts (recommended — the points were earned on another system, so they shouldn't retroactively swing the house race); 'Count as earned' writes them as real PulseEDU recognitions so they DO count toward houses, leaderboards, and totals. Either way the import is fully reversible from History → Roll back, and redeeming points in the Store never reduces house totals.",
+    columns: [
+      {
+        target: "local_sis_id",
+        label: "Local SIS ID",
+        required: true,
+        acceptedHeaders: [
+          "local_sis_id",
+          "local_id",
+          "sis_id",
+          "student_id",
+          "student_number",
+          "studentnumber",
+          "id",
+          "studentid",
+        ],
+        notes:
+          "Your local student number (NOT the state FLEID). Must already exist in the PulseEDU roster — import rosters first.",
+      },
+      {
+        target: "points",
+        label: "Point balance",
+        required: true,
+        acceptedHeaders: [
+          "points",
+          "balance",
+          "point_balance",
+          "points_balance",
+          "current_balance",
+          "available_points",
+          "total_points",
+        ],
+        notes:
+          "Whole number ≥ 0 (commas allowed, e.g. 1,250). This is the student's current spendable balance in your old app.",
+      },
+    ],
+    sampleCsv:
+      "local_sis_id,points\n" + "100245,320\n" + "100377,1,250\n" + "100412,0\n",
+    notes: [
+      "School-scope only. Match is by Local SIS ID — rows with no matching student (or a duplicate SIS ID) are reported and skipped, never guessed.",
+      "Pick 'Store balance only' or 'Count as earned' on the commit step. Store-only is the default and never touches house standings or leaderboards.",
+      "Reversible from History → Roll back. 'Store balance only' is idempotent: re-importing a corrected file just updates each student's balance to the new number (it never stacks). 'Count as earned' writes recognitions, so re-running it adds again — don't re-import the same file.",
+      "Redeeming migrated points in the School Store never reduces house totals — spending and the house race are independent.",
     ],
   },
 };
@@ -998,6 +1065,12 @@ export default function DataImports({
   const [tab, setTab] = useState<"upload" | "history">("upload");
   const [kind, setKind] = useState<Kind>("assessments");
   const [scope, setScope] = useState<Scope>("school");
+  // points_migration only — how migrated points behave. Default false =
+  // "Store balance only" (spendable, excluded from houses/leaderboards).
+  const [pmCountsTowardHouses, setPmCountsTowardHouses] = useState(false);
+  // Label stamped on the migrated rows (staffName on earned entries, source
+  // on the ledger). Shown to staff in PBIS history; defaults if left blank.
+  const [pmSource, setPmSource] = useState("Imported balance");
   const kindDef = KIND_DEFS[kind];
   // Effective scope: rosters/behavior don't support district mode, so
   // force-clamp to school regardless of what the radio says. The toggle
@@ -1505,7 +1578,17 @@ export default function DataImports({
                 filename,
                 isHistorical: historical,
               })
-            : JSON.stringify({ csv: csvText, filename, mapping }),
+            : kind === "points_migration"
+              ? JSON.stringify({
+                  csv: csvText,
+                  filename,
+                  mapping,
+                  options: {
+                    countsTowardHouses: pmCountsTowardHouses,
+                    source: pmSource.trim() || undefined,
+                  },
+                })
+              : JSON.stringify({ csv: csvText, filename, mapping }),
       });
       const j = await r.json();
       if (!r.ok) {
@@ -2786,6 +2869,147 @@ export default function DataImports({
                       or changed. Blank cells preserve current values
                       (COALESCE), so partial files are safe.
                     </div>
+                  )}
+
+                  {/* points_migration only: match summary + the per-import
+                      behavior toggle (store-only vs count-as-earned) and a
+                      source label. The toggle is the heart of this importer
+                      — it decides whether migrated points stay out of the
+                      house race or land as real recognitions. */}
+                  {kind === "points_migration" && (
+                    <>
+                      {preview.pointsMigration && (
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "1rem",
+                            marginBottom: "1rem",
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          <Stat
+                            label="Students matched"
+                            value={preview.pointsMigration.matched}
+                            accent
+                          />
+                          <Stat
+                            label="No match (skip)"
+                            value={preview.pointsMigration.unmatched}
+                            warn
+                          />
+                          <Stat
+                            label="Points to migrate"
+                            value={preview.pointsMigration.totalPoints}
+                          />
+                        </div>
+                      )}
+                      <div
+                        style={{
+                          padding: "0.75rem 0.85rem",
+                          background: "rgba(59, 130, 246, 0.06)",
+                          border: "1px solid #3b82f6",
+                          borderRadius: 6,
+                          marginBottom: "1rem",
+                        }}
+                      >
+                        <div
+                          style={{ fontWeight: 600, marginBottom: "0.5rem" }}
+                        >
+                          How should these points behave?
+                        </div>
+                        <label
+                          style={{
+                            display: "flex",
+                            gap: "0.5rem",
+                            alignItems: "flex-start",
+                            marginBottom: "0.5rem",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <input
+                            type="radio"
+                            name="pmBehavior"
+                            checked={!pmCountsTowardHouses}
+                            onChange={() => setPmCountsTowardHouses(false)}
+                            style={{ marginTop: 3 }}
+                          />
+                          <span style={{ fontSize: 13 }}>
+                            <strong>Store balance only</strong>{" "}
+                            <span style={{ color: "var(--text-subtle)" }}>
+                              (recommended)
+                            </span>
+                            <br />
+                            Spendable in the School Store, but{" "}
+                            <strong>excluded</strong> from house standings,
+                            leaderboards, and recognition counts.
+                          </span>
+                        </label>
+                        <label
+                          style={{
+                            display: "flex",
+                            gap: "0.5rem",
+                            alignItems: "flex-start",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <input
+                            type="radio"
+                            name="pmBehavior"
+                            checked={pmCountsTowardHouses}
+                            onChange={() => setPmCountsTowardHouses(true)}
+                            style={{ marginTop: 3 }}
+                          />
+                          <span style={{ fontSize: 13 }}>
+                            <strong>Count as earned</strong>
+                            <br />
+                            Written as real PulseEDU recognitions — these{" "}
+                            <strong>do</strong> count toward houses,
+                            leaderboards, and totals.
+                          </span>
+                        </label>
+                        <div
+                          style={{
+                            marginTop: "0.75rem",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "0.25rem",
+                          }}
+                        >
+                          <label
+                            htmlFor="pm-source"
+                            style={{ fontSize: 13, fontWeight: 600 }}
+                          >
+                            Source label
+                          </label>
+                          <input
+                            id="pm-source"
+                            type="text"
+                            value={pmSource}
+                            onChange={(e) => setPmSource(e.target.value)}
+                            placeholder="e.g. LiveSchool"
+                            maxLength={80}
+                            style={{
+                              padding: "0.4rem 0.55rem",
+                              borderRadius: 6,
+                              border: "1px solid var(--border, #2a3447)",
+                              background: "var(--surface, #0f1729)",
+                              color: "var(--text)",
+                              fontSize: 13,
+                              maxWidth: 280,
+                            }}
+                          />
+                          <span
+                            style={{
+                              fontSize: 12,
+                              color: "var(--text-subtle)",
+                            }}
+                          >
+                            Shown in PBIS history so staff know where the
+                            balance came from.
+                          </span>
+                        </div>
+                      </div>
+                    </>
                   )}
 
                   {scope === "district" &&
