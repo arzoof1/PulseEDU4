@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import { studentFetch, setStudentToken, type StudentMe } from "./api";
+import {
+  studentFetch,
+  setStudentToken,
+  getSchoolId,
+  type StudentMe,
+} from "./api";
 
 interface DemoStudent {
   id: number;
@@ -25,9 +30,11 @@ export default function StudentLogin({
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/api/student-auth/sso/available", {
-          credentials: "include",
-        });
+        const schoolId = getSchoolId();
+        const res = await fetch(
+          `/api/student-auth/sso/available?schoolId=${schoolId}`,
+          { credentials: "include" },
+        );
         if (!res.ok) return;
         const data = (await res.json()) as {
           ssoConfigured: boolean;
@@ -36,9 +43,10 @@ export default function StudentLogin({
         setSsoConfigured(data.ssoConfigured);
         setDemoAllowed(data.demoLoginAllowed);
         if (data.demoLoginAllowed) {
-          const ds = await fetch("/api/student-auth/demo-students?schoolId=1", {
-            credentials: "include",
-          });
+          const ds = await fetch(
+            `/api/student-auth/demo-students?schoolId=${schoolId}`,
+            { credentials: "include" },
+          );
           if (ds.ok) {
             const body = (await ds.json()) as { students: DemoStudent[] };
             setDemoStudents(body.students);
@@ -54,9 +62,10 @@ export default function StudentLogin({
     setBusy(true);
     setError(undefined);
     try {
-      const res = await fetch("/api/student-auth/sso/start?schoolId=1", {
-        credentials: "include",
-      });
+      const res = await fetch(
+        `/api/student-auth/sso/start?schoolId=${getSchoolId()}`,
+        { credentials: "include" },
+      );
       const data = (await res.json().catch(() => null)) as
         | { url?: string; message?: string }
         | null;

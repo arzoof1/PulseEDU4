@@ -175,6 +175,22 @@ export interface StudentStore {
   orders: StoreOrder[];
 }
 
+// The tenant this student session is for. Read from the `?schoolId=` query
+// param so a district can hand out per-school portal links
+// (e.g. `/student?schoolId=2`). Defaults to 1 for the single-tenant install.
+// This MUST be threaded to every pre-auth endpoint (sso/available, sso/start,
+// demo-students) so school-2+ students route through their own SSO config and
+// tenant-scoped identity resolution — never school 1's.
+export function getSchoolId(): number {
+  try {
+    const raw = new URLSearchParams(window.location.search).get("schoolId");
+    const n = raw == null ? NaN : Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  } catch {
+    return 1;
+  }
+}
+
 export function appBase(): string {
   return import.meta.env.BASE_URL || "/";
 }
