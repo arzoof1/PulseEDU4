@@ -38,3 +38,26 @@ therefore *also* excludes admins.
 confirm the destination group's `show*` flag admits all of them (broaden additively if
 not), and update `NAV_GROUP_OWNERSHIP`. Don't leave the source group's `show*` clause if
 it becomes the source of an empty rendered group for some role.
+
+## Folding a redundant entry point (Phase 2)
+
+When the SAME capability has two sidebar entry points and one audience can reach it
+through both, gate the redundant row out for that audience instead of deleting it.
+Concretely: the standalone read-only "School Store" row was visible to everyone, but
+every `canAccessPbisHub` user is also `canEditSchoolStore` (identical role set) and so
+already reaches the store via the PBIS Hub's manage tile. Gating the standalone row
+`effectiveFeatures.SchoolStore && !canAccessPbisHub` removes it for hub-havers while
+keeping it for non-hub teachers (their only catalog entry) — no access lost.
+
+**Why:** "fold hubs" means one canonical entry point PER AUDIENCE, not deleting the
+page. The `schoolStore` activeSection + its `NAV_GROUP_OWNERSHIP.recognition` entry must
+stay so deep links still render + force-expand the group.
+
+**Companion trap — stale `show<Group>` OR-terms make empty headers.** A group's `show*`
+flag must stay in lockstep with the items that can actually render inside it. After PBIS
+Points was promoted to Quick Access, `showRecognition` still OR-ed `effectiveFeatures.Pbis`
+even though no Recognition row is gated on it — a Pbis-on / no-hub / store-off user saw an
+empty "Recognition" header. Fix: make the flag exactly the OR of its children's gates
+(`effectiveFeatures.SchoolStore || canAccessPbisHub`). **How to apply:** whenever you
+add/remove/move a row in a group, re-derive that group's `show*` as the disjunction of
+the surviving rows' gates.

@@ -11025,10 +11025,15 @@ function App() {
         // only renders if at least one item inside is visible to the
         // current user — no empty headers. activeSection keys are
         // unchanged, this is a cosmetic regrouping only.
+        // Recognition's only rows are the standalone School Store
+        // (effectiveFeatures.SchoolStore && !canAccessPbisHub) and the
+        // PBIS Hub (canAccessPbisHub), so the group is non-empty exactly
+        // when (SchoolStore feature on) OR (hub access). The old
+        // effectiveFeatures.Pbis term is stale — PBIS Points moved to
+        // Quick Access — and could render an empty group header, so it's
+        // dropped here to keep the gate in lockstep with the children.
         const showRecognition =
-          effectiveFeatures.Pbis ||
-          effectiveFeatures.SchoolStore ||
-          canAccessPbisHub;
+          effectiveFeatures.SchoolStore || canAccessPbisHub;
         const showBehaviorSupport =
           effectiveFeatures.LogIntervention ||
           effectiveFeatures.RequestPullout ||
@@ -11320,7 +11325,18 @@ function App() {
               >
                 {/* PBIS Points was promoted to Quick Access — kept out
                     of Recognition to avoid duplication. */}
+                {/* Phase 2 (hub fold): the standalone read-only School
+                    Store row is only shown to staff who CANNOT open the
+                    PBIS Hub. Everyone with canAccessPbisHub also has
+                    canEditSchoolStore (identical role set), so they reach
+                    the store via the Hub's "School Store" manage tile —
+                    the sidebar row is redundant for them. Non-hub staff
+                    (regular teachers) keep this row as their only catalog
+                    entry point, so no access is removed. The schoolStore
+                    activeSection + Recognition force-expand ownership stay
+                    intact for deep links. */}
                 {effectiveFeatures.SchoolStore &&
+                  !canAccessPbisHub &&
                   renderNavItem({
                     key: "schoolStore",
                     label: "School Store",
