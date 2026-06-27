@@ -665,6 +665,113 @@ router.post("/school-store/redemptions/:rid/fulfill", async (req, res) => {
   await sendRedeemResult(res, schoolId, result);
 });
 
+// ---- BULK APPROVE / FULFILL (Core Team) ----
+// Rapid-fire fulfillment from the Redemption Log: act on many rows in one
+// round-trip. Each row reuses the SAME per-row helper (approveRedemption /
+// fulfillRedemption) so all validation, the per-student lock, and the
+// stock/points accounting are identical to the single-row path. Rows that
+// can't make the requested transition (already changed, cancelled, etc.) are
+// reported as skipped rather than failing the whole batch. The response is
+// always 200 with a per-row breakdown so the client can show "N done, M
+// skipped".
+function parseRedemptionIds(
+  req: import("express").Request,
+  res: import("express").Response,
+): number[] | null {
+  const raw = (req.body as { ids?: unknown })?.ids;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    res.status(400).json({ error: "Provide a non-empty ids array" });
+    return null;
+  }
+  if (raw.length > 500) {
+    res.status(400).json({ error: "Too many ids in one batch (max 500)" });
+    return null;
+  }
+  const out: number[] = [];
+  for (const v of raw) {
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 1) {
+      res.status(400).json({ error: "Invalid redemption id in batch" });
+      return null;
+    }
+    out.push(n);
+  }
+  return Array.from(new Set(out));
+}
+
+type BulkRowResult =
+  | { id: number; ok: true }
+  | { id: number; ok: false; code: string; message: string };
+
+router.post("/school-store/redemptions/bulk-approve", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requireFulfillmentAccess(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const ids = parseRedemptionIds(req, res);
+  if (!ids) return;
+
+  const results: BulkRowResult[] = [];
+  let ok = 0;
+  for (const rid of ids) {
+    const result = await approveRedemption({
+      schoolId,
+      redemptionId: rid,
+      staffId: staff.id,
+    });
+    if (result.ok) {
+      ok++;
+      results.push({ id: rid, ok: true });
+    } else {
+      results.push({
+        id: rid,
+        ok: false,
+        code: result.code,
+        message: result.message,
+      });
+    }
+  }
+  res.json({ results, summary: { ok, failed: ids.length - ok } });
+});
+
+router.post("/school-store/redemptions/bulk-fulfill", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requireFulfillmentAccess(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const ids = parseRedemptionIds(req, res);
+  if (!ids) return;
+
+  const results: BulkRowResult[] = [];
+  let ok = 0;
+  for (const rid of ids) {
+    // Bulk fulfill from the log records no delivery class — that's the
+    // Distribution tab's job. Pass null delivery fields (the single-row
+    // helper already accepts them).
+    const result = await fulfillRedemption({
+      schoolId,
+      redemptionId: rid,
+      staffId: staff.id,
+      deliverTeacherName: null,
+      deliverPeriod: null,
+    });
+    if (result.ok) {
+      ok++;
+      results.push({ id: rid, ok: true });
+    } else {
+      results.push({
+        id: rid,
+        ok: false,
+        code: result.code,
+        message: result.message,
+      });
+    }
+  }
+  res.json({ results, summary: { ok, failed: ids.length - ok } });
+});
+
 // ---- CANCEL / REFUND (Core Team) ----
 router.post("/school-store/redemptions/:rid/cancel", async (req, res) => {
   const staff = await loadStaff(req, res);

@@ -513,6 +513,12 @@ function LogPanel({ catalog }: { catalog: CatalogItem[] }) {
   const [itemId, setItemId] = useState<string>("");
   const [status, setStatus] = useState<string>("");
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [confirming, setConfirming] = useState<null | "approve" | "fulfill">(
+    null,
+  );
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -541,6 +547,111 @@ function LogPanel({ catalog }: { catalog: CatalogItem[] }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // A row is "actionable" only while it can still advance (needs approval, or
+  // ready to prep). Fulfilled/cancelled rows are never selectable.
+  const isActionable = (s: string) =>
+    s === "pending_approval" || s === "pending";
+
+  // Keep the selection in sync with the current rows — drop ids that scrolled
+  // out of the filter or already changed status, so a stale selection can
+  // never act on a row the dean can no longer see.
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set<number>();
+      for (const r of rows) {
+        if (isActionable(r.status) && prev.has(r.id)) next.add(r.id);
+      }
+      return next.size === prev.size ? prev : next;
+    });
+    setConfirming(null);
+  }, [rows]);
+
+  const approvableSelected = useMemo(
+    () =>
+      rows.filter((r) => selected.has(r.id) && r.status === "pending_approval"),
+    [rows, selected],
+  );
+  const fulfillableSelected = useMemo(
+    () => rows.filter((r) => selected.has(r.id) && r.status === "pending"),
+    [rows, selected],
+  );
+  const actionableRows = useMemo(
+    () => rows.filter((r) => isActionable(r.status)),
+    [rows],
+  );
+  const allActionableSelected =
+    actionableRows.length > 0 &&
+    actionableRows.every((r) => selected.has(r.id));
+  const someActionableSelected = actionableRows.some((r) =>
+    selected.has(r.id),
+  );
+
+  const toggleRow = (id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    setConfirming(null);
+  };
+  const toggleAll = () => {
+    setConfirming(null);
+    setSelected(
+      allActionableSelected
+        ? new Set()
+        : new Set(actionableRows.map((r) => r.id)),
+    );
+  };
+
+  async function runBulk(action: "approve" | "fulfill") {
+    const targets = action === "approve" ? approvableSelected : fulfillableSelected;
+    const ids = targets.map((r) => r.id);
+    if (ids.length === 0) {
+      setConfirming(null);
+      return;
+    }
+    setBulkBusy(true);
+    setNotice(null);
+    // Optimistic: flip the affected rows immediately for a snappy "slide down
+    // the list" feel; load() below reconciles with server truth.
+    const optimisticStatus = action === "approve" ? "pending" : "fulfilled";
+    setRows((prev) =>
+      prev.map((r) =>
+        ids.includes(r.id) ? { ...r, status: optimisticStatus } : r,
+      ),
+    );
+    try {
+      const r = await authFetch(
+        `/api/school-store/redemptions/bulk-${action}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids }),
+        },
+      );
+      const j = (await r.json().catch(() => ({}))) as {
+        error?: string;
+        summary?: { ok: number; failed: number };
+      };
+      if (!r.ok) {
+        setNotice(j.error ?? "Bulk action failed.");
+      } else if (j.summary && j.summary.failed > 0) {
+        setNotice(
+          `${j.summary.ok} done, ${j.summary.failed} skipped (already changed).`,
+        );
+      }
+    } catch {
+      setNotice("Bulk action failed.");
+    } finally {
+      setConfirming(null);
+      setSelected(new Set());
+      setBulkBusy(false);
+      await load();
+    }
+  }
 
   async function act(redemptionId: number, action: "approve" | "fulfill") {
     setBusyId(redemptionId);
@@ -605,6 +716,153 @@ function LogPanel({ catalog }: { catalog: CatalogItem[] }) {
         </label>
       </div>
 
+      {notice && (
+        <div
+          style={{
+            ...card,
+            padding: "0.6rem 0.9rem",
+            borderColor: "#fcd34d",
+            background: "#fffbeb",
+            color: "#92400e",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: "0.75rem",
+          }}
+        >
+          <span style={{ fontSize: "0.88rem" }}>{notice}</span>
+          <button
+            type="button"
+            onClick={() => setNotice(null)}
+            style={{
+              border: "none",
+              background: "transparent",
+              color: "#92400e",
+              cursor: "pointer",
+              fontWeight: 700,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {someActionableSelected && (
+        <div
+          style={{
+            position: "sticky",
+            top: 8,
+            zIndex: 5,
+            ...card,
+            padding: "0.6rem 0.9rem",
+            background: "var(--card, #fff)",
+            boxShadow: "0 4px 12px rgba(15,23,42,0.08)",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.75rem",
+            flexWrap: "wrap",
+          }}
+        >
+          <span style={{ fontWeight: 600 }}>
+            {selected.size} selected
+          </span>
+          {confirming === null ? (
+            <>
+              {approvableSelected.length > 0 && (
+                <button
+                  type="button"
+                  disabled={bulkBusy}
+                  onClick={() => setConfirming("approve")}
+                  style={{
+                    padding: "0.4rem 0.9rem",
+                    borderRadius: 8,
+                    border: "none",
+                    background: "#2563eb",
+                    color: "#fff",
+                    fontWeight: 600,
+                    cursor: bulkBusy ? "wait" : "pointer",
+                  }}
+                >
+                  Approve {approvableSelected.length}
+                </button>
+              )}
+              {fulfillableSelected.length > 0 && (
+                <button
+                  type="button"
+                  disabled={bulkBusy}
+                  onClick={() => setConfirming("fulfill")}
+                  style={{
+                    padding: "0.4rem 0.9rem",
+                    borderRadius: 8,
+                    border: "none",
+                    background: "#15803d",
+                    color: "#fff",
+                    fontWeight: 600,
+                    cursor: bulkBusy ? "wait" : "pointer",
+                  }}
+                >
+                  Mark {fulfillableSelected.length} fulfilled
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={bulkBusy}
+                onClick={() => setSelected(new Set())}
+                style={{
+                  padding: "0.4rem 0.8rem",
+                  borderRadius: 8,
+                  border: "1px solid var(--border, #e2e8f0)",
+                  background: "transparent",
+                  color: "var(--text, #0f172a)",
+                  cursor: "pointer",
+                }}
+              >
+                Clear
+              </button>
+            </>
+          ) : (
+            <>
+              <span style={{ fontWeight: 600 }}>
+                {confirming === "approve"
+                  ? `Approve ${approvableSelected.length} redemption${approvableSelected.length === 1 ? "" : "s"}?`
+                  : `Mark ${fulfillableSelected.length} redemption${fulfillableSelected.length === 1 ? "" : "s"} fulfilled?`}
+              </span>
+              <button
+                type="button"
+                disabled={bulkBusy}
+                onClick={() => void runBulk(confirming)}
+                style={{
+                  padding: "0.4rem 0.9rem",
+                  borderRadius: 8,
+                  border: "none",
+                  background: confirming === "approve" ? "#2563eb" : "#15803d",
+                  color: "#fff",
+                  fontWeight: 600,
+                  cursor: bulkBusy ? "wait" : "pointer",
+                }}
+              >
+                {bulkBusy ? "Working…" : "Confirm"}
+              </button>
+              <button
+                type="button"
+                disabled={bulkBusy}
+                onClick={() => setConfirming(null)}
+                style={{
+                  padding: "0.4rem 0.8rem",
+                  borderRadius: 8,
+                  border: "1px solid var(--border, #e2e8f0)",
+                  background: "transparent",
+                  color: "var(--text, #0f172a)",
+                  cursor: bulkBusy ? "wait" : "pointer",
+                }}
+              >
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       {loading ? (
         <p style={{ color: "var(--muted, #64748b)" }}>Loading…</p>
       ) : error ? (
@@ -626,6 +884,21 @@ function LogPanel({ catalog }: { catalog: CatalogItem[] }) {
                   fontSize: "0.82rem",
                 }}
               >
+                <th style={{ padding: "10px 12px", width: 36 }}>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all actionable rows"
+                    checked={allActionableSelected}
+                    disabled={actionableRows.length === 0}
+                    ref={(el) => {
+                      if (el)
+                        el.indeterminate =
+                          someActionableSelected && !allActionableSelected;
+                    }}
+                    onChange={toggleAll}
+                    style={{ cursor: "pointer" }}
+                  />
+                </th>
                 <th style={{ padding: "10px 12px" }}>Student</th>
                 <th style={{ padding: "10px 12px" }}>SIS ID</th>
                 <th style={{ padding: "10px 12px" }}>Item</th>
@@ -640,8 +913,24 @@ function LogPanel({ catalog }: { catalog: CatalogItem[] }) {
               {rows.map((r) => (
                 <tr
                   key={r.id}
-                  style={{ borderTop: "1px solid var(--border, #e2e8f0)" }}
+                  style={{
+                    borderTop: "1px solid var(--border, #e2e8f0)",
+                    background: selected.has(r.id)
+                      ? "rgba(37,99,235,0.06)"
+                      : undefined,
+                  }}
                 >
+                  <td style={{ padding: "10px 12px" }}>
+                    {isActionable(r.status) && (
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${r.studentName}`}
+                        checked={selected.has(r.id)}
+                        onChange={() => toggleRow(r.id)}
+                        style={{ cursor: "pointer" }}
+                      />
+                    )}
+                  </td>
                   <td style={{ padding: "10px 12px" }}>
                     {r.studentName}
                     {r.grade !== null && (
