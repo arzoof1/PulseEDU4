@@ -20,6 +20,14 @@ resolution is the one place you don't yet have `req.schoolId`, so the tenant
 must come from the SSO flow state, not the matched row.
 
 **How to apply:** any new external-identity sign-in (SSO/OIDC/magic-link that
-matches on a SIS id). The client SSO button must pass `?schoolId=` to
-`/sso/start` for the scoping to engage; without it the code falls back to
-unscoped lookup but still rejects ambiguity.
+matches on a SIS id). `schoolId` is MANDATORY: `/sso/start` returns 400 without
+it, `/sso/callback` returns 400 if the session lost it, and there is NO unscoped
+fallback — the roster lookup is always `and(eq(col,value), eq(schoolId,...))`.
+The client SSO button must pass `?schoolId=` to `/sso/start`.
+
+Also resolve the IdP config PER SCHOOL, not a global `limit(1)`:
+`schoolId -> schools.name -> district_integrations.school_name` (fall back to
+the `"default"` row for single-tenant installs). The callback is a top-level
+browser redirect, so on success establish the session and `res.redirect` into
+the SPA — do not return JSON. Factor the session-establish step into a helper
+shared with the JSON demo/login path so both issue sessions identically.

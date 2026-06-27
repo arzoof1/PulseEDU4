@@ -3,6 +3,7 @@ import { and, eq, isNotNull, sql } from "drizzle-orm";
 import {
   db,
   studentsTable,
+  schoolsTable,
   districtIntegrationsTable,
 } from "@workspace/db";
 import { getSsoAdapter } from "@workspace/sis-adapters";
@@ -55,28 +56,28 @@ function publicStudent(row: typeof studentsTable.$inferSelect) {
   };
 }
 
-// Shared sign-in: regenerate the session, stamp the student id + last-login,
-// and return the public student plus a fresh student bearer token. Used by
-// BOTH the SSO callback and the guarded demo login so the session/token
-// issuance path is identical (and fully tested via the demo login).
-function signInStudent(
+// Regenerate the session, stamp the student id + last-login, and invoke `done`
+// once the session is durably saved. Shared by the JSON sign-in (demo login)
+// and the SSO callback (which redirects instead of returning JSON), so the
+// session/token issuance path is identical and fully exercised by the demo
+// login. Never carries over a staff/parent session in the same browser.
+function establishStudentSession(
   req: Request,
-  res: Response,
   row: typeof studentsTable.$inferSelect,
+  done: (err?: unknown) => void,
 ): void {
   req.session.regenerate((err) => {
     if (err) {
-      res.status(500).json({ error: "Could not start session" });
+      done(err);
       return;
     }
     req.session.studentId = row.id;
-    // Never carry over a staff/parent session in the same browser.
     delete req.session.staffId;
     delete req.session.parentId;
     delete req.session.activeSchoolId;
     req.session.save(async (saveErr) => {
       if (saveErr) {
-        res.status(500).json({ error: "Could not save session" });
+        done(saveErr);
         return;
       }
       try {
@@ -87,10 +88,26 @@ function signInStudent(
       } catch {
         /* last-login stamp is best-effort */
       }
-      res.json({
-        ...publicStudent(row),
-        authToken: issueStudentAuthToken(row.id),
-      });
+      done();
+    });
+  });
+}
+
+// JSON sign-in: returns the public student plus a fresh bearer token. Used by
+// the guarded demo login.
+function signInStudent(
+  req: Request,
+  res: Response,
+  row: typeof studentsTable.$inferSelect,
+): void {
+  establishStudentSession(req, row, (err) => {
+    if (err) {
+      res.status(500).json({ error: "Could not start session" });
+      return;
+    }
+    res.json({
+      ...publicStudent(row),
+      authToken: issueStudentAuthToken(row.id),
     });
   });
 }
@@ -110,19 +127,30 @@ router.use(async (req, _res, next) => {
   next();
 });
 
-// Resolve the district SSO adapter for a school (by school row → its district
-// integrations config). Returns null when no SSO provider is configured.
+// Resolve the district SSO adapter for a SPECIFIC school. `district_integrations`
+// is keyed by `school_name`; we map schoolId → schools.name and prefer that
+// school's row, falling back to the "default" row (single-tenant installs).
+// Returns null when no SSO provider is configured for the school. Resolving by
+// school (not a global `limit 1`) is required so multi-school/district installs
+// route each student to the correct IdP config.
 async function resolveSsoForSchool(schoolId: number) {
-  // district_integrations is keyed by schoolName ("default" for single-tenant
-  // installs). We read the single default row; multi-district installs would
-  // route by school here. Kept simple and explicit.
-  const [row] = await db
+  const [school] = await db
+    .select({ name: schoolsTable.name })
+    .from(schoolsTable)
+    .where(eq(schoolsTable.id, schoolId))
+    .limit(1);
+  if (!school) return null;
+
+  const rows = await db
     .select({
+      schoolName: districtIntegrationsTable.schoolName,
       provider: districtIntegrationsTable.ssoProvider,
       config: districtIntegrationsTable.ssoConfig,
     })
-    .from(districtIntegrationsTable)
-    .limit(1);
+    .from(districtIntegrationsTable);
+  const row =
+    rows.find((r) => r.schoolName === school.name) ??
+    rows.find((r) => r.schoolName === "default");
   if (!row || row.provider === "none") return null;
   return getSsoAdapter(
     row.provider as Parameters<typeof getSsoAdapter>[0],
@@ -135,22 +163,15 @@ async function resolveSsoForSchool(schoolId: number) {
 // yet (the documented external prerequisite).
 router.get("/student-auth/sso/start", async (req, res) => {
   try {
-    // Single-tenant default: resolve the one configured SSO provider. (Schools
-    // pick their provider at the district level, not per student.)
-    const [row] = await db
-      .select({
-        provider: districtIntegrationsTable.ssoProvider,
-        config: districtIntegrationsTable.ssoConfig,
-      })
-      .from(districtIntegrationsTable)
-      .limit(1);
-    const adapter =
-      row && row.provider !== "none"
-        ? getSsoAdapter(
-            row.provider as Parameters<typeof getSsoAdapter>[0],
-            row.config ?? {},
-          )
-        : null;
+    // schoolId is REQUIRED: it both selects the school's IdP config and scopes
+    // the callback's roster lookup to a single tenant. Without it we cannot
+    // safely resolve which student record to bind, so we refuse to start.
+    const schoolId = Number(req.query.schoolId);
+    if (!Number.isFinite(schoolId)) {
+      res.status(400).json({ error: "A school is required to sign in." });
+      return;
+    }
+    const adapter = await resolveSsoForSchool(schoolId);
     if (!adapter) {
       res.status(501).json({
         error: "not_configured",
@@ -164,10 +185,7 @@ router.get("/student-auth/sso/start", async (req, res) => {
     req.session.studentSsoState = state;
     // Remember which school this sign-in is for so the callback can scope the
     // roster lookup to a SINGLE tenant (identifiers are not globally unique).
-    const schoolId = Number(req.query.schoolId);
-    req.session.studentSsoSchoolId = Number.isFinite(schoolId)
-      ? schoolId
-      : undefined;
+    req.session.studentSsoSchoolId = schoolId;
     const url = adapter.buildAuthorizeUrl(state);
     req.session.save(() => {
       res.json({ url });
@@ -201,26 +219,18 @@ router.get("/student-auth/sso/callback", async (req, res) => {
     return;
   }
   delete req.session.studentSsoState;
-  // The tenant this sign-in is scoped to (captured at /sso/start). Roster
-  // identifiers are NOT globally unique, so every lookup below is scoped by it.
+  // The tenant this sign-in is scoped to (captured at /sso/start). REQUIRED:
+  // roster identifiers are NOT globally unique, so without a school we cannot
+  // safely bind a student record. There is NO unscoped fallback.
   const ssoSchoolId = req.session.studentSsoSchoolId ?? null;
   delete req.session.studentSsoSchoolId;
+  if (ssoSchoolId === null) {
+    res.status(400).json({ error: "Invalid sign-in session. Please try again." });
+    return;
+  }
 
   try {
-    const [row] = await db
-      .select({
-        provider: districtIntegrationsTable.ssoProvider,
-        config: districtIntegrationsTable.ssoConfig,
-      })
-      .from(districtIntegrationsTable)
-      .limit(1);
-    const adapter =
-      row && row.provider !== "none"
-        ? getSsoAdapter(
-            row.provider as Parameters<typeof getSsoAdapter>[0],
-            row.config ?? {},
-          )
-        : null;
+    const adapter = await resolveSsoForSchool(ssoSchoolId);
     if (!adapter) {
       res
         .status(501)
@@ -236,10 +246,7 @@ router.get("/student-auth/sso/callback", async (req, res) => {
     const scoped = (
       col: typeof studentsTable.ssoExternalId | typeof studentsTable.localSisId,
       value: string,
-    ) =>
-      ssoSchoolId === null
-        ? eq(col, value)
-        : and(eq(col, value), eq(studentsTable.schoolId, ssoSchoolId));
+    ) => and(eq(col, value), eq(studentsTable.schoolId, ssoSchoolId));
 
     let student: typeof studentsTable.$inferSelect | undefined;
     const byExternal = await db
@@ -294,7 +301,18 @@ router.get("/student-auth/sso/callback", async (req, res) => {
       });
       return;
     }
-    signInStudent(req, res, student);
+    // SSO callback is a top-level BROWSER redirect target, not an XHR — so on
+    // success we establish the session and redirect into the SPA portal. The
+    // student lands on /student; StudentApp's /me call re-establishes the
+    // bearer token from the fresh session cookie.
+    establishStudentSession(req, student, (err) => {
+      if (err) {
+        logger.error({ err }, "student SSO session establish failed");
+        res.redirect("/student?ssoError=" + encodeURIComponent("Could not complete sign-in. Please try again."));
+        return;
+      }
+      res.redirect("/student");
+    });
   } catch (err) {
     if (err instanceof AdapterNotImplementedError) {
       res.status(501).json({ error: "District single sign-on isn't set up yet." });
@@ -307,13 +325,13 @@ router.get("/student-auth/sso/callback", async (req, res) => {
 
 // GET /api/student-auth/sso/available — lets the login page know whether the
 // real SSO button should be shown and whether the demo login is offered.
-router.get("/student-auth/sso/available", async (_req, res) => {
-  const [row] = await db
-    .select({ provider: districtIntegrationsTable.ssoProvider })
-    .from(districtIntegrationsTable)
-    .limit(1);
+router.get("/student-auth/sso/available", async (req, res) => {
+  // Per-school: the login page asks "is ClassLink set up for THIS school?".
+  // Defaults to school 1 (single-tenant default, matches the demo flow).
+  const schoolId = Number(req.query.schoolId) || 1;
+  const adapter = await resolveSsoForSchool(schoolId).catch(() => null);
   res.json({
-    ssoConfigured: Boolean(row && row.provider !== "none"),
+    ssoConfigured: Boolean(adapter),
     demoLoginAllowed: demoLoginAllowed(),
   });
 });

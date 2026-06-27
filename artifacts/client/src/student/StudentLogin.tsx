@@ -54,7 +54,7 @@ export default function StudentLogin({
     setBusy(true);
     setError(undefined);
     try {
-      const res = await fetch("/api/student-auth/sso/start", {
+      const res = await fetch("/api/student-auth/sso/start?schoolId=1", {
         credentials: "include",
       });
       const data = (await res.json().catch(() => null)) as
