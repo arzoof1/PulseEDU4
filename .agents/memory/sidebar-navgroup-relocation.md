@@ -118,3 +118,29 @@ the destination group's `show*` admits its full audience, add the key to
 NAV_GROUP_OWNERSHIP if it had no owner (houseRankings had none), and expect an interim
 state where the item shows in BOTH Quick Access and its group until the pinnable layer
 removes the static list.
+
+## Pinnable-favorites no-orphan invariant (Phase 4b)
+
+Converting the static Quick Access strip into a per-user pinnable favorites layer
+(localStorage `pulseedu.quickaccess.${userId}.v1`, cap 5, inline "Customize"
+checklist) re-opens the sole-home trap: if a user can UNPIN an item, that item
+needs a permanent home elsewhere or unpinning = capability removal. Phase 4a only
+gave group homes to 4 of the 8 pinnables (pbis, houseRankings, requestPullout,
+accommodations). The OTHER 4 (hallPasses, teacherRoster, studentLookup,
+partneringWithParents) have NO sidebar group home — their permanent home is the
+**always-on Tile Home launcher** (`goToTileHome()` header button in
+`.header-controls`, never gated/pinnable → full-screen `<TileHome tiles onPick>`;
+every pinnable key is a navigable tile).
+
+**The actual invariant to enforce: each pinnable item's pin gate (`canShow`) must
+IMPLY its Tile Home tile is visible.** Audit gate-by-gate against the Tile Home
+`add(condition, {...})` block. They matched for 7/8; the gap was hallPasses —
+its tile is gated `effectiveFeatures.HallPasses !== false` but the old Quick
+Access rendered it unconditionally, so canShow had to be tightened from `true`
+to `HallPasses !== false` (a deliberate, documented tightening). **Why:** the
+no-orphan rule outranks "preserve gate verbatim" at the feature-off edge — an
+item you can pin but whose only permanent home (the tile) is hidden orphans on
+unpin. **How to apply:** don't assume a 4a-style group home exists for every
+shortcut; the Tile Home is a legitimate permanent home, but only if its tile
+gate is a superset of the pin gate. The first architect pass FAILED because it
+only grepped grouped `renderNavItem` calls and missed the Tile Home launcher.

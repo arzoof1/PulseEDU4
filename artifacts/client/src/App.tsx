@@ -4126,6 +4126,146 @@ function NavGroup({
   );
 }
 
+// Phase 4b — Quick Access is a per-user PINNABLE favorites strip (max 5),
+// persisted in localStorage so it survives reload and is scoped per user
+// (two staff sharing an iPad don't inherit each other's favorites). Every
+// pinnable destination has a permanent home OUTSIDE this strip — either a
+// themed accordion (pbis/houseRankings/requestPullout/accommodations, Phase
+// 4a) or the always-on Tile Home launcher (hallPasses/teacherRoster/
+// studentLookup/partneringWithParents). Each item's pin gate matches its
+// Tile Home tile gate, so unpinning never makes a destination unreachable.
+// First-time users are seeded a familiar
+// default set. The smart/special Quick Access items (AST, Comp Time,
+// Verify Pullout, Pickup, Spotlight) are NOT pinnable — they stay rendered
+// unconditionally by the parent after this favorites block.
+function QuickAccessFavorites<
+  S extends { key: string; label: string; icon: React.ReactNode },
+>({
+  userId,
+  items,
+  renderItem,
+}: {
+  userId: string;
+  items: Array<S & { canShow: boolean }>;
+  renderItem: (s: S) => React.ReactNode;
+}) {
+  const storageKey = `pulseedu.quickaccess.${userId}.v1`;
+  const MAX_PINS = 5;
+  // Seeded defaults for a first-time user (no stored value). Filtered to
+  // what the user can actually see and capped at MAX_PINS below.
+  const DEFAULT_PINS = [
+    "hallPasses",
+    "teacherRoster",
+    "studentLookup",
+    "requestPullout",
+    "pbis",
+  ];
+  const available = items.filter((it) => it.canShow);
+  const availableKeys = new Set(available.map((it) => it.key));
+  const [pins, setPins] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw === null) {
+        return DEFAULT_PINS.filter((k) => availableKeys.has(k)).slice(
+          0,
+          MAX_PINS,
+        );
+      }
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((k): k is string => typeof k === "string");
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  });
+  const [editing, setEditing] = useState(false);
+  // Persist on every change. Pins for a temporarily-off feature are kept
+  // in storage (we filter at render) so the pin returns if the feature
+  // comes back — only the user's explicit unpin removes it.
+  useEffect(() => {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(pins));
+    } catch {
+      /* ignore quota / private-mode failures */
+    }
+  }, [storageKey, pins]);
+  // Render pinned items in the canonical master order (not pin-click
+  // order) for a stable layout, filtered to what's currently visible and
+  // hard-capped at MAX_PINS.
+  const visiblePinCount = pins.filter((k) => availableKeys.has(k)).length;
+  const pinnedToRender = available
+    .filter((it) => pins.includes(it.key))
+    .slice(0, MAX_PINS);
+  const togglePin = (key: string) => {
+    setPins((prev) => {
+      if (prev.includes(key)) return prev.filter((k) => k !== key);
+      if (prev.filter((k) => availableKeys.has(k)).length >= MAX_PINS) {
+        return prev;
+      }
+      return [...prev, key];
+    });
+  };
+  return (
+    <>
+      <div className="section-label quick-access-label">
+        <span>Quick Access</span>
+        {available.length > 0 && (
+          <button
+            type="button"
+            className="quick-access-edit-btn"
+            onClick={() => setEditing((v) => !v)}
+            aria-expanded={editing}
+            title="Choose which shortcuts appear in Quick Access"
+          >
+            {editing ? "Done" : "Customize"}
+          </button>
+        )}
+      </div>
+      {pinnedToRender.map((it) => renderItem(it))}
+      {!editing && pinnedToRender.length === 0 && available.length > 0 && (
+        <button
+          type="button"
+          className="nav-item quick-access-empty"
+          onClick={() => setEditing(true)}
+        >
+          <span className="nav-icon">➕</span>
+          Pin your favorites
+        </button>
+      )}
+      {editing && (
+        <div className="quick-access-editor">
+          <div className="quick-access-editor-hint">
+            Pick up to {MAX_PINS} shortcuts
+          </div>
+          {available.map((it) => {
+            const checked = pins.includes(it.key);
+            const atCap = !checked && visiblePinCount >= MAX_PINS;
+            return (
+              <label
+                key={it.key}
+                className={
+                  "quick-access-option" + (atCap ? " is-disabled" : "")
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={atCap}
+                  onChange={() => togglePin(it.key)}
+                />
+                <span className="nav-icon">{it.icon}</span>
+                <span>{it.label}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+}
+
 function PlaceholderCard({
   title,
   body,
@@ -11080,70 +11220,85 @@ function App() {
         const sidebarUserId = String(authUser?.id ?? "anon");
         // People (Teacher Roster) is always rendered below the divider, so
         // the EKG always has content beneath it — render unconditionally.
+        //
+        // Phase 4b — the pinnable Quick Access master list. Each item keeps
+        // its EXACT prior gate; `canShow` additionally folds in the two
+        // renderNavItem internal exclusions (non-exempt allowlist +
+        // front-office pullout) so the Edit Favorites panel only ever
+        // offers items that would actually render. NO-ORPHAN INVARIANT: each
+        // pinnable item's canShow MUST imply its Tile Home tile is visible
+        // (the always-on header launcher is the permanent home), so unpinning
+        // never removes the only entry point. The per-item gates below match
+        // the Tile Home `add(...)` gates exactly (hallPasses included).
+        const quickAccessBase: Array<NavSection & { canShow: boolean }> = [
+          {
+            key: "hallPasses",
+            label: "Hall Passes",
+            icon: IconDoor,
+            // Parity with the Tile Home launcher gate (add(HallPasses !== false))
+            // so every pinnable item that CAN be pinned also has a visible
+            // permanent Tile Home tile — unpinning can never orphan it.
+            canShow: effectiveFeatures.HallPasses !== false,
+          },
+          { key: "teacherRoster", label: "Teacher Roster", icon: IconUser, canShow: true },
+          {
+            key: "studentLookup",
+            label: "Student Profile",
+            icon: IconUser,
+            canShow: !isNonExemptOnly,
+          },
+          {
+            key: "partneringWithParents",
+            label: "Partnering with Parents",
+            icon: IconUser,
+            canShow: effectiveFeatures.AcademicEvidence && !isNonExemptOnly,
+          },
+          {
+            key: "requestPullout",
+            label: "Request Pullout",
+            icon: IconClipboard,
+            canShow: effectiveFeatures.RequestPullout,
+          },
+          { key: "pbis", label: "PBIS Points", icon: IconStar, canShow: effectiveFeatures.Pbis },
+          {
+            key: "houseRankings",
+            label: "House Rankings",
+            icon: IconStar,
+            canShow: effectiveFeatures.Pbis,
+          },
+          {
+            key: "accommodations",
+            label: "Accommodations",
+            icon: IconClipboard,
+            canShow: effectiveFeatures.Accommodations,
+          },
+        ];
+        const quickAccessPinnable = quickAccessBase.map((it) => ({
+          ...it,
+          canShow:
+            it.canShow &&
+            !(isNonExemptOnly && !NON_EXEMPT_ALLOWED_KEYS.has(it.key)) &&
+            !(isFrontOfficeOnly && it.key === "requestPullout"),
+        }));
         return (
           <aside className="sidebar">
             {/* Locked top — Hall Pass + Tardy Pass anchor the sidebar.
                 Request Pullout and PBIS Points were promoted here per
                 user request — they're high-frequency teacher actions
                 so we surface them above the themed accordions. */}
-            <div className="section-label">Quick Access</div>
-            {renderNavItem({
-              key: "hallPasses",
-              label: "Hall Passes",
-              icon: IconDoor,
-            })}
-            {/* Teacher Roster promoted to Quick Access — every teacher's
-                daily landing for their students. Always visible (no
-                feature flag); cross-teacher access still gated server-side. */}
-            {renderNavItem({
-              key: "teacherRoster",
-              label: "Teacher Roster",
-              icon: IconUser,
-            })}
-            {/* Student Lookup — search any visible student (teachers: own
-                roster; core team/admin/counselor: school-wide) and open a
-                read-only one-stop snapshot with the editable weekly
-                HeartBEAT message. Visibility scoping enforced server-side. */}
-            {!isNonExemptOnly &&
-              renderNavItem({
-                key: "studentLookup",
-                label: "Student Profile",
-                icon: IconUser,
-              })}
-            {/* Partnering with Parents — academic work-sample sharing,
-                available to any active teaching staff (cross-teacher reach
-                gated server-side). */}
-            {effectiveFeatures.AcademicEvidence &&
-              !isNonExemptOnly &&
-              partneringWithParentsNavSections.map(renderNavItem)}
-            {effectiveFeatures.RequestPullout &&
-              renderNavItem({
-                key: "requestPullout",
-                label: "Request Pullout",
-                icon: IconClipboard,
-              })}
-            {effectiveFeatures.Pbis &&
-              renderNavItem({
-                key: "pbis",
-                label: "PBIS Points",
-                icon: IconStar,
-              })}
-            {/* House Rankings — opens the same big "House Standings"
-                screen used on digital signage TVs in the main content
-                pane. Sidebar stays visible so teachers can flip back to
-                another tool quickly. */}
-            {effectiveFeatures.Pbis &&
-              renderNavItem({
-                key: "houseRankings",
-                label: "House Rankings",
-                icon: IconStar,
-              })}
-            {effectiveFeatures.Accommodations &&
-              renderNavItem({
-                key: "accommodations",
-                label: "Accommodations",
-                icon: IconClipboard,
-              })}
+            {/* Quick Access is now a per-user pinnable favorites strip
+                (Phase 4b). Every pinnable destination has a permanent home
+                outside this strip — a themed accordion (Phase 4a) or the
+                always-on Tile Home launcher — and each pin gate matches its
+                Tile Home tile gate, so unpinning never orphans an item.
+                The smart/special items below (AST, Comp Time, Verify
+                Pullout, Pickup, Spotlight) are NOT pinnable and follow. */}
+            <QuickAccessFavorites
+              key={`${sidebarUserId}-quickaccess`}
+              userId={sidebarUserId}
+              items={quickAccessPinnable}
+              renderItem={renderNavItem}
+            />
             {/* AST (Alternate Schedule Time) — visible to every staff
                 member. The actual approval queue lives under School
                 Admin and is gated by canApproveAst. Feature-gated:
