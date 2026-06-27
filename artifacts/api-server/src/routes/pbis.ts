@@ -638,10 +638,10 @@ router.post("/pbis/:id/void", async (req: Request, res: Response) => {
 });
 
 // Aggregate KPIs for the PBIS Hub home panel.
-// Returns 8 weeks of school-week buckets (Mon-Fri, no weekends) with
-// pointsAwarded, distinct studentsRecognized, distinct teachersActive,
-// and avgPointsPerStudent (over the full student body). Voided entries
-// are excluded everywhere.
+// Returns 8 weeks of full Mon-Sun week buckets (weekend entries roll into
+// their Monday-anchored week) with pointsAwarded, distinct
+// studentsRecognized, distinct teachersActive, and avgPointsPerStudent
+// (over the full student body). Voided entries are excluded everywhere.
 router.get("/pbis/home-stats", async (req: Request, res: Response) => {
   const staff = await loadSessionStaff(req);
   if (!staff) {
@@ -670,11 +670,13 @@ router.get("/pbis/home-stats", async (req: Request, res: Response) => {
   thisMonday.setHours(0, 0, 0, 0);
   thisMonday.setDate(thisMonday.getDate() - daysSinceMonday);
 
-  // Window: WEEKS weeks back, ending Friday end-of-day this week.
+  // Window: WEEKS weeks back, ending at next Monday 00:00 (covers the full
+  // Mon-Sun week, so points awarded on a weekend still roll into that week
+  // instead of falling into an uncounted Sat-Mon gap).
   const windowStart = new Date(thisMonday);
   windowStart.setDate(windowStart.getDate() - 7 * (WEEKS - 1));
   const windowEnd = new Date(thisMonday);
-  windowEnd.setDate(windowEnd.getDate() + 5); // Saturday 00:00 = end of Fri
+  windowEnd.setDate(windowEnd.getDate() + 7); // next Monday 00:00
 
   // Pull all non-voided entries in the window.
   const entries = await db
@@ -707,7 +709,7 @@ router.get("/pbis/home-stats", async (req: Request, res: Response) => {
     const wStart = new Date(windowStart);
     wStart.setDate(wStart.getDate() + 7 * i);
     const wEnd = new Date(wStart);
-    wEnd.setDate(wEnd.getDate() + 5); // Sat 00:00
+    wEnd.setDate(wEnd.getDate() + 7); // next Mon 00:00
     buckets.push({
       weekStart: wStart.toISOString().slice(0, 10),
       weekEnd: new Date(wEnd.getTime() - 1).toISOString().slice(0, 10),
@@ -719,8 +721,6 @@ router.get("/pbis/home-stats", async (req: Request, res: Response) => {
 
   for (const e of entries) {
     const created = new Date(e.createdAt);
-    const dow = created.getDay(); // 0=Sun..6=Sat
-    if (dow === 0 || dow === 6) continue; // Mon-Fri only
     const idx = Math.floor(
       (created.getTime() - windowStart.getTime()) / (7 * 24 * 60 * 60 * 1000),
     );
