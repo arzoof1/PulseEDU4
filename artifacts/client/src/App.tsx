@@ -3980,7 +3980,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "interventionReports",
     // Phase 3 (heal MTSS split): the MTSS Coordinator hub + its Templates
     // sub-page moved here from the Insights group so the whole MTSS
-    // workflow force-expands the same (Academic and Behavior Supports)
+    // workflow force-expands the same (Student Support, id=behaviorSupport)
     // group where the coordinator's sidebar row now lives.
     "mtssCoordinator",
     "mtssTemplates",
@@ -4025,7 +4025,7 @@ NAV_GROUP_OWNERSHIP.schoolAdmin = [
   "trustedAdultsAdmin",
   "displays",
   // Behavior-lists editor ("Interventions") moved here from the
-  // Academic and Behavior Supports group so all per-school config
+  // Student Support group (id=behaviorSupport) so all per-school config
   // lives in one Admin & Settings home. activeSection key unchanged.
   "interventions",
 ];
@@ -11354,7 +11354,7 @@ function App() {
               <NavGroup
                 key={`${sidebarUserId}-behaviorSupport`}
                 id="behaviorSupport"
-                label="Academic and Behavior Supports"
+                label="Student Support"
                 userId={sidebarUserId}
                 containsActive={groupContainsActive(
                   "behaviorSupport",
