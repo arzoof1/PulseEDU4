@@ -5168,7 +5168,7 @@ function ClassroomInterventionReport() {
               <select
                 value={teacherFilter}
                 onChange={(e) => setTeacherFilter(e.target.value)}
-                style={{ padding: "4px 8px" }}
+                style={{ padding: "4px 28px 4px 8px" }}
               >
                 <option value="">All teachers</option>
                 {teacherOptions.map((t) => (
