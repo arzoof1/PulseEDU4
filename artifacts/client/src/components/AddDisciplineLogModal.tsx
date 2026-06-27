@@ -1,11 +1,11 @@
 import {
-  useCallback,
   useEffect,
   useMemo,
   useState,
   type CSSProperties,
 } from "react";
 import { authFetch } from "../lib/authToken";
+import StudentPicker from "./StudentPicker";
 
 interface Props {
   initialKind: "iss" | "oss";
@@ -103,8 +103,6 @@ export default function AddDisciplineLogModal({
   // than a plain prop reference) so existing reads of `kind` further
   // down don't need to change.
   const [kind] = useState<"iss" | "oss">(initialKind);
-  const [studentInput, setStudentInput] = useState("");
-  const [studentResults, setStudentResults] = useState<StudentRow[]>([]);
   const [student, setStudent] = useState<StudentRow | null>(null);
   const [reasonId, setReasonId] = useState<string>("");
   const [reasonText, setReasonText] = useState("");
@@ -146,24 +144,13 @@ export default function AddDisciplineLogModal({
     })();
   }, [month]);
 
-  // Student typeahead.
-  const searchStudents = useCallback(async (q: string) => {
-    if (!q || q.length < 2) {
-      setStudentResults([]);
-      return;
-    }
+  // Student typeahead — same endpoint, minChars, and 8-result cap as before.
+  const searchStudents = async (q: string): Promise<StudentRow[]> => {
     const r = await authFetch(`/api/students?q=${encodeURIComponent(q)}`);
-    if (r.ok) {
-      const d = (await r.json()) as StudentRow[];
-      setStudentResults(d.slice(0, 8));
-    }
-  }, []);
-
-  useEffect(() => {
-    if (student) return;
-    const t = setTimeout(() => void searchStudents(studentInput), 200);
-    return () => clearTimeout(t);
-  }, [studentInput, student, searchStudents]);
+    if (!r.ok) throw new Error("Search failed");
+    const d = (await r.json()) as StudentRow[];
+    return d.slice(0, 8);
+  };
 
   const toggleDate = (d: string) => {
     const next = new Set(dates);
@@ -370,7 +357,6 @@ export default function AddDisciplineLogModal({
                 type="button"
                 onClick={() => {
                   setStudent(null);
-                  setStudentInput("");
                 }}
                 style={{
                   background: "white",
@@ -385,51 +371,22 @@ export default function AddDisciplineLogModal({
               </button>
             </div>
           ) : (
-            <>
-              <input
-                style={input}
-                placeholder="Search by name or ID…"
-                value={studentInput}
-                onChange={(e) => setStudentInput(e.target.value)}
-                autoFocus
-              />
-              {studentResults.length > 0 && (
-                <div
-                  style={{
-                    marginTop: 4,
-                    border: "1px solid #cbd5e1",
-                    borderRadius: 6,
-                    maxHeight: 180,
-                    overflow: "auto",
-                  }}
-                >
-                  {studentResults.map((s) => (
-                    <button
-                      key={s.studentId}
-                      type="button"
-                      onClick={() => setStudent(s)}
-                      style={{
-                        display: "block",
-                        width: "100%",
-                        textAlign: "left",
-                        padding: "6px 10px",
-                        background: "white",
-                        border: "none",
-                        borderBottom: "1px solid #f1f5f9",
-                        cursor: "pointer",
-                      }}
-                    >
-                      <div style={{ fontWeight: 600 }}>
-                        {s.firstName} {s.lastName}
-                      </div>
-                      <div style={{ fontSize: 11, color: "var(--text-subtle)" }}>
-                        {s.localSisId ?? "—"} · Gr {s.grade ?? "—"}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </>
+            <StudentPicker
+              mode="async"
+              fetcher={searchStudents}
+              debounceMs={200}
+              minChars={2}
+              onSelect={(s) => setStudent(s)}
+              getKey={(s) => s.studentId}
+              getPrimary={(s) => `${s.firstName} ${s.lastName}`}
+              renderMeta={(s) => `· ${s.localSisId ?? "—"} · Gr ${s.grade ?? "—"}`}
+              placeholder="Search by name or ID…"
+              autoFocus
+              clearable={false}
+              minWidth="100%"
+              style={{ display: "block" }}
+              inputStyle={input}
+            />
           )}
         </div>
 

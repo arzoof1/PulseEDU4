@@ -55,6 +55,7 @@ import {
 import FastCoveragePage from "./components/FastCoveragePage";
 import CameraRegistryPage from "./components/CameraRegistryPage";
 import CreatePassModal from "./components/CreatePassModal";
+import StudentPicker from "./components/StudentPicker";
 import { CompanionQueuePanel } from "./components/CompanionQueuePanel";
 import { KioskBanner } from "./components/KioskBanner";
 import { KioskCardsPanel } from "./components/KioskCardsPanel";
@@ -372,7 +373,6 @@ function RequestPulloutSection({
   reasonOptions: PulloutReasonLite[];
   isAdmin?: boolean;
 }) {
-  const [studentSearch, setStudentSearch] = useState("");
   const [studentId, setStudentId] = useState<string>("");
   const [reasonChoice, setReasonChoice] = useState<string>("");
   const [reasonOther, setReasonOther] = useState<string>("");
@@ -468,21 +468,6 @@ function RequestPulloutSection({
   const [submitting, setSubmitting] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const sortedStudents = useMemo(() => {
-    const q = studentSearch.trim().toLowerCase();
-    const list = q
-      ? students.filter(
-          (s) =>
-            s.firstName.toLowerCase().includes(q) ||
-            s.lastName.toLowerCase().includes(q) ||
-            s.studentId.toLowerCase().includes(q) ||
-            (s.localSisId?.toLowerCase().includes(q) ?? false),
-        )
-      : students;
-    // Admins/SuperUsers see all matches; non-admins keep the original 50-cap
-    // safety limit so the dropdown can't render a huge list.
-    return isAdmin ? list : list.slice(0, 50);
-  }, [students, studentSearch, isAdmin]);
 
   const selectedStudent = useMemo(
     () => students.find((s) => s.studentId === studentId) ?? null,
@@ -570,7 +555,6 @@ function RequestPulloutSection({
           text: `Pullout request #${data.id} submitted. An administrator will verify it shortly.${dispatchTail}`,
         });
         setStudentId("");
-        setStudentSearch("");
         setReasonChoice("");
         setReasonOther("");
         setSelectedInterventionIds(new Set());
@@ -622,37 +606,25 @@ function RequestPulloutSection({
       <form onSubmit={submit} style={{ display: "grid", gap: "0.75rem" }}>
         <label style={{ display: "grid", gap: 4 }}>
           <span>Student</span>
-          <input
-            type="text"
-            list="request-pullout-student-options"
-            placeholder="Type name or ID…"
-            value={studentSearch}
-            onChange={(e) => {
-              const v = e.target.value;
-              setStudentSearch(v);
-              const typed = v.trim();
-              const match = sortedStudents.find(
-                (s) =>
-                  // Must mirror the <option> value rendered below — it
-                  // uses localSisId, so matching on studentId here never
-                  // fired and the form's studentId stayed empty (submit
-                  // button permanently disabled).
-                  `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})` ===
-                    v ||
-                  s.studentId === typed ||
-                  (s.localSisId != null && s.localSisId === typed),
-              );
-              setStudentId(match ? match.studentId : "");
-            }}
+          <StudentPicker
+            mode="local"
+            items={students}
+            selectedKey={studentId}
+            onSelect={(s) => setStudentId(s.studentId)}
+            onClear={() => setStudentId("")}
+            getKey={(s) => s.studentId}
+            getPrimary={(s) => `${s.firstName} ${s.lastName}`}
+            getInputLabel={(s) =>
+              `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`
+            }
+            getSearchText={(s) =>
+              `${s.firstName} ${s.lastName} ${s.studentId} ${s.localSisId ?? ""}`
+            }
+            renderMeta={(s) => `· ${s.localSisId ?? "—"} · Gr ${s.grade}`}
+            maxResults={isAdmin ? Infinity : 50}
+            minWidth="100%"
+            style={{ display: "block" }}
           />
-          <datalist id="request-pullout-student-options">
-            {sortedStudents.map((s) => (
-              <option
-                key={s.id}
-                value={`${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`}
-              />
-            ))}
-          </datalist>
         </label>
         {selectedStudent && preflight && (
           <div
@@ -937,7 +909,6 @@ function VerifyPulloutsSection({
   // the student name is pre-populated from the teacher's submission;
   // this form is the manual escape hatch for the call-in case.
   const [calledInOpen, setCalledInOpen] = useState(false);
-  const [calledInStudentSearch, setCalledInStudentSearch] = useState("");
   const [calledInStudentId, setCalledInStudentId] = useState("");
   const [calledInTeacherName, setCalledInTeacherName] = useState("");
   const [calledInPeriod, setCalledInPeriod] = useState("");
@@ -1088,7 +1059,6 @@ function VerifyPulloutsSection({
           ok: true,
           text: `Called-in pullout #${data.id} added for ${studentName(calledInStudentId)} — ready to verify below.`,
         });
-        setCalledInStudentSearch("");
         setCalledInStudentId("");
         setCalledInTeacherName("");
         setCalledInPeriod("");
@@ -1321,37 +1291,25 @@ function VerifyPulloutsSection({
               <span style={{ fontSize: 12, color: "#475569" }}>
                 Student
               </span>
-              <input
-                type="text"
-                list="called-in-pullout-students"
-                placeholder="Type name or ID…"
-                value={calledInStudentSearch}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setCalledInStudentSearch(v);
-                  const match = sortedStudentsForCalledIn.find(
-                    (s) =>
-                      `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})` ===
-                        v ||
-                      s.studentId === v.trim() ||
-                      (s.localSisId ?? "") === v.trim(),
-                  );
-                  setCalledInStudentId(match ? match.studentId : "");
-                }}
-                style={{
-                  padding: "0.4rem 0.6rem",
-                  border: "1px solid #cbd5e1",
-                  borderRadius: 6,
-                }}
+              <StudentPicker
+                mode="local"
+                items={sortedStudentsForCalledIn}
+                selectedKey={calledInStudentId}
+                onSelect={(s) => setCalledInStudentId(s.studentId)}
+                onClear={() => setCalledInStudentId("")}
+                getKey={(s) => s.studentId}
+                getPrimary={(s) => `${s.firstName} ${s.lastName}`}
+                getInputLabel={(s) =>
+                  `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`
+                }
+                getSearchText={(s) =>
+                  `${s.firstName} ${s.lastName} ${s.studentId} ${s.localSisId ?? ""}`
+                }
+                renderMeta={(s) => `· ${s.localSisId ?? "—"} · Gr ${s.grade}`}
+                maxResults={Infinity}
+                minWidth="100%"
+                style={{ display: "block" }}
               />
-              <datalist id="called-in-pullout-students">
-                {sortedStudentsForCalledIn.map((s) => (
-                  <option
-                    key={s.id}
-                    value={`${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`}
-                  />
-                ))}
-              </datalist>
             </label>
             <div
               style={{
@@ -1829,7 +1787,6 @@ function IssDashboardSection({ students }: { students: Student[] }) {
   const [confirmRosterDeleteId, setConfirmRosterDeleteId] = useState<
     number | null
   >(null);
-  const [addStudentSearch, setAddStudentSearch] = useState("");
   const [addStudentId, setAddStudentId] = useState("");
   const [addPeriod, setAddPeriod] = useState("");
   const [addNotes, setAddNotes] = useState("");
@@ -1926,18 +1883,6 @@ function IssDashboardSection({ students }: { students: Student[] }) {
     return m;
   }, [students]);
 
-  const sortedStudents = useMemo(() => {
-    const q = addStudentSearch.trim().toLowerCase();
-    const list = q
-      ? students.filter(
-          (s) =>
-            s.firstName.toLowerCase().includes(q) ||
-            s.lastName.toLowerCase().includes(q) ||
-            s.studentId.toLowerCase().includes(q),
-        )
-      : students;
-    return list.slice(0, 50);
-  }, [students, addStudentSearch]);
 
   const sortedRoster = useMemo(() => {
     return [...roster].sort((a, b) => {
@@ -1974,7 +1919,6 @@ function IssDashboardSection({ students }: { students: Student[] }) {
         setMsg({ ok: false, text: data?.error || "Could not add to roster." });
       } else {
         setAddStudentId("");
-        setAddStudentSearch("");
         setAddPeriod("");
         setAddNotes("");
         await refreshRoster();
@@ -2508,32 +2452,27 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                 <span style={{ fontSize: "0.8rem", color: "#64748b" }}>
                   Student
                 </span>
-                <input
-                  type="text"
-                  list="iss-roster-add-student-options"
-                  placeholder="Type name or ID…"
-                  value={addStudentSearch}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setAddStudentSearch(v);
-                    const m = sortedStudents.find(
-                      (s) =>
-                        `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})` ===
-                          v ||
-                        s.studentId === v.trim() ||
-                        (s.localSisId ?? "") === v.trim(),
-                    );
-                    setAddStudentId(m ? m.studentId : "");
-                  }}
+                <StudentPicker
+                  mode="local"
+                  items={students}
+                  selectedKey={addStudentId}
+                  onSelect={(s) => setAddStudentId(s.studentId)}
+                  onClear={() => setAddStudentId("")}
+                  getKey={(s) => s.studentId}
+                  getPrimary={(s) => `${s.firstName} ${s.lastName}`}
+                  getInputLabel={(s) =>
+                    `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`
+                  }
+                  getSearchText={(s) =>
+                    `${s.firstName} ${s.lastName} ${s.studentId} ${s.localSisId ?? ""}`
+                  }
+                  renderMeta={(s) =>
+                    `· ${s.localSisId ?? "—"} · Gr ${s.grade}`
+                  }
+                  maxResults={50}
+                  minWidth="100%"
+                  style={{ display: "block" }}
                 />
-                <datalist id="iss-roster-add-student-options">
-                  {sortedStudents.map((s) => (
-                    <option
-                      key={s.id}
-                      value={`${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`}
-                    />
-                  ))}
-                </datalist>
               </label>
               <label style={{ display: "grid", gap: 2 }}>
                 <span style={{ fontSize: "0.8rem", color: "#64748b" }}>
@@ -3721,6 +3660,8 @@ function PolarityStudentPicker({
   );
 }
 
+// Thin wrapper preserving the original Family-Communication API while
+// delegating all behavior to the shared StudentPicker (the reference look).
 function StudentCombobox({
   students,
   value,
@@ -3736,183 +3677,26 @@ function StudentCombobox({
   minWidth?: number;
   isAdmin?: boolean;
 }) {
-  const selected = students.find((s) => s.studentId === value);
-  const labelOf = (s: Student) =>
-    `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`;
-  const [query, setQuery] = useState(selected ? labelOf(selected) : "");
-  const [open, setOpen] = useState(false);
-  const [highlight, setHighlight] = useState(0);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    setQuery(selected ? labelOf(selected) : "");
-  }, [value, students]);
-
-  useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, []);
-
-  const matches = (() => {
-    const q = query.trim().toLowerCase();
-    const base = q
-      ? students.filter((s) => {
-          return (
-            s.firstName.toLowerCase().includes(q) ||
-            s.lastName.toLowerCase().includes(q) ||
-            s.studentId.toLowerCase().includes(q) ||
-            labelOf(s).toLowerCase().includes(q)
-          );
-        })
-      : students;
-    return isAdmin ? base : base.slice(0, 50);
-  })();
-
-  const commit = (s: Student) => {
-    onChange(s.studentId);
-    setQuery(labelOf(s));
-    setOpen(false);
-  };
-
   return (
-    <div
-      ref={wrapRef}
-      style={{ position: "relative", display: "inline-block", minWidth }}
-    >
-      <input
-        type="text"
-        value={query}
-        placeholder={placeholder}
-        onFocus={() => {
-          setOpen(true);
-          setHighlight(0);
-        }}
-        onChange={(e) => {
-          setQuery(e.target.value);
-          setOpen(true);
-          setHighlight(0);
-          if (e.target.value.trim() === "") onChange("");
-        }}
-        onKeyDown={(e) => {
-          if (!open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
-            setOpen(true);
-            return;
-          }
-          if (e.key === "ArrowDown") {
-            e.preventDefault();
-            setHighlight((h) => Math.min(h + 1, matches.length - 1));
-          } else if (e.key === "ArrowUp") {
-            e.preventDefault();
-            setHighlight((h) => Math.max(h - 1, 0));
-          } else if (e.key === "Enter") {
-            if (open && matches[highlight]) {
-              e.preventDefault();
-              commit(matches[highlight]);
-            }
-          } else if (e.key === "Escape") {
-            setOpen(false);
-          }
-        }}
-        style={{ width: "100%", padding: "0.4rem 0.55rem" }}
-      />
-      {value && (
-        <button
-          type="button"
-          onClick={() => {
-            onChange("");
-            setQuery("");
-            setOpen(false);
-          }}
-          aria-label="Clear"
-          style={{
-            position: "absolute",
-            right: 6,
-            top: "50%",
-            transform: "translateY(-50%)",
-            background: "transparent",
-            border: "none",
-            color: "#64748b",
-            cursor: "pointer",
-            fontSize: "1.1rem",
-            lineHeight: 1,
-            padding: "0 0.25rem",
-          }}
-        >
-          ×
-        </button>
-      )}
-      {open && matches.length > 0 && (
-        <ul
-          role="listbox"
-          style={{
-            position: "absolute",
-            zIndex: 50,
-            top: "calc(100% + 2px)",
-            left: 0,
-            right: 0,
-            margin: 0,
-            padding: "0.25rem 0",
-            listStyle: "none",
-            background: "#fff",
-            border: "1px solid #cbd5e1",
-            borderRadius: 6,
-            boxShadow: "0 6px 18px rgba(15,23,42,0.12)",
-            maxHeight: 280,
-            overflowY: "auto",
-          }}
-        >
-          {matches.map((s, i) => (
-            <li
-              key={s.studentId}
-              role="option"
-              aria-selected={i === highlight}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                commit(s);
-              }}
-              onMouseEnter={() => setHighlight(i)}
-              style={{
-                padding: "0.4rem 0.6rem",
-                cursor: "pointer",
-                background: i === highlight ? "#e0f2fe" : "transparent",
-                fontSize: "0.92rem",
-              }}
-            >
-              <strong>
-                {s.firstName} {s.lastName}
-              </strong>{" "}
-              <span style={{ color: "#64748b" }}>
-                · {s.localSisId ?? "—"} · Gr {s.grade}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {open && matches.length === 0 && query.trim() !== "" && (
-        <div
-          style={{
-            position: "absolute",
-            zIndex: 50,
-            top: "calc(100% + 2px)",
-            left: 0,
-            right: 0,
-            background: "#fff",
-            border: "1px solid #cbd5e1",
-            borderRadius: 6,
-            padding: "0.5rem 0.6rem",
-            color: "#64748b",
-            fontSize: "0.9rem",
-          }}
-        >
-          No matches.
-        </div>
-      )}
-    </div>
+    <StudentPicker
+      mode="local"
+      items={students}
+      selectedKey={value}
+      onSelect={(s) => onChange(s.studentId)}
+      onClear={() => onChange("")}
+      getKey={(s) => s.studentId}
+      getPrimary={(s) => `${s.firstName} ${s.lastName}`}
+      getInputLabel={(s) =>
+        `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`
+      }
+      getSearchText={(s) =>
+        `${s.firstName} ${s.lastName} ${s.studentId} ${s.localSisId ?? ""}`
+      }
+      renderMeta={(s) => `· ${s.localSisId ?? "—"} · Gr ${s.grade}`}
+      placeholder={placeholder}
+      minWidth={minWidth}
+      maxResults={isAdmin ? Infinity : 50}
+    />
   );
 }
 

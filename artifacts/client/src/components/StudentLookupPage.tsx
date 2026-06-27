@@ -13,9 +13,10 @@
 // NO FLEID forward-facing: search results and the snapshot only ever render
 // localSisId; the canonical studentId is used solely as the lookup key.
 
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import StudentProfile from "./StudentProfile";
+import StudentPicker from "./StudentPicker";
 
 interface SearchHit {
   studentId: string;
@@ -43,49 +44,20 @@ export default function StudentLookupPage({
   onBack,
   canManageDismissal = false,
 }: Props) {
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchHit[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [searchError, setSearchError] = useState("");
   const [selected, setSelected] = useState<SearchHit | null>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Debounced search. Empty query clears results (we never auto-dump the
-  // whole school into the picker).
-  useEffect(() => {
-    if (selected) return; // pause searching while viewing a snapshot
-    const q = query.trim();
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (q.length === 0) {
-      setResults([]);
-      setSearchError("");
-      setSearching(false);
-      return;
+  // Shared async search — same endpoint + visibility scope as before.
+  const fetchHits = async (q: string): Promise<SearchHit[]> => {
+    const r = await authFetch(
+      `/api/student-lookup/search?q=${encodeURIComponent(q)}`,
+    );
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body?.error || "Search failed");
     }
-    setSearching(true);
-    debounceRef.current = setTimeout(async () => {
-      try {
-        const r = await authFetch(
-          `/api/student-lookup/search?q=${encodeURIComponent(q)}`,
-        );
-        if (!r.ok) {
-          const body = await r.json().catch(() => ({}));
-          throw new Error(body?.error || "Search failed");
-        }
-        const data = (await r.json()) as { students: SearchHit[] };
-        setResults(data.students ?? []);
-        setSearchError("");
-      } catch (e) {
-        setSearchError(e instanceof Error ? e.message : "Search failed");
-        setResults([]);
-      } finally {
-        setSearching(false);
-      }
-    }, 250);
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [query, selected]);
+    const data = (await r.json()) as { students: SearchHit[] };
+    return data.students ?? [];
+  };
 
   if (selected) {
     return (
@@ -120,14 +92,23 @@ export default function StudentLookupPage({
         </button>
       </div>
 
-      <input
-        autoFocus
-        type="text"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
+      <StudentPicker
+        mode="async"
+        fetcher={fetchHits}
+        debounceMs={250}
+        onSelect={(hit) => setSelected(hit)}
+        getKey={(hit) => hit.studentId}
+        getPrimary={(hit) => `${hit.lastName}, ${hit.firstName}`}
+        renderMeta={(hit) =>
+          `${gradeLabel(hit.grade)} · ID ${hit.localSisId ?? "—"}`
+        }
         placeholder="Search by first name, last name, or SIS ID…"
-        style={{
-          width: "100%",
+        emptyText="No students found. Teachers can only look up students on their own roster."
+        autoFocus
+        clearable={false}
+        minWidth="100%"
+        style={{ display: "block" }}
+        inputStyle={{
           padding: "12px 14px",
           fontSize: 16,
           borderRadius: 10,
@@ -135,72 +116,6 @@ export default function StudentLookupPage({
           boxSizing: "border-box",
         }}
       />
-
-      <div style={{ marginTop: 16 }}>
-        {searching && (
-          <div style={{ color: "var(--muted)", padding: "8px 2px" }}>
-            Searching…
-          </div>
-        )}
-        {searchError && (
-          <div
-            style={{
-              color: "var(--negative, #b91c1c)",
-              padding: "8px 12px",
-              background: "var(--negative-soft, #fef2f2)",
-              borderRadius: 8,
-            }}
-          >
-            {searchError}
-          </div>
-        )}
-        {!searching &&
-          !searchError &&
-          query.trim().length > 0 &&
-          results.length === 0 && (
-            <div style={{ color: "var(--muted)", padding: "8px 2px" }}>
-              No students found. Teachers can only look up students on their
-              own roster.
-            </div>
-          )}
-        {results.length > 0 && (
-          <div
-            style={{
-              border: "1px solid var(--border)",
-              borderRadius: 10,
-              overflow: "hidden",
-            }}
-          >
-            {results.map((hit, i) => (
-              <button
-                key={hit.studentId}
-                onClick={() => setSelected(hit)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  width: "100%",
-                  padding: "12px 14px",
-                  background: "transparent",
-                  border: "none",
-                  borderTop: i === 0 ? "none" : "1px solid var(--border)",
-                  cursor: "pointer",
-                  textAlign: "left",
-                  font: "inherit",
-                  color: "var(--text)",
-                }}
-              >
-                <span style={{ fontWeight: 600 }}>
-                  {hit.lastName}, {hit.firstName}
-                </span>
-                <span style={{ color: "var(--muted)", fontSize: 13 }}>
-                  {gradeLabel(hit.grade)} · ID {hit.localSisId ?? "—"}
-                </span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
     </div>
   );
 }

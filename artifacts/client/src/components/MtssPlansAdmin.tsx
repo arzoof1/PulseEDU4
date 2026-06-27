@@ -9,6 +9,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import StudentPicker from "./StudentPicker";
 
 type StatusFilter = "active" | "closed" | "all";
 
@@ -1827,26 +1828,24 @@ function PlanModal({
             >
               Student
             </label>
-            <input
-              list="mtss-plan-students"
-              value={studentId}
-              onChange={(e) => setStudentId(e.target.value)}
+            <StudentPicker
+              mode="local"
+              items={students}
+              selectedKey={studentId}
+              onSelect={(s) => setStudentId(s.studentId)}
+              onClear={() => setStudentId("")}
+              getKey={(s) => s.studentId}
+              getPrimary={(s) => `${s.firstName} ${s.lastName}`}
+              getInputLabel={(s) => studentLabel(s)}
+              getSearchText={(s) =>
+                `${s.firstName} ${s.lastName} ${s.studentId} ${s.localSisId ?? ""}`
+              }
+              renderMeta={(s) => `· ${s.localSisId ?? "—"} · Gr ${s.grade}`}
               placeholder="Type a name or ID…"
-              style={{
-                width: "100%",
-                padding: "0.5rem",
-                border: "1px solid #cbd5e1",
-                borderRadius: 6,
-              }}
-              required
+              maxResults={Infinity}
+              minWidth="100%"
+              style={{ display: "block" }}
             />
-            <datalist id="mtss-plan-students">
-              {students.map((s) => (
-                <option key={s.studentId} value={s.studentId}>
-                  {studentLabel(s)}
-                </option>
-              ))}
-            </datalist>
             {dupHint && (
               <div
                 style={{
