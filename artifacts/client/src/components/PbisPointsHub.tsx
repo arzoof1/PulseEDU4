@@ -7486,6 +7486,436 @@ export function PbisWalletsPage() {
   return <PbisPointsReportView me={me} />;
 }
 
+// ---------------------------------------------------------------------------
+// My PBIS Usage — anonymized, school-wide point-awarding benchmark.
+// Visible to ALL staff. Shows the signed-in teacher's OWN positive-recognition
+// numbers boldly, alongside anonymized peer aggregates (school average, per
+// department, per period) and the top awarded behaviors. No teacher names ever
+// appear; comparison buckets with fewer than `threshold` distinct awarding
+// teachers come back suppressed so a small group can't identify one person.
+// Backed by GET /api/reports/pbis-usage (the server identifies the caller via
+// the session, so this page needs no /api/auth/me round-trip).
+// ---------------------------------------------------------------------------
+type UsageDept = {
+  department: string;
+  teacherCount: number | null;
+  avgPointsPerTeacher: number | null;
+  avgRecognitionsPerTeacher: number | null;
+  suppressed: boolean;
+  isMine: boolean;
+};
+type UsagePeriod = {
+  period: string;
+  teacherCount: number | null;
+  totalPoints: number | null;
+  avgPointsPerTeacher: number | null;
+  suppressed: boolean;
+};
+type UsageReport = {
+  window: { from: string; to: string; days: number };
+  threshold: number;
+  me: {
+    department: string;
+    points: number;
+    recognitions: number;
+    studentsRecognized: number;
+  };
+  school: {
+    awardingTeachers: number | null;
+    totalPoints: number | null;
+    totalRecognitions: number | null;
+    avgPointsPerTeacher: number | null;
+    avgRecognitionsPerTeacher: number | null;
+    suppressed: boolean;
+  };
+  byDepartment: UsageDept[];
+  byPeriod: UsagePeriod[];
+  topBehaviors: { reason: string; count: number; points: number }[];
+};
+
+const USAGE_RANGES: { key: string; label: string; days: number }[] = [
+  { key: "7", label: "Last 7 days", days: 7 },
+  { key: "30", label: "Last 30 days", days: 30 },
+  { key: "90", label: "Last 90 days", days: 90 },
+];
+
+function usageLocalIso(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export function PbisUsagePage() {
+  const [rangeKey, setRangeKey] = useState<string>("30");
+  const [data, setData] = useState<UsageReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    const days = USAGE_RANGES.find((r) => r.key === rangeKey)?.days ?? 30;
+    const to = new Date();
+    const from = new Date();
+    from.setDate(from.getDate() - (days - 1));
+    const qs = `from=${usageLocalIso(from)}&to=${usageLocalIso(to)}`;
+    (async () => {
+      try {
+        const res = await authFetch(`/api/reports/pbis-usage?${qs}`);
+        if (cancelled) return;
+        if (!res.ok) {
+          setError("Could not load PBIS usage. Please try again.");
+          setData(null);
+          return;
+        }
+        setData((await res.json()) as UsageReport);
+      } catch {
+        if (!cancelled) {
+          setError("Could not load PBIS usage. Please try again.");
+          setData(null);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rangeKey]);
+
+  const suppressedMsg = (n: number) => `Not enough teachers to compare (need ${n}+)`;
+  const fmt = (n: number | null) => (n == null ? "—" : String(n));
+
+  // Bar scale for the me-vs-peers headline comparison.
+  const schoolAvg = data?.school.avgPointsPerTeacher ?? null;
+  const myDept = data?.byDepartment.find((d) => d.isMine) ?? null;
+  const myDeptAvg = myDept && !myDept.suppressed ? myDept.avgPointsPerTeacher : null;
+  const barMax = Math.max(
+    data?.me.points ?? 0,
+    schoolAvg ?? 0,
+    myDeptAvg ?? 0,
+    1,
+  );
+
+  return (
+    <div style={{ maxWidth: 980, margin: "0 auto", padding: "1.25rem 1rem 3rem" }}>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          gap: "0.75rem",
+          marginBottom: "1rem",
+        }}
+      >
+        <div>
+          <h1 style={{ fontSize: "1.5rem", fontWeight: 800, margin: 0, color: "#0f172a" }}>
+            My PBIS Usage
+          </h1>
+          <p style={{ margin: "0.35rem 0 0", color: "#475569", maxWidth: 620 }}>
+            See how your positive recognitions compare to your peers. Your own
+            numbers are shown in <strong>bold</strong>; everyone else appears only
+            as anonymized averages — <strong>no teacher names</strong>.
+          </p>
+        </div>
+        <select
+          value={rangeKey}
+          onChange={(e) => setRangeKey(e.target.value)}
+          style={{
+            padding: "0.45rem 0.6rem",
+            borderRadius: "0.5rem",
+            border: "1px solid #cbd5e1",
+            background: "#fff",
+            color: "#0f172a",
+            fontWeight: 600,
+          }}
+        >
+          {USAGE_RANGES.map((r) => (
+            <option key={r.key} value={r.key}>
+              {r.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {loading && <div style={{ color: "#64748b", padding: "2rem 0" }}>Loading…</div>}
+      {error && !loading && (
+        <div
+          style={{
+            background: "#fef2f2",
+            border: "1px solid #fecaca",
+            color: "#b91c1c",
+            borderRadius: "0.6rem",
+            padding: "1rem",
+          }}
+        >
+          {error}
+        </div>
+      )}
+
+      {data && !loading && !error && (
+        <>
+          {/* ---- Your numbers (bold hero) ---- */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+              gap: "0.75rem",
+              marginBottom: "1.25rem",
+            }}
+          >
+            {[
+              { label: "Your points awarded", value: data.me.points },
+              { label: "Your recognitions", value: data.me.recognitions },
+              { label: "Students you recognized", value: data.me.studentsRecognized },
+            ].map((c) => (
+              <div
+                key={c.label}
+                style={{
+                  background: "linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%)",
+                  border: "1px solid #bfdbfe",
+                  borderRadius: "0.7rem",
+                  padding: "1rem",
+                }}
+              >
+                <div style={{ fontSize: "1.9rem", fontWeight: 800, color: "#1e3a8a" }}>
+                  {c.value}
+                </div>
+                <div style={{ color: "#1e40af", fontWeight: 600, fontSize: "0.85rem" }}>
+                  {c.label}
+                </div>
+              </div>
+            ))}
+            <div
+              style={{
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+                borderRadius: "0.7rem",
+                padding: "1rem",
+              }}
+            >
+              <div style={{ fontSize: "1rem", fontWeight: 800, color: "#0f172a" }}>
+                {data.me.department}
+              </div>
+              <div style={{ color: "#64748b", fontWeight: 600, fontSize: "0.85rem" }}>
+                Your department
+              </div>
+            </div>
+          </div>
+
+          {/* ---- Me vs peers headline bars ---- */}
+          <section
+            style={{
+              border: "1px solid #e2e8f0",
+              borderRadius: "0.7rem",
+              padding: "1.1rem 1.2rem",
+              marginBottom: "1.25rem",
+              background: "#fff",
+            }}
+          >
+            <h2 style={{ fontSize: "1.05rem", fontWeight: 700, margin: "0 0 0.85rem", color: "#0f172a" }}>
+              You vs. your peers (points awarded)
+            </h2>
+            {[
+              { label: "You", value: data.me.points, mine: true, suppressed: false },
+              {
+                label: "School average / teacher",
+                value: schoolAvg,
+                mine: false,
+                suppressed: data.school.suppressed,
+              },
+              {
+                label: `${data.me.department} average / teacher`,
+                value: myDeptAvg,
+                mine: false,
+                suppressed: !myDept || myDept.suppressed,
+              },
+            ].map((row) => (
+              <div key={row.label} style={{ marginBottom: "0.7rem" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    fontSize: "0.85rem",
+                    marginBottom: "0.25rem",
+                    color: row.mine ? "#1e3a8a" : "#475569",
+                    fontWeight: row.mine ? 800 : 600,
+                  }}
+                >
+                  <span>{row.label}</span>
+                  <span>
+                    {row.suppressed ? suppressedMsg(data.threshold) : fmt(row.value)}
+                  </span>
+                </div>
+                {!row.suppressed && (
+                  <div
+                    style={{
+                      height: 10,
+                      background: "#f1f5f9",
+                      borderRadius: 999,
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      style={{
+                        height: "100%",
+                        width: `${Math.min(100, ((row.value ?? 0) / barMax) * 100)}%`,
+                        background: row.mine ? "#2563eb" : "#94a3b8",
+                        borderRadius: 999,
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
+            <p style={{ margin: "0.5rem 0 0", color: "#94a3b8", fontSize: "0.78rem" }}>
+              {data.school.suppressed ? (
+                <>{suppressedMsg(data.threshold)}</>
+              ) : (
+                <>
+                  School-wide: {data.school.totalPoints} points from{" "}
+                  {data.school.awardingTeachers} teacher
+                  {data.school.awardingTeachers === 1 ? "" : "s"} over the last{" "}
+                  {data.window.days} days.
+                </>
+              )}
+            </p>
+          </section>
+
+          {/* ---- By department ---- */}
+          <section style={{ marginBottom: "1.25rem" }}>
+            <h2 style={{ fontSize: "1.05rem", fontWeight: 700, margin: "0 0 0.6rem", color: "#0f172a" }}>
+              By department (avg per teacher)
+            </h2>
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: "0.6rem", overflow: "hidden" }}>
+              {data.byDepartment.length === 0 && (
+                <div style={{ padding: "1rem", color: "#64748b" }}>No awards in this window.</div>
+              )}
+              {data.byDepartment.map((d) => (
+                <div
+                  key={d.department}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "0.65rem 0.9rem",
+                    borderTop: "1px solid #f1f5f9",
+                    background: d.isMine ? "#eff6ff" : "#fff",
+                  }}
+                >
+                  <div style={{ fontWeight: d.isMine ? 800 : 600, color: "#0f172a" }}>
+                    {d.department}
+                    {d.isMine && (
+                      <span style={{ color: "#2563eb", fontWeight: 700 }}> (you)</span>
+                    )}
+                  </div>
+                  <div style={{ textAlign: "right", color: "#334155" }}>
+                    {d.suppressed ? (
+                      <span style={{ color: "#94a3b8", fontSize: "0.85rem" }}>
+                        {suppressedMsg(data.threshold)}
+                      </span>
+                    ) : (
+                      <span style={{ fontWeight: 700 }}>
+                        {fmt(d.avgPointsPerTeacher)} pts
+                        <span style={{ color: "#94a3b8", fontWeight: 500 }}>
+                          {" "}· {d.teacherCount} teachers
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* ---- By period ---- */}
+          <section style={{ marginBottom: "1.25rem" }}>
+            <h2 style={{ fontSize: "1.05rem", fontWeight: 700, margin: "0 0 0.6rem", color: "#0f172a" }}>
+              By class period (avg per teacher)
+            </h2>
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: "0.6rem", overflow: "hidden" }}>
+              {data.byPeriod.length === 0 && (
+                <div style={{ padding: "1rem", color: "#64748b" }}>No awards in this window.</div>
+              )}
+              {data.byPeriod.map((p) => (
+                <div
+                  key={p.period}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "0.65rem 0.9rem",
+                    borderTop: "1px solid #f1f5f9",
+                  }}
+                >
+                  <div style={{ fontWeight: 600, color: "#0f172a" }}>
+                    {p.period === "Unmatched" ? "Other / unmatched" : `Period ${p.period}`}
+                  </div>
+                  <div style={{ textAlign: "right", color: "#334155" }}>
+                    {p.suppressed ? (
+                      <span style={{ color: "#94a3b8", fontSize: "0.85rem" }}>
+                        {suppressedMsg(data.threshold)}
+                      </span>
+                    ) : (
+                      <span style={{ fontWeight: 700 }}>
+                        {fmt(p.avgPointsPerTeacher)} pts
+                        <span style={{ color: "#94a3b8", fontWeight: 500 }}>
+                          {" "}· {p.teacherCount} teachers
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* ---- Top behaviors ---- */}
+          <section style={{ marginBottom: "1.25rem" }}>
+            <h2 style={{ fontSize: "1.05rem", fontWeight: 700, margin: "0 0 0.6rem", color: "#0f172a" }}>
+              Top awarded behaviors (school-wide)
+            </h2>
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: "0.6rem", overflow: "hidden" }}>
+              {data.topBehaviors.length === 0 && (
+                <div style={{ padding: "1rem", color: "#64748b" }}>No awards in this window.</div>
+              )}
+              {data.topBehaviors.map((b, i) => (
+                <div
+                  key={b.reason}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "0.6rem 0.9rem",
+                    borderTop: i === 0 ? "none" : "1px solid #f1f5f9",
+                  }}
+                >
+                  <div style={{ color: "#0f172a" }}>{b.reason}</div>
+                  <div style={{ color: "#334155", fontWeight: 700 }}>
+                    {b.points} pts
+                    <span style={{ color: "#94a3b8", fontWeight: 500 }}>
+                      {" "}· {b.count}×
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <p style={{ color: "#94a3b8", fontSize: "0.78rem", margin: 0 }}>
+            Comparisons are anonymized. Any department or period with fewer than{" "}
+            {data.threshold} awarding teachers is hidden so no single teacher can
+            be identified.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ComingSoon({ tab }: { tab: Tab }) {
   const labels: Record<Tab, { title: string; body: string }> = {
     classes: { title: "Classes", body: "" },

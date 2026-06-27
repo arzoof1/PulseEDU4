@@ -770,6 +770,308 @@ router.get("/reports/pbis", requireStaff, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// My PBIS Usage — anonymized, school-wide point-AWARDING benchmark.
+//   GET /api/reports/pbis-usage?from=YYYY-MM-DD&to=YYYY-MM-DD
+//
+// Purpose: let EVERY staffer see how much they use the positive-recognition
+// system relative to their peers, WITHOUT exposing any other teacher's name.
+// The caller's own numbers come back in `me`; everyone else is rolled up into
+// anonymized school / department / period aggregates.
+//
+// Privacy: comparison buckets (school avg, each department, each period) are
+// suppressed (value = null, suppressed = true) whenever fewer than
+// MIN_COMPARE_TEACHERS distinct awarding teachers contributed, so a small
+// department or single-teacher period can't be used to back into one person's
+// numbers. Top behaviors are reason-level (not teacher-identifying) and are
+// never suppressed.
+//
+// Counts only NON-VOIDED POSITIVE awards (polarity <> 'negative'), matching the
+// /insights/behavior "positives" definition.
+const MIN_COMPARE_TEACHERS = 3;
+router.get("/reports/pbis-usage", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+
+  // Window — default to the trailing 30 days (matches the insights default).
+  const toRaw = req.query.to ? String(req.query.to) : todayIsoDate();
+  let fromRaw: string;
+  if (req.query.from) {
+    fromRaw = String(req.query.from);
+  } else {
+    const base = parseStrictIsoDate(toRaw);
+    if (!base) {
+      res
+        .status(400)
+        .json({ error: "to must be a valid YYYY-MM-DD calendar date" });
+      return;
+    }
+    base.setUTCDate(base.getUTCDate() - 29);
+    fromRaw = base.toISOString().slice(0, 10);
+  }
+  if (!parseStrictIsoDate(fromRaw) || !parseStrictIsoDate(toRaw)) {
+    res
+      .status(400)
+      .json({ error: "from and to must be valid YYYY-MM-DD calendar dates" });
+    return;
+  }
+  if (toRaw < fromRaw) {
+    res.status(400).json({ error: "to must be on or after from" });
+    return;
+  }
+  const fromDate = parseStrictIsoDate(fromRaw)!;
+  const toDate = parseStrictIsoDate(toRaw)!;
+  const spanDays =
+    Math.round((toDate.getTime() - fromDate.getTime()) / 86400000) + 1;
+  if (spanDays > MAX_RANGE_DAYS) {
+    res
+      .status(400)
+      .json({ error: `Date range may not exceed ${MAX_RANGE_DAYS} days` });
+    return;
+  }
+
+  // ---- All non-voided positive awards in the window (school-wide) ---------
+  const entries = await db
+    .select({
+      studentId: pbisEntriesTable.studentId,
+      reason: pbisEntriesTable.reason,
+      points: pbisEntriesTable.points,
+      staffId: pbisEntriesTable.staffId,
+    })
+    .from(pbisEntriesTable)
+    .where(
+      and(
+        eq(pbisEntriesTable.schoolId, schoolId),
+        sql`substring(${pbisEntriesTable.createdAt}, 1, 10) >= ${fromRaw}`,
+        sql`substring(${pbisEntriesTable.createdAt}, 1, 10) <= ${toRaw}`,
+        sql`${pbisEntriesTable.voidedAt} IS NULL`,
+        sql`${pbisEntriesTable.polarity} <> 'negative'`,
+      ),
+    );
+
+  // ---- Staff -> department map (active staff at this school) --------------
+  const staffRows = await db
+    .select({ id: staffTable.id, department: staffTable.department })
+    .from(staffTable)
+    .where(eq(staffTable.schoolId, schoolId));
+  const deptByStaff = new Map<number, string>();
+  for (const s of staffRows) {
+    deptByStaff.set(s.id, (s.department ?? "").trim() || "Unassigned");
+  }
+
+  // ---- (teacher, student) -> class period, for the by-period breakdown ----
+  // An award has no period of its own, so we attribute it to the period of the
+  // section where the awarding teacher rosters that student. Awards with no
+  // matching section (e.g. admins, cross-class recognitions) fall into the
+  // "Unmatched" bucket.
+  const rosterRows = await db
+    .select({
+      studentId: sectionRosterTable.studentId,
+      teacherStaffId: classSectionsTable.teacherStaffId,
+      period: classSectionsTable.period,
+    })
+    .from(sectionRosterTable)
+    .innerJoin(
+      classSectionsTable,
+      eq(classSectionsTable.id, sectionRosterTable.sectionId),
+    )
+    .where(
+      and(
+        eq(sectionRosterTable.schoolId, schoolId),
+        eq(classSectionsTable.isPlanning, false),
+      ),
+    );
+  const periodByTeacherStudent = new Map<string, number>();
+  for (const r of rosterRows) {
+    if (r.teacherStaffId == null) continue;
+    const key = `${r.teacherStaffId}|${r.studentId}`;
+    if (!periodByTeacherStudent.has(key)) {
+      periodByTeacherStudent.set(key, r.period);
+    }
+  }
+
+  // ---- Per-teacher aggregation -------------------------------------------
+  type TeacherAgg = { points: number; count: number; students: Set<string> };
+  const byTeacher = new Map<number, TeacherAgg>();
+  // Reason (behavior) rollup — school-wide, anonymized.
+  const byReason = new Map<string, { count: number; points: number }>();
+  // Period rollup — period -> points + distinct contributing teachers.
+  const periodAgg = new Map<
+    number,
+    { points: number; count: number; teachers: Set<number> }
+  >();
+  // "Unmatched" period bucket keyed separately (no real period number).
+  let unmatchedPeriodPoints = 0;
+  let unmatchedPeriodCount = 0;
+  const unmatchedPeriodTeachers = new Set<number>();
+
+  let schoolPoints = 0;
+  let schoolRecognitions = 0;
+
+  for (const e of entries) {
+    const pts = e.points ?? 0;
+
+    // Top behaviors are a school-wide, non-teacher-identifying view, so they
+    // count every positive award (including rare unattributed bulk awards).
+    const br = byReason.get(e.reason) ?? { count: 0, points: 0 };
+    br.count += 1;
+    br.points += pts;
+    byReason.set(e.reason, br);
+
+    // Peer-comparison totals must reflect the SAME population as the
+    // per-teacher denominator (`awardingTeachers`), so unattributed awards
+    // (staffId == null) are excluded from school totals as well. Otherwise
+    // the school average and the me-vs-peers math drift.
+    if (e.staffId == null) continue;
+    schoolPoints += pts;
+    schoolRecognitions += 1;
+    const ta = byTeacher.get(e.staffId) ?? {
+      points: 0,
+      count: 0,
+      students: new Set<string>(),
+    };
+    ta.points += pts;
+    ta.count += 1;
+    ta.students.add(e.studentId);
+    byTeacher.set(e.staffId, ta);
+
+    const period = periodByTeacherStudent.get(`${e.staffId}|${e.studentId}`);
+    if (period == null) {
+      unmatchedPeriodPoints += pts;
+      unmatchedPeriodCount += 1;
+      unmatchedPeriodTeachers.add(e.staffId);
+    } else {
+      const pa = periodAgg.get(period) ?? {
+        points: 0,
+        count: 0,
+        teachers: new Set<number>(),
+      };
+      pa.points += pts;
+      pa.count += 1;
+      pa.teachers.add(e.staffId);
+      periodAgg.set(period, pa);
+    }
+  }
+
+  const awardingTeachers = byTeacher.size;
+  const round1 = (n: number) => Math.round(n * 10) / 10;
+
+  // ---- School-wide averages (suppressed under the threshold) -------------
+  // When suppressed we must withhold EVERY derivable figure (totals + the
+  // teacher count), not just the averages: with only 1–2 awarding teachers a
+  // viewer could otherwise compute a peer's exact output as
+  // `totalPoints - myPoints`. Below the threshold the whole school scope
+  // collapses to nulls.
+  const schoolSuppressed = awardingTeachers < MIN_COMPARE_TEACHERS;
+  const school = {
+    awardingTeachers: schoolSuppressed ? null : awardingTeachers,
+    totalPoints: schoolSuppressed ? null : schoolPoints,
+    totalRecognitions: schoolSuppressed ? null : schoolRecognitions,
+    avgPointsPerTeacher: schoolSuppressed
+      ? null
+      : round1(schoolPoints / awardingTeachers),
+    avgRecognitionsPerTeacher: schoolSuppressed
+      ? null
+      : round1(schoolRecognitions / awardingTeachers),
+    suppressed: schoolSuppressed,
+  };
+
+  // ---- The caller's own numbers (always shown, never suppressed) ----------
+  const mine = byTeacher.get(staff.id);
+  const me = {
+    department: (staff.department ?? "").trim() || "Unassigned",
+    points: mine?.points ?? 0,
+    recognitions: mine?.count ?? 0,
+    studentsRecognized: mine?.students.size ?? 0,
+  };
+
+  // ---- By department ------------------------------------------------------
+  const deptAgg = new Map<
+    string,
+    { points: number; recognitions: number; teachers: number }
+  >();
+  for (const [staffId, agg] of byTeacher.entries()) {
+    const dept = deptByStaff.get(staffId) ?? "Unassigned";
+    const d = deptAgg.get(dept) ?? { points: 0, recognitions: 0, teachers: 0 };
+    d.points += agg.points;
+    d.recognitions += agg.count;
+    d.teachers += 1;
+    deptAgg.set(dept, d);
+  }
+  const byDepartment = Array.from(deptAgg.entries())
+    .map(([department, d]) => {
+      const suppressed = d.teachers < MIN_COMPARE_TEACHERS;
+      return {
+        department,
+        // Withhold the contributor count for suppressed buckets too — it is a
+        // derivation input, so exposing it would weaken the threshold guard.
+        teacherCount: suppressed ? null : d.teachers,
+        avgPointsPerTeacher: suppressed ? null : round1(d.points / d.teachers),
+        avgRecognitionsPerTeacher: suppressed
+          ? null
+          : round1(d.recognitions / d.teachers),
+        suppressed,
+        isMine: department === me.department,
+      };
+    })
+    .sort((a, b) => {
+      // Mine first, then by avg (suppressed last), then name.
+      if (a.isMine !== b.isMine) return a.isMine ? -1 : 1;
+      const av = a.avgPointsPerTeacher ?? -1;
+      const bv = b.avgPointsPerTeacher ?? -1;
+      if (av !== bv) return bv - av;
+      return a.department.localeCompare(b.department);
+    });
+
+  // ---- By period ----------------------------------------------------------
+  const byPeriod = Array.from(periodAgg.entries())
+    .map(([period, p]) => {
+      const teacherCount = p.teachers.size;
+      const suppressed = teacherCount < MIN_COMPARE_TEACHERS;
+      return {
+        period: String(period),
+        teacherCount: suppressed ? null : teacherCount,
+        totalPoints: suppressed ? null : p.points,
+        avgPointsPerTeacher: suppressed
+          ? null
+          : round1(p.points / teacherCount),
+        suppressed,
+      };
+    })
+    .sort((a, b) => Number(a.period) - Number(b.period));
+  if (unmatchedPeriodCount > 0) {
+    const teacherCount = unmatchedPeriodTeachers.size;
+    const suppressed = teacherCount < MIN_COMPARE_TEACHERS;
+    byPeriod.push({
+      period: "Unmatched",
+      teacherCount: suppressed ? null : teacherCount,
+      totalPoints: suppressed ? null : unmatchedPeriodPoints,
+      avgPointsPerTeacher: suppressed
+        ? null
+        : round1(unmatchedPeriodPoints / teacherCount),
+      suppressed,
+    });
+  }
+
+  // ---- Top behaviors (reasons) — school-wide, not teacher-identifying -----
+  const topBehaviors = Array.from(byReason.entries())
+    .map(([reason, v]) => ({ reason, count: v.count, points: v.points }))
+    .sort((a, b) => b.points - a.points || b.count - a.count)
+    .slice(0, 10);
+
+  res.json({
+    window: { from: fromRaw, to: toRaw, days: spanDays },
+    threshold: MIN_COMPARE_TEACHERS,
+    me,
+    school,
+    byDepartment,
+    byPeriod,
+    topBehaviors,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // PBIS Points balance report (roster of lifetime EARNED + current BANK balance)
 //   GET /api/reports/pbis-wallets?houseId=&sectionId=&teacherStaffId=&format=
 // Shows, per student, lifetime points earned alongside their spendable bank

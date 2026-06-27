@@ -114,6 +114,7 @@ import PbisPointsHub, {
   ClassroomStoreView,
   ManageListsView,
   PbisWalletsPage,
+  PbisUsagePage,
 } from "./components/PbisPointsHub";
 import PulseBrainLabHub from "./components/pulseBrainLab/PulseBrainLabHub";
 import PartneringWithParentsHub from "./components/academicEvidence/PartneringWithParentsHub";
@@ -3981,6 +3982,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "pbisMilestoneEmails",
     "pbisLists",
     "pbisWallets",
+    "pbisUsage",
   ],
   behaviorSupport: [
     "logIntervention",
@@ -5702,6 +5704,7 @@ function App() {
     | "eligibility"
     | "tileHome"
     | "pbisWallets"
+    | "pbisUsage"
     | "callCampaign"
   >("hallPasses");
   // Tile Home is a full-screen launcher that takes over the viewport.
@@ -11676,6 +11679,17 @@ function App() {
                     label: "Points Bank",
                     icon: IconStar,
                   })}
+                {/* My PBIS Usage — anonymized, school-wide point-awarding
+                    benchmark. Visible to ALL staff (no privilege gate): the
+                    page shows the signed-in teacher their OWN numbers boldly
+                    and compares to peer averages with no names. Same nav gate
+                    as PBIS Points. */}
+                {effectiveFeatures.Pbis &&
+                  renderNavItem({
+                    key: "pbisUsage",
+                    label: "My PBIS Usage",
+                    icon: IconStar,
+                  })}
                 {/* Both reward catalogs now live here in Recognition (they
                     used to be tabs inside the PBIS Points hub). School Store
                     is the read-only school-wide catalog, shown to every
@@ -17506,6 +17520,9 @@ function App() {
       )}
       {activeSection === "pbisWallets" && effectiveFeatures.Pbis && (
         <PbisWalletsPage />
+      )}
+      {activeSection === "pbisUsage" && effectiveFeatures.Pbis && (
+        <PbisUsagePage />
       )}
       {/* Call Campaign — Core Team launches/ends a "call all families"
           outreach campaign. Relocated here from the top of the PBIS Points
