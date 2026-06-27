@@ -7895,12 +7895,14 @@ export async function ensureFeaturePlansSchema() {
   };
   // Starter Plus = Starter plus the features that complete its soft
   // dependencies: PBIS + Houses light up recognition and the signage
-  // house-standings tile; Family Communication is the parent-notification
+  // house-standings tile; School Store is the PBIS rewards catalog (depends
+  // on PBIS, which is present); Family Communication is the parent-notification
   // delivery channel; Parent Portal turns on the parent-facing surfaces.
   const starterPlusFeatures: Record<string, true> = {
     ...starterFeatures,
     pbis: true,
     houses: true,
+    schoolStore: true,
     familyComm: true,
     parentPortal: true,
   };

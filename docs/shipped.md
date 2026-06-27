@@ -3,6 +3,34 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Feature Licensing — Starter / Starter Plus plans + dependency
+  highlighting.** Seeded two new plans (`starter`, `starter_plus`) via
+  `ensureFeaturePlansSchema` (`INSERT ... ON CONFLICT DO NOTHING`;
+  Starter Plus additionally carries `schoolStore`). Added a two-level
+  feature **dependency graph** to the registry: each `FeatureSpec` in
+  `lib/featureLicensing.ts` (`FEATURE_KEYS`) may declare `requires` (HARD —
+  blocks save) and `recommends` (SOFT — warns only). The
+  `/feature-licensing/feature-keys` endpoint returns `FEATURE_KEYS`
+  verbatim, so the edges flow to the client with no route change. Edges —
+  **Required:** `schoolStore→pbis`, `schoolStoreNotify→schoolStore`,
+  `houses→pbis`; **Recommended:** `hallPasses→bellSchedule`,
+  `tardyPass→bellSchedule`, `schoolStoreNotify→familyComm`,
+  `parentPortal→familyComm`, `mtssPlans→academics`,
+  `earlyWarning→academics`, `behaviorSpecialist→mtssPlans`. The client
+  (`FeatureLicensingAdminPage.tsx`) added a shared
+  `computeDepIssues(features, enabledMap)` helper + `DepBanner` /
+  `RowDepNote` and wired it into **all three** feature-toggle surfaces:
+  `PlanEditorModal`, `FeaturePickerModal`, and the per-row `OverridesDrawer`
+  (made plan-aware: effective = `override ?? plan default`). Required
+  violations block save (button disabled + `save()` guard) on the modal
+  surfaces; the drawer's immediate-write paths (`upsert`, Clear/`remove`)
+  reject any write that would persist an unmet Required dep. `resetAll`
+  is intentionally unguarded (it only reverts to already-guarded plan
+  defaults). **Invariant: every UI surface that toggles a feature must run
+  `computeDepIssues` on the EFFECTIVE feature set and block writes that
+  leave a Required dep unmet — adding a new toggle surface without it
+  reopens the bypass.**
+
 - **Feature Licensing — Enterprise plan is all-features + school search.** The
   enterprise plan now carries EVERY feature by default (its `features` JSONB is
   derived from `FEATURE_KEYS`, the single source of truth, in
