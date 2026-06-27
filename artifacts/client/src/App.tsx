@@ -18386,13 +18386,6 @@ function App() {
             show: canManageAllPbisLists,
           },
           {
-            key: "interventions",
-            label: "Manage Intervention List",
-            desc: "Add, edit, or remove the interventions teachers can pick when logging.",
-            color: "#7c3aed",
-            show: canManageBehaviorLists,
-          },
-          {
             key: "trustedAdultInterventions",
             label: "Trusted Adult Interventions",
             desc: "Edit the interventions a trusted adult can deliver during check-ins.",
