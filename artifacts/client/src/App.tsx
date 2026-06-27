@@ -9708,6 +9708,11 @@ function App() {
   // lib/storeRedemptions.ts (isCoreTeam OR PBIS coordinator). Drives the
   // fulfillment dashboard nav item and the pulsing cart badge in the header.
   const canFulfillStore = isCoreTeamMember || isPbisCoord;
+  // Who may purchase School Store rewards on behalf of a student — the
+  // catalog crew (canEditSchoolStore) PLUS the fulfillment crew / Core Team
+  // (canFulfillStore). Mirrors the server's requirePurchaseAccess gate
+  // (hasStoreWriteAccess || canManageStoreFulfillment) in routes/schoolStore.ts.
+  const canPurchaseSchoolStore = canEditSchoolStore || canFulfillStore;
   const isSuperUser = authUser?.isSuperUser === true;
   // District Admin tier (Phase 1D). Mirrors the server-side
   // `canActAsDistrict` predicate in artifacts/api-server/src/lib/scope.ts —
@@ -17479,7 +17484,10 @@ function App() {
           controls right here, since the store now lives in the sidebar;
           everyone else sees the read-only catalog. */}
       {activeSection === "schoolStore" && (
-        <SchoolStoreView canEdit={canEditSchoolStore} />
+        <SchoolStoreView
+          canEdit={canEditSchoolStore}
+          canPurchase={canPurchaseSchoolStore}
+        />
       )}
 
       {/* Per-teacher Classroom Store — moved out of the PBIS Hub tab bar into
@@ -17495,7 +17503,10 @@ function App() {
           read-only rather than crash, but the UI only links to this
           section from a tile that's already gated. */}
       {activeSection === "schoolStoreManage" && (
-        <SchoolStoreView canEdit={canEditSchoolStore} />
+        <SchoolStoreView
+          canEdit={canEditSchoolStore}
+          canPurchase={canPurchaseSchoolStore}
+        />
       )}
 
       {/* Core Team / PBIS-coordinator fulfillment dashboard. Server gates

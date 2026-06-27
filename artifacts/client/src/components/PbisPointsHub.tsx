@@ -5625,14 +5625,20 @@ type StoreConfig = {
 function StoreView({
   config,
   canEdit,
+  canPurchase = false,
 }: {
   config: StoreConfig;
   canEdit: boolean;
+  // When true, render a "Purchase for a student" header action that opens
+  // the on-behalf redemption flow. Used by the School Store for the catalog
+  // crew + Core Team; the Classroom Store leaves this off.
+  canPurchase?: boolean;
 }) {
   const [items, setItems] = useState<StoreItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState<StoreItem | "new" | null>(null);
+  const [purchasing, setPurchasing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -5718,6 +5724,24 @@ function StoreView({
             + Add item
           </button>
         )}
+        {canPurchase && (
+          <button
+            type="button"
+            onClick={() => setPurchasing(true)}
+            style={{
+              padding: "0.55rem 1rem",
+              background: "rgba(255,255,255,0.16)",
+              color: "white",
+              border: "1px solid rgba(255,255,255,0.65)",
+              borderRadius: "0.4rem",
+              fontWeight: 700,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            🛒 Purchase for a student
+          </button>
+        )}
       </div>
 
       {err && (
@@ -5799,6 +5823,14 @@ function StoreView({
           }}
         />
       )}
+
+      {purchasing && (
+        <PurchaseForStudentModal
+          apiPath={config.apiPath}
+          items={items}
+          onClose={() => setPurchasing(false)}
+        />
+      )}
     </div>
   );
 }
@@ -5830,7 +5862,522 @@ export function ClassroomStoreView() {
 // Coordinator / PBIS Coordinator (server enforces this too). Exported so
 // it can be embedded in the BS hub, MTSS hub, and a top-level read-only
 // sidebar entry — see App.tsx.
-export function SchoolStoreView({ canEdit }: { canEdit: boolean }) {
+// =============================================================================
+// PurchaseForStudentModal — staff-initiated "buy on behalf of a student"
+// flow for the School Store. Step 1: search + pick a student (reuses the
+// shared /api/student-finder/search endpoint). Step 2: see the student's
+// available points and redeem an item against the SAME engine the family
+// + student portals use (POST <apiPath>/:id/redeem). FLEID is never shown —
+// the student id is a join key only; the UI renders localSisId.
+// =============================================================================
+
+interface FinderHit {
+  studentId: string;
+  localSisId?: string | null;
+  firstName: string;
+  lastName: string;
+  grade: number;
+}
+
+interface PickedStudent {
+  studentId: string;
+  name: string;
+  localSisId: string | null;
+  grade: number;
+}
+
+interface WalletInfo {
+  earned: number;
+  spent: number;
+  available: number;
+}
+
+function PurchaseForStudentModal({
+  apiPath,
+  items,
+  onClose,
+}: {
+  apiPath: string;
+  items: StoreItem[];
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<FinderHit[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [student, setStudent] = useState<PickedStudent | null>(null);
+  const [wallet, setWallet] = useState<WalletInfo | null>(null);
+  const [walletLoading, setWalletLoading] = useState(false);
+  const [confirmItem, setConfirmItem] = useState<StoreItem | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  // Close on Escape.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // Debounced student typeahead (paused once a student is picked).
+  useEffect(() => {
+    if (student) return;
+    const q = query.trim();
+    if (q.length < 1) {
+      setHits([]);
+      return;
+    }
+    setSearching(true);
+    const handle = window.setTimeout(async () => {
+      try {
+        const r = await authFetch(
+          `/api/student-finder/search?q=${encodeURIComponent(q)}`,
+        );
+        if (!r.ok) throw new Error("Search failed");
+        const data = (await r.json()) as { students?: FinderHit[] };
+        setHits(Array.isArray(data.students) ? data.students : []);
+      } catch {
+        setHits([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [query, student]);
+
+  async function loadWallet(studentId: string) {
+    setWalletLoading(true);
+    setWallet(null);
+    try {
+      const r = await authFetch(`${apiPath}/wallet/${studentId}`);
+      if (!r.ok) throw new Error("Could not load this student's points");
+      const data = (await r.json()) as WalletInfo & {
+        localSisId: string | null;
+        studentName: string;
+      };
+      setWallet({
+        earned: data.earned,
+        spent: data.spent,
+        available: data.available,
+      });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not load points");
+    } finally {
+      setWalletLoading(false);
+    }
+  }
+
+  function pickStudent(h: FinderHit) {
+    setErr(null);
+    setSuccess(null);
+    setConfirmItem(null);
+    setStudent({
+      studentId: h.studentId,
+      name: `${h.firstName} ${h.lastName}`.trim(),
+      localSisId: h.localSisId ?? null,
+      grade: h.grade,
+    });
+    void loadWallet(h.studentId);
+  }
+
+  function changeStudent() {
+    setStudent(null);
+    setWallet(null);
+    setConfirmItem(null);
+    setErr(null);
+    setSuccess(null);
+    setQuery("");
+    setHits([]);
+  }
+
+  async function confirmPurchase(item: StoreItem) {
+    if (!student) return;
+    setSubmitting(true);
+    setErr(null);
+    setSuccess(null);
+    try {
+      const r = await authFetch(`${apiPath}/${item.id}/redeem`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentId: student.studentId }),
+      });
+      const data = (await r.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      if (!r.ok) {
+        throw new Error(data.error || "Purchase failed");
+      }
+      setSuccess(
+        `Purchased “${item.name}” for ${student.name}. Sent to the fulfillment queue.`,
+      );
+      setConfirmItem(null);
+      // Reflect the new balance so the buyer can keep going.
+      await loadWallet(student.studentId);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Purchase failed");
+      setConfirmItem(null);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const active = items.filter((i) => !i.archived);
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15, 23, 42, 0.55)",
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "center",
+        padding: "3rem 1rem",
+        zIndex: 1000,
+        overflowY: "auto",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "white",
+          borderRadius: "0.7rem",
+          width: "min(640px, 100%)",
+          maxHeight: "100%",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          boxShadow: "0 20px 50px rgba(15, 23, 42, 0.35)",
+        }}
+      >
+        <div
+          style={{
+            padding: "1rem 1.25rem",
+            borderBottom: "1px solid #e2e8f0",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.75rem",
+          }}
+        >
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: "1.15rem", fontWeight: 700, color: "#0f172a" }}>
+              🛒 Purchase for a student
+            </div>
+            <div style={{ fontSize: "0.85rem", color: "#64748b", marginTop: 2 }}>
+              {student
+                ? "Choose a reward to redeem with this student's points."
+                : "Search for the student you're buying for."}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              border: "none",
+              background: "transparent",
+              fontSize: "1.4rem",
+              cursor: "pointer",
+              color: "#64748b",
+              lineHeight: 1,
+            }}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{ padding: "1.25rem", overflowY: "auto" }}>
+          {err && (
+            <div
+              style={{
+                marginBottom: "0.85rem",
+                padding: "0.6rem 0.8rem",
+                background: "#fee2e2",
+                color: "#991b1b",
+                borderRadius: "0.4rem",
+                fontSize: "0.9rem",
+              }}
+            >
+              {err}
+            </div>
+          )}
+          {success && (
+            <div
+              style={{
+                marginBottom: "0.85rem",
+                padding: "0.6rem 0.8rem",
+                background: "#dcfce7",
+                color: "#166534",
+                borderRadius: "0.4rem",
+                fontSize: "0.9rem",
+              }}
+            >
+              {success}
+            </div>
+          )}
+
+          {!student ? (
+            <>
+              <input
+                autoFocus
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search by student name or local ID…"
+                style={{
+                  width: "100%",
+                  padding: "0.6rem 0.8rem",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: "0.45rem",
+                  fontSize: "0.95rem",
+                  boxSizing: "border-box",
+                }}
+              />
+              <div style={{ marginTop: "0.85rem" }}>
+                {searching ? (
+                  <div style={{ color: "#64748b", fontSize: "0.9rem" }}>
+                    Searching…
+                  </div>
+                ) : query.trim() && hits.length === 0 ? (
+                  <div style={{ color: "#64748b", fontSize: "0.9rem" }}>
+                    No students match “{query.trim()}”.
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {hits.map((h) => (
+                      <button
+                        key={h.studentId}
+                        type="button"
+                        onClick={() => pickStudent(h)}
+                        style={{
+                          textAlign: "left",
+                          padding: "0.55rem 0.75rem",
+                          border: "1px solid #e2e8f0",
+                          borderRadius: "0.45rem",
+                          background: "white",
+                          cursor: "pointer",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <span style={{ fontWeight: 600, color: "#0f172a" }}>
+                          {h.firstName} {h.lastName}
+                        </span>
+                        <span style={{ fontSize: "0.82rem", color: "#64748b" }}>
+                          Grade {h.grade}
+                          {h.localSisId ? ` · ID ${h.localSisId}` : ""}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  padding: "0.7rem 0.85rem",
+                  background: "#f1f5f9",
+                  borderRadius: "0.5rem",
+                  marginBottom: "1rem",
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 700, color: "#0f172a" }}>
+                    {student.name}
+                  </div>
+                  <div style={{ fontSize: "0.82rem", color: "#64748b" }}>
+                    Grade {student.grade}
+                    {student.localSisId ? ` · ID ${student.localSisId}` : ""}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: "0.72rem", color: "#64748b" }}>
+                    Available
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "1.25rem",
+                      fontWeight: 800,
+                      color: "#1d4ed8",
+                    }}
+                  >
+                    {walletLoading || !wallet ? "…" : `${wallet.available} pts`}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={changeStudent}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "#1d4ed8",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  fontSize: "0.85rem",
+                  padding: 0,
+                  marginBottom: "0.85rem",
+                }}
+              >
+                ← Choose a different student
+              </button>
+
+              {active.length === 0 ? (
+                <div style={{ color: "#64748b", fontSize: "0.9rem" }}>
+                  No items available in the store.
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {active.map((item) => {
+                    const affordable =
+                      !!wallet && wallet.available >= item.pointsCost;
+                    const isConfirming = confirmItem?.id === item.id;
+                    return (
+                      <div
+                        key={item.id}
+                        style={{
+                          border: "1px solid #e2e8f0",
+                          borderRadius: "0.5rem",
+                          padding: "0.7rem 0.85rem",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            gap: 10,
+                          }}
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <div
+                              style={{
+                                fontWeight: 600,
+                                color: "#0f172a",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {item.name}
+                            </div>
+                            <div
+                              style={{ fontSize: "0.82rem", color: "#64748b" }}
+                            >
+                              {item.pointsCost} pts
+                            </div>
+                          </div>
+                          {!isConfirming && (
+                            <button
+                              type="button"
+                              disabled={!affordable || walletLoading}
+                              onClick={() => {
+                                setErr(null);
+                                setSuccess(null);
+                                setConfirmItem(item);
+                              }}
+                              style={{
+                                padding: "0.45rem 0.85rem",
+                                background: affordable ? "#1d4ed8" : "#cbd5e1",
+                                color: "white",
+                                border: "none",
+                                borderRadius: "0.4rem",
+                                fontWeight: 700,
+                                cursor:
+                                  affordable && !walletLoading
+                                    ? "pointer"
+                                    : "not-allowed",
+                                whiteSpace: "nowrap",
+                                fontSize: "0.85rem",
+                              }}
+                            >
+                              {affordable ? "Purchase" : "Not enough pts"}
+                            </button>
+                          )}
+                        </div>
+                        {isConfirming && (
+                          <div
+                            style={{
+                              marginTop: "0.6rem",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              flexWrap: "wrap",
+                            }}
+                          >
+                            <span
+                              style={{ fontSize: "0.85rem", color: "#0f172a" }}
+                            >
+                              Spend {item.pointsCost} pts for {student.name}?
+                            </span>
+                            <button
+                              type="button"
+                              disabled={submitting}
+                              onClick={() => void confirmPurchase(item)}
+                              style={{
+                                padding: "0.4rem 0.8rem",
+                                background: "#166534",
+                                color: "white",
+                                border: "none",
+                                borderRadius: "0.4rem",
+                                fontWeight: 700,
+                                cursor: submitting ? "wait" : "pointer",
+                                fontSize: "0.82rem",
+                              }}
+                            >
+                              {submitting ? "Purchasing…" : "Confirm"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={submitting}
+                              onClick={() => setConfirmItem(null)}
+                              style={{
+                                padding: "0.4rem 0.8rem",
+                                background: "white",
+                                color: "#475569",
+                                border: "1px solid #cbd5e1",
+                                borderRadius: "0.4rem",
+                                fontWeight: 600,
+                                cursor: "pointer",
+                                fontSize: "0.82rem",
+                              }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function SchoolStoreView({
+  canEdit,
+  canPurchase = false,
+}: {
+  canEdit: boolean;
+  canPurchase?: boolean;
+}) {
   return (
     <StoreView
       config={{
@@ -5851,6 +6398,7 @@ export function SchoolStoreView({ canEdit }: { canEdit: boolean }) {
           : "Check back later — your admin hasn't added any items yet.",
       }}
       canEdit={canEdit}
+      canPurchase={canPurchase}
     />
   );
 }

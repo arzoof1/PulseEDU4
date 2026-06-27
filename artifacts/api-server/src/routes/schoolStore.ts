@@ -145,6 +145,25 @@ function requireWriteAccess(
   return true;
 }
 
+// Purchasing on behalf of a student is shared by the catalog owners
+// (hasStoreWriteAccess) AND the fulfillment crew (Core Team + PBIS
+// coordinator, via canManageStoreFulfillment) who run the redemption
+// queue. Kept in sync with the client's `canPurchaseSchoolStore`
+// (canEditSchoolStore || canFulfillStore) in App.tsx.
+function requirePurchaseAccess(
+  staff: typeof staffTable.$inferSelect,
+  res: import("express").Response,
+): boolean {
+  if (!(hasStoreWriteAccess(staff) || canManageStoreFulfillment(staff))) {
+    res.status(403).json({
+      error:
+        "Only the school store crew or the Core Team can purchase on behalf of a student",
+    });
+    return false;
+  }
+  return true;
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -555,7 +574,7 @@ router.get("/school-store/wallet/:studentId", async (req, res) => {
 router.post("/school-store/:id/redeem", async (req, res) => {
   const staff = await loadStaff(req, res);
   if (!staff) return;
-  if (!requireWriteAccess(staff, res)) return;
+  if (!requirePurchaseAccess(staff, res)) return;
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
   const itemId = Number(req.params.id);
