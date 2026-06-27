@@ -3,6 +3,21 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Feature Licensing — Enterprise plan is all-features + school search.** The
+  enterprise plan now carries EVERY feature by default (its `features` JSONB is
+  derived from `FEATURE_KEYS`, the single source of truth, in
+  `ensureFeaturePlansSchema`), so only true deviations remain as per-school
+  overrides. An idempotent `UPDATE` folds newly-added features into the existing
+  plan row (the seed `INSERT ... ON CONFLICT DO NOTHING` cannot), and a one-shot
+  migration (`enterprise_plan_fold_redundant_overrides_v1`) drops redundant
+  force-ON overrides (`enabled`, no upsell, no expiry, plan already enables the
+  feature) on enterprise schools and reapplies licensing so `super_feature_*`
+  flags come from the plan — force-OFF and expiring/trial overrides are left
+  intact. This zeroed out D.S. Parrott's 3 stale overrides (compTime,
+  eligibility, schoolStoreNotify). The Feature Licensing admin page's Schools
+  section also got a name search box (client-side filter + result count) for
+  scaling to hundreds of schools.
+
 - **Hall Pass — bulk teacher destination management (3 phases)** — replaced the
   cumbersome 187-row teacher destination allow-list grid with a bulk,
   school-managed flow while keeping the grid as the manual edge-case editor.

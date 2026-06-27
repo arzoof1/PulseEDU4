@@ -63,6 +63,10 @@ import { logger } from "./lib/logger";
 import { fetchWeatherForLocation } from "./lib/weatherFetcher";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./lib/schoolYear.js";
 import {
+  FEATURE_KEYS,
+  reapplyLicensingToSchool,
+} from "./lib/featureLicensing.js";
+import {
   mondayOf,
   enumerateWeeks,
   academicStartMonday,
@@ -7841,31 +7845,15 @@ export async function ensureFeaturePlansSchema() {
   // (Column adds for schools.plan_id + school_settings.super_feature_ast
   // happen earlier via ensureFeaturePlansColumns, before seedTenancy.)
 
-  // Seed the default "enterprise" plan (everything on, no quotas).
-  // The keys here match FEATURE_KEYS in
-  // artifacts/api-server/src/lib/featureLicensing.ts — keep in sync.
-  const enterpriseFeatures = {
-    familyComm: true,
-    pbis: true,
-    schoolStore: true,
-    accommodations: true,
-    logIntervention: true,
-    requestPullout: true,
-    hallPasses: true,
-    tardyPass: true,
-    mtssPlans: true,
-    behaviorSpecialist: true,
-    issDashboard: true,
-    displays: true,
-    bellSchedule: true,
-    earlyWarning: true,
-    academics: true,
-    dataImports: true,
-    houses: true,
-    parentPortal: true,
-    ast: true,
-    compTime: true,
-  };
+  // Seed the default "enterprise" plan: EVERY feature on, no quotas.
+  // Derived from FEATURE_KEYS (the single source of truth) so the plan can
+  // never silently drift behind newly-added features again — historically
+  // this literal lagged behind FEATURE_KEYS (schoolStoreNotify / eligibility /
+  // compTime were missing), which forced schools to turn those on via
+  // per-school overrides instead of getting them from the plan.
+  const enterpriseFeatures: Record<string, true> = Object.fromEntries(
+    FEATURE_KEYS.map((f) => [f.key, true as const]),
+  );
   await db.execute(sql`
     INSERT INTO plans (key, label, description, features, quotas)
     VALUES (
@@ -7877,6 +7865,16 @@ export async function ensureFeaturePlansSchema() {
     )
     ON CONFLICT (key) DO NOTHING
   `);
+  // Fold any newly-added features into an EXISTING enterprise plan row
+  // (ON CONFLICT DO NOTHING above never updates it). Idempotent: re-writing
+  // the same all-on JSONB every boot is a no-op once it has converged.
+  await db.execute(sql`
+    UPDATE plans
+       SET features = ${JSON.stringify(enterpriseFeatures)}::jsonb,
+           updated_at = NOW()
+     WHERE key = 'enterprise'
+       AND features <> ${JSON.stringify(enterpriseFeatures)}::jsonb
+  `);
 
   // Backfill: any school still on plan_id IS NULL gets the enterprise
   // plan so the runtime behavior is unchanged after this migration.
@@ -7885,6 +7883,52 @@ export async function ensureFeaturePlansSchema() {
     SET plan_id = (SELECT id FROM plans WHERE key = 'enterprise')
     WHERE plan_id IS NULL
   `);
+
+  // One-shot: now that the enterprise plan carries EVERY feature, any
+  // per-school override that merely forces a plan-provided feature ON (no
+  // upsell, no expiry) is pure redundancy — it was only ever needed because
+  // the plan lagged. Drop those so the admin's "X overrides" count reflects
+  // real deviations again, then reapply licensing so the super_feature_*
+  // booleans are driven by the plan. Force-OFF and expiring/trial overrides
+  // are genuine deviations and are left untouched. Guarded by a marker so we
+  // never fight an admin who later re-adds a redundant override on purpose.
+  const ENTERPRISE_FOLD_MARKER = "enterprise_plan_fold_redundant_overrides_v1";
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS app_one_shot_markers (
+      name text PRIMARY KEY,
+      ran_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  const foldMarker = await db.execute<{ name: string }>(
+    sql`SELECT name FROM app_one_shot_markers WHERE name = ${ENTERPRISE_FOLD_MARKER}`,
+  );
+  if (foldMarker.rows.length === 0) {
+    // Match redundant overrides against the plan's OWN features JSONB
+    // (which we just set all-on) via the jsonb `->>` accessor — avoids
+    // passing a JS array into the sql template, which drizzle expands to a
+    // row tuple that can't be cast to text[].
+    const affected = await db.execute<{ school_id: number }>(sql`
+      DELETE FROM school_feature_overrides sfo
+       USING schools s, plans p
+       WHERE sfo.school_id = s.id
+         AND s.plan_id = p.id
+         AND p.key = 'enterprise'
+         AND sfo.enabled = TRUE
+         AND sfo.show_upsell = FALSE
+         AND sfo.expires_at IS NULL
+         AND COALESCE((p.features ->> sfo.feature_key)::boolean, FALSE) = TRUE
+      RETURNING sfo.school_id
+    `);
+    const schoolIds = Array.from(new Set(affected.rows.map((r) => r.school_id)));
+    for (const sid of schoolIds) {
+      // Re-derive super_feature_* from the (now all-on) plan, then overlay
+      // any surviving overrides. Per-school lock + transaction live inside.
+      await reapplyLicensingToSchool(sid);
+    }
+    await db.execute(
+      sql`INSERT INTO app_one_shot_markers (name) VALUES (${ENTERPRISE_FOLD_MARKER}) ON CONFLICT DO NOTHING`,
+    );
+  }
 }
 
 // -----------------------------------------------------------------------------

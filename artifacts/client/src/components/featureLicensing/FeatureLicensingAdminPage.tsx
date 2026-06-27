@@ -747,6 +747,8 @@ function SchoolsSection({
   onReload: () => void | Promise<void>;
   onError: (msg: string) => void;
 }) {
+  const [query, setQuery] = useState("");
+
   async function changePlan(schoolId: number, planId: number | null) {
     try {
       await sendJson(`/api/feature-licensing/schools/${schoolId}/plan`, "PATCH", {
@@ -758,9 +760,40 @@ function SchoolsSection({
     }
   }
 
+  const q = query.trim().toLowerCase();
+  const visibleSchools = q
+    ? schools.filter((s) => s.schoolName.toLowerCase().includes(q))
+    : schools;
+
   return (
     <section>
-      <h3 style={{ marginBottom: "0.5rem" }}>Schools</h3>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          marginBottom: "0.5rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <h3 style={{ margin: 0 }}>Schools</h3>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search schools…"
+            aria-label="Search schools by name"
+            style={{ minWidth: 220 }}
+          />
+          <span style={{ fontSize: "0.85em", color: "#777", whiteSpace: "nowrap" }}>
+            {q
+              ? `${visibleSchools.length} of ${schools.length}`
+              : `${schools.length} school${schools.length === 1 ? "" : "s"}`}
+          </span>
+        </div>
+      </div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr style={{ textAlign: "left" }}>
@@ -771,7 +804,7 @@ function SchoolsSection({
           </tr>
         </thead>
         <tbody>
-          {schools.map((s) => (
+          {visibleSchools.map((s) => (
             <tr key={s.schoolId} style={{ borderTop: "1px solid var(--border, #eee)" }}>
               <td>{s.schoolName}</td>
               <td>
@@ -806,10 +839,12 @@ function SchoolsSection({
               </td>
             </tr>
           ))}
-          {schools.length === 0 && (
+          {visibleSchools.length === 0 && (
             <tr>
               <td colSpan={4} style={{ color: "var(--text-subtle, #777)" }}>
-                No schools.
+                {schools.length === 0
+                  ? "No schools."
+                  : `No schools match "${query.trim()}".`}
               </td>
             </tr>
           )}
