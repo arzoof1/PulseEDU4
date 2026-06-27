@@ -92,4 +92,29 @@ wrong group wins).
 **Naming is an owner decision:** the target IA calls this group "Student Support"
 but it's still labeled "Academic and Behavior Supports" — renaming was deferred as
 an explicit open decision (muscle-memory cost). Don't unilaterally rename nav groups
-during a structural consolidation.
+during a structural consolidation. (Owner later approved the "Student Support" rename;
+only the visible `label` changed — the `behaviorSupport` id + activeSection keys stay.)
+
+## Quick Access is NOT purely duplicative — the sole-home trap (Phase 4a)
+
+Before converting a "Quick Access"/shortcuts strip into a user-pinnable favorites
+layer, audit whether each shortcut ALSO has a permanent group home. It often does
+NOT: organic cleanup tends to remove an item from its group and leave it ONLY in
+Quick Access "to avoid duplication." Here `pbis`, `houseRankings`, `requestPullout`,
+and `accommodations` each lived ONLY in Quick Access. If you then make Quick Access
+pinnable (user can unpin), an unpinned sole-home item becomes unreachable from the
+sidebar = capability removal. Fix BEFORE making it pinnable: restore each item to its
+group (same per-item gate verbatim), so the grouped nav is the complete map and
+unpinning never orphans anything.
+
+**Restoring an item re-REQUIRES broadening the group's `show*` flag back to a superset
+of the item's gate** — i.e. you may be reversing an earlier tightening. Phase 2 had
+narrowed `showRecognition` to `SchoolStore || canAccessPbisHub` once PBIS Points left
+for Quick Access; restoring pbis/houseRankings (gate `effectiveFeatures.Pbis`) means
+`showRecognition` must again OR in `effectiveFeatures.Pbis` or PBIS-only teachers get
+no Recognition home. The companion-trap rule still holds: `show*` == disjunction of the
+rows that can actually render inside. **How to apply:** for each restored key, confirm
+the destination group's `show*` admits its full audience, add the key to
+NAV_GROUP_OWNERSHIP if it had no owner (houseRankings had none), and expect an interim
+state where the item shows in BOTH Quick Access and its group until the pinnable layer
+removes the static list.

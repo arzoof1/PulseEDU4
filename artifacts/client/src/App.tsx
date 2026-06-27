@@ -3965,6 +3965,10 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
   insights: ["insights", "insightsWatchlist", "myWatchList", "studentProfile", "classComposer", "contactRate"],
   recognition: [
     "pbis",
+    // Phase 4a: House Rankings restored to its permanent Recognition home
+    // (it previously lived ONLY in Quick Access and had no force-expand
+    // owner). pbis was already owned here from before the QA promotion.
+    "houseRankings",
     "schoolStore",
     "schoolStoreManage",
     "pbisHub",
@@ -11037,8 +11041,16 @@ function App() {
         // effectiveFeatures.Pbis term is stale — PBIS Points moved to
         // Quick Access — and could render an empty group header, so it's
         // dropped here to keep the gate in lockstep with the children.
+        // Phase 4a: PBIS Points + House Rankings restored to their permanent
+        // Recognition home, so this flag must again admit plain PBIS users
+        // (effectiveFeatures.Pbis) — a superset of the items' own gate — or
+        // those items would have no reachable group home once Quick Access
+        // becomes pinnable in 4b. (Phase 2 had tightened this to
+        // SchoolStore||Hub when PBIS Points lived only in Quick Access.)
         const showRecognition =
-          effectiveFeatures.SchoolStore || canAccessPbisHub;
+          effectiveFeatures.Pbis ||
+          effectiveFeatures.SchoolStore ||
+          canAccessPbisHub;
         const showBehaviorSupport =
           effectiveFeatures.LogIntervention ||
           effectiveFeatures.RequestPullout ||
@@ -11328,8 +11340,25 @@ function App() {
                 userId={sidebarUserId}
                 containsActive={groupContainsActive("recognition", activeSection)}
               >
-                {/* PBIS Points was promoted to Quick Access — kept out
-                    of Recognition to avoid duplication. */}
+                {/* Phase 4a: PBIS Points + House Rankings restored to their
+                    permanent Recognition home so the grouped nav is the
+                    complete map. Same gate as the Quick Access copies
+                    (effectiveFeatures.Pbis). Until Quick Access becomes
+                    pinnable favorites in 4b these intentionally also appear
+                    in the static Quick Access list (interim duplication);
+                    recognition force-expand ownership covers both keys. */}
+                {effectiveFeatures.Pbis &&
+                  renderNavItem({
+                    key: "pbis",
+                    label: "PBIS Points",
+                    icon: IconStar,
+                  })}
+                {effectiveFeatures.Pbis &&
+                  renderNavItem({
+                    key: "houseRankings",
+                    label: "House Rankings",
+                    icon: IconStar,
+                  })}
                 {/* Phase 2 (hub fold): the standalone read-only School
                     Store row is only shown to staff who CANNOT open the
                     PBIS Hub. Everyone with canAccessPbisHub also has
@@ -11408,8 +11437,19 @@ function App() {
                     force-expand ownership now lives on behaviorSupport. */}
                 {canAccessMtssHub &&
                   mtssCoordNavSections.map(renderNavItem)}
-                {/* Request Pullout was promoted to Quick Access — kept
-                    out of Behavior Support to avoid duplication. */}
+                {/* Phase 4a: Request Pullout restored to its permanent
+                    Student Support home so the grouped nav is the complete
+                    map. Same gate as the Quick Access copy
+                    (effectiveFeatures.RequestPullout); renderNavItem still
+                    applies the front-office exclusion. behaviorSupport
+                    already owns the key. Also still appears in the static
+                    Quick Access list until 4b (interim duplication). */}
+                {effectiveFeatures.RequestPullout &&
+                  renderNavItem({
+                    key: "requestPullout",
+                    label: "Request Pullout",
+                    icon: IconClipboard,
+                  })}
                 {isBehaviorSpec &&
                   behaviorSpecNavSections.map(renderNavItem)}
                 {isBehaviorSpec &&
@@ -11481,8 +11521,18 @@ function App() {
                   activeSection,
                 )}
               >
-                {/* Accommodations was promoted to Quick Access — kept
-                    out of Special Programs to avoid duplication. */}
+                {/* Phase 4a: Accommodations restored to its permanent
+                    Special Programs home so the grouped nav is the complete
+                    map. Same gate as the Quick Access copy
+                    (effectiveFeatures.Accommodations); specialPrograms
+                    already owns the key. Also still appears in the static
+                    Quick Access list until 4b (interim duplication). */}
+                {effectiveFeatures.Accommodations &&
+                  renderNavItem({
+                    key: "accommodations",
+                    label: "Accommodations",
+                    icon: IconClipboard,
+                  })}
                 {isEseCoord && eseNavSections.map(renderNavItem)}
               </NavGroup>
             )}
