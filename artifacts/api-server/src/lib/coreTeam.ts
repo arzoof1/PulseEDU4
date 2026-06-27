@@ -11,9 +11,10 @@
 //
 // Members: SuperUser, District Admin, school Admin, Behavior Specialist,
 // MTSS Coordinator, School Psychologist — plus any staff member an admin
-// explicitly adds to the Core Team via the assignable `isCoreTeam` flag in
-// Settings → Staff & Roles. The explicit flag grants the full Core Team
-// power set everywhere this gate (and every gate that composes it) is used.
+// explicitly adds to the Core Team via the assignable `isCoreTeam` flag, or
+// anyone assigned the Confidential Secretary role (`isConfidentialSecretary`)
+// in Settings → Staff & Roles. Either flag grants the full Core Team power set
+// everywhere this gate (and every gate that composes it) is used.
 export function isCoreTeam(staff: {
   isSuperUser?: boolean | null;
   isDistrictAdmin?: boolean | null;
@@ -22,6 +23,7 @@ export function isCoreTeam(staff: {
   isMtssCoordinator?: boolean | null;
   isSchoolPsychologist?: boolean | null;
   isCoreTeam?: boolean | null;
+  isConfidentialSecretary?: boolean | null;
 }): boolean {
   return Boolean(
     staff.isSuperUser ||
@@ -30,7 +32,8 @@ export function isCoreTeam(staff: {
       staff.isBehaviorSpecialist ||
       staff.isMtssCoordinator ||
       staff.isSchoolPsychologist ||
-      staff.isCoreTeam,
+      staff.isCoreTeam ||
+      staff.isConfidentialSecretary,
   );
 }
 

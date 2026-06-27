@@ -222,6 +222,25 @@ const ROLE_PRESETS: {
       "capReports",
     ],
   },
+  // Confidential Secretary: the front-office role that historically held the
+  // AST-approval capability but had no role label. The flag is ORed into
+  // isCoreTeam() server-side (and the client mirror), so the holder is a FULL
+  // Core Team member everywhere. The bundle below mirrors the Core Team preset
+  // so the role lands with "full Core Team access" by default; the admin can
+  // untick individual pages afterward. AST approval (canApproveAst) stays a
+  // separate, independently-granted capability.
+  {
+    flag: "isConfidentialSecretary",
+    label: "Confidential Secretary",
+    capabilities: [
+      "capStudentActivity",
+      "capInterventionLog",
+      "capInterventionManage",
+      "capSupportNotes",
+      "capPulloutsVerify",
+      "capReports",
+    ],
+  },
   {
     flag: "isSocialWorker",
     label: "School Social Worker",

@@ -119,6 +119,18 @@ export const staffTable = pgTable("staff", {
   // isCoreTeam() (safety plans, pickup, tours, tickets, etc.).
   isCoreTeam: boolean("is_core_team").notNull().default(false),
 
+  // Confidential Secretary — the front-office role that historically held the
+  // AST-approval capability (canApproveAst) but had no dedicated role label.
+  // Now a first-class, admin-assignable role that is ORed into isCoreTeam() in
+  // lib/coreTeam.ts, so the holder is a FULL Core Team member everywhere (same
+  // power set as the explicit isCoreTeam flag). The Staff & Roles preset lights
+  // up the Core Team page bundle by default; admins can untick individual pages.
+  // Keeps canApproveAst as a separate capability — the two are granted
+  // independently.
+  isConfidentialSecretary: boolean("is_confidential_secretary")
+    .notNull()
+    .default(false),
+
   // ---- Per-page capability flags ----
   // Pages everyone uses by default — defaulted true so new staff land with
   // the same baseline access teachers have today.

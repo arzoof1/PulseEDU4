@@ -5482,6 +5482,7 @@ function App() {
     isSro?: boolean;
     isGuardian?: boolean;
     isCoreTeam?: boolean;
+    isConfidentialSecretary?: boolean;
     capStaffRoles?: boolean;
     capManageRoles?: boolean;
     capManageDisplays?: boolean;
@@ -9487,7 +9488,8 @@ function App() {
     authUser?.isBehaviorSpecialist === true ||
     authUser?.isMtssCoordinator === true ||
     authUser?.isSchoolPsychologist === true ||
-    authUser?.isCoreTeam === true;
+    authUser?.isCoreTeam === true ||
+    authUser?.isConfidentialSecretary === true;
   // Pickup-tag management gate — mirrors canManagePickup() in
   // lib/coreTeam.ts. Admin / Core Team (BS, MTSS, school psych,
   // district admin, super) / counselor (school OR guidance) /
@@ -9548,6 +9550,7 @@ function App() {
     authUser?.isMtssCoordinator === true ||
     authUser?.isSchoolPsychologist === true ||
     authUser?.isCoreTeam === true ||
+    authUser?.isConfidentialSecretary === true ||
     authUser?.isAthleticDirector === true ||
     authUser?.capManageDismissal === true;
   // Contact Info Fixes gate — front-office staff (capManageContactInfo) plus
@@ -19507,6 +19510,7 @@ function App() {
                 authUser?.isMtssCoordinator ||
                 authUser?.isSchoolPsychologist ||
                 authUser?.isCoreTeam ||
+                authUser?.isConfidentialSecretary ||
                 authUser?.isCounselor ||
                 authUser?.isGuidanceCounselor ||
                 authUser?.capManageDismissal,
@@ -23057,6 +23061,7 @@ function App() {
               authUser?.isMtssCoordinator ||
               authUser?.isSchoolPsychologist ||
               authUser?.isCoreTeam ||
+              authUser?.isConfidentialSecretary ||
               authUser?.isCounselor ||
               authUser?.isGuidanceCounselor ||
               authUser?.capManageDismissal,
