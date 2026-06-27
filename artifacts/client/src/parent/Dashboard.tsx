@@ -36,6 +36,7 @@ import QRCode from "qrcode";
 import { Ticket } from "lucide-react";
 import { parentFetch, setParentToken, navigate, type ParentMe } from "./api";
 import FamilyMessages from "./FamilyMessages";
+import StoreTab, { type StoreData } from "./StoreTab";
 import ParentTabBar, { type ParentTab } from "./ParentTabBar";
 import {
   fetchLearningAtHomeCards,
@@ -267,6 +268,13 @@ export default function Dashboard({ me }: { me: ParentMe }) {
   // activeStudentId is unchanged — used after returning from the
   // Preferences panel so toggles take effect immediately.
   const [snapshotNonce, setSnapshotNonce] = useState(0);
+  // Per-student School Store payload (wallet + catalog + orders). Loaded
+  // independently of the snapshot so the Rewards tab can refresh after a
+  // redemption without re-fetching the whole snapshot.
+  const [store, setStore] = useState<StoreData | null>(null);
+  const [storeLoading, setStoreLoading] = useState(true);
+  const [storeError, setStoreError] = useState("");
+  const [storeNonce, setStoreNonce] = useState(0);
   // Tracks whether a PDF download is in flight so we can disable the
   // button + show a "Downloading…" label and avoid double-clicks
   // hitting the server twice.
@@ -280,6 +288,7 @@ export default function Dashboard({ me }: { me: ParentMe }) {
     return saved === "home" ||
       saved === "behavior" ||
       saved === "academics" ||
+      saved === "rewards" ||
       saved === "messages" ||
       saved === "more"
       ? saved
@@ -389,6 +398,42 @@ export default function Dashboard({ me }: { me: ParentMe }) {
       cancelled = true;
     };
   }, [activeStudentId, snapshotNonce]);
+
+  // School Store payload — refetched on sibling switch and after a redemption
+  // (storeNonce bump). The endpoint returns `{ enabled: false }` when the
+  // school store license is off, which hides the Rewards tab entirely.
+  useEffect(() => {
+    if (activeStudentId === null) {
+      setStoreLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setStoreLoading(true);
+    setStoreError("");
+    (async () => {
+      try {
+        const res = await parentFetch(
+          `/api/parent/store?studentId=${activeStudentId}`,
+        );
+        if (cancelled) return;
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          setStoreError(body.error ?? `Could not load rewards (${res.status})`);
+        } else {
+          setStore((await res.json()) as StoreData);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setStoreError(err instanceof Error ? err.message : "Network error");
+        }
+      } finally {
+        if (!cancelled) setStoreLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeStudentId, storeNonce]);
 
   async function handleSignOut() {
     try {
@@ -607,6 +652,19 @@ export default function Dashboard({ me }: { me: ParentMe }) {
         {activeTab === "academics" && snapshot && !loading && (
           <AcademicsTab snapshot={snapshot} />
         )}
+        {/* Rewards — School Store. Per-student (wallet + catalog + orders),
+            so sibling switching reloads it; refreshes itself after a
+            redemption via the storeNonce bump. */}
+        {activeTab === "rewards" && (
+          <StoreTab
+            studentId={activeStudent.id}
+            studentFirstName={activeStudent.firstName}
+            data={store}
+            loading={storeLoading}
+            error={storeError}
+            onRedeemed={() => setStoreNonce((n) => n + 1)}
+          />
+        )}
         {/* Family Messages — school broadcasts. Family-scoped (not tied to
             the active student) so it lives on its own tab and is unaffected
             by sibling switching or the snapshot load state. */}
@@ -631,6 +689,7 @@ export default function Dashboard({ me }: { me: ParentMe }) {
         onChange={setActiveTab}
         unreadMessages={unreadMessages}
         newAcademics={newAcademics}
+        showRewards={store?.enabled ?? false}
       />
     </div>
   );

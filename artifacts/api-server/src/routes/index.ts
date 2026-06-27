@@ -63,6 +63,7 @@ import parentInvitesRouter from "./parentInvites";
 import parentPreviewRouter from "./parentPreview";
 import staffPreviewRouter from "./staffPreview";
 import parentSnapshotRouter from "./parentSnapshot";
+import parentStoreRouter from "./parentStore";
 import schoolBrandingRouter from "./schoolBranding";
 import pulseRouter from "./pulse";
 import demoHeartbeatRouter from "./demoHeartbeat";
@@ -211,6 +212,7 @@ router.use(
   "/parent/heartbeat-prefs",
   requireFeatureForParent("parentPortal"),
 );
+router.use("/parent/store", requireFeatureForParent("parentPortal"));
 
 // Family Messages — Core-Team → parent broadcast. Staff compose/monitor
 // surface gated on the school's `familyComm` license; the parent-facing inbox
@@ -251,6 +253,7 @@ router.use(parentInvitesRouter);
 router.use(parentPreviewRouter);
 router.use(staffPreviewRouter);
 router.use(parentSnapshotRouter);
+router.use(parentStoreRouter);
 router.use(schoolBrandingRouter);
 router.use(pulseRouter);
 router.use(demoHeartbeatRouter);

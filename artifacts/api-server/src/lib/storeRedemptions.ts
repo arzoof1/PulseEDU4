@@ -795,7 +795,7 @@ export interface StoreCatalogItemView {
   name: string;
   description: string;
   pointsCost: number;
-  imageUrl: string | null;
+  hasImage: boolean;
   requiresApproval: boolean;
   perStudentLimit: number | null;
   ownedActiveCount: number;
@@ -929,7 +929,7 @@ export async function buildStudentStoreView(
       name: item.name,
       description: item.description,
       pointsCost: item.pointsCost,
-      imageUrl: item.imageUrl,
+      hasImage: item.imageUrl !== null,
       requiresApproval: item.requiresApproval,
       perStudentLimit: item.perStudentLimit,
       ownedActiveCount,
