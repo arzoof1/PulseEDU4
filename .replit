@@ -71,3 +71,8 @@ externalPort = 8008
 [nix]
 channel = "stable-25_05"
 packages = ["fontconfig", "freetype", "ghostscript", "glib", "glibcLocales", "harfbuzz", "pango"]
+
+[userenv]
+
+[userenv.shared]
+ALLOW_CROSS_DISTRICT_SUPERUSER = "1"
