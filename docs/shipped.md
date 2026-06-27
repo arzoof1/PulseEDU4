@@ -17,6 +17,14 @@ For active follow-ups, see the **Open work** section in `replit.md`.
   `GET /interventions/student-report/:studentId/pdf?teacher=` route; both gated
   `requireStaff` + `isCoreTeam`, JSON response shape unchanged. PDF renders the
   student's `localSisId` only (never the FLEID) and uses WinAnsi-safe glyphs.
+  The PDF **Behaviors** section is a bordered **table** (Behavior · Date ·
+  Subject · Teacher) sorted teacher → behavior → date (newest first) so admins
+  can scan repeating patterns per teacher; **Subject** = the logging teacher's
+  academic `department` (school-scoped staff lookup, `—` when unset). An
+  **"Include notes in PDF"** checkbox (server `?notes=1`) is **off by default**;
+  when on, each behavior's note renders as a full-width sub-row (and intervention
+  notes are included too). Table has manual page-break handling that redraws the
+  header row on each new page.
 - **Student Profile (Student Lookup evolved)** — the Quick Access "Student
   Lookup" surface is now labeled **Student Profile** (sidebar nav item, quick
   tile, and page heading); the internal `activeSection` key stays `studentLookup`

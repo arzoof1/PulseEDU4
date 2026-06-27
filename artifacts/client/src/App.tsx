@@ -4833,6 +4833,7 @@ function ClassroomInterventionReport() {
   const [error, setError] = useState<string | null>(null);
   const [teacherFilter, setTeacherFilter] = useState("");
   const [pdfBusy, setPdfBusy] = useState(false);
+  const [includeNotes, setIncludeNotes] = useState(false);
 
   // Debounced student search.
   useEffect(() => {
@@ -5007,9 +5008,10 @@ function ClassroomInterventionReport() {
     setPdfBusy(true);
     setError(null);
     try {
-      const qs = teacherFilter
-        ? `?teacher=${encodeURIComponent(teacherFilter)}`
-        : "";
+      const params = new URLSearchParams();
+      if (teacherFilter) params.set("teacher", teacherFilter);
+      if (includeNotes) params.set("notes", "1");
+      const qs = params.toString() ? `?${params.toString()}` : "";
       const r = await authFetch(
         `/api/interventions/student-report/${encodeURIComponent(
           picked.studentId,
@@ -5177,6 +5179,21 @@ function ClassroomInterventionReport() {
                   </option>
                 ))}
               </select>
+            </label>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 14,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={includeNotes}
+                onChange={(e) => setIncludeNotes(e.target.checked)}
+              />
+              Include notes in PDF
             </label>
             <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
               <button type="button" onClick={downloadCsv}>

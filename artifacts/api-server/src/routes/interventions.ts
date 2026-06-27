@@ -628,6 +628,7 @@ router.get(
       return;
     }
     const teacherParam = String(req.query.teacher ?? "").trim();
+    const includeNotes = String(req.query.notes ?? "").trim() === "1";
 
     const full = await loadStudentReport(schoolId, studentId);
     if (!full) {
@@ -637,6 +638,24 @@ router.get(
     const data = teacherParam
       ? filterReportByTeacher(full, teacherParam)
       : full;
+
+    // Map teacher display name -> academic department (the PDF's "Subject"
+    // column). Department is optional per staff member, so it is often blank.
+    const staffRows = await db
+      .select({
+        displayName: staffTable.displayName,
+        department: staffTable.department,
+      })
+      .from(staffTable)
+      .where(eq(staffTable.schoolId, schoolId));
+    const deptByName = new Map<string, string>();
+    for (const s of staffRows) {
+      if (s.displayName) deptByName.set(s.displayName, s.department ?? "");
+    }
+    const subjectFor = (staffName: string | null) => {
+      const d = staffName ? deptByName.get(staffName) : "";
+      return d && d.trim() ? d.trim() : "—";
+    };
 
     const fmt = (iso: string) => {
       const d = new Date(iso);
@@ -751,7 +770,7 @@ router.get(
               iv.outcome,
             )}`,
           );
-          if (iv.note) {
+          if (includeNotes && iv.note) {
             doc.fillColor("#64748b").text(`      ${iv.note}`);
             doc.fillColor("#334155");
           }
@@ -760,25 +779,108 @@ router.get(
       }
     }
 
-    heading("Behaviors (by teacher)");
+    // Behaviors table — columns Behavior | Date | Subject | Teacher, sorted by
+    // teacher, then behavior name, then date (newest first) so an admin can scan
+    // for repeating patterns per teacher. Notes (when requested) render as a
+    // full-width sub-row beneath the behavior they belong to.
+    heading("Behaviors");
     if (data.behaviors.length === 0) {
       doc.text("None yet.");
     } else {
-      for (const [teacher, rows] of byTeacher(data.behaviors)) {
-        doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a").text(teacher);
-        doc.font("Helvetica").fontSize(10).fillColor("#334155");
-        const ordered = [...rows].sort((a, b) =>
-          b.createdAt.localeCompare(a.createdAt),
+      const tableX = doc.page.margins.left;
+      const tableW =
+        doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      const bottomY = doc.page.height - doc.page.margins.bottom;
+      const cols: Array<{ label: string; w: number }> = [
+        { label: "Behavior", w: tableW * 0.38 },
+        { label: "Date", w: tableW * 0.17 },
+        { label: "Subject", w: tableW * 0.2 },
+        { label: "Teacher", w: tableW * 0.25 },
+      ];
+      const pad = 4;
+      const colX = (i: number) =>
+        tableX + cols.slice(0, i).reduce((a, c) => a + c.w, 0);
+
+      const drawHeaderRow = () => {
+        const h = 18;
+        const y0 = doc.y;
+        doc.save();
+        doc.rect(tableX, y0, tableW, h).fill("#0f172a");
+        doc.restore();
+        doc.font("Helvetica-Bold").fontSize(9).fillColor("#ffffff");
+        cols.forEach((c, i) => {
+          doc.text(c.label, colX(i) + pad, y0 + 5, {
+            width: c.w - pad * 2,
+            lineBreak: false,
+          });
+        });
+        doc.y = y0 + h;
+        doc.font("Helvetica").fontSize(9).fillColor("#334155");
+      };
+
+      const drawCellRow = (cells: string[], zebra: boolean) => {
+        const heights = cells.map((txt, i) =>
+          doc.heightOfString(txt || "", { width: cols[i].w - pad * 2 }),
         );
-        for (const b of ordered) {
-          doc.text(`   ${fmt(b.createdAt)}  ${b.reason}`);
-          if (b.note) {
-            doc.fillColor("#64748b").text(`      ${b.note}`);
-            doc.fillColor("#334155");
-          }
+        const rowH = Math.max(...heights, 11) + pad * 2;
+        if (doc.y + rowH > bottomY) {
+          doc.addPage();
+          drawHeaderRow();
         }
-        doc.moveDown(0.3);
-      }
+        const y0 = doc.y;
+        if (zebra) {
+          doc.save();
+          doc.rect(tableX, y0, tableW, rowH).fill("#f1f5f9");
+          doc.restore();
+        }
+        doc.font("Helvetica").fontSize(9).fillColor("#334155");
+        cells.forEach((txt, i) => {
+          doc.text(txt || "", colX(i) + pad, y0 + pad, {
+            width: cols[i].w - pad * 2,
+          });
+        });
+        doc.save().lineWidth(0.5).strokeColor("#e2e8f0");
+        doc.rect(tableX, y0, tableW, rowH).stroke();
+        doc.restore();
+        doc.y = y0 + rowH;
+      };
+
+      const drawNoteRow = (note: string) => {
+        const txt = `Note: ${note}`;
+        const w = tableW - pad * 2;
+        const rowH = doc.heightOfString(txt, { width: w }) + pad * 2;
+        if (doc.y + rowH > bottomY) {
+          doc.addPage();
+          drawHeaderRow();
+        }
+        const y0 = doc.y;
+        doc.save();
+        doc.rect(tableX, y0, tableW, rowH).fill("#fafafa");
+        doc.restore();
+        doc.font("Helvetica-Oblique").fontSize(8.5).fillColor("#64748b");
+        doc.text(txt, tableX + pad, y0 + pad, { width: w });
+        doc.save().lineWidth(0.5).strokeColor("#e2e8f0");
+        doc.rect(tableX, y0, tableW, rowH).stroke();
+        doc.restore();
+        doc.y = y0 + rowH;
+        doc.font("Helvetica").fontSize(9).fillColor("#334155");
+      };
+
+      const sorted = [...data.behaviors].sort(
+        (a, b) =>
+          (a.staffName ?? "").localeCompare(b.staffName ?? "") ||
+          (a.reason ?? "").localeCompare(b.reason ?? "") ||
+          (b.createdAt ?? "").localeCompare(a.createdAt ?? ""),
+      );
+
+      drawHeaderRow();
+      sorted.forEach((b, idx) => {
+        drawCellRow(
+          [b.reason, fmt(b.createdAt), subjectFor(b.staffName), b.staffName ?? "—"],
+          idx % 2 === 1,
+        );
+        if (includeNotes && b.note) drawNoteRow(b.note);
+      });
     }
 
     doc.end();
