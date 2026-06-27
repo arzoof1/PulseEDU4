@@ -72,4 +72,5 @@
 - [CSV export formula injection](csv-export-injection.md) — CSV cells must neutralize leading = + - @ tab CR (prefix apostrophe), not just quote delimiters; review flags it as security.
 - [Student report JSON+PDF parity](student-report-json-pdf-parity.md) — per-student Classroom Intervention Report: JSON + PDF share loadStudentReport(); both gated requireStaff+isCoreTeam; PDF uses localSisId only.
 - [Contact-rate escalation grouping](contact-rate-escalation.md) — per-teacher escalation emails must group/resolve by staff.id not displayName (names not unique → roster leak); school-scope the staff join too.
+- [Sidebar NavGroup item relocation](sidebar-navgroup-relocation.md) — moving a gated sidebar item between NavGroups needs 3 lockstep edits: broaden the destination `show<Group>` flag to a superset of the item gate, move the `NAV_GROUP_OWNERSHIP` key, keep the per-item gate verbatim.
 - [Generic JSX babel crash](generic-jsx-babel-metadata.md) — `<Comp<T> ...>` typechecks but blanks the Replit Vite dev page (Babel metadata plugin can't parse it); drop the type arg, let props infer T.

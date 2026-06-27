@@ -3980,7 +3980,6 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "interventionReports",
     "requestPullout",
     "behaviorSpecialist",
-    "interventions",
     "trustedAdultInterventions",
     "verifyPullouts",
     "issDashboard",
@@ -4020,6 +4019,10 @@ NAV_GROUP_OWNERSHIP.schoolAdmin = [
   "hallPassMgmt",
   "trustedAdultsAdmin",
   "displays",
+  // Behavior-lists editor ("Interventions") moved here from the
+  // Academic and Behavior Supports group so all per-school config
+  // lives in one Admin & Settings home. activeSection key unchanged.
+  "interventions",
 ];
 
 function groupContainsActive(groupId: string, activeSection: string): boolean {
@@ -11037,7 +11040,17 @@ function App() {
           (canManageBehaviorLists && !isBehaviorSpec);
         const showSpecialPrograms =
           effectiveFeatures.Accommodations || isEseCoord;
-        const showSchoolAdmin = canManageBellSchedules || isAdmin;
+        // canManageBellSchedules covers admin/superuser/mtss/behaviorSpec.
+        // The "Interventions" behavior-lists editor moved into this group;
+        // its viewers are (canManageBehaviorLists && !isBehaviorSpec) =
+        // MTSS coordinators (already covered via isMtss) + Deans (NOT
+        // otherwise in this group). Add that clause so Deans keep their
+        // config item. Each item below stays individually gated, so this
+        // only ever reveals items a user is already authorized for.
+        const showSchoolAdmin =
+          canManageBellSchedules ||
+          isAdmin ||
+          (canManageBehaviorLists && !isBehaviorSpec);
         // Phase 2 polish — per-user namespace for the NavGroup accordion
         // localStorage so two staff sharing the same browser don't inherit
         // each other's collapse preferences. "anon" keeps unauthenticated
@@ -11389,8 +11402,8 @@ function App() {
                     label: "Investigations",
                     icon: IconClipboard,
                   })}
-                {canManageBehaviorLists && !isBehaviorSpec &&
-                  interventionsNavSections.map(renderNavItem)}
+                {/* "Interventions" (behavior-lists editor) moved to the
+                    Admin & Settings group — see below. */}
                 {/* Hidden here when there's pending work because Verify
                     Pullout gets promoted to Quick Access in that case
                     (avoiding a duplicate nav item). Still visible here
@@ -11497,7 +11510,7 @@ function App() {
               <NavGroup
                 key={`${sidebarUserId}-schoolAdmin`}
                 id="schoolAdmin"
-                label="School Admin"
+                label="Admin & Settings"
                 userId={sidebarUserId}
                 containsActive={groupContainsActive(
                   "schoolAdmin",
@@ -11539,6 +11552,11 @@ function App() {
                     label: "Eligibility Hub",
                     icon: IconClipboard,
                   })}
+                {/* Behavior-lists editor — same gate as before the move
+                    (MTSS coordinators + Deans; admins/behavior-specs are
+                    excluded by !isBehaviorSpec, unchanged). */}
+                {canManageBehaviorLists && !isBehaviorSpec &&
+                  interventionsNavSections.map(renderNavItem)}
               </NavGroup>
             )}
           </aside>
