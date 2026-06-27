@@ -55,7 +55,7 @@ const kpis: KpiCfg[] = [
   },
   {
     key: "teachersActive",
-    label: "Teachers Active",
+    label: "Staff Active",
     color: "#0e7490",
     format: (n, s) =>
       s.totalTeachingStaff > 0

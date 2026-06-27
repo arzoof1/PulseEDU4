@@ -44,7 +44,7 @@ function buildAlerts(d: ApiResponse): Alert[] {
     out.push({
       key: "quiet-teachers",
       severity: d.quietTeachers.count >= 5 ? "alert" : "warn",
-      headline: `${d.quietTeachers.count} of ${d.quietTeachers.total} teachers haven't awarded points in ${d.thresholds.quietTeacherDays}+ school days`,
+      headline: `${d.quietTeachers.count} of ${d.quietTeachers.total} staff haven't awarded points in ${d.thresholds.quietTeacherDays}+ school days`,
       detail: "Consider a friendly reminder or coaching nudge.",
       sample:
         d.quietTeachers.sampleNames.length > 0

@@ -758,14 +758,44 @@ router.get("/pbis/home-stats", async (req: Request, res: Response) => {
       teachingStaffSet.add(r.staffId);
     }
   }
-  const totalTeachingStaff = teachingStaffSet.size;
+
+  // "Point-awarding staff" population = classroom teachers PLUS any active
+  // non-teaching staff (admins, coordinators, deans) who actually award PBIS
+  // points. Per product decision, anyone who awards points counts as active,
+  // so the denominator and the "active" numerator share this same set (and
+  // stays consistent with /pbis/needs-attention).
+  const activeStaffRows = await db
+    .select({ id: staffTable.id })
+    .from(staffTable)
+    .where(
+      and(eq(staffTable.schoolId, req.schoolId!), eq(staffTable.active, true)),
+    );
+  const activeStaffIdSet = new Set<number>(activeStaffRows.map((r) => r.id));
+  const awarderRows = await db
+    .select({ staffId: pbisEntriesTable.staffId })
+    .from(pbisEntriesTable)
+    .where(
+      and(
+        eq(pbisEntriesTable.schoolId, req.schoolId!),
+        isNull(pbisEntriesTable.voidedAt),
+      ),
+    );
+  const pointAwardingStaffSet = new Set<number>(teachingStaffSet);
+  for (const r of awarderRows) {
+    if (r.staffId != null && activeStaffIdSet.has(r.staffId)) {
+      pointAwardingStaffSet.add(r.staffId);
+    }
+  }
+  const totalTeachingStaff = pointAwardingStaffSet.size;
 
   const weeks = buckets.map((b) => ({
     weekStart: b.weekStart,
     weekEnd: b.weekEnd,
     pointsAwarded: b.points,
     studentsRecognized: b.studentIds.size,
-    teachersActive: b.staffIds.size,
+    teachersActive: [...b.staffIds].filter((id) =>
+      pointAwardingStaffSet.has(id),
+    ).length,
     avgPointsPerStudent:
       totalStudents > 0 ? +(b.points / totalStudents).toFixed(2) : 0,
   }));
@@ -866,8 +896,26 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
   for (const r of teachingRows) {
     if (!r.isPlanning) teachingStaffIds.add(r.staffId);
   }
-  const teachingStaff = allStaff.filter(
-    (s) => s.active && teachingStaffIds.has(s.id),
+  // "Point-awarding staff" = classroom teachers PLUS any active non-teaching
+  // staff (admins, coordinators, deans) who actually award PBIS points. Per
+  // product decision, an admin awarding points counts as active, so this
+  // alert measures the whole point-awarding population, not just teachers.
+  const everAwardedRows = await db
+    .select({ staffId: pbisEntriesTable.staffId })
+    .from(pbisEntriesTable)
+    .where(
+      and(
+        eq(pbisEntriesTable.schoolId, req.schoolId!),
+        isNull(pbisEntriesTable.voidedAt),
+      ),
+    );
+  const everAwardedStaffIds = new Set<number>();
+  for (const r of everAwardedRows) {
+    if (r.staffId != null) everAwardedStaffIds.add(r.staffId);
+  }
+  const pointAwardingStaff = allStaff.filter(
+    (s) =>
+      s.active && (teachingStaffIds.has(s.id) || everAwardedStaffIds.has(s.id)),
   );
   const allStudents = await db
     .select({
@@ -885,8 +933,9 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     ]),
   );
 
-  // ---------- 1. Quiet teachers ----------
-  // Teachers with no non-voided entries in the last QUIET_DAYS school days.
+  // ---------- 1. Quiet staff ----------
+  // Point-awarding staff with no non-voided entries in the last QUIET_DAYS
+  // school days.
   const quietWindow = subtractSchoolDays(QUIET_DAYS);
   const recentTeacherEntries = await db
     .select({ staffId: pbisEntriesTable.staffId })
@@ -902,7 +951,9 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
   for (const r of recentTeacherEntries) {
     if (r.staffId != null) activeStaffIds.add(r.staffId);
   }
-  const quietTeachers = teachingStaff.filter((s) => !activeStaffIds.has(s.id));
+  const quietTeachers = pointAwardingStaff.filter(
+    (s) => !activeStaffIds.has(s.id),
+  );
   const quietTeacherSample = quietTeachers
     .slice(0, 3)
     .map((s) => s.displayName);
@@ -1180,7 +1231,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     },
     quietTeachers: {
       count: quietTeachers.length,
-      total: teachingStaff.length,
+      total: pointAwardingStaff.length,
       sampleNames: quietTeacherSample,
     },
     invisibleStudents: {
