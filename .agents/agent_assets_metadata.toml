@@ -414,3 +414,9 @@ id = "RQNSwX8jj45FQxBU81EYZ"
 uri = "file://docs/migration-roadmap-2026-06-22_to_2026-06-27.md"
 type = "text"
 title = "Full Developer Migration Roadmap (June 22 → 27)"
+
+[[outputs]]
+id = "2VB3QqU93xN7MNN3GLPgY"
+uri = "file://exports/PulseEDU-Pre-Demo-Feature-Preview.pdf"
+type = "pdf"
+title = "PulseEDU — Pre-Demo Feature Preview (PDF)"
