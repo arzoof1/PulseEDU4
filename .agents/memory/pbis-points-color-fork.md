@@ -52,6 +52,19 @@ gate on `canManageAllPbisLists` (admin/BS/MTSS), NOT the broader
 Negative Behaviors sub-tab. Server still enforces all writes.
 
 **How to apply:** keep the tile `show` and the section render guard on the SAME
-gate. If you add a 4th sub-tab with a looser server gate, keep the gate as the
+gate. If you add a sub-tab with a looser server gate, keep the gate as the
 intersection (or split per-sub-tab visibility) — don't widen it past the most
 restrictive sub-tab's write gate.
+
+Sub-tabs are now: Negative Behaviors / Note Templates / Interventions / Pullout
+Reasons. **Note Templates is its OWN sub-tab** (exported `NoteTemplatesSection`,
+`scope="school"`), NOT nested under Negative Behaviors — `SettingsView` takes a
+`hideTemplates` prop and the behaviors sub-tab passes it so templates render in
+exactly one place.
+
+**Error-channel invariant:** `ManageListsView` has a top-level FATAL
+`errorMsg` gate (`if (errorMsg) return <blocking panel>`). Child CRUD sections
+must report runtime save/delete failures through a SEPARATE non-fatal channel
+(the templates tab uses `templateErr`, rendered inline + dismissible) — wiring a
+child's `onError` to `setErrorMsg` ejects the user out of the whole tabbed tile
+on any failed op. Reserve `errorMsg` for initial-load failures only.

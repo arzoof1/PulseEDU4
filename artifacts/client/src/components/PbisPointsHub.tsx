@@ -2839,7 +2839,7 @@ function BulkAwardModal({
 // the rubric in Settings. Any staff sees the picker; only PBIS admins edit.
 // =============================================================================
 
-function NoteTemplatesSection({
+export function NoteTemplatesSection({
   me,
   canEdit,
   templates,
@@ -3254,6 +3254,7 @@ export function SettingsView({
   onTemplatesChanged,
   lockedScope,
   initialFilter = "all",
+  hideTemplates = false,
 }: {
   me: Me | null;
   reasons: Reason[];
@@ -3267,6 +3268,9 @@ export function SettingsView({
   // Default polarity filter. The Manage Lists tab opens this editor pre-filtered
   // to "negative" so admins land directly on the negative-behavior list.
   initialFilter?: "all" | "positive" | "negative";
+  // When true, the Note Templates section is omitted — used by Manage Lists,
+  // which surfaces note templates as its own standalone sub-tab.
+  hideTemplates?: boolean;
 }) {
   const [viewScope, setViewScope] = useState<"school" | "teacher">(
     lockedScope ?? "teacher",
@@ -3749,24 +3753,28 @@ export function SettingsView({
         ))
       )}
 
-      {/* Visual separator between behaviors and templates */}
-      <hr
-        style={{
-          border: 0,
-          borderTop: "1px solid #e2e8f0",
-          margin: "1.5rem 0 1.25rem",
-        }}
-      />
+      {!hideTemplates && (
+        <>
+          {/* Visual separator between behaviors and templates */}
+          <hr
+            style={{
+              border: 0,
+              borderTop: "1px solid #e2e8f0",
+              margin: "1.5rem 0 1.25rem",
+            }}
+          />
 
-      {/* Note Templates — share the same scope as the rubric above */}
-      <NoteTemplatesSection
-        me={me}
-        canEdit={canEdit}
-        templates={templates}
-        onTemplatesChanged={onTemplatesChanged}
-        onError={setErr}
-        scope={viewScope}
-      />
+          {/* Note Templates — share the same scope as the rubric above */}
+          <NoteTemplatesSection
+            me={me}
+            canEdit={canEdit}
+            templates={templates}
+            onTemplatesChanged={onTemplatesChanged}
+            onError={setErr}
+            scope={viewScope}
+          />
+        </>
+      )}
 
       {editing && canEdit && (
         <BehaviorEditModal
@@ -3794,8 +3802,12 @@ export function ManageListsView() {
   const [templates, setTemplates] = useState<NoteTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Non-fatal error channel for the Note Templates sub-tab. Kept separate from
+  // errorMsg (which gates the whole tile into a blocking panel) so a failed
+  // template save/delete shows inline and the tabs stay usable.
+  const [templateErr, setTemplateErr] = useState<string | null>(null);
   const [subTab, setSubTab] = useState<
-    "behaviors" | "interventions" | "pullouts"
+    "behaviors" | "templates" | "interventions" | "pullouts"
   >("behaviors");
 
   useEffect(() => {
@@ -3831,13 +3843,23 @@ export function ManageListsView() {
   }, []);
 
   const SUBTABS: {
-    key: "behaviors" | "interventions" | "pullouts";
+    key: "behaviors" | "templates" | "interventions" | "pullouts";
     label: string;
   }[] = [
     { key: "behaviors", label: "Negative Behaviors" },
+    { key: "templates", label: "Note Templates" },
     { key: "interventions", label: "Interventions" },
     { key: "pullouts", label: "Pullout Reasons" },
   ];
+
+  // School-scope edit gate — mirrors SettingsView's school-view canEdit
+  // (admin / BS / MTSS). Note templates here are always school-scoped.
+  const canEditTemplates = !!(
+    me?.isSuperUser ||
+    me?.isAdmin ||
+    me?.isBehaviorSpecialist ||
+    me?.isMtssCoordinator
+  );
 
   if (loading) {
     return (
@@ -3904,7 +3926,52 @@ export function ManageListsView() {
           onTemplatesChanged={setTemplates}
           lockedScope="school"
           initialFilter="negative"
+          hideTemplates
         />
+      ) : subTab === "templates" ? (
+        <>
+          {templateErr && (
+            <div
+              style={{
+                padding: "0.7rem 0.9rem",
+                marginBottom: "0.85rem",
+                background: "#fee2e2",
+                color: "#991b1b",
+                borderRadius: "0.4rem",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "0.6rem",
+              }}
+            >
+              <span>{templateErr}</span>
+              <button
+                type="button"
+                onClick={() => setTemplateErr(null)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#991b1b",
+                  cursor: "pointer",
+                  fontWeight: 700,
+                  fontSize: "1rem",
+                  lineHeight: 1,
+                }}
+                aria-label="Dismiss error"
+              >
+                ×
+              </button>
+            </div>
+          )}
+          <NoteTemplatesSection
+            me={me}
+            canEdit={canEditTemplates}
+            templates={templates}
+            onTemplatesChanged={setTemplates}
+            onError={setTemplateErr}
+            scope="school"
+          />
+        </>
       ) : subTab === "interventions" ? (
         <InterventionTypesAdmin />
       ) : (
