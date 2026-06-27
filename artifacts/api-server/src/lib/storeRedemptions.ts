@@ -783,6 +783,167 @@ export async function getStudentDisplay(
   };
 }
 
+// --------------------------------------------------------------------------
+// Family / student redeem surfaces — a single FLEID-safe view of one
+// student's store: their wallet, the redeemable catalog with per-student
+// availability/affordability flags pre-computed, and their order history.
+// The FLEID (`studentId`) is the JOIN key only; NONE of the returned shapes
+// carry it — callers render `localSisId` (resolved separately) instead.
+// --------------------------------------------------------------------------
+export interface StoreCatalogItemView {
+  id: number;
+  name: string;
+  description: string;
+  pointsCost: number;
+  imageUrl: string | null;
+  requiresApproval: boolean;
+  perStudentLimit: number | null;
+  ownedActiveCount: number;
+  available: boolean;
+  unavailableReason: string | null;
+  affordable: boolean;
+  pointsToGo: number;
+}
+
+export interface StoreOrderView {
+  id: number;
+  itemName: string;
+  pointsSpent: number;
+  status: string;
+  createdAt: string;
+  fulfilledAt: string | null;
+  deliverTeacherName: string | null;
+  deliverPeriod: string | null;
+  cancelReason: string | null;
+}
+
+export interface StudentStoreView {
+  wallet: StudentWallet;
+  items: StoreCatalogItemView[];
+  orders: StoreOrderView[];
+}
+
+// One student's redemption history (newest first). FLEID-safe.
+export async function listStudentRedemptions(
+  schoolId: number,
+  studentId: string,
+): Promise<StoreOrderView[]> {
+  const rows = await db
+    .select({
+      id: schoolStoreRedemptionsTable.id,
+      itemName: schoolStoreRedemptionsTable.itemName,
+      pointsSpent: schoolStoreRedemptionsTable.pointsSpent,
+      status: schoolStoreRedemptionsTable.status,
+      createdAt: schoolStoreRedemptionsTable.createdAt,
+      fulfilledAt: schoolStoreRedemptionsTable.fulfilledAt,
+      deliverTeacherName: schoolStoreRedemptionsTable.deliverTeacherName,
+      deliverPeriod: schoolStoreRedemptionsTable.deliverPeriod,
+      cancelReason: schoolStoreRedemptionsTable.cancelReason,
+    })
+    .from(schoolStoreRedemptionsTable)
+    .where(
+      and(
+        eq(schoolStoreRedemptionsTable.schoolId, schoolId),
+        eq(schoolStoreRedemptionsTable.studentId, studentId),
+      ),
+    )
+    .orderBy(sql`${schoolStoreRedemptionsTable.createdAt} DESC`);
+  return rows.map((r) => ({
+    id: r.id,
+    itemName: r.itemName,
+    pointsSpent: r.pointsSpent,
+    status: r.status,
+    createdAt: r.createdAt,
+    fulfilledAt: r.fulfilledAt ?? null,
+    deliverTeacherName: r.deliverTeacherName ?? null,
+    deliverPeriod: r.deliverPeriod ?? null,
+    cancelReason: r.cancelReason ?? null,
+  }));
+}
+
+// Build the full per-student store view: wallet + catalog (with availability
+// and affordability resolved exactly the way `redeemItem` will enforce them,
+// so the UI's disabled-state matches the server's decision) + order history.
+export async function buildStudentStoreView(
+  schoolId: number,
+  studentId: string,
+): Promise<StudentStoreView> {
+  const [wallet, mode] = await Promise.all([
+    computeWallet(schoolId, studentId),
+    getInventoryMode(schoolId),
+  ]);
+
+  // Active (non-cancelled) redemption counts per item — drives the
+  // per-student-limit indicator without an N+1 query.
+  const activeCounts = await db
+    .select({
+      itemId: schoolStoreRedemptionsTable.itemId,
+      n: sql<number>`count(*)::int`,
+    })
+    .from(schoolStoreRedemptionsTable)
+    .where(
+      and(
+        eq(schoolStoreRedemptionsTable.schoolId, schoolId),
+        eq(schoolStoreRedemptionsTable.studentId, studentId),
+        inArray(schoolStoreRedemptionsTable.status, [...ACTIVE_STATUSES]),
+      ),
+    )
+    .groupBy(schoolStoreRedemptionsTable.itemId);
+  const countByItem = new Map<number, number>();
+  for (const r of activeCounts) countByItem.set(r.itemId, r.n);
+
+  const rows = await db
+    .select()
+    .from(schoolStoreItemsTable)
+    .where(
+      and(
+        eq(schoolStoreItemsTable.schoolId, schoolId),
+        eq(schoolStoreItemsTable.archived, false),
+      ),
+    )
+    .orderBy(schoolStoreItemsTable.sortOrder, schoolStoreItemsTable.name);
+
+  const items: StoreCatalogItemView[] = rows.map((item) => {
+    const ownedActiveCount = countByItem.get(item.id) ?? 0;
+    // Stock availability mirrors redeemItem: simple mode uses the inStock
+    // toggle; quantity mode treats a null quantity as untracked (available).
+    const inStock =
+      mode === "simple"
+        ? item.inStock
+        : item.quantityOnHand === null || item.quantityOnHand > 0;
+    const limitReached =
+      item.perStudentLimit !== null &&
+      ownedActiveCount >= item.perStudentLimit;
+    const affordable = wallet.available >= item.pointsCost;
+    let unavailableReason: string | null = null;
+    if (!inStock) {
+      unavailableReason = "Out of stock";
+    } else if (limitReached) {
+      unavailableReason =
+        item.perStudentLimit === 1
+          ? "Already redeemed"
+          : `Limit of ${item.perStudentLimit} reached`;
+    }
+    return {
+      id: item.id,
+      name: item.name,
+      description: item.description,
+      pointsCost: item.pointsCost,
+      imageUrl: item.imageUrl,
+      requiresApproval: item.requiresApproval,
+      perStudentLimit: item.perStudentLimit,
+      ownedActiveCount,
+      available: inStock && !limitReached,
+      unavailableReason,
+      affordable,
+      pointsToGo: Math.max(0, item.pointsCost - wallet.available),
+    };
+  });
+
+  const orders = await listStudentRedemptions(schoolId, studentId);
+  return { wallet, items, orders };
+}
+
 // Convenience re-export so route code can load a full staff row for the
 // fulfillment gate without re-importing the table everywhere.
 export { staffTable };
