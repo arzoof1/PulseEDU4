@@ -211,6 +211,11 @@ export default function PbisPointsHub({
   );
   const visibleTabs = TAB_LABELS.filter((t) => {
     if (t.key === "rubric" || t.key === "rewards") return false;
+    // Reports (the wallets / Points Bank ledger) was promoted to its own
+    // "Points Bank" Recognition sidebar item, so it no longer appears as a
+    // buried tab here. The render branch below is left in place but is now
+    // unreachable from this hub (default tab is "classes").
+    if (t.key === "reports") return false;
     if (t.key === "settings") return canSeeSettingsTab;
     return true;
   });
@@ -7078,7 +7083,7 @@ type SectionOpt = {
   teacherName: string;
 };
 
-function PbisPointsReportView({ me }: { me: Me | null }) {
+export function PbisPointsReportView({ me }: { me: Me | null }) {
   const isPrivileged = !!(
     me?.isSuperUser ||
     me?.isAdmin ||
@@ -7452,6 +7457,33 @@ function PbisPointsReportView({ me }: { me: Me | null }) {
       )}
     </div>
   );
+}
+
+// Standalone "Points Bank" page — the wallets / Earned·Spent·Bank ledger,
+// promoted to its own Recognition sidebar item so it is reachable in one
+// click instead of being buried behind PBIS Points -> Positive -> Reports
+// tab. Self-fetches the signed-in account so App can mount it with no props;
+// PbisPointsReportView uses `me` only to decide school-wide vs own-awarded
+// scope (server enforces the same).
+export function PbisWalletsPage() {
+  const [me, setMe] = useState<Me | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authFetch("/api/auth/me");
+        if (!res.ok || cancelled) return;
+        setMe((await res.json()) as Me);
+      } catch {
+        // Non-fatal: PbisPointsReportView renders with me=null (own-scope),
+        // and the server still scopes results by the authenticated session.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return <PbisPointsReportView me={me} />;
 }
 
 function ComingSoon({ tab }: { tab: Tab }) {

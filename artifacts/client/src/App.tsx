@@ -113,6 +113,7 @@ import PbisPointsHub, {
   SchoolStoreView,
   ClassroomStoreView,
   ManageListsView,
+  PbisWalletsPage,
 } from "./components/PbisPointsHub";
 import PulseBrainLabHub from "./components/pulseBrainLab/PulseBrainLabHub";
 import PartneringWithParentsHub from "./components/academicEvidence/PartneringWithParentsHub";
@@ -3979,6 +3980,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "pbisReasons",
     "pbisMilestoneEmails",
     "pbisLists",
+    "pbisWallets",
   ],
   behaviorSupport: [
     "logIntervention",
@@ -3998,7 +4000,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "behaviorReview",
   ],
   specialPrograms: ["accommodations", "ese"],
-  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess"],
+  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess", "callCampaign"],
   people: ["teacherRoster", "staffRoles"],
   // hallPassMgmt is reached via the Hall Passes admin tools; it has no
   // dedicated nav item so we anchor it to School Admin so the sidebar
@@ -5699,6 +5701,8 @@ function App() {
     | "pulseDnaStudio"
     | "eligibility"
     | "tileHome"
+    | "pbisWallets"
+    | "callCampaign"
   >("hallPasses");
   // Tile Home is a full-screen launcher that takes over the viewport.
   // When the user enters it from the top-right header button we stash
@@ -11660,6 +11664,18 @@ function App() {
                     label: "House Rankings",
                     icon: IconStar,
                   })}
+                {/* Points Bank — the wallets ledger (Earned / Spent / Bank
+                    balance, CSV·PDF·Print). Promoted to its own Recognition
+                    row so it is reachable in one click; it used to be buried
+                    behind PBIS Points -> Positive -> Reports tab. Same nav
+                    gate as PBIS Points; the page + server scope results by
+                    role. */}
+                {effectiveFeatures.Pbis &&
+                  renderNavItem({
+                    key: "pbisWallets",
+                    label: "Points Bank",
+                    icon: IconStar,
+                  })}
                 {/* Both reward catalogs now live here in Recognition (they
                     used to be tabs inside the PBIS Points hub). School Store
                     is the read-only school-wide catalog, shown to every
@@ -11879,6 +11895,18 @@ function App() {
                   renderNavItem({
                     key: "pulseDnaStudio",
                     label: "PulseDNA Studio",
+                    icon: IconUser,
+                  })}
+                {/* Call Campaign — Core Team launches a "call all families"
+                    outreach campaign (each student owned by their
+                    responsible-period teacher). Moved here from the top of
+                    PBIS Points; it logs to the Communication Log and is a
+                    family-comms tool. Same gate as Family Messages. */}
+                {effectiveFeatures.FamilyComm &&
+                  isCoreTeamMember &&
+                  renderNavItem({
+                    key: "callCampaign",
+                    label: "Call Campaign",
                     icon: IconUser,
                   })}
                 {canManageSettings && (
@@ -17470,13 +17498,22 @@ function App() {
 
       {activeSection === "pbis" && (
         <>
-          {isCoreTeamMember && <CallInitiativeAdminPanel />}
           <PbisPointsHub
             classroomStoreEnabled={classroomStoreEnabled}
             onSetClassroomStoreEnabled={setClassroomStoreEnabled}
           />
         </>
       )}
+      {activeSection === "pbisWallets" && effectiveFeatures.Pbis && (
+        <PbisWalletsPage />
+      )}
+      {/* Call Campaign — Core Team launches/ends a "call all families"
+          outreach campaign. Relocated here from the top of the PBIS Points
+          page: it is a family-communication tool, not a points surface. The
+          teacher-facing nudge banner + call worklist stay app-wide. */}
+      {activeSection === "callCampaign" &&
+        effectiveFeatures.FamilyComm &&
+        isCoreTeamMember && <CallInitiativeAdminPanel />}
       {activeSection === "pulseBrainLab" && isBehaviorSpec && <PulseBrainLabHub />}
       {activeSection === "partneringWithParents" &&
         !isNonExemptOnly &&
