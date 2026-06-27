@@ -31,8 +31,12 @@ import {
   computeWallet,
   getStudentDisplay,
   canManageStoreFulfillment,
+  countPendingFulfillment,
+  buildFulfillmentDistribution,
+  loadPickSheet,
   type RedeemResult,
 } from "../lib/storeRedemptions.js";
+import PDFDocument from "pdfkit";
 
 // Map a redemption-engine failure code to an HTTP status.
 function redeemErrorStatus(code: string): number {
@@ -660,6 +664,138 @@ router.post("/school-store/redemptions/:rid/cancel", async (req, res) => {
     reason,
   });
   await sendRedeemResult(res, schoolId, result);
+});
+
+// ---- PENDING COUNT (Core Team) ----
+// Drives the pulsing cart badge. Polled, so keep it cheap.
+router.get("/school-store/pending-count", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requireFulfillmentAccess(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const counts = await countPendingFulfillment(schoolId);
+  res.json(counts);
+});
+
+// ---- DISTRIBUTION BY CLASS (Core Team) ----
+// Pending redemptions mapped onto the teacher+period combos the redeeming
+// students are actually enrolled in, plus an `unscheduled` bucket.
+router.get("/school-store/distribution", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requireFulfillmentAccess(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const distribution = await buildFulfillmentDistribution(schoolId);
+  res.json(distribution);
+});
+
+// ---- PICK-SHEET PDF (Core Team) ----
+// The bagging list for one teacher/period combo. Streamed as a download
+// (never opened/printed in a tab — the preview iframe blob gotcha). Renders
+// localSisId only; the FLEID never appears.
+router.get("/school-store/pick-sheet.pdf", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requireFulfillmentAccess(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const teacherStaffId = Number(req.query.teacherStaffId);
+  const period = Number(req.query.period);
+  if (!Number.isInteger(teacherStaffId) || teacherStaffId < 1) {
+    res.status(400).json({ error: "Invalid teacherStaffId" });
+    return;
+  }
+  if (!Number.isInteger(period)) {
+    res.status(400).json({ error: "Invalid period" });
+    return;
+  }
+  const sheet = await loadPickSheet(schoolId, teacherStaffId, period);
+  if (!sheet) {
+    res
+      .status(404)
+      .json({ error: "No pending redemptions for that class right now" });
+    return;
+  }
+
+  const safeName = sheet.teacherName.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="pick-sheet-${safeName}-period-${sheet.period}.pdf"`,
+  );
+
+  const doc = new PDFDocument({ size: "LETTER", margin: 50 });
+  doc.pipe(res);
+
+  doc
+    .fontSize(20)
+    .font("Helvetica-Bold")
+    .text("School Store Pick Sheet", { align: "left" });
+  doc
+    .moveDown(0.3)
+    .fontSize(13)
+    .font("Helvetica")
+    .text(`${sheet.teacherName} — ${sheet.periodLabel}`);
+  doc
+    .moveDown(0.1)
+    .fontSize(10)
+    .fillColor("#64748b")
+    .text(
+      `Generated ${new Date().toLocaleString("en-US")} · ${sheet.lines.length} line item${sheet.lines.length === 1 ? "" : "s"}`,
+    );
+  doc.fillColor("#0f172a");
+  doc.moveDown(0.8);
+
+  // Column layout.
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const colStudent = left;
+  const colId = left + 200;
+  const colItem = left + 300;
+  const colQty = right - 40;
+
+  function drawHeader() {
+    doc.fontSize(10).font("Helvetica-Bold").fillColor("#334155");
+    const y = doc.y;
+    doc.text("Student", colStudent, y);
+    doc.text("SIS ID", colId, y);
+    doc.text("Item", colItem, y, { width: colQty - colItem - 8 });
+    doc.text("Qty", colQty, y);
+    doc.moveDown(0.4);
+    doc
+      .moveTo(left, doc.y)
+      .lineTo(right, doc.y)
+      .strokeColor("#cbd5e1")
+      .stroke();
+    doc.moveDown(0.3);
+    doc.fillColor("#0f172a").font("Helvetica");
+  }
+  drawHeader();
+
+  for (const line of sheet.lines) {
+    if (doc.y > doc.page.height - doc.page.margins.bottom - 40) {
+      doc.addPage();
+      drawHeader();
+    }
+    const y = doc.y;
+    doc.fontSize(11).font("Helvetica");
+    const gradeSuffix = line.grade !== null ? ` (Gr ${line.grade})` : "";
+    doc.text(`${line.studentName}${gradeSuffix}`, colStudent, y, {
+      width: colId - colStudent - 8,
+    });
+    doc.text(line.localSisId ?? "—", colId, y, {
+      width: colItem - colId - 8,
+    });
+    doc.text(line.itemName, colItem, y, {
+      width: colQty - colItem - 8,
+    });
+    doc.font("Helvetica-Bold").text(String(line.quantity), colQty, y);
+    doc.moveDown(0.6);
+  }
+
+  doc.end();
 });
 
 export default router;

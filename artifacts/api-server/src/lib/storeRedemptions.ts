@@ -18,6 +18,8 @@ import {
   pbisPointMigrationsTable,
   studentsTable,
   staffTable,
+  classSectionsTable,
+  sectionRosterTable,
   type SchoolStoreRedemptionRow,
 } from "@workspace/db";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
@@ -942,6 +944,288 @@ export async function buildStudentStoreView(
 
   const orders = await listStudentRedemptions(schoolId, studentId);
   return { wallet, items, orders };
+}
+
+// --------------------------------------------------------------------------
+// Core Team fulfillment surfaces — the queue badge counter, the
+// distribution-by-class view, and the pick-sheet. All FLEID-safe (the join
+// key `studentId` never appears in any returned shape; rows carry
+// `localSisId` only).
+// --------------------------------------------------------------------------
+
+// Format a numeric class period as an ordinal phrase for the
+// "delivered in Mrs. Martin's 3rd period soon" confirmation copy.
+export function periodLabel(period: number): string {
+  const n = Math.trunc(period);
+  const mod100 = n % 100;
+  let suffix = "th";
+  if (mod100 < 11 || mod100 > 13) {
+    switch (n % 10) {
+      case 1:
+        suffix = "st";
+        break;
+      case 2:
+        suffix = "nd";
+        break;
+      case 3:
+        suffix = "rd";
+        break;
+    }
+  }
+  return `${n}${suffix} period`;
+}
+
+export interface PendingFulfillmentCount {
+  pending: number;
+  pendingApproval: number;
+  total: number;
+}
+
+// Counts that drive the pulsing cart badge: items awaiting fulfillment
+// (status 'pending') and requests awaiting approval (status
+// 'pending_approval'). Both are work the fulfillment crew must act on.
+export async function countPendingFulfillment(
+  schoolId: number,
+): Promise<PendingFulfillmentCount> {
+  const rows = await db
+    .select({
+      status: schoolStoreRedemptionsTable.status,
+      n: sql<number>`count(*)::int`,
+    })
+    .from(schoolStoreRedemptionsTable)
+    .where(
+      and(
+        eq(schoolStoreRedemptionsTable.schoolId, schoolId),
+        inArray(schoolStoreRedemptionsTable.status, [
+          "pending",
+          "pending_approval",
+        ]),
+      ),
+    )
+    .groupBy(schoolStoreRedemptionsTable.status);
+  let pending = 0;
+  let pendingApproval = 0;
+  for (const r of rows) {
+    if (r.status === "pending") pending = r.n;
+    else if (r.status === "pending_approval") pendingApproval = r.n;
+  }
+  return { pending, pendingApproval, total: pending + pendingApproval };
+}
+
+// One pending redemption, display-safe, as it appears in the distribution
+// view and on the pick-sheet.
+export interface FulfillmentRow {
+  redemptionId: number;
+  localSisId: string | null;
+  studentName: string;
+  grade: number | null;
+  itemId: number;
+  itemName: string;
+  pointsSpent: number;
+}
+
+export interface FulfillmentCombo {
+  teacherStaffId: number;
+  teacherName: string;
+  period: number;
+  periodLabel: string;
+  rows: FulfillmentRow[];
+}
+
+export interface FulfillmentDistribution {
+  combos: FulfillmentCombo[];
+  // Students with a pending redemption but no (non-planning) scheduled
+  // class — they can't be slotted into a teacher/period combo, so the crew
+  // fulfills them without a delivery target.
+  unscheduled: FulfillmentRow[];
+}
+
+// Build the distribution-by-class view: every 'pending' (approved, points
+// held) redemption mapped onto the teacher+period combos the redeeming
+// student is ACTUALLY enrolled in (section_roster ⨝ class_sections ⨝ staff,
+// school-scoped, non-planning). A student in several classes appears under
+// each of their combos; the crew picks ONE combo to deliver to. Students
+// with no schedule fall into `unscheduled`.
+export async function buildFulfillmentDistribution(
+  schoolId: number,
+): Promise<FulfillmentDistribution> {
+  // 1. Pending redemptions (display-safe), newest first.
+  const pendingRows = await db
+    .select({
+      redemptionId: schoolStoreRedemptionsTable.id,
+      studentId: schoolStoreRedemptionsTable.studentId,
+      itemId: schoolStoreRedemptionsTable.itemId,
+      itemName: schoolStoreRedemptionsTable.itemName,
+      pointsSpent: schoolStoreRedemptionsTable.pointsSpent,
+      localSisId: studentsTable.localSisId,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      grade: studentsTable.grade,
+    })
+    .from(schoolStoreRedemptionsTable)
+    .leftJoin(
+      studentsTable,
+      and(
+        eq(studentsTable.studentId, schoolStoreRedemptionsTable.studentId),
+        eq(studentsTable.schoolId, schoolStoreRedemptionsTable.schoolId),
+      ),
+    )
+    .where(
+      and(
+        eq(schoolStoreRedemptionsTable.schoolId, schoolId),
+        eq(schoolStoreRedemptionsTable.status, "pending"),
+      ),
+    )
+    .orderBy(sql`${schoolStoreRedemptionsTable.createdAt} DESC`);
+
+  if (pendingRows.length === 0) {
+    return { combos: [], unscheduled: [] };
+  }
+
+  const toRow = (r: (typeof pendingRows)[number]): FulfillmentRow => ({
+    redemptionId: r.redemptionId,
+    localSisId: r.localSisId ?? null,
+    studentName:
+      r.firstName || r.lastName
+        ? `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim()
+        : "Unknown student",
+    grade: r.grade ?? null,
+    itemId: r.itemId,
+    itemName: r.itemName,
+    pointsSpent: r.pointsSpent,
+  });
+
+  // 2. Schedules for exactly the redeeming students.
+  const studentIds = Array.from(new Set(pendingRows.map((r) => r.studentId)));
+  const scheduleRows = await db
+    .select({
+      studentId: sectionRosterTable.studentId,
+      teacherStaffId: classSectionsTable.teacherStaffId,
+      teacherName: staffTable.displayName,
+      period: classSectionsTable.period,
+    })
+    .from(sectionRosterTable)
+    .innerJoin(
+      classSectionsTable,
+      eq(sectionRosterTable.sectionId, classSectionsTable.id),
+    )
+    .innerJoin(staffTable, eq(staffTable.id, classSectionsTable.teacherStaffId))
+    .where(
+      and(
+        eq(sectionRosterTable.schoolId, schoolId),
+        eq(classSectionsTable.schoolId, schoolId),
+        eq(classSectionsTable.isPlanning, false),
+        inArray(sectionRosterTable.studentId, studentIds),
+      ),
+    );
+
+  // studentId -> list of combos that student is in.
+  const combosByStudent = new Map<
+    string,
+    { teacherStaffId: number; teacherName: string; period: number }[]
+  >();
+  for (const s of scheduleRows) {
+    const arr = combosByStudent.get(s.studentId) ?? [];
+    arr.push({
+      teacherStaffId: s.teacherStaffId,
+      teacherName: s.teacherName,
+      period: s.period,
+    });
+    combosByStudent.set(s.studentId, arr);
+  }
+
+  // 3. Fan each pending redemption out onto its student's combos.
+  const comboMap = new Map<string, FulfillmentCombo>();
+  const unscheduled: FulfillmentRow[] = [];
+  for (const r of pendingRows) {
+    const combos = combosByStudent.get(r.studentId);
+    if (!combos || combos.length === 0) {
+      unscheduled.push(toRow(r));
+      continue;
+    }
+    for (const c of combos) {
+      const key = `${c.teacherStaffId}|${c.period}`;
+      let combo = comboMap.get(key);
+      if (!combo) {
+        combo = {
+          teacherStaffId: c.teacherStaffId,
+          teacherName: c.teacherName,
+          period: c.period,
+          periodLabel: periodLabel(c.period),
+          rows: [],
+        };
+        comboMap.set(key, combo);
+      }
+      combo.rows.push(toRow(r));
+    }
+  }
+
+  const combos = Array.from(comboMap.values()).sort(
+    (a, b) =>
+      a.teacherName.localeCompare(b.teacherName) || a.period - b.period,
+  );
+  return { combos, unscheduled };
+}
+
+export interface PickSheetLine {
+  localSisId: string | null;
+  studentName: string;
+  grade: number | null;
+  itemName: string;
+  quantity: number;
+}
+
+export interface PickSheet {
+  teacherStaffId: number;
+  teacherName: string;
+  period: number;
+  periodLabel: string;
+  lines: PickSheetLine[];
+}
+
+// The bagging list for one teacher/period combo: student → item → quantity,
+// derived from that combo's pending redemptions (same schedule validation as
+// the distribution view). Returns null when the teacher/period isn't a real
+// combo for any pending redemption.
+export async function loadPickSheet(
+  schoolId: number,
+  teacherStaffId: number,
+  period: number,
+): Promise<PickSheet | null> {
+  const dist = await buildFulfillmentDistribution(schoolId);
+  const combo = dist.combos.find(
+    (c) => c.teacherStaffId === teacherStaffId && c.period === period,
+  );
+  if (!combo) return null;
+  // Group by student + item into quantities (each redemption is one unit).
+  const lineMap = new Map<string, PickSheetLine>();
+  for (const r of combo.rows) {
+    const key = `${r.localSisId ?? r.studentName}|${r.itemName}`;
+    const existing = lineMap.get(key);
+    if (existing) {
+      existing.quantity += 1;
+    } else {
+      lineMap.set(key, {
+        localSisId: r.localSisId,
+        studentName: r.studentName,
+        grade: r.grade,
+        itemName: r.itemName,
+        quantity: 1,
+      });
+    }
+  }
+  const lines = Array.from(lineMap.values()).sort(
+    (a, b) =>
+      a.studentName.localeCompare(b.studentName) ||
+      a.itemName.localeCompare(b.itemName),
+  );
+  return {
+    teacherStaffId: combo.teacherStaffId,
+    teacherName: combo.teacherName,
+    period: combo.period,
+    periodLabel: combo.periodLabel,
+    lines,
+  };
 }
 
 // Convenience re-export so route code can load a full staff row for the

@@ -68,6 +68,8 @@ import CheckInOutModal from "./components/CheckInOutModal";
 import LogInterventionLauncher from "./components/LogInterventionLauncher";
 import InterventionsBell from "./components/InterventionsBell";
 import AstNotificationBell from "./components/AstNotificationBell";
+import StoreFulfillmentBell from "./components/StoreFulfillmentBell";
+import SchoolStoreFulfillmentView from "./components/SchoolStoreFulfillmentView";
 import AstSidebarBadge from "./components/AstSidebarBadge";
 import FeatureLicensingAdminPage from "./components/featureLicensing/FeatureLicensingAdminPage";
 import SuperUserHomeRollups from "./components/districtOverview/SuperUserHomeRollups";
@@ -3972,6 +3974,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "houseRankings",
     "schoolStore",
     "schoolStoreManage",
+    "schoolStoreFulfillment",
     "classroomStore",
     "pbisHub",
     "pbisRecent",
@@ -5617,6 +5620,7 @@ function App() {
     | "pbisHub"
     | "schoolStore"
     | "schoolStoreManage"
+    | "schoolStoreFulfillment"
     | "classroomStore"
     | "accommodations"
     | "ese"
@@ -9695,6 +9699,10 @@ function App() {
     isBehaviorSpec ||
     isMtss ||
     isPbisCoord;
+  // School Store fulfillment crew — mirrors canManageStoreFulfillment() in
+  // lib/storeRedemptions.ts (isCoreTeam OR PBIS coordinator). Drives the
+  // fulfillment dashboard nav item and the pulsing cart badge in the header.
+  const canFulfillStore = isCoreTeamMember || isPbisCoord;
   const isSuperUser = authUser?.isSuperUser === true;
   // District Admin tier (Phase 1D). Mirrors the server-side
   // `canActAsDistrict` predicate in artifacts/api-server/src/lib/scope.ts —
@@ -10900,6 +10908,14 @@ function App() {
           canApproveAst={canApproveAst}
           onOpenAdmin={() => setActiveSection("astAdmin")}
         />
+        {/* School Store cart — pulses amber for the fulfillment crew when
+            there are orders awaiting approval or prep. Clicks into the
+            fulfillment dashboard. */}
+        <StoreFulfillmentBell
+          refreshKey={interventionRefreshKey}
+          canFulfillStore={canFulfillStore && effectiveFeatures.SchoolStore}
+          onOpen={() => setActiveSection("schoolStoreFulfillment")}
+        />
         {/* Student Finder — "where is this kid right now?" lookup
             available to every signed-in staff member (hall monitors,
             front-office subs, custodians). Sits on the left side of the
@@ -11565,6 +11581,16 @@ function App() {
                   renderNavItem({
                     key: "schoolStore",
                     label: "School Store",
+                    icon: IconStar,
+                  })}
+                {/* Fulfillment dashboard — Core Team / PBIS coordinator only
+                    (mirrors canManageStoreFulfillment server-side). Where the
+                    crew approves, preps by class, and prints pick-sheets. */}
+                {effectiveFeatures.SchoolStore &&
+                  canFulfillStore &&
+                  renderNavItem({
+                    key: "schoolStoreFulfillment",
+                    label: "Store Fulfillment",
                     icon: IconStar,
                   })}
                 {/* Classroom Store — per-teacher, private to the logged-in
@@ -17429,6 +17455,13 @@ function App() {
           section from a tile that's already gated. */}
       {activeSection === "schoolStoreManage" && (
         <SchoolStoreView canEdit={canEditSchoolStore} />
+      )}
+
+      {/* Core Team / PBIS-coordinator fulfillment dashboard. Server gates
+          every endpoint via canManageStoreFulfillment; the nav item + this
+          render are gated on canFulfillStore to match. */}
+      {activeSection === "schoolStoreFulfillment" && canFulfillStore && (
+        <SchoolStoreFulfillmentView />
       )}
 
       {(activeSection === "pbisRecent" || activeSection === "pbisReports") && (<>
