@@ -68,3 +68,5 @@
 - [PBIS Points color-first fork](pbis-points-color-fork.md) — hub entry splits Positive(award, positiveReasons) vs Negative(quick-log behavior+intervention, negativeReasons); negatives write via /api/interventions/quick-log not /api/pbis.
 - [PBIS write milestone parity](pbis-write-milestone-parity.md) — any endpoint inserting pbis_entries directly must also run processMilestonesForStudent (from lib/pbisMilestones, NOT @workspace/db) or milestone side-effects drift.
 - [school-settings PUT gating](school-settings-put-gating.md) — PUT /school-settings has no route-level admin guard; gate each school-WIDE field inline (intRange already wrote to updates, so 403+return before db.update).
+- [CSV export formula injection](csv-export-injection.md) — CSV cells must neutralize leading = + - @ tab CR (prefix apostrophe), not just quote delimiters; review flags it as security.
+- [Student report JSON+PDF parity](student-report-json-pdf-parity.md) — per-student Classroom Intervention Report: JSON + PDF share loadStudentReport(); both gated requireStaff+isCoreTeam; PDF uses localSisId only.

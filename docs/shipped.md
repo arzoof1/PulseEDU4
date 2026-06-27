@@ -3,6 +3,20 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Classroom Intervention Report — evaluate-by-teacher + exports** — the
+  per-student admin report (Core Team only) now has a **Teacher** dropdown
+  filter (defaults to **All teachers**); records always sort by teacher name
+  then most-recent-first so each teacher's behaviors/interventions cluster for
+  side-by-side evaluation. Added **Download CSV** (client-side, UTF-8 BOM,
+  formula-injection-hardened cells) and **Print PDF** (server-streamed pdfkit
+  attachment, designed to staple to an ODR file) — both honor the selected
+  teacher filter. Server-side, the JSON route
+  `GET /interventions/student-report/:studentId` was refactored to share a
+  `loadStudentReport()` loader + `summarizeInterventions()` +
+  `filterReportByTeacher()` with the new
+  `GET /interventions/student-report/:studentId/pdf?teacher=` route; both gated
+  `requireStaff` + `isCoreTeam`, JSON response shape unchanged. PDF renders the
+  student's `localSisId` only (never the FLEID) and uses WinAnsi-safe glyphs.
 - **Student Profile (Student Lookup evolved)** — the Quick Access "Student
   Lookup" surface is now labeled **Student Profile** (sidebar nav item, quick
   tile, and page heading); the internal `activeSection` key stays `studentLookup`

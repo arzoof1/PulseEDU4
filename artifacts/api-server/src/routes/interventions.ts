@@ -26,6 +26,7 @@ import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { processMilestonesForStudent } from "../lib/pbisMilestones.js";
+import PDFDocument from "pdfkit";
 
 const router: IRouter = Router();
 
@@ -439,6 +440,144 @@ router.get(
 // Per-student admin report: every negative behavior across all teachers, every
 // intervention logged (by teacher) with its derived outcome, and a per-type
 // effectiveness summary ("what's worked").
+// Roll up the per-type effectiveness summary ("what's worked") from a set of
+// graded interventions. Shared by the full report and the teacher-filtered view.
+function summarizeInterventions(
+  interventions: Array<{ interventionType: string; outcome: Outcome | "na" }>,
+): Record<
+  string,
+  { used: number; worked: number; recurred: number; pending: number }
+> {
+  const summary: Record<
+    string,
+    { used: number; worked: number; recurred: number; pending: number }
+  > = {};
+  for (const iv of interventions) {
+    const slot = (summary[iv.interventionType] ??= {
+      used: 0,
+      worked: 0,
+      recurred: 0,
+      pending: 0,
+    });
+    slot.used += 1;
+    if (iv.outcome !== "na") slot[iv.outcome] += 1;
+  }
+  return summary;
+}
+
+// Load the per-student Classroom Intervention Report data (behaviors,
+// graded interventions, and the effectiveness summary). Returns null if the
+// student does not exist in this school. Shared by the JSON route and the
+// printable PDF route so both stay in lock-step.
+async function loadStudentReport(schoolId: number, studentId: string) {
+  const [student] = await db
+    .select({
+      studentId: studentsTable.studentId,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      localSisId: studentsTable.localSisId,
+    })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.studentId, studentId),
+        eq(studentsTable.schoolId, schoolId),
+      ),
+    );
+  if (!student) return null;
+
+  const behaviors = await db
+    .select({
+      reason: pbisEntriesTable.reason,
+      staffName: pbisEntriesTable.staffName,
+      note: pbisEntriesTable.note,
+      createdAt: pbisEntriesTable.createdAt,
+    })
+    .from(pbisEntriesTable)
+    .where(
+      and(
+        eq(pbisEntriesTable.schoolId, schoolId),
+        eq(pbisEntriesTable.studentId, studentId),
+        eq(pbisEntriesTable.polarity, "negative"),
+        isNull(pbisEntriesTable.voidedAt),
+      ),
+    )
+    .orderBy(desc(pbisEntriesTable.createdAt))
+    .limit(300);
+
+  const interventionRows = await db
+    .select({
+      interventionType: interventionEntriesTable.interventionType,
+      behaviorReason: interventionEntriesTable.behaviorReason,
+      note: interventionEntriesTable.note,
+      staffName: interventionEntriesTable.staffName,
+      createdAt: interventionEntriesTable.createdAt,
+    })
+    .from(interventionEntriesTable)
+    .where(
+      and(
+        eq(interventionEntriesTable.schoolId, schoolId),
+        eq(interventionEntriesTable.studentId, studentId),
+      ),
+    )
+    .orderBy(desc(interventionEntriesTable.createdAt))
+    .limit(300);
+
+  // Build reason -> behavior timestamps so each linked intervention can be
+  // scored against the recurrence of the specific behavior it targeted.
+  const tsByReason = new Map<string, string[]>();
+  for (const b of behaviors) {
+    if (!b.reason || !b.createdAt) continue;
+    const arr = tsByReason.get(b.reason) ?? [];
+    arr.push(b.createdAt);
+    tsByReason.set(b.reason, arr);
+  }
+
+  const windowDays = await effectivenessWindowDays(schoolId);
+  const nowIso = new Date().toISOString();
+  const interventions = interventionRows.map((iv) => {
+    const outcome: Outcome | "na" = iv.behaviorReason
+      ? deriveOutcome(
+          iv.createdAt,
+          tsByReason.get(iv.behaviorReason) ?? [],
+          nowIso,
+          windowDays,
+        )
+      : "na";
+    return { ...iv, outcome };
+  });
+
+  return {
+    windowDays,
+    student,
+    behaviors,
+    interventions,
+    summary: summarizeInterventions(interventions),
+  };
+}
+
+type StudentReportData = NonNullable<
+  Awaited<ReturnType<typeof loadStudentReport>>
+>;
+
+// Narrow a report to a single teacher (matching staffName on both behaviors and
+// interventions) and recompute the effectiveness summary for that subset.
+function filterReportByTeacher(
+  data: StudentReportData,
+  teacher: string,
+): StudentReportData {
+  const t = teacher.trim();
+  if (!t) return data;
+  const behaviors = data.behaviors.filter((b) => b.staffName === t);
+  const interventions = data.interventions.filter((iv) => iv.staffName === t);
+  return {
+    ...data,
+    behaviors,
+    interventions,
+    summary: summarizeInterventions(interventions),
+  };
+}
+
 router.get(
   "/interventions/student-report/:studentId",
   requireStaff,
@@ -457,108 +596,192 @@ router.get(
       return;
     }
 
-    const [student] = await db
-      .select({
-        studentId: studentsTable.studentId,
-        firstName: studentsTable.firstName,
-        lastName: studentsTable.lastName,
-        localSisId: studentsTable.localSisId,
-      })
-      .from(studentsTable)
-      .where(
-        and(
-          eq(studentsTable.studentId, studentId),
-          eq(studentsTable.schoolId, schoolId),
-        ),
-      );
-    if (!student) {
+    const data = await loadStudentReport(schoolId, studentId);
+    if (!data) {
       res.status(404).json({ error: "Student not found" });
       return;
     }
+    res.json(data);
+  },
+);
 
-    const behaviors = await db
-      .select({
-        reason: pbisEntriesTable.reason,
-        staffName: pbisEntriesTable.staffName,
-        note: pbisEntriesTable.note,
-        createdAt: pbisEntriesTable.createdAt,
-      })
-      .from(pbisEntriesTable)
-      .where(
-        and(
-          eq(pbisEntriesTable.schoolId, schoolId),
-          eq(pbisEntriesTable.studentId, studentId),
-          eq(pbisEntriesTable.polarity, "negative"),
-          isNull(pbisEntriesTable.voidedAt),
-        ),
-      )
-      .orderBy(desc(pbisEntriesTable.createdAt))
-      .limit(300);
+// Printable PDF of the per-student Classroom Intervention Report — designed to
+// be attached to an ODR (Office Discipline Referral). Optional ?teacher= filter
+// narrows the report to a single teacher. Mirrors the JSON route's Core-Team
+// gate. The client triggers this as a blob DOWNLOAD (never window.open/print)
+// because the session cookie is blocked inside the Replit preview iframe.
+router.get(
+  "/interventions/student-report/:studentId/pdf",
+  requireStaff,
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (schoolId === null) return;
+    const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+      .staff;
+    if (!isCoreTeam(staff)) {
+      res.status(403).json({ error: "Core Team access required" });
+      return;
+    }
+    const studentId = String(req.params.studentId ?? "").trim();
+    if (!studentId) {
+      res.status(400).json({ error: "studentId is required" });
+      return;
+    }
+    const teacherParam = String(req.query.teacher ?? "").trim();
 
-    const interventionRows = await db
-      .select({
-        interventionType: interventionEntriesTable.interventionType,
-        behaviorReason: interventionEntriesTable.behaviorReason,
-        note: interventionEntriesTable.note,
-        staffName: interventionEntriesTable.staffName,
-        createdAt: interventionEntriesTable.createdAt,
-      })
-      .from(interventionEntriesTable)
-      .where(
-        and(
-          eq(interventionEntriesTable.schoolId, schoolId),
-          eq(interventionEntriesTable.studentId, studentId),
-        ),
-      )
-      .orderBy(desc(interventionEntriesTable.createdAt))
-      .limit(300);
+    const full = await loadStudentReport(schoolId, studentId);
+    if (!full) {
+      res.status(404).json({ error: "Student not found" });
+      return;
+    }
+    const data = teacherParam
+      ? filterReportByTeacher(full, teacherParam)
+      : full;
 
-    // Build reason -> behavior timestamps so each linked intervention can be
-    // scored against the recurrence of the specific behavior it targeted.
-    const tsByReason = new Map<string, string[]>();
-    for (const b of behaviors) {
-      if (!b.reason || !b.createdAt) continue;
-      const arr = tsByReason.get(b.reason) ?? [];
-      arr.push(b.createdAt);
-      tsByReason.set(b.reason, arr);
+    const fmt = (iso: string) => {
+      const d = new Date(iso);
+      return Number.isNaN(d.getTime())
+        ? iso
+        : d.toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+          });
+    };
+    const outcomeLabel = (o: Outcome | "na") =>
+      o === "worked"
+        ? "Worked"
+        : o === "recurred"
+          ? "Recurred"
+          : o === "pending"
+            ? "Pending"
+            : "—";
+    // Group rows by teacher (sorted by teacher name) for the "by teacher" view.
+    const byTeacher = <T extends { staffName: string | null }>(rows: T[]) => {
+      const m = new Map<string, T[]>();
+      const sorted = [...rows].sort((a, b) =>
+        (a.staffName ?? "").localeCompare(b.staffName ?? ""),
+      );
+      for (const r of sorted) {
+        const key = r.staffName ?? "—";
+        const arr = m.get(key) ?? [];
+        arr.push(r);
+        m.set(key, arr);
+      }
+      return m;
+    };
+
+    const safeName = `${data.student.lastName}_${data.student.firstName}`.replace(
+      /[^A-Za-z0-9_-]/g,
+      "",
+    );
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="intervention-report-${safeName || "student"}.pdf"`,
+    );
+
+    const doc = new PDFDocument({ size: "LETTER", margin: 50 });
+    doc.pipe(res);
+
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(18)
+      .fillColor("#0f172a")
+      .text("Classroom Intervention Report");
+    doc.moveDown(0.3);
+    doc.font("Helvetica").fontSize(11).fillColor("#334155");
+    doc.text(
+      `${data.student.lastName}, ${data.student.firstName}    ID: ${
+        data.student.localSisId ?? "—"
+      }`,
+    );
+    const genDate = new Date().toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    doc.text(
+      `Generated ${genDate}    Recurrence window: ${data.windowDays} days`,
+    );
+    if (teacherParam) doc.text(`Filtered to teacher: ${teacherParam}`);
+    doc.moveDown(0.6);
+
+    const heading = (t: string) => {
+      doc.moveDown(0.4);
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(13)
+        .fillColor("#0f172a")
+        .text(t);
+      doc.moveDown(0.15);
+      doc.font("Helvetica").fontSize(10).fillColor("#334155");
+    };
+
+    heading("What's worked (summary)");
+    const sumEntries = Object.entries(data.summary).sort(
+      (a, b) => b[1].worked - a[1].worked,
+    );
+    if (sumEntries.length === 0) {
+      doc.text("No interventions logged yet.");
+    } else {
+      for (const [name, s] of sumEntries) {
+        doc.text(
+          `• ${name} — tried ${s.used}, worked ${s.worked}, recurred ${s.recurred}, pending ${s.pending}`,
+        );
+      }
     }
 
-    const windowDays = await effectivenessWindowDays(schoolId);
-    const nowIso = new Date().toISOString();
-    const interventions = interventionRows.map((iv) => {
-      const outcome: Outcome | "na" = iv.behaviorReason
-        ? deriveOutcome(
-            iv.createdAt,
-            tsByReason.get(iv.behaviorReason) ?? [],
-            nowIso,
-            windowDays,
-          )
-        : "na";
-      return { ...iv, outcome };
-    });
-
-    const summary: Record<
-      string,
-      { used: number; worked: number; recurred: number; pending: number }
-    > = {};
-    for (const iv of interventions) {
-      const slot = (summary[iv.interventionType] ??= {
-        used: 0,
-        worked: 0,
-        recurred: 0,
-        pending: 0,
-      });
-      slot.used += 1;
-      if (iv.outcome !== "na") slot[iv.outcome] += 1;
+    heading("Interventions logged (by teacher)");
+    if (data.interventions.length === 0) {
+      doc.text("None yet.");
+    } else {
+      for (const [teacher, rows] of byTeacher(data.interventions)) {
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a").text(teacher);
+        doc.font("Helvetica").fontSize(10).fillColor("#334155");
+        const ordered = [...rows].sort((a, b) =>
+          b.createdAt.localeCompare(a.createdAt),
+        );
+        for (const iv of ordered) {
+          const forBehavior = iv.behaviorReason
+            ? ` (for: ${iv.behaviorReason})`
+            : "";
+          doc.text(
+            `   ${fmt(iv.createdAt)}  ${iv.interventionType}${forBehavior} — ${outcomeLabel(
+              iv.outcome,
+            )}`,
+          );
+          if (iv.note) {
+            doc.fillColor("#64748b").text(`      ${iv.note}`);
+            doc.fillColor("#334155");
+          }
+        }
+        doc.moveDown(0.3);
+      }
     }
 
-    res.json({
-      windowDays,
-      student,
-      behaviors,
-      interventions,
-      summary,
-    });
+    heading("Behaviors (by teacher)");
+    if (data.behaviors.length === 0) {
+      doc.text("None yet.");
+    } else {
+      for (const [teacher, rows] of byTeacher(data.behaviors)) {
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a").text(teacher);
+        doc.font("Helvetica").fontSize(10).fillColor("#334155");
+        const ordered = [...rows].sort((a, b) =>
+          b.createdAt.localeCompare(a.createdAt),
+        );
+        for (const b of ordered) {
+          doc.text(`   ${fmt(b.createdAt)}  ${b.reason}`);
+          if (b.note) {
+            doc.fillColor("#64748b").text(`      ${b.note}`);
+            doc.fillColor("#334155");
+          }
+        }
+        doc.moveDown(0.3);
+      }
+    }
+
+    doc.end();
   },
 );
 

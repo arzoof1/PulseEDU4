@@ -4801,6 +4801,29 @@ function InterventionReportTabs({
   );
 }
 
+// Trigger a client-side file download from a Blob. We download (never
+// window.open) because the session cookie is blocked inside the Replit preview
+// iframe and a blob URL opened in a new tab renders blank.
+function downloadBlobFile(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+// CSV-escape a single cell. Neutralizes CSV/Excel formula injection (cells
+// starting with = + - @ tab or CR can execute as formulas), then quotes when
+// the value contains a comma, quote, or newline.
+function toCsvCell(v: string | number | null | undefined): string {
+  let s = v == null ? "" : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
 function ClassroomInterventionReport() {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<CIReportSearchRow[]>([]);
@@ -4808,6 +4831,8 @@ function ClassroomInterventionReport() {
   const [report, setReport] = useState<CIReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [teacherFilter, setTeacherFilter] = useState("");
+  const [pdfBusy, setPdfBusy] = useState(false);
 
   // Debounced student search.
   useEffect(() => {
@@ -4841,6 +4866,7 @@ function ClassroomInterventionReport() {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setTeacherFilter("");
     authFetch(
       `/api/interventions/student-report/${encodeURIComponent(
         picked.studentId,
@@ -4875,6 +4901,129 @@ function ClassroomInterventionReport() {
           year: "numeric",
         });
   };
+
+  // Distinct teachers on this student's records (behaviors + interventions),
+  // sorted by name — drives the teacher filter dropdown.
+  const teacherOptions = useMemo(() => {
+    if (!report) return [];
+    const set = new Set<string>();
+    for (const b of report.behaviors) if (b.staffName) set.add(b.staffName);
+    for (const iv of report.interventions)
+      if (iv.staffName) set.add(iv.staffName);
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [report]);
+
+  // Always sort by teacher name (then most-recent first) so "All teachers"
+  // clusters each teacher's rows together for side-by-side evaluation.
+  const sortByTeacherThenDate = <
+    T extends { staffName: string; createdAt: string },
+  >(
+    rows: T[],
+  ) =>
+    [...rows].sort(
+      (a, b) =>
+        a.staffName.localeCompare(b.staffName) ||
+        b.createdAt.localeCompare(a.createdAt),
+    );
+
+  const filteredBehaviors = useMemo(() => {
+    if (!report) return [];
+    const rows = teacherFilter
+      ? report.behaviors.filter((b) => b.staffName === teacherFilter)
+      : report.behaviors;
+    return sortByTeacherThenDate(rows);
+  }, [report, teacherFilter]);
+
+  const filteredInterventions = useMemo(() => {
+    if (!report) return [];
+    const rows = teacherFilter
+      ? report.interventions.filter((iv) => iv.staffName === teacherFilter)
+      : report.interventions;
+    return sortByTeacherThenDate(rows);
+  }, [report, teacherFilter]);
+
+  // Recompute the "what's worked" summary for the currently filtered set.
+  const filteredSummary = useMemo(() => {
+    const out: Record<
+      string,
+      { used: number; worked: number; recurred: number; pending: number }
+    > = {};
+    for (const iv of filteredInterventions) {
+      const slot = (out[iv.interventionType] ??= {
+        used: 0,
+        worked: 0,
+        recurred: 0,
+        pending: 0,
+      });
+      slot.used += 1;
+      if (iv.outcome !== "na") slot[iv.outcome] += 1;
+    }
+    return out;
+  }, [filteredInterventions]);
+
+  const teacherSlug = teacherFilter
+    ? "-" + teacherFilter.replace(/[^A-Za-z0-9]+/g, "_")
+    : "";
+  const baseName = picked
+    ? `intervention-report-${picked.lastName}_${picked.firstName}${teacherSlug}`
+    : "intervention-report";
+
+  function downloadCsv() {
+    if (!report) return;
+    const rows: (string | number | null | undefined)[][] = [
+      ["Record", "Date", "Teacher", "Item", "For behavior", "Outcome", "Note"],
+    ];
+    for (const iv of filteredInterventions) {
+      rows.push([
+        "Intervention",
+        fmtDate(iv.createdAt),
+        iv.staffName,
+        iv.interventionType,
+        iv.behaviorReason ?? "",
+        iv.outcome === "na" ? "" : iv.outcome,
+        iv.note ?? "",
+      ]);
+    }
+    for (const b of filteredBehaviors) {
+      rows.push([
+        "Behavior",
+        fmtDate(b.createdAt),
+        b.staffName,
+        b.reason,
+        "",
+        "",
+        b.note ?? "",
+      ]);
+    }
+    const csv = rows.map((r) => r.map(toCsvCell).join(",")).join("\r\n");
+    downloadBlobFile(
+      new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }),
+      `${baseName}.csv`,
+    );
+  }
+
+  async function downloadPdf() {
+    if (!picked) return;
+    setPdfBusy(true);
+    setError(null);
+    try {
+      const qs = teacherFilter
+        ? `?teacher=${encodeURIComponent(teacherFilter)}`
+        : "";
+      const r = await authFetch(
+        `/api/interventions/student-report/${encodeURIComponent(
+          picked.studentId,
+        )}/pdf${qs}`,
+      );
+      if (!r.ok) throw new Error("Could not generate the PDF.");
+      const blob = await r.blob();
+      downloadBlobFile(blob, `${baseName}.pdf`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not generate the PDF.");
+    } finally {
+      setPdfBusy(false);
+    }
+  }
 
   return (
     <div
@@ -4998,6 +5147,46 @@ function ClassroomInterventionReport() {
 
       {report && !loading && (
         <div style={{ display: "grid", gap: "1.5rem" }}>
+          {/* Toolbar: teacher filter + exports */}
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 14,
+              }}
+            >
+              Teacher:
+              <select
+                value={teacherFilter}
+                onChange={(e) => setTeacherFilter(e.target.value)}
+                style={{ padding: "4px 8px" }}
+              >
+                <option value="">All teachers</option>
+                {teacherOptions.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+              <button type="button" onClick={downloadCsv}>
+                Download CSV
+              </button>
+              <button type="button" onClick={downloadPdf} disabled={pdfBusy}>
+                {pdfBusy ? "Preparing…" : "Print PDF"}
+              </button>
+            </div>
+          </div>
           {/* What's worked summary */}
           <div>
             <h4 style={{ margin: "0 0 0.5rem" }}>
@@ -5012,7 +5201,7 @@ function ClassroomInterventionReport() {
                 (recurrence window: {report.windowDays} days)
               </span>
             </h4>
-            {Object.keys(report.summary).length === 0 ? (
+            {Object.keys(filteredSummary).length === 0 ? (
               <div style={{ color: "var(--muted, #666)" }}>
                 No interventions logged yet.
               </div>
@@ -5040,7 +5229,7 @@ function ClassroomInterventionReport() {
                   </tr>
                 </thead>
                 <tbody>
-                  {Object.entries(report.summary)
+                  {Object.entries(filteredSummary)
                     .sort((a, b) => b[1].worked - a[1].worked)
                     .map(([name, s]) => (
                       <tr
@@ -5074,7 +5263,7 @@ function ClassroomInterventionReport() {
           {/* Interventions by teacher */}
           <div>
             <h4 style={{ margin: "0 0 0.5rem" }}>Interventions logged</h4>
-            {report.interventions.length === 0 ? (
+            {filteredInterventions.length === 0 ? (
               <div style={{ color: "var(--muted, #666)" }}>None yet.</div>
             ) : (
               <table
@@ -5096,7 +5285,7 @@ function ClassroomInterventionReport() {
                   </tr>
                 </thead>
                 <tbody>
-                  {report.interventions.map((iv, i) => (
+                  {filteredInterventions.map((iv, i) => (
                     <tr key={i} style={{ borderBottom: "1px solid #eee" }}>
                       <td style={{ padding: "0.4rem", whiteSpace: "nowrap" }}>
                         {fmtDate(iv.createdAt)}
@@ -5128,7 +5317,7 @@ function ClassroomInterventionReport() {
           {/* Behaviors across teachers */}
           <div>
             <h4 style={{ margin: "0 0 0.5rem" }}>Behaviors</h4>
-            {report.behaviors.length === 0 ? (
+            {filteredBehaviors.length === 0 ? (
               <div style={{ color: "var(--muted, #666)" }}>None yet.</div>
             ) : (
               <table
@@ -5148,7 +5337,7 @@ function ClassroomInterventionReport() {
                   </tr>
                 </thead>
                 <tbody>
-                  {report.behaviors.map((b, i) => (
+                  {filteredBehaviors.map((b, i) => (
                     <tr key={i} style={{ borderBottom: "1px solid #eee" }}>
                       <td style={{ padding: "0.4rem", whiteSpace: "nowrap" }}>
                         {fmtDate(b.createdAt)}
