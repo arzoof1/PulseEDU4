@@ -23,11 +23,8 @@ import PulseDnaStudio from "./components/PulseDnaStudio";
 import HelpAssistant from "./components/HelpAssistant";
 import { TileHome, type Tile as TileHomeTile } from "./pages/TileHome";
 import StaffAstPage from "./components/ast/StaffAstPage";
-import AdminAstQueuePage from "./components/ast/AdminAstQueuePage";
-import AstInsightsPage from "./components/ast/AstInsightsPage";
 import StaffCompPage from "./components/comp/StaffCompPage";
-import AdminCompQueuePage from "./components/comp/AdminCompQueuePage";
-import CompInsightsPage from "./components/comp/CompInsightsPage";
+import StaffTimeHub from "./components/StaffTimeHub";
 import TimeTrackingPanel from "./components/comp/TimeTrackingPanel";
 import WatchlistHub from "./components/WatchlistHub";
 import CaseOutcomesPage from "./components/CaseOutcomesPage";
@@ -4037,6 +4034,8 @@ NAV_GROUP_OWNERSHIP.schoolAdmin = [
   // Student Support group (id=behaviorSupport) so all per-school config
   // lives in one Admin & Settings home. activeSection key unchanged.
   "interventions",
+  // Consolidated AST + Comp Time admin home (was four separate items).
+  "staffTime",
 ];
 
 function groupContainsActive(groupId: string, activeSection: string): boolean {
@@ -5690,11 +5689,8 @@ function App() {
     | "earlyWarningDashboard"
     | "interventionReportsLegacy"
     | "ast"
-    | "astAdmin"
-    | "astInsights"
     | "comp"
-    | "compAdmin"
-    | "compInsights"
+    | "staffTime"
     | "pickupTags"
     | "contactFixes"
     | "classComposer"
@@ -10215,10 +10211,7 @@ function App() {
   const adminNavSections: NavSection[] = [
     { key: "staffRoles", label: "Staff & Roles", icon: IconUser },
     { key: "settings", label: "Settings", icon: IconSettings },
-    { key: "astAdmin", label: "AST Approvals", icon: IconClock },
-    { key: "astInsights", label: "AST Insights", icon: IconClipboard },
-    { key: "compAdmin", label: "Comp Time Approvals", icon: IconClock },
-    { key: "compInsights", label: "Comp Time Insights", icon: IconClipboard },
+    { key: "staffTime", label: "Staff Time", icon: IconClock },
   ];
   // Anyone with the canApproveAst flag — admin tier OR an explicit per-staff
   // grant (e.g. confidential secretary) — can see the admin AST queue.
@@ -10354,11 +10347,10 @@ function App() {
     if (key === "contactFixes" && contactFixesCount > 0) {
       return <span style={badgeStyle}>{contactFixesCount}</span>;
     }
-    if (key === "astAdmin" && astPendingCount > 0) {
-      return <span style={badgeStyle}>{astPendingCount}</span>;
-    }
-    if (key === "compAdmin" && compPendingCount > 0) {
-      return <span style={badgeStyle}>{compPendingCount}</span>;
+    if (key === "staffTime" && astPendingCount + compPendingCount > 0) {
+      return (
+        <span style={badgeStyle}>{astPendingCount + compPendingCount}</span>
+      );
     }
     return null;
   };
@@ -11003,7 +10995,7 @@ function App() {
         <AstNotificationBell
           refreshKey={interventionRefreshKey}
           canApproveAst={canApproveAst}
-          onOpenAdmin={() => setActiveSection("astAdmin")}
+          onOpenAdmin={() => setActiveSection("staffTime")}
         />
         {/* School Store cart — pulses amber for the fulfillment crew when
             there are orders awaiting approval or prep. Clicks into the
@@ -11953,10 +11945,8 @@ function App() {
                     icon: IconClipboard,
                   })}
                 {isAdmin && renderNavItem(adminNavSections[1])}
-                {canApproveAst && renderNavItem(adminNavSections[2])}
-                {canApproveAst && renderNavItem(adminNavSections[3])}
-                {canApproveCompTime && renderNavItem(adminNavSections[4])}
-                {canApproveCompTime && renderNavItem(adminNavSections[5])}
+                {(canApproveAst || canApproveCompTime) &&
+                  renderNavItem(adminNavSections[2])}
                 {canManageEligibility &&
                   renderNavItem({
                     key: "eligibility",
@@ -18753,33 +18743,21 @@ function App() {
         </FeatureGate>
       )}
 
-      {activeSection === "astAdmin" && canApproveAst && (
-        <FeatureGate feature="ast" label="AST">
-          <AdminAstQueuePage />
-        </FeatureGate>
-      )}
-      {activeSection === "astInsights" && canApproveAst && (
-        <FeatureGate feature="ast" label="AST">
-          <AstInsightsPage />
-        </FeatureGate>
-      )}
-
       {activeSection === "comp" && canSeeCompTimeStaff && (
         <FeatureGate feature="compTime" label="Comp Time">
           <StaffCompPage />
         </FeatureGate>
       )}
 
-      {activeSection === "compAdmin" && canApproveCompTime && (
-        <FeatureGate feature="compTime" label="Comp Time">
-          <AdminCompQueuePage />
-        </FeatureGate>
-      )}
-      {activeSection === "compInsights" && canApproveCompTime && (
-        <FeatureGate feature="compTime" label="Comp Time">
-          <CompInsightsPage />
-        </FeatureGate>
-      )}
+      {activeSection === "staffTime" &&
+        (canApproveAst || canApproveCompTime) && (
+          <StaffTimeHub
+            canApproveAst={canApproveAst}
+            canApproveCompTime={canApproveCompTime}
+            astPending={astPendingCount}
+            compPending={compPendingCount}
+          />
+        )}
 
       {activeSection === "featureLicensing" && isSuperUser && (
         <FeatureLicensingAdminPage />
