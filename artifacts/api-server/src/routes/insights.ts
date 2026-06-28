@@ -56,8 +56,10 @@ import {
   bucketTarget,
   bucketFor,
   proficiencyGap,
+  placePmSet,
   SUB_LEVEL_LABEL,
   type Subject,
+  type PmPlacementSet,
 } from "../lib/fastCutScores.js";
 import { loadAttendanceMetrics } from "../lib/attendanceMetrics.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
@@ -2922,6 +2924,10 @@ router.get("/insights/academics/band", async (req, res) => {
     attendancePct?: number | null;
     ptsToNextLevel?: number | null;
     ptsToProficient?: number | null;
+    // Per-PM FAST placements (level + sub-level) for the roster-style
+    // level pills in the drill-down drawer. Same chart conventions as the
+    // roster so colors agree across surfaces.
+    levels?: PmPlacementSet;
   };
   const hits: Hit[] = [];
   for (const r of fastRows) {
@@ -2938,6 +2944,12 @@ router.get("/insights/academics/band", async (req, res) => {
       pm1: r.pm1 ?? null,
       pm2: r.pm2 ?? null,
       pm3: r.pm3,
+      levels: placePmSet(subject, grade, {
+        priorYearScore: r.priorYearScore ?? null,
+        pm1: r.pm1 ?? null,
+        pm2: r.pm2 ?? null,
+        pm3: r.pm3,
+      }),
     });
   }
   hits.sort((a, b) => a.pm3 - b.pm3);
@@ -3050,6 +3062,9 @@ interface TrajectoryStudentRec {
   pm2Band: TrajectoryBand;
   pm3Band: TrajectoryBand;
   pm3SubLevel: string | null;
+  // Per-PM FAST placements (level + sub-level) for the roster-style level
+  // pills in the drill-down drawer. Same chart conventions as the roster.
+  levels: PmPlacementSet;
 }
 
 function classifyArchetype(rec: TrajectoryStudentRec): TrajectoryArchetype {
@@ -3303,11 +3318,15 @@ async function loadTrajectoryRecs(
     const pm2 = fr?.pm2 ?? null;
     const pm3 = fr?.pm3 ?? null;
 
-    const pm1Placement =
-      pm1 != null ? placeOnChart(pm1, subject, grade) : null;
-    const pm2Placement =
-      pm2 != null ? placeOnChart(pm2, subject, grade) : null;
-    const pm3Placement = pm3 != null ? placePm3(pm3, subject, grade) : null;
+    // Single source of truth for per-PM placement — drives both the
+    // trajectory band classification and the drawer's level pills, so the
+    // two never disagree.
+    const levels = placePmSet(subject, grade, {
+      priorYearScore: fr?.priorYearScore ?? null,
+      pm1,
+      pm2,
+      pm3,
+    });
 
     recs.push({
       studentId: sr.studentId,
@@ -3318,10 +3337,11 @@ async function loadTrajectoryRecs(
       pm1,
       pm2,
       pm3,
-      pm1Band: levelToBand(pm1Placement),
-      pm2Band: levelToBand(pm2Placement),
-      pm3Band: levelToBand(pm3Placement),
-      pm3SubLevel: pm3Placement?.subLevel ?? null,
+      pm1Band: levelToBand(levels.pm1),
+      pm2Band: levelToBand(levels.pm2),
+      pm3Band: levelToBand(levels.pm3),
+      pm3SubLevel: levels.pm3?.subLevel ?? null,
+      levels,
     });
   }
   return recs;
@@ -3472,6 +3492,8 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
     attendancePct?: number | null;
     ptsToNextLevel?: number | null;
     ptsToProficient?: number | null;
+    // Per-PM FAST placements for the roster-style level pills.
+    levels?: PmPlacementSet;
   };
   const hits: Hit[] = [];
   for (const { subject: subj, rec: r } of tagged) {
@@ -3490,6 +3512,7 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
       pm2: r.pm2,
       pm3: r.pm3,
       subject: subj,
+      levels: r.levels,
     });
   }
   hits.sort((a, b) => a.studentName.localeCompare(b.studentName));

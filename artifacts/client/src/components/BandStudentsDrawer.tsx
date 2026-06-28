@@ -7,7 +7,21 @@
 // the close button to dismiss; ESC closes too. Scroll-locks the body
 // while open.
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import {
+  FastScorePill,
+  PillViewContext,
+  PillViewToggle,
+  type PillView,
+  type PillMarker,
+} from "./FastScorePill";
+
+// One PM window's FAST placement (level + sub-level). Mirrors the server
+// `Placement` shape carried on the `levels` field.
+interface PmCell {
+  level: 1 | 2 | 3 | 4 | 5;
+  subLevel: string;
+}
 
 interface Student {
   studentId: string;
@@ -23,6 +37,15 @@ interface Student {
   // path below already null-checks so existing callers that always set
   // a number remain safe.
   pm3?: number | null;
+  // Per-PM FAST placements for the roster-style level pills. Optional so
+  // callers that don't render the PM columns are unaffected; when absent
+  // the pill falls back to a neutral "—".
+  levels?: {
+    priorYearScore: PmCell | null;
+    pm1: PmCell | null;
+    pm2: PmCell | null;
+    pm3: PmCell | null;
+  } | null;
   // Optional per-student pills shown next to the name. Program (ESE|504)
   // and MTSS (Tier 2+|Tier 3) are mutually exclusive within their group;
   // BQ ELA / BQ Math are independent ("lowest 25% prior-year FAST").
@@ -51,50 +74,77 @@ export interface ScoreColumn {
   render?: (s: Student) => React.ReactNode;
 }
 
-// Green/bold for upward movement, red/bold for a decline — used by the
-// shared PM columns to flag PM2 / PM3 relative to the PM1 baseline so a
-// reader spots momentum at a glance. Equal scores or a missing baseline
-// render plain.
-const upStyle: React.CSSProperties = { color: "#16a34a", fontWeight: 700 };
-const downStyle: React.CSSProperties = { color: "#dc2626", fontWeight: 700 };
-
-function movementCell(
+// Small gain/decline cue for PM2 / PM3 vs the PM1 baseline (raw scale
+// score). The pill itself now encodes the achievement level (color), so
+// the ▲/▼ marker preserves the at-a-glance momentum read. Equal scores or
+// a missing baseline → no marker.
+function markerVsPm1(
   value: number | null | undefined,
   baseline: number | null | undefined,
-): React.ReactNode {
-  if (value == null) return "—";
-  if (baseline != null && value > baseline)
-    return <span style={upStyle}>{value}</span>;
-  if (baseline != null && value < baseline)
-    return <span style={downStyle}>{value}</span>;
-  return value;
+): PillMarker {
+  if (value == null || baseline == null) return null;
+  if (value > baseline) return "up";
+  if (value < baseline) return "down";
+  return null;
 }
 
 // Shared PM progression columns for the Insights drill-downs: prior-year
-// PM3 baseline, then PM1 -> PM2 -> PM3. PM2 and PM3 are colored by their
-// movement vs the PM1 baseline (green up, red down). Callers prepend these
-// to INSIGHTS_METRIC_COLUMNS so the Academics band drawer and Academic
+// PM3 baseline, then PM1 -> PM2 -> PM3, each rendered as a roster-style
+// FAST achievement-level pill (level color, click to flip to the scale
+// score, surface-wide toggle). PM2 / PM3 keep a small ▲/▼ marker for
+// movement vs the PM1 baseline. Callers prepend these to
+// INSIGHTS_METRIC_COLUMNS so the Academics band drawer and Academic
 // Trajectories render an identical table.
 export const INSIGHTS_PM_COLUMNS: ScoreColumn[] = [
   {
     key: "priorYearScore",
     label: "Prior PM3",
-    render: (s) => (s.priorYearScore != null ? s.priorYearScore : "—"),
+    render: (s) => (
+      <FastScorePill
+        score={s.priorYearScore}
+        level={s.levels?.priorYearScore?.level}
+        subLevel={s.levels?.priorYearScore?.subLevel}
+        pmLabel="Prior PM3"
+      />
+    ),
   },
   {
     key: "pm1",
     label: "PM1",
-    render: (s) => (s.pm1 != null ? s.pm1 : "—"),
+    render: (s) => (
+      <FastScorePill
+        score={s.pm1}
+        level={s.levels?.pm1?.level}
+        subLevel={s.levels?.pm1?.subLevel}
+        pmLabel="PM1"
+      />
+    ),
   },
   {
     key: "pm2",
     label: "PM2",
-    render: (s) => movementCell(s.pm2, s.pm1),
+    render: (s) => (
+      <FastScorePill
+        score={s.pm2}
+        level={s.levels?.pm2?.level}
+        subLevel={s.levels?.pm2?.subLevel}
+        pmLabel="PM2"
+        marker={markerVsPm1(s.pm2, s.pm1)}
+      />
+    ),
   },
   {
     key: "pm3",
     label: "PM3",
-    render: (s) => movementCell(s.pm3, s.pm1),
+    render: (s) => (
+      <FastScorePill
+        score={s.pm3}
+        level={s.levels?.pm3?.level}
+        subLevel={s.levels?.pm3?.subLevel}
+        pmLabel="PM3"
+        marker={markerVsPm1(s.pm3, s.pm1)}
+      />
+    ),
   },
 ];
 
@@ -150,6 +200,10 @@ interface Props {
   // generates the CSV (client- or server-side) and triggers the download
   // — drawer just exposes the button slot so it stays generic.
   onDownloadCsv?: () => void;
+  // When true, renders the "Show: Level | Scale score" toggle in the
+  // header and drives every FastScorePill in the table from it. Opt-in so
+  // callers that don't render the PM level pills get no stray toggle.
+  showScoreToggle?: boolean;
 }
 
 const DEFAULT_COLUMNS: ScoreColumn[] = [
@@ -170,7 +224,12 @@ export default function BandStudentsDrawer({
   onOpenProfile,
   scoreColumns = DEFAULT_COLUMNS,
   onDownloadCsv,
+  showScoreToggle,
 }: Props) {
+  // Surface-wide pill face ("Level" by default). Only meaningful when
+  // showScoreToggle is on; otherwise the provider just supplies the
+  // default so any pills still render their level face.
+  const [pillView, setPillView] = useState<PillView>("level");
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
@@ -209,6 +268,9 @@ export default function BandStudentsDrawer({
             )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {showScoreToggle && students.length > 0 && (
+              <PillViewToggle value={pillView} onChange={setPillView} />
+            )}
             {onDownloadCsv && students.length > 0 && (
               <button
                 type="button"
@@ -242,6 +304,7 @@ export default function BandStudentsDrawer({
           </div>
         </div>
 
+        <PillViewContext.Provider value={pillView}>
         <div style={bodyStyle}>
           {loading && (
             <p style={{ color: "var(--text-subtle)" }}>Loading…</p>
@@ -347,6 +410,7 @@ export default function BandStudentsDrawer({
             </>
           )}
         </div>
+        </PillViewContext.Provider>
       </div>
     </div>
   );

@@ -30,6 +30,7 @@ import GroupInsightsTab from "./GroupInsightsTab";
 import TeacherInstructionLogTab from "./TeacherInstructionLogTab";
 import Tier3WeeklyForm from "./Tier3WeeklyForm";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
+import { LEVEL_BG, LEVEL_FG } from "./FastScorePill";
 
 // Top-level tab in this page. "roster" is the original FAST PM
 // pills + flags table; "benchmarks" is the FAST Phase 2 per-item
@@ -381,23 +382,9 @@ function SafetyPlanPill({
   );
 }
 
-// Level → background color. Per product preference:
-// L1 red, L2 orange, L3 green, L4 blue, L5 purple.
-const LEVEL_BG: Record<1 | 2 | 3 | 4 | 5, string> = {
-  1: "#dc2626", // red
-  2: "#f59e0b", // orange
-  3: "#16a34a", // green
-  4: "#2563eb", // blue
-  5: "#7c3aed", // purple
-};
-// All chosen backgrounds are dark enough to take white text legibly.
-const LEVEL_FG: Record<1 | 2 | 3 | 4 | 5, string> = {
-  1: "#fff",
-  2: "#fff",
-  3: "#fff",
-  4: "#fff",
-  5: "#fff",
-};
+// Level → background/foreground colors live in the shared FastScorePill
+// module so the Roster pills and the Insights drill-down level pills can
+// never silently diverge. Imported above as LEVEL_BG / LEVEL_FG.
 
 // Pastel fill + dark text/stroke for the bucket icon, keyed to the
 // student's CURRENT FAST level (per the FAST palette: L1 red, L2

@@ -109,6 +109,14 @@ interface BandStudent {
   attendancePct?: number | null;
   ptsToNextLevel?: number | null;
   ptsToProficient?: number | null;
+  // Per-PM FAST placements for the roster-style level pills (rides along
+  // straight into BandStudentsDrawer's matching `levels` field).
+  levels?: {
+    priorYearScore: { level: 1 | 2 | 3 | 4 | 5; subLevel: string } | null;
+    pm1: { level: 1 | 2 | 3 | 4 | 5; subLevel: string } | null;
+    pm2: { level: 1 | 2 | 3 | 4 | 5; subLevel: string } | null;
+    pm3: { level: 1 | 2 | 3 | 4 | 5; subLevel: string } | null;
+  } | null;
 }
 
 interface BandResponse {
@@ -382,6 +390,7 @@ export default function AcademicsDashboard({ onOpenProfile }: Props) {
           ...INSIGHTS_PM_COLUMNS,
           ...INSIGHTS_METRIC_COLUMNS,
         ]}
+        showScoreToggle
         truncated={drillData?.truncated}
         total={drillData?.total}
         loading={drillLoading}

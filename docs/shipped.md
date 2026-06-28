@@ -3,6 +3,26 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Insights drill-down — PM progression as FAST level pills.** The
+  Prior PM3 · PM1 · PM2 · PM3 columns in the shared `BandStudentsDrawer`
+  (Academic Trajectories drill-down + Academics band drill-ins) now render
+  as roster-style **FAST achievement-level pills** instead of plain
+  numbers: pill background = the FAST level color (L1 red → L5 purple),
+  face shows the sub-level, click a pill to flip it to the raw scale score.
+  A header **"Show: Level | Scale score"** toggle (`showScoreToggle` prop)
+  drives every pill on the surface; per-pill overrides reset when the
+  global toggle changes. PM2/PM3 keep a small **▲ green / ▼ red** marker for
+  movement vs the PM1 baseline (replacing the old green/red `movementCell`
+  bold-number coloring). New shared `FastScorePill.tsx` owns the
+  `LEVEL_BG`/`LEVEL_FG` palette (now imported by the Teacher Roster too, so
+  the two surfaces can't drift) plus `PillViewContext`, `FastScorePill`,
+  and `PillViewToggle`. Server: new `placePmSet()` in `fastCutScores.ts` is
+  the single source for the four PM placements (prior & current PM3 →
+  `placePm3`; PM1/PM2 → `placeOnChart`); trajectory banding now derives from
+  the same call, and a `levels` field rides on the band endpoint, the
+  trajectory recs, and `/trajectory/students`. Read-only/additive — other
+  drawer callers (which don't pass `showScoreToggle`) are unaffected.
+
 - **Insights drill-down — PM progression columns.** The shared
   `BandStudentsDrawer` (Academic Trajectories drill-down + Academics
   dashboard band drill-ins) now renders the full PM progression in order
