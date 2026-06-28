@@ -15,7 +15,8 @@
     "fix-dsp-names": "tsx ./src/dspParrottFixNames.ts",
     "seed-teacher-locations": "tsx ./src/seedTeacherLocations.ts",
     "seed-mtss": "tsx ./src/seedMtssProgress.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "brochure-pdf": "tsx ./src/generateBrochurePdf.ts"
   },
   "devDependencies": {
     "@types/node": "catalog:",
