@@ -53,6 +53,18 @@ interface Student {
   mtssPill?: "Tier 2+" | "Tier 3" | null;
   bqEla?: boolean;
   bqMath?: boolean;
+  // Teacher-Roster parity context (additive). ELL flag, active safety-plan
+  // summary (SP indicator), and the FAST learning-gain green-check. Optional
+  // so callers that don't supply them are unaffected.
+  ell?: boolean;
+  safetyPlan?: {
+    itemCount: number;
+    items?: unknown[];
+    notes?: string | null;
+    updatedAt?: string | null;
+    updatedByName?: string | null;
+  } | null;
+  learningGain?: boolean | null;
   // Optional additive metrics (shared insights source of truth). Only
   // rendered when the caller opts in via `scoreColumns`. daysAbsent /
   // attendancePct from the Eligibility Hub upload; ptsToNextLevel /
@@ -137,13 +149,26 @@ export const INSIGHTS_PM_COLUMNS: ScoreColumn[] = [
     key: "pm3",
     label: "PM3",
     render: (s) => (
-      <FastScorePill
-        score={s.pm3}
-        level={s.levels?.pm3?.level}
-        subLevel={s.levels?.pm3?.subLevel}
-        pmLabel="PM3"
-        marker={markerVsPm1(s.pm3, s.pm1)}
-      />
+      <span
+        style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+      >
+        <FastScorePill
+          score={s.pm3}
+          level={s.levels?.pm3?.level}
+          subLevel={s.levels?.pm3?.subLevel}
+          pmLabel="PM3"
+          marker={markerVsPm1(s.pm3, s.pm1)}
+        />
+        {s.learningGain === true && (
+          <span
+            title="FAST learning gain met (PM3 vs prior-year PM3)"
+            aria-label="FAST learning gain met"
+            style={lgCheckStyle}
+          >
+            ✓
+          </span>
+        )}
+      </span>
     ),
   },
 ];
@@ -325,6 +350,7 @@ export default function BandStudentsDrawer({
                   : `${students.length} student${students.length === 1 ? "" : "s"}`}
                 {truncated ? ` — showing first ${students.length}` : ""}
               </p>
+              <style>{`.bsd-row:hover { background: #f8fafc; }`}</style>
               <table className="pulse-table" style={tableStyle}>
                 <thead>
                   <tr>
@@ -339,23 +365,58 @@ export default function BandStudentsDrawer({
                 </thead>
                 <tbody>
                   {students.map((s) => (
-                    <tr key={s.studentId}>
+                    <tr
+                      key={s.studentId}
+                      className="bsd-row"
+                      onClick={() => onOpenProfile(s.studentId)}
+                      style={{ cursor: "pointer" }}
+                      title="Open Student Profile"
+                    >
                       <td style={tdStyle}>
                         <button
                           type="button"
-                          onClick={() => onOpenProfile(s.studentId)}
+                          onClick={(e) => {
+                            // Row already handles open-profile; stop here so
+                            // the name click doesn't fire it twice.
+                            e.stopPropagation();
+                            onOpenProfile(s.studentId);
+                          }}
                           style={linkBtnStyle}
                         >
                           {s.studentName}
                         </button>
+                        {s.safetyPlan && (
+                          <span
+                            style={spPillStyle}
+                            title={`Active safety plan${
+                              s.safetyPlan.itemCount
+                                ? ` — ${s.safetyPlan.itemCount} item${
+                                    s.safetyPlan.itemCount === 1 ? "" : "s"
+                                  }`
+                                : ""
+                            }`}
+                            aria-label="Active safety plan"
+                          >
+                            SP
+                          </span>
+                        )}
                         {(s.programPill ||
                           s.mtssPill ||
+                          s.ell ||
                           s.bqEla ||
                           s.bqMath) && (
                           <span style={pillRowStyle}>
                             {s.programPill && (
                               <span style={pillStyle(PILL_TONES.program)}>
                                 {s.programPill}
+                              </span>
+                            )}
+                            {s.ell && (
+                              <span
+                                style={pillStyle(PILL_TONES.ell)}
+                                title="English Language Learner"
+                              >
+                                ELL
                               </span>
                             )}
                             {s.mtssPill && (
@@ -394,7 +455,15 @@ export default function BandStudentsDrawer({
                           c.key
                         ];
                         return (
-                          <td key={c.key} style={tdStyleNum}>
+                          <td
+                            key={c.key}
+                            style={tdStyleNum}
+                            // Score cells host click-to-flip FAST pills; stop
+                            // the click from bubbling to the row's
+                            // open-profile handler so flipping a pill never
+                            // navigates away.
+                            onClick={(e) => e.stopPropagation()}
+                          >
                             {c.render
                               ? c.render(s)
                               : v != null
@@ -520,7 +589,37 @@ const PILL_TONES = {
   tier3: { bg: "#fee2e2", fg: "#b91c1c", border: "#fecaca" },
   // BQ = "lowest 25% prior-year FAST" — violet to match insights accent.
   bq: { bg: "#ede9fe", fg: "#5b21b6", border: "#ddd6fe" },
+  // ELL — green, matching the Teacher Roster program chip palette.
+  ell: { bg: "#dcfce7", fg: "#14532d", border: "#bbf7d0" },
 } as const;
+
+// Solid-red "SP" indicator shown right after the name when a student has an
+// active safety plan — mirrors the Teacher Roster SafetyPlanPill so the cue
+// reads identically across surfaces.
+const spPillStyle: React.CSSProperties = {
+  display: "inline-block",
+  marginLeft: 6,
+  padding: "1px 7px",
+  borderRadius: 999,
+  background: "#dc2626",
+  color: "#fff",
+  fontSize: 10,
+  fontWeight: 800,
+  letterSpacing: "0.04em",
+  lineHeight: 1.4,
+  verticalAlign: "middle",
+  whiteSpace: "nowrap",
+};
+
+// Green check appended to the PM3 pill when the student met the FAST
+// learning gain (PM3 vs prior-year PM3) — same green-check cue as the
+// Teacher Roster.
+const lgCheckStyle: React.CSSProperties = {
+  color: "#16a34a",
+  fontSize: 13,
+  fontWeight: 900,
+  lineHeight: 1,
+};
 
 function pillStyle(tone: { bg: string; fg: string; border: string }): React.CSSProperties {
   return {

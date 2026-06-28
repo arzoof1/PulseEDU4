@@ -46,6 +46,7 @@ import {
   studentRetentionsTable,
   housesTable,
   attendanceCheckinsTable,
+  safetyPlansTable,
 } from "@workspace/db";
 import { and, eq, inArray, isNull, gte, lte, sql, desc, or } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -63,7 +64,12 @@ import {
 } from "../lib/fastCutScores.js";
 import { loadAttendanceMetrics } from "../lib/attendanceMetrics.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
-import { loadFastHistory, pickHistory } from "../lib/fastHistory.js";
+import {
+  loadFastHistory,
+  pickHistory,
+  type FastHistoryEntry,
+} from "../lib/fastHistory.js";
+import { decideLearningGain } from "../lib/learningGains.js";
 import {
   parseInsightsFilters,
   applyInsightsFilters,
@@ -73,6 +79,118 @@ import {
 } from "../lib/insightsFilters.js";
 
 const router: IRouter = Router();
+
+// ---------------------------------------------------------------------------
+// Drill-down parity helpers (shared by the Academics band + Trajectory
+// drill-in endpoints so both surfaces show the SAME Teacher-Roster context:
+// the ELL flag, the active safety-plan (SP) indicator, and the FAST
+// learning-gain green-check.)
+// ---------------------------------------------------------------------------
+
+// Active safety-plan summary surfaced on a drill-down row. Mirrors the
+// shape the Teacher Roster sends (routes/teacherRoster.ts) so the client
+// SP pill renders identically across surfaces.
+type DrilldownSafetyPlan = {
+  itemCount: number;
+  items: unknown[];
+  notes: string;
+  updatedAt: Date | null;
+  updatedByName: string | null;
+};
+
+// Load the ELL flag + active safety-plan summary for a (school-scoped) set
+// of students. Used to decorate the visible slice of each drill-down.
+async function loadDrilldownContext(
+  schoolId: number,
+  studentIds: string[],
+): Promise<{
+  ellByStudent: Map<string, boolean>;
+  safetyPlanByStudent: Map<string, DrilldownSafetyPlan>;
+}> {
+  const ellByStudent = new Map<string, boolean>();
+  const safetyPlanByStudent = new Map<string, DrilldownSafetyPlan>();
+  if (studentIds.length === 0) return { ellByStudent, safetyPlanByStudent };
+
+  const [ellRows, spRows] = await Promise.all([
+    db
+      .select({
+        studentId: studentsTable.studentId,
+        ell: studentsTable.ell,
+      })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          inArray(studentsTable.studentId, studentIds),
+        ),
+      ),
+    // Active safety plans (status='active') — same query the roster uses.
+    db
+      .select({
+        studentId: safetyPlansTable.studentId,
+        items: safetyPlansTable.items,
+        notes: safetyPlansTable.notes,
+        updatedAt: safetyPlansTable.updatedAt,
+        updatedByName: safetyPlansTable.updatedByName,
+      })
+      .from(safetyPlansTable)
+      .where(
+        and(
+          eq(safetyPlansTable.schoolId, schoolId),
+          eq(safetyPlansTable.status, "active"),
+          inArray(safetyPlansTable.studentId, studentIds),
+        ),
+      ),
+  ]);
+
+  for (const r of ellRows) ellByStudent.set(r.studentId, Boolean(r.ell));
+  for (const sp of spRows) {
+    const activeItems = (sp.items ?? []).filter(
+      (i: { active?: boolean }) => i && i.active,
+    );
+    safetyPlanByStudent.set(sp.studentId, {
+      itemCount: activeItems.length,
+      items: activeItems,
+      notes: sp.notes,
+      updatedAt: sp.updatedAt,
+      updatedByName: sp.updatedByName,
+    });
+  }
+  return { ellByStudent, safetyPlanByStudent };
+}
+
+// FAST learning-gain green-check for one drill-down row. Uses the SAME
+// strict PM3-to-PM3 rule as the Teacher Roster — prior-year evidence comes
+// from loadFastHistory historical PM3 (NEVER priorYearScore), placed on the
+// test-administration grade chart (grade-1), and compared against the
+// current PM3 placement already carried on the row's `levels`.
+function computeRowLearningGain(args: {
+  subject: Subject;
+  grade: number | null;
+  currentLevels: PmPlacementSet | undefined;
+  currentPm3: number | null;
+  history: FastHistoryEntry[];
+}): boolean | null {
+  const { subject, grade, currentLevels, currentPm3, history } = args;
+  if (grade == null) return null;
+  const top = history[0];
+  const priorGrade = grade - 1;
+  const canPlace =
+    !!top &&
+    priorGrade >= 1 &&
+    (subject === "ela" || subject === "math") &&
+    hasChart(subject, priorGrade);
+  const priorPlacement =
+    canPlace && top ? placeOnChart(top.pm3, subject, priorGrade) : null;
+  return decideLearningGain({
+    priorLevel: priorPlacement?.level ?? null,
+    currentLevel: currentLevels?.pm3?.level ?? null,
+    priorScore: top?.pm3 ?? null,
+    currentScore: currentPm3,
+    priorSubLevel: priorPlacement?.subLevel ?? null,
+    currentSubLevel: currentLevels?.pm3?.subLevel ?? null,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Auth + visibility helpers
@@ -2924,6 +3042,13 @@ router.get("/insights/academics/band", async (req, res) => {
     attendancePct?: number | null;
     ptsToNextLevel?: number | null;
     ptsToProficient?: number | null;
+    // Teacher-Roster parity context (additive). ELL flag, active
+    // safety-plan summary, and the FAST learning-gain green-check —
+    // surfaced so the drill-down shows the same whole-child context as
+    // the roster.
+    ell?: boolean;
+    safetyPlan?: DrilldownSafetyPlan | null;
+    learningGain?: boolean | null;
     // Per-PM FAST placements (level + sub-level) for the roster-style
     // level pills in the drill-down drawer. Same chart conventions as the
     // roster so colors agree across surfaces.
@@ -2961,14 +3086,32 @@ router.get("/insights/academics/band", async (req, res) => {
   // Decorate the visible slice with the shared additive metrics. Attendance
   // is batch-loaded once; FAST gaps reuse bucketFor/proficiencyGap so this
   // surface agrees exactly with the Trajectory drawer and Teacher Roster.
-  const attMap = await loadAttendanceMetrics(
+  const visibleIds = visible.map((h) => h.studentId);
+  const attMap = await loadAttendanceMetrics(schoolId, visibleIds);
+  // Teacher-Roster parity context for the visible slice: ELL flag, active
+  // safety plan, and FAST learning-gain. Loaded once for the trimmed set.
+  const { ellByStudent, safetyPlanByStudent } = await loadDrilldownContext(
     schoolId,
-    visible.map((h) => h.studentId),
+    visibleIds,
   );
+  const historyMap = await loadFastHistory({
+    schoolId,
+    studentIds: visibleIds,
+    subjects: [subject],
+  });
   for (const h of visible) {
     const att = attMap.get(h.studentId);
     h.daysAbsent = att?.daysAbsent ?? null;
     h.attendancePct = att?.attendancePct ?? null;
+    h.ell = ellByStudent.get(h.studentId) ?? false;
+    h.safetyPlan = safetyPlanByStudent.get(h.studentId) ?? null;
+    h.learningGain = computeRowLearningGain({
+      subject,
+      grade: h.grade,
+      currentLevels: h.levels,
+      currentPm3: h.pm3,
+      history: pickHistory(historyMap, h.studentId, subject),
+    });
     // grade is non-null for every pushed hit (the placement loop skips
     // grade === null), but narrow for the type checker.
     if (h.grade != null) {
@@ -3484,6 +3627,11 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
     mtssPill?: "Tier 2+" | "Tier 3" | null;
     bqEla?: boolean;
     bqMath?: boolean;
+    // Teacher-Roster parity context (additive) — ELL flag, active
+    // safety-plan summary, and the FAST learning-gain green-check.
+    ell?: boolean;
+    safetyPlan?: DrilldownSafetyPlan | null;
+    learningGain?: boolean | null;
     // Additive read-only metrics (shared source of truth). daysAbsent /
     // attendancePct from the Eligibility Hub upload; ptsToNextLevel /
     // ptsToProficient from the FAST cut-score charts. All null when the
@@ -3526,9 +3674,14 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
   // to the trimmed studentId set.
   const visibleIds = Array.from(new Set(visible.map((h) => h.studentId)));
   if (visibleIds.length > 0) {
-    type FlagRow = { student_id: string; ese: boolean; is_504: boolean };
+    type FlagRow = {
+      student_id: string;
+      ese: boolean;
+      is_504: boolean;
+      ell: boolean;
+    };
     const flagRes = await db.execute<FlagRow>(sql`
-      SELECT student_id, ese, is_504
+      SELECT student_id, ese, is_504, ell
       FROM students
       WHERE school_id = ${schoolId} AND ${inArray(studentsTable.studentId, visibleIds)}
     `);
@@ -3566,13 +3719,37 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
     // Attendance metrics (shared helper) for the visible slice only.
     const attendance = await loadAttendanceMetrics(schoolId, visibleIds);
 
+    // Teacher-Roster parity context: active safety plan + FAST history for
+    // the learning-gain green-check. ELL rides on the flag query above.
+    const { safetyPlanByStudent } = await loadDrilldownContext(
+      schoolId,
+      visibleIds,
+    );
+    const historyMap = await loadFastHistory({
+      schoolId,
+      studentIds: visibleIds,
+      subjects: ["ela", "math"],
+    });
+
     for (const h of visible) {
       const f = flagMap.get(h.studentId);
       h.programPill = f?.ese ? "ESE" : f?.is_504 ? "504" : null;
+      h.ell = Boolean(f?.ell);
       const t = tierMap.get(h.studentId);
       h.mtssPill = t === 3 ? "Tier 3" : t === 2 ? "Tier 2+" : null;
       h.bqEla = bqEla.has(h.studentId);
       h.bqMath = bqMath.has(h.studentId);
+      h.safetyPlan = safetyPlanByStudent.get(h.studentId) ?? null;
+      h.learningGain =
+        h.subject != null
+          ? computeRowLearningGain({
+              subject: h.subject,
+              grade: h.grade,
+              currentLevels: h.levels,
+              currentPm3: h.pm3,
+              history: pickHistory(historyMap, h.studentId, h.subject),
+            })
+          : null;
 
       const att = attendance.get(h.studentId);
       h.daysAbsent = att?.daysAbsent ?? null;

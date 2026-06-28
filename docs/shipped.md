@@ -3,6 +3,26 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Insights drill-down — full Teacher Roster parity.** The shared
+  `BandStudentsDrawer` (Academics band drill-ins + Academic Trajectories)
+  now carries the same whole-child context as the Teacher Roster: an
+  **ELL** chip (green, alongside ESE/504), a red **SP** indicator for an
+  active safety plan (rendered right after the name), and the FAST
+  **learning-gain green-check** appended to the PM3 pill. Each student row
+  is also fully clickable → opens that student's **Student Profile** (reuses
+  the existing `onOpenProfile`; score cells `stopPropagation` so the
+  click-to-flip FAST pills still work). Server (`insights.ts`): both the
+  band and trajectory drill-in endpoints decorate their visible slice via
+  two shared helpers — `loadDrilldownContext` (ELL flag + active
+  safety-plan summary, school-scoped to the visible IDs) and
+  `computeRowLearningGain` (strict PM3-to-PM3 using `loadFastHistory`
+  historical PM3 placed on the grade-1 chart + `decideLearningGain`,
+  **never `priorYearScore`** — same source as the roster green-check).
+  Trajectory reused its existing flag SQL by adding the `ell` column.
+  **Invariant: the learning-gain check on the drill-downs and the Teacher
+  Roster green-check must agree — both flow from `loadFastHistory`
+  historical PM3 + `decideLearningGain`, never `priorYearScore`.**
+
 - **Insights drill-down — PM progression as FAST level pills.** The
   Prior PM3 · PM1 · PM2 · PM3 columns in the shared `BandStudentsDrawer`
   (Academic Trajectories drill-down + Academics band drill-ins) now render
