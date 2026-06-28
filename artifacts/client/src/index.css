@@ -1330,6 +1330,36 @@ ul[style*="listStyle: none"] li button:hover {
   .cp-cta-button--blue { animation: none; }
 }
 
+/* New-tour-request alert banner — a gentle attention pulse in the
+   banner's own red tone, mirroring the AST / Store CTA pulse so the
+   nudge reads as "look here" without being noisy. Pauses on hover and
+   respects reduced-motion. */
+.tour-lead-banner {
+  /* Static shadow so the banner keeps its lift even when the pulse is
+     paused (hover) or disabled (reduced-motion). */
+  box-shadow: 0 4px 14px rgba(220, 38, 38, 0.30);
+  animation: tour-lead-pulse 2.4s ease-in-out infinite;
+}
+.tour-lead-banner:hover { animation-play-state: paused; }
+@keyframes tour-lead-pulse {
+  0%, 100% {
+    box-shadow:
+      0 4px 14px rgba(220, 38, 38, 0.30),
+      0 0 0 0 rgba(220, 38, 38, 0.45);
+  }
+  50% {
+    box-shadow:
+      0 6px 18px rgba(220, 38, 38, 0.42),
+      0 0 0 8px rgba(220, 38, 38, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tour-lead-banner {
+    animation: none;
+    box-shadow: 0 4px 14px rgba(220, 38, 38, 0.30);
+  }
+}
+
 .back-button-purple {
   background: #ede9fe;
   color: #6d28d9;
@@ -1987,9 +2017,16 @@ ul[style*="listStyle: none"] li button:hover {
   text-align: left;
   cursor: pointer;
   color: #fff;
-  background: linear-gradient(135deg, #6366f1 0%, #ec4899 50%, #f59e0b 100%);
+  /* Match the school's branding gradient (falls back to the original
+     playful rainbow when a school hasn't customized). The spinning
+     "color effect" lives in .spotlight-launch-glow on top, so it keeps
+     animating regardless of the background tint. */
+  background: var(
+    --brand-header-bg,
+    linear-gradient(135deg, #6366f1 0%, #ec4899 50%, #f59e0b 100%)
+  );
   box-shadow:
-    0 4px 14px rgba(99, 102, 241, 0.32),
+    0 4px 14px color-mix(in srgb, var(--brand-primary, #6366f1) 36%, transparent),
     inset 0 1px 0 rgba(255, 255, 255, 0.25);
   overflow: hidden;
   isolation: isolate;
@@ -1998,15 +2035,15 @@ ul[style*="listStyle: none"] li button:hover {
 .spotlight-launch:hover {
   transform: translateY(-1px);
   box-shadow:
-    0 6px 18px rgba(99, 102, 241, 0.42),
+    0 6px 18px color-mix(in srgb, var(--brand-primary, #6366f1) 46%, transparent),
     inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 .spotlight-launch:active { transform: translateY(0); }
 .spotlight-launch.active {
   box-shadow:
     0 0 0 2px #fff,
-    0 0 0 4px #6366f1,
-    0 4px 14px rgba(99, 102, 241, 0.45);
+    0 0 0 4px var(--brand-primary, #6366f1),
+    0 4px 14px color-mix(in srgb, var(--brand-primary, #6366f1) 48%, transparent);
 }
 .spotlight-launch-glow {
   position: absolute;

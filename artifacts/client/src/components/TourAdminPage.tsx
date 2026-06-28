@@ -347,6 +347,7 @@ export function TourLeadBanner({
     <button
       type="button"
       onClick={onOpen}
+      className="tour-lead-banner"
       style={{
         width: "100%",
         border: "none",
@@ -360,7 +361,6 @@ export function TourLeadBanner({
         display: "flex",
         alignItems: "center",
         gap: 12,
-        boxShadow: "0 4px 14px rgba(220,38,38,0.3)",
       }}
     >
       <span style={{ fontSize: 24 }}>🔔</span>
