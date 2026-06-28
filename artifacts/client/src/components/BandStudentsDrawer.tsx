@@ -13,7 +13,6 @@ import {
   PillViewContext,
   PillViewToggle,
   type PillView,
-  type PillMarker,
 } from "./FastScorePill";
 
 // One PM window's FAST placement (level + sub-level). Mirrors the server
@@ -86,27 +85,52 @@ export interface ScoreColumn {
   render?: (s: Student) => React.ReactNode;
 }
 
-// Small gain/decline cue for PM2 / PM3 vs the PM1 baseline (raw scale
-// score). The pill itself now encodes the achievement level (color), so
-// the ▲/▼ marker preserves the at-a-glance momentum read. Equal scores or
-// a missing baseline → no marker.
-function markerVsPm1(
-  value: number | null | undefined,
-  baseline: number | null | undefined,
-): PillMarker {
-  if (value == null || baseline == null) return null;
-  if (value > baseline) return "up";
-  if (value < baseline) return "down";
-  return null;
+// Numeric scale-score delta shown directly under a PM pill — full parity
+// with the Teacher Roster ("+12 from PM2" / "−8 from PM1") so staff don't
+// have to do the subtraction in their head while scanning. Green for
+// growth, red for decline, neutral gray for flat. Renders nothing when
+// either side is missing (most common case: a window the student didn't
+// sit) — better empty than wrong.
+function PmDelta({
+  from,
+  to,
+  fromLabel,
+}: {
+  from: number | null | undefined;
+  to: number | null | undefined;
+  fromLabel: string;
+}) {
+  if (from == null || to == null) return null;
+  const delta = to - from;
+  const sign = delta > 0 ? "+" : delta < 0 ? "−" : "±";
+  const color = delta > 0 ? "#15803d" : delta < 0 ? "#b91c1c" : "#6b7280";
+  return (
+    <div
+      title={`${sign}${Math.abs(delta)} scale-score points vs ${fromLabel}`}
+      style={{
+        marginTop: 2,
+        fontSize: 10,
+        lineHeight: 1.2,
+        color,
+        fontWeight: 600,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {sign}
+      {Math.abs(delta)}{" "}
+      <span style={{ color: "#9ca3af", fontWeight: 400 }}>from {fromLabel}</span>
+    </div>
+  );
 }
 
 // Shared PM progression columns for the Insights drill-downs: prior-year
 // PM3 baseline, then PM1 -> PM2 -> PM3, each rendered as a roster-style
 // FAST achievement-level pill (level color, click to flip to the scale
-// score, surface-wide toggle). PM2 / PM3 keep a small ▲/▼ marker for
-// movement vs the PM1 baseline. Callers prepend these to
-// INSIGHTS_METRIC_COLUMNS so the Academics band drawer and Academic
-// Trajectories render an identical table.
+// score, surface-wide toggle). Each PM pill carries a numeric scale-score
+// delta below it (PM1 vs Prior, PM2 vs PM1, PM3 vs PM2) for full Teacher
+// Roster parity. Callers prepend these to INSIGHTS_METRIC_COLUMNS so the
+// Academics band drawer and Academic Trajectories render an identical
+// table.
 export const INSIGHTS_PM_COLUMNS: ScoreColumn[] = [
   {
     key: "priorYearScore",
@@ -124,54 +148,69 @@ export const INSIGHTS_PM_COLUMNS: ScoreColumn[] = [
     key: "pm1",
     label: "PM1",
     render: (s) => (
-      <FastScorePill
-        score={s.pm1}
-        level={s.levels?.pm1?.level}
-        subLevel={s.levels?.pm1?.subLevel}
-        pmLabel="PM1"
-      />
+      <div style={pmCellStyle}>
+        <FastScorePill
+          score={s.pm1}
+          level={s.levels?.pm1?.level}
+          subLevel={s.levels?.pm1?.subLevel}
+          pmLabel="PM1"
+        />
+        <PmDelta from={s.priorYearScore} to={s.pm1} fromLabel="Prior" />
+      </div>
     ),
   },
   {
     key: "pm2",
     label: "PM2",
     render: (s) => (
-      <FastScorePill
-        score={s.pm2}
-        level={s.levels?.pm2?.level}
-        subLevel={s.levels?.pm2?.subLevel}
-        pmLabel="PM2"
-        marker={markerVsPm1(s.pm2, s.pm1)}
-      />
+      <div style={pmCellStyle}>
+        <FastScorePill
+          score={s.pm2}
+          level={s.levels?.pm2?.level}
+          subLevel={s.levels?.pm2?.subLevel}
+          pmLabel="PM2"
+        />
+        <PmDelta from={s.pm1} to={s.pm2} fromLabel="PM1" />
+      </div>
     ),
   },
   {
     key: "pm3",
     label: "PM3",
     render: (s) => (
-      <span
-        style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
-      >
-        <FastScorePill
-          score={s.pm3}
-          level={s.levels?.pm3?.level}
-          subLevel={s.levels?.pm3?.subLevel}
-          pmLabel="PM3"
-          marker={markerVsPm1(s.pm3, s.pm1)}
-        />
-        {s.learningGain === true && (
-          <span
-            title="FAST learning gain met (PM3 vs prior-year PM3)"
-            aria-label="FAST learning gain met"
-            style={lgCheckStyle}
-          >
-            ✓
-          </span>
-        )}
-      </span>
+      <div style={pmCellStyle}>
+        <span
+          style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+        >
+          <FastScorePill
+            score={s.pm3}
+            level={s.levels?.pm3?.level}
+            subLevel={s.levels?.pm3?.subLevel}
+            pmLabel="PM3"
+          />
+          {s.learningGain === true && (
+            <span
+              title="FAST learning gain met (PM3 vs prior-year PM3)"
+              aria-label="FAST learning gain met"
+              style={lgCheckStyle}
+            >
+              ✓
+            </span>
+          )}
+        </span>
+        <PmDelta from={s.pm2} to={s.pm3} fromLabel="PM2" />
+      </div>
     ),
   },
 ];
+
+// Vertical stack for a PM cell: the level pill on top, the numeric
+// scale-score delta directly beneath it.
+const pmCellStyle: React.CSSProperties = {
+  display: "inline-flex",
+  flexDirection: "column",
+  alignItems: "center",
+};
 
 // Shared additive metric columns for the Insights drill-downs (Academics
 // band drawer + Academic Trajectories). Renders Days Absent, approximate

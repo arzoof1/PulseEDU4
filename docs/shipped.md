@@ -31,9 +31,11 @@ For active follow-ups, see the **Open work** section in `replit.md`.
   face shows the sub-level, click a pill to flip it to the raw scale score.
   A header **"Show: Level | Scale score"** toggle (`showScoreToggle` prop)
   drives every pill on the surface; per-pill overrides reset when the
-  global toggle changes. PM2/PM3 keep a small **▲ green / ▼ red** marker for
-  movement vs the PM1 baseline (replacing the old green/red `movementCell`
-  bold-number coloring). New shared `FastScorePill.tsx` owns the
+  global toggle changes. Each PM pill now carries a **numeric scale-score
+  delta** directly beneath it (PM1 vs Prior, PM2 vs PM1, PM3 vs PM2 — green
+  growth / red decline) via the shared `PmDelta`, full Teacher Roster parity
+  (replaced the earlier ▲/▼ direction-only marker and the old green/red
+  `movementCell` bold-number coloring). New shared `FastScorePill.tsx` owns the
   `LEVEL_BG`/`LEVEL_FG` palette (now imported by the Teacher Roster too, so
   the two surfaces can't drift) plus `PillViewContext`, `FastScorePill`,
   and `PillViewToggle`. Server: new `placePmSet()` in `fastCutScores.ts` is
