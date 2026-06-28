@@ -181,6 +181,14 @@ interface RosterRow {
   // Grades the student was retained in (ascending). Empty when none.
   // Drives the small black "R" pill rendered after the chain icon.
   retainedGrades: number[];
+  // Additive read-only attendance (from the Eligibility Hub upload).
+  // daysAbsent is the raw absence total; attendancePct is an ESTIMATE
+  // (weekday denominator since the semester start). Null when missing.
+  attendance?: {
+    daysAbsent: number | null;
+    daysTardy: number | null;
+    attendancePct: number | null;
+  } | null;
 }
 
 interface RosterResponse {
@@ -1852,6 +1860,7 @@ export default function TeacherRosterPage({
     pm1: boolean;
     pm2: boolean;
     programs: boolean;
+    attendance: boolean;
     subject: SubjectFilter;
   };
   const VIS_DEFAULT: Visibility = {
@@ -1863,6 +1872,7 @@ export default function TeacherRosterPage({
     pm1: true,
     pm2: true,
     programs: true,
+    attendance: true,
     subject: "both",
   };
   // Bumped to v3 because the Programs (ESE / 504 / ELL) toggle was
@@ -1889,6 +1899,7 @@ export default function TeacherRosterPage({
         pm1: parsed.pm1 ?? true,
         pm2: parsed.pm2 ?? true,
         programs: parsed.programs ?? true,
+        attendance: parsed.attendance ?? true,
         subject,
       };
     } catch {
@@ -2797,6 +2808,17 @@ export default function TeacherRosterPage({
         </label>
         <label
           style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+          title="Show or hide the Attendance column (days absent + estimated %)"
+        >
+          <input
+            type="checkbox"
+            checked={visibility.attendance}
+            onChange={() => toggleVis("attendance")}
+          />
+          Attendance
+        </label>
+        <label
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
           title="Show or hide the invisible-student eye icon column"
         >
           <input
@@ -2880,6 +2902,15 @@ export default function TeacherRosterPage({
                 <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
                   Grade
                 </th>
+                {visibility.attendance && (
+                  <th
+                    rowSpan={2}
+                    style={{ padding: "8px 10px", verticalAlign: "bottom" }}
+                    title="Days absent (from the Eligibility Hub upload) and an ESTIMATED attendance % (weekday denominator since the semester start)"
+                  >
+                    Attend.
+                  </th>
+                )}
                 {(() => {
                   const groupCols =
                     (visibility.priorPm3 ? 1 : 0) +
@@ -3220,6 +3251,29 @@ export default function TeacherRosterPage({
                     </td>
                   )}
                   <td style={{ padding: "6px 10px" }}>{row.grade}</td>
+                  {visibility.attendance && (
+                    <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
+                      {row.attendance?.daysAbsent != null ? (
+                        <span
+                          title={
+                            row.attendance.attendancePct != null
+                              ? `${row.attendance.attendancePct}% estimated attendance${row.attendance.daysTardy != null ? ` · ${row.attendance.daysTardy} tardies` : ""}`
+                              : "Attendance % unavailable (no semester start configured)"
+                          }
+                        >
+                          {row.attendance.daysAbsent}d
+                          {row.attendance.attendancePct != null && (
+                            <span style={{ color: "#6b7280", fontSize: 11 }}>
+                              {" "}
+                              (~{row.attendance.attendancePct}%)
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        <span style={{ color: "#d1d5db", fontSize: 12 }}>—</span>
+                      )}
+                    </td>
+                  )}
                   {showEla && (
                     <SubjectCells
                       block={row.ela}

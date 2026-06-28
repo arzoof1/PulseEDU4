@@ -28,7 +28,9 @@ import {
   type InsightsFilterValue,
 } from "./InsightsFilterBar";
 import InsightsPicker from "./InsightsPicker";
-import BandStudentsDrawer from "./BandStudentsDrawer";
+import BandStudentsDrawer, {
+  INSIGHTS_METRIC_COLUMNS,
+} from "./BandStudentsDrawer";
 
 // =============================================================================
 // Types
@@ -349,6 +351,10 @@ interface TrajStudent {
   mtssPill?: "Tier 2+" | "Tier 3" | null;
   bqEla?: boolean;
   bqMath?: boolean;
+  daysAbsent?: number | null;
+  attendancePct?: number | null;
+  ptsToNextLevel?: number | null;
+  ptsToProficient?: number | null;
 }
 
 interface TrajectoryStudentsResponse {
@@ -781,13 +787,18 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
         title={drawerTitle}
         subtitle={
           drawerData
-            ? `${drawerData.total} student${drawerData.total === 1 ? "" : "s"}${drawerData.truncated ? ` (showing first ${drawerData.students.length})` : ""}`
+            ? `${drawerData.total} student${drawerData.total === 1 ? "" : "s"}${drawerData.truncated ? ` (showing first ${drawerData.students.length})` : ""} · Att % is an estimate`
             : undefined
         }
         // Pass pm1/pm3 through as-is (including nulls). The drawer
         // renders "—" for missing scores, which is the honest signal
         // for the Untested archetype rather than a fabricated 0.
         students={drawerData?.students ?? []}
+        scoreColumns={[
+          { key: "pm1", label: "PM1" },
+          { key: "pm3", label: "PM3" },
+          ...INSIGHTS_METRIC_COLUMNS,
+        ]}
         truncated={drawerData?.truncated}
         total={drawerData?.total}
         loading={drawerLoading}

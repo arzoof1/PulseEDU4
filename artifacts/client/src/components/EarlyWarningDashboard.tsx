@@ -59,6 +59,13 @@ type RiskRow = {
   signals: Signals;
   hasActivePlan: boolean;
   isUnsupportedHighRisk: boolean;
+  // Additive read-only metrics (shared source of truth). daysAbsent /
+  // attendancePct from the Eligibility Hub upload; ptsToProficient is the
+  // worst-subject FAST points-to-Level-3 (subject in ptsToProficientSubject).
+  daysAbsent?: number | null;
+  attendancePct?: number | null;
+  ptsToProficient?: number | null;
+  ptsToProficientSubject?: "ela" | "math" | null;
 };
 
 type EarlyWarningResponse = {
@@ -713,6 +720,26 @@ function TopRiskPanel({
               </th>
               <th
                 style={{
+                  textAlign: "right",
+                  padding: "0.4rem 0.5rem",
+                  fontWeight: 500,
+                }}
+                title="Days absent (from the Eligibility Hub upload). % is an estimate (weekday denominator since the semester start)."
+              >
+                Days abs.
+              </th>
+              <th
+                style={{
+                  textAlign: "right",
+                  padding: "0.4rem 0.5rem",
+                  fontWeight: 500,
+                }}
+                title="Worst-subject FAST points to Level 3 (proficiency) on PM3. Blank when proficient or no chart."
+              >
+                → L3
+              </th>
+              <th
+                style={{
                   textAlign: "left",
                   padding: "0.4rem 0.5rem",
                   fontWeight: 500,
@@ -804,6 +831,62 @@ function TopRiskPanel({
                     >
                       {r.score}
                     </span>
+                  </td>
+                  <td
+                    style={{
+                      padding: "0.55rem 0.5rem",
+                      textAlign: "right",
+                      verticalAlign: "middle",
+                      fontSize: 12,
+                      fontVariantNumeric: "tabular-nums",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {r.daysAbsent != null ? (
+                      <span
+                        title={
+                          r.attendancePct != null
+                            ? `~${r.attendancePct}% estimated attendance`
+                            : "Attendance % unavailable (no semester start configured)"
+                        }
+                      >
+                        {r.daysAbsent}
+                        {r.attendancePct != null && (
+                          <span style={{ color: "#94a3b8", fontSize: 11 }}>
+                            {" "}
+                            (~{r.attendancePct}%)
+                          </span>
+                        )}
+                      </span>
+                    ) : (
+                      <span style={{ color: "#cbd5e1" }}>—</span>
+                    )}
+                  </td>
+                  <td
+                    style={{
+                      padding: "0.55rem 0.5rem",
+                      textAlign: "right",
+                      verticalAlign: "middle",
+                      fontSize: 12,
+                      fontVariantNumeric: "tabular-nums",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {r.ptsToProficient != null && r.ptsToProficient > 0 ? (
+                      <span
+                        title={`${r.ptsToProficient} FAST points to Level 3${r.ptsToProficientSubject ? ` (${r.ptsToProficientSubject.toUpperCase()})` : ""}`}
+                      >
+                        +{r.ptsToProficient}
+                        {r.ptsToProficientSubject && (
+                          <span style={{ color: "#94a3b8", fontSize: 11 }}>
+                            {" "}
+                            {r.ptsToProficientSubject.toUpperCase()}
+                          </span>
+                        )}
+                      </span>
+                    ) : (
+                      <span style={{ color: "#cbd5e1" }}>—</span>
+                    )}
                   </td>
                   <td
                     style={{

@@ -512,3 +512,29 @@ export function bucketFor(
     nextStopLabel: SUB_LEVEL_LABEL[target.nextStop],
   };
 }
+
+// Points needed to reach PROFICIENCY (Level 3) on the student's
+// CURRENT-grade chart — i.e. the L3 minimum minus the score. Uses the
+// same current-grade chart convention as `bucketTarget`/`bucketFor` so
+// the number agrees with the roster's "points to next stop" math.
+//
+// Returns:
+//   - a positive integer  → points still needed to clear L3
+//   - 0                   → already at/above proficiency (no gap)
+//   - null                → no chart for this (subject, grade) or no
+//                           score to measure against
+//
+// Note: this is grade-anchored on the CURRENT grade (not the prior-grade
+// PM3 placement chart). For a PM3 score that's intentional — the gap a
+// coordinator cares about is "how far from on-grade-level proficient."
+export function proficiencyGap(
+  pmScore: number | null,
+  subject: Subject,
+  currentGrade: number,
+): number | null {
+  if (pmScore == null) return null;
+  const l3 = levelMin(subject, currentGrade, 3);
+  if (l3 == null) return null;
+  const gap = l3 - pmScore;
+  return gap > 0 ? gap : 0;
+}

@@ -3,6 +3,43 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Insights per-student metrics — Days Absent, Pts to Next FAST
+  Sub-Level, Pts to Proficiency.** Three READ-ONLY, additive numeric
+  columns surfaced across four Insights surfaces, all sourced from
+  shared server helpers so the numbers agree everywhere (no writes; no
+  impact on points-on-scan, `class_signins`, or official ledgers).
+  **(1) Days Absent + approx %** comes from a new single-source helper
+  `lib/attendanceMetrics.ts` → `loadAttendanceMetrics(schoolId,
+  studentIds)`, which batch-reads the latest Eligibility Hub upload
+  (`eligibility_absences.absence_total` / `days_tardy`) for the current
+  semester, school-scoped, keyed by canonical `studentId`. The raw
+  uploaded count is surfaced (not the eligibility-rule "counted"
+  figure). The **%** is APPROXIMATE by design (product-accepted):
+  there is no instructional-day calendar, so the denominator is the
+  count of **weekdays** (Mon–Fri) from the configured semester start to
+  today (school-local IANA tz, clamped at semester end); it does not
+  subtract holidays/workdays so it reads a few points low, and is always
+  labeled an estimate in the UI. When no semester start is configured,
+  `attendancePct` is null (raw count still renders); students with no
+  upload row are absent from the map and render "—" (never a fabricated
+  0%). **(2) Pts to Next FAST Sub-Level** reuses `bucketFor().gap` and
+  **(3) Pts to Proficiency** uses the new `proficiencyGap(pm3, subject,
+  grade)` (= `levelMin(subject, grade, 3) − PM3`) in
+  `lib/fastCutScores.ts`, so Teacher Roster and the Insights drawers
+  share the exact same FAST cut-score source. **Surfaces:** Academic
+  Trajectories drill-down + Academics band drill-in both render all
+  three via the now-generic `BandStudentsDrawer` (exported `ScoreColumn`
+  interface + opt-in `INSIGHTS_METRIC_COLUMNS`; `scoreColumns` prop is
+  backward-compatible so other callers are unaffected); Teacher Roster
+  gains an **Attendance** column ("Nd (~X%)") with a visibility toggle
+  (FAST gaps already existed there); Early Warning gains **Days abs.**
+  and **→ L3** (worst proficiency gap across ela/math) columns next to
+  the risk score. The band endpoint guards `grade != null` before the
+  gap math. **Invariant: all three metrics MUST flow from the shared
+  helpers (`loadAttendanceMetrics` + `bucketFor`/`proficiencyGap`) on
+  every surface, or the same student would show different numbers across
+  Trajectory / Academics / Roster / Early Warning.**
+
 - **Class Sign-Ins roll-call — date + teacher + period filters.**
   The kiosk class-sign-in roll-call panel (`RollCallPanel.tsx`, backed
   by `GET /api/class-signins/today`) gained a top filter bar: a **date

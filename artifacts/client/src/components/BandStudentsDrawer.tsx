@@ -26,7 +26,59 @@ interface Student {
   mtssPill?: "Tier 2+" | "Tier 3" | null;
   bqEla?: boolean;
   bqMath?: boolean;
+  // Optional additive metrics (shared insights source of truth). Only
+  // rendered when the caller opts in via `scoreColumns`. daysAbsent /
+  // attendancePct from the Eligibility Hub upload; ptsToNextLevel /
+  // ptsToProficient from the FAST cut-score charts.
+  daysAbsent?: number | null;
+  attendancePct?: number | null;
+  ptsToNextLevel?: number | null;
+  ptsToProficient?: number | null;
 }
+
+// A score-table column. `key` is used as a React key and (when no custom
+// `render` is given) as the field read off the Student. `render` lets a
+// caller format a cell (e.g. "92%" or a "—") without the drawer needing to
+// know about the metric. Back-compat: existing callers pass only
+// { key: "pm1" | "pm3", label } and get the default numeric cell.
+export interface ScoreColumn {
+  key: string;
+  label: string;
+  render?: (s: Student) => React.ReactNode;
+}
+
+// Shared additive metric columns for the Insights drill-downs (Academics
+// band drawer + Academic Trajectories). Renders Days Absent, approximate
+// attendance % (estimate — see the drawer subtitle note), points to the
+// next FAST sub-level, and points to proficiency (Level 3). Callers append
+// these to their base PM columns so the two surfaces stay identical.
+export const INSIGHTS_METRIC_COLUMNS: ScoreColumn[] = [
+  {
+    key: "daysAbsent",
+    label: "Days Abs",
+    render: (s) => (s.daysAbsent != null ? s.daysAbsent : "—"),
+  },
+  {
+    key: "attendancePct",
+    label: "Att %*",
+    render: (s) => (s.attendancePct != null ? `${s.attendancePct}%` : "—"),
+  },
+  {
+    key: "ptsToNextLevel",
+    label: "→ Next",
+    render: (s) => (s.ptsToNextLevel != null ? s.ptsToNextLevel : "—"),
+  },
+  {
+    key: "ptsToProficient",
+    label: "→ L3",
+    render: (s) =>
+      s.ptsToProficient == null
+        ? "—"
+        : s.ptsToProficient === 0
+          ? "✓"
+          : s.ptsToProficient,
+  },
+];
 
 interface Props {
   open: boolean;
@@ -39,16 +91,17 @@ interface Props {
   error?: string;
   onClose: () => void;
   onOpenProfile: (studentId: string) => void;
-  // Optional column config for the score table — defaults to ELA/Math
-  // PM3 columns. Different dashboards can pass different columns.
-  scoreColumns?: { key: "pm1" | "pm3"; label: string }[];
+  // Optional column config for the score table — defaults to PM1/PM3
+  // columns. Different dashboards can pass different columns, including
+  // custom-rendered metric columns (attendance, FAST gaps).
+  scoreColumns?: ScoreColumn[];
   // Optional CSV download button rendered in the drawer header. Caller
   // generates the CSV (client- or server-side) and triggers the download
   // — drawer just exposes the button slot so it stays generic.
   onDownloadCsv?: () => void;
 }
 
-const DEFAULT_COLUMNS: { key: "pm1" | "pm3"; label: string }[] = [
+const DEFAULT_COLUMNS: ScoreColumn[] = [
   { key: "pm1", label: "PM1" },
   { key: "pm3", label: "PM3" },
 ];
@@ -222,11 +275,20 @@ export default function BandStudentsDrawer({
                             : s.grade
                           : "—"}
                       </td>
-                      {scoreColumns.map((c) => (
-                        <td key={c.key} style={tdStyleNum}>
-                          {s[c.key] != null ? s[c.key] : "—"}
-                        </td>
-                      ))}
+                      {scoreColumns.map((c) => {
+                        const v = (s as unknown as Record<string, unknown>)[
+                          c.key
+                        ];
+                        return (
+                          <td key={c.key} style={tdStyleNum}>
+                            {c.render
+                              ? c.render(s)
+                              : v != null
+                                ? (v as React.ReactNode)
+                                : "—"}
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>

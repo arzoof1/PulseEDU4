@@ -39,7 +39,9 @@ import InsightsPicker, {
   extractTopLists,
   topListsToCsv,
 } from "./InsightsPicker";
-import BandStudentsDrawer from "./BandStudentsDrawer";
+import BandStudentsDrawer, {
+  INSIGHTS_METRIC_COLUMNS,
+} from "./BandStudentsDrawer";
 
 interface Grower {
   studentId: string;
@@ -100,6 +102,10 @@ interface BandStudent {
   grade: number | null;
   pm1: number | null;
   pm3: number;
+  daysAbsent?: number | null;
+  attendancePct?: number | null;
+  ptsToNextLevel?: number | null;
+  ptsToProficient?: number | null;
 }
 
 interface BandResponse {
@@ -365,10 +371,15 @@ export default function AcademicsDashboard({ onOpenProfile }: Props) {
         title={`${drillSubject === "ela" ? "ELA" : "Math"} — ${LEVEL_LABEL[drillLevel]}`}
         subtitle={
           drillData
-            ? `${drillData.total} student${drillData.total === 1 ? "" : "s"} placed at this level on PM3${drillData.truncated ? ` (showing first ${drillData.students.length})` : ""}`
+            ? `${drillData.total} student${drillData.total === 1 ? "" : "s"} placed at this level on PM3${drillData.truncated ? ` (showing first ${drillData.students.length})` : ""} · Att % is an estimate`
             : undefined
         }
         students={drillData?.students ?? []}
+        scoreColumns={[
+          { key: "pm1", label: "PM1" },
+          { key: "pm3", label: "PM3" },
+          ...INSIGHTS_METRIC_COLUMNS,
+        ]}
         truncated={drillData?.truncated}
         total={drillData?.total}
         loading={drillLoading}

@@ -54,9 +54,12 @@ import {
   placeOnChart,
   hasChart,
   bucketTarget,
+  bucketFor,
+  proficiencyGap,
   SUB_LEVEL_LABEL,
   type Subject,
 } from "../lib/fastCutScores.js";
+import { loadAttendanceMetrics } from "../lib/attendanceMetrics.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 import { loadFastHistory, pickHistory } from "../lib/fastHistory.js";
 import {
@@ -2908,6 +2911,13 @@ router.get("/insights/academics/band", async (req, res) => {
     grade: number | null;
     pm1: number | null;
     pm3: number;
+    // Additive read-only metrics (shared source of truth). daysAbsent /
+    // attendancePct from the Eligibility Hub upload; ptsToNextLevel /
+    // ptsToProficient from the FAST cut-score charts.
+    daysAbsent?: number | null;
+    attendancePct?: number | null;
+    ptsToNextLevel?: number | null;
+    ptsToProficient?: number | null;
   };
   const hits: Hit[] = [];
   for (const r of fastRows) {
@@ -2928,10 +2938,34 @@ router.get("/insights/academics/band", async (req, res) => {
 
   const CAP = 200;
   const truncated = hits.length > CAP;
+  const visible = truncated ? hits.slice(0, CAP) : hits;
+
+  // Decorate the visible slice with the shared additive metrics. Attendance
+  // is batch-loaded once; FAST gaps reuse bucketFor/proficiencyGap so this
+  // surface agrees exactly with the Trajectory drawer and Teacher Roster.
+  const attMap = await loadAttendanceMetrics(
+    schoolId,
+    visible.map((h) => h.studentId),
+  );
+  for (const h of visible) {
+    const att = attMap.get(h.studentId);
+    h.daysAbsent = att?.daysAbsent ?? null;
+    h.attendancePct = att?.attendancePct ?? null;
+    // grade is non-null for every pushed hit (the placement loop skips
+    // grade === null), but narrow for the type checker.
+    if (h.grade != null) {
+      h.ptsToNextLevel = bucketFor(h.pm3, subject, h.grade).gap;
+      h.ptsToProficient = proficiencyGap(h.pm3, subject, h.grade);
+    } else {
+      h.ptsToNextLevel = null;
+      h.ptsToProficient = null;
+    }
+  }
+
   res.json({
     subject,
     level,
-    students: truncated ? hits.slice(0, CAP) : hits,
+    students: visible,
     truncated,
     total: hits.length,
   });
@@ -3418,6 +3452,14 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
     mtssPill?: "Tier 2+" | "Tier 3" | null;
     bqEla?: boolean;
     bqMath?: boolean;
+    // Additive read-only metrics (shared source of truth). daysAbsent /
+    // attendancePct from the Eligibility Hub upload; ptsToNextLevel /
+    // ptsToProficient from the FAST cut-score charts. All null when the
+    // underlying data is missing (rendered as "—").
+    daysAbsent?: number | null;
+    attendancePct?: number | null;
+    ptsToNextLevel?: number | null;
+    ptsToProficient?: number | null;
   };
   const hits: Hit[] = [];
   for (const { subject: subj, rec: r } of tagged) {
@@ -3484,6 +3526,9 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
       else if (r.subject === "math") bqMath.add(r.student_id);
     }
 
+    // Attendance metrics (shared helper) for the visible slice only.
+    const attendance = await loadAttendanceMetrics(schoolId, visibleIds);
+
     for (const h of visible) {
       const f = flagMap.get(h.studentId);
       h.programPill = f?.ese ? "ESE" : f?.is_504 ? "504" : null;
@@ -3491,6 +3536,21 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
       h.mtssPill = t === 3 ? "Tier 3" : t === 2 ? "Tier 2+" : null;
       h.bqEla = bqEla.has(h.studentId);
       h.bqMath = bqMath.has(h.studentId);
+
+      const att = attendance.get(h.studentId);
+      h.daysAbsent = att?.daysAbsent ?? null;
+      h.attendancePct = att?.attendancePct ?? null;
+
+      // FAST gaps — per row (each row is one student+subject). bucketFor
+      // gives the points to the next sub-level; proficiencyGap the points
+      // to Level 3. Both null when the score/chart is missing.
+      if (h.subject && h.grade != null && h.pm3 != null) {
+        h.ptsToNextLevel = bucketFor(h.pm3, h.subject, h.grade).gap;
+        h.ptsToProficient = proficiencyGap(h.pm3, h.subject, h.grade);
+      } else {
+        h.ptsToNextLevel = null;
+        h.ptsToProficient = null;
+      }
     }
   }
 
@@ -4966,6 +5026,13 @@ router.get("/insights/early-warning", async (req, res) => {
     };
     hasActivePlan: boolean;
     isUnsupportedHighRisk: boolean;
+    // Additive read-only leaderboard columns (decorated on the visible
+    // top-N slice only). daysAbsent/attendancePct from the Eligibility Hub
+    // upload; ptsToProficient = worst-subject FAST points-to-Level-3.
+    daysAbsent?: number | null;
+    attendancePct?: number | null;
+    ptsToProficient?: number | null;
+    ptsToProficientSubject?: "ela" | "math" | null;
   };
 
   const scored: Scored[] = [];
@@ -5041,6 +5108,65 @@ router.get("/insights/early-warning", async (req, res) => {
 
   const TOP_N = 25;
   const topRisk = scored.slice(0, TOP_N);
+
+  // --- Additive read-only leaderboard columns (visible slice only) --------
+  // Official days-absent (Eligibility Hub upload) + points-to-proficiency
+  // (FAST L3 gap, worst subject). Decorating only the rendered top-N keeps
+  // the cost to two small cohort-bounded queries. Has NO effect on the risk
+  // score, band counts, or any other surface.
+  const topIds = topRisk.map((r) => r.studentId);
+  if (topIds.length > 0) {
+    const attendance = await loadAttendanceMetrics(schoolId, topIds);
+    const sy = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+    const ewFastRows = await db
+      .select({
+        studentId: studentFastScoresTable.studentId,
+        subject: studentFastScoresTable.subject,
+        pm3: studentFastScoresTable.pm3,
+      })
+      .from(studentFastScoresTable)
+      .where(
+        and(
+          eq(studentFastScoresTable.schoolId, schoolId),
+          eq(studentFastScoresTable.schoolYear, sy),
+          inArray(studentFastScoresTable.subject, ["ela", "math"]),
+          inArray(studentFastScoresTable.studentId, topIds),
+        ),
+      );
+    type EwPm3Row = {
+      studentId: string;
+      subject: string;
+      pm3: number | null;
+    };
+    const pm3ByStudent = new Map<string, EwPm3Row[]>();
+    for (const r of ewFastRows as EwPm3Row[]) {
+      const arr = pm3ByStudent.get(r.studentId) ?? [];
+      arr.push(r);
+      pm3ByStudent.set(r.studentId, arr);
+    }
+    for (const r of topRisk) {
+      const att = attendance.get(r.studentId);
+      r.daysAbsent = att?.daysAbsent ?? null;
+      r.attendancePct = att?.attendancePct ?? null;
+      // Worst (furthest-from-L3) gap across the student's tested subjects —
+      // the most actionable single "how far from proficient" signal.
+      let worst: number | null = null;
+      let worstSubject: "ela" | "math" | null = null;
+      if (r.grade != null) {
+        for (const fr of pm3ByStudent.get(r.studentId) ?? []) {
+          if (fr.subject !== "ela" && fr.subject !== "math") continue;
+          const gap = proficiencyGap(fr.pm3, fr.subject, r.grade);
+          if (gap == null) continue;
+          if (worst == null || gap > worst) {
+            worst = gap;
+            worstSubject = fr.subject;
+          }
+        }
+      }
+      r.ptsToProficient = worst;
+      r.ptsToProficientSubject = worstSubject;
+    }
+  }
 
   const pct = (n: number) => (cohort > 0 ? n / cohort : 0);
   const highOrCritical = bandCounts.high + bandCounts.critical;
