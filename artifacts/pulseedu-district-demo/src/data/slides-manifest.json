@@ -32,8 +32,24 @@
     "speakerNotes": "Stress automation: one scan, three outcomes — pass, attendance, recognition. Then open the public tour page to show the front door for prospective families."
   },
   {
-    "id": "teacher-roster",
+    "id": "student-points-store",
     "position": 5,
+    "filepath": "src/pages/slides/StudentPointsStore.tsx",
+    "title": "Student Experience — Points Store & Wallet",
+    "description": "The PBIS economy: points earned on a scan become spendable rewards. Two catalogs — a per-teacher Classroom Store and a school-wide School Store — plus a per-student points wallet, family redemption from the Parent Portal, a Core Team fulfillment queue, and balance migration from a prior platform.",
+    "speakerNotes": "Close the recognition loop: points are not just a number, they buy something. Show the School Store and a student wallet, then note families can redeem from the portal and Core Team fulfills from one queue."
+  },
+  {
+    "id": "student-self-service",
+    "position": 6,
+    "filepath": "src/pages/slides/StudentSelfService.tsx",
+    "title": "Student Experience — Students Sign In",
+    "description": "Student self-service. Students sign in with ClassLink single sign-on to see their own HeartBEAT — points, recognitions, and goals — and redeem rewards themselves from their own balance.",
+    "speakerNotes": "Sign in as a student with ClassLink. Show their own HeartBEAT and let them redeem a reward from their balance — no teacher middle-step."
+  },
+  {
+    "id": "teacher-roster",
+    "position": 7,
     "filepath": "src/pages/slides/TeacherRoster.tsx",
     "title": "Teacher Experience — Roster",
     "description": "The Teacher Roster: FAST benchmark data, ESE/504/ELL and safety flags, learning-gain green-checks, one shared source of truth for teacher and Core Team.",
@@ -41,7 +57,7 @@
   },
   {
     "id": "teacher-small-group",
-    "position": 6,
+    "position": 8,
     "filepath": "src/pages/slides/TeacherSmallGroup.tsx",
     "title": "Teacher Experience — Small Groups & Accommodations",
     "description": "Form small groups from shared skill gaps and log support over time; required accommodations surface at the point of instruction.",
@@ -49,15 +65,31 @@
   },
   {
     "id": "student-support-heartbeat",
-    "position": 7,
+    "position": 9,
     "filepath": "src/pages/slides/StudentSupportHeartbeat.tsx",
     "title": "Student Support — HeartBEAT",
     "description": "The Invisible Student. Key message: every student should be known by someone. HeartBEAT finds students with no meaningful adult connection before the year slips by.",
     "speakerNotes": "Slow down — this is the emotional center. Say the line out loud. Then open Noah Xu to show the invisible-student flag and the connection history that explains why."
   },
   {
+    "id": "student-support-safety-plans",
+    "position": 10,
+    "filepath": "src/pages/slides/StudentSupportSafetyPlans.tsx",
+    "title": "Student Support — Safety Plans",
+    "description": "Per-student behavioral and physical safety plans built from a reusable item library, with role-based access (Guidance Counselor and Core Team edit, all staff view) and a full audit log of every change.",
+    "speakerNotes": "Open a student's safety plan. Show the library-built checklist, who can edit versus view, and the audit log. The point: the adult in the room already knows the plan."
+  },
+  {
+    "id": "student-support-eligibility",
+    "position": 11,
+    "filepath": "src/pages/slides/StudentSupportEligibility.tsx",
+    "title": "Student Support — Eligibility Hub",
+    "description": "Attendance-based participation eligibility for athletics, clubs, and activities. Absences and tardies set each student's status; coaches see a read-only roster of their own activity; a weekly digest flags at-risk students; athletic directors, Core Team, and the front office manage it.",
+    "speakerNotes": "Open the Eligibility Hub. Show how absences and tardies drive who can play this week, the coach's read-only roster, and the weekly digest that flags at-risk students before game day."
+  },
+  {
     "id": "mtss-tiers",
-    "position": 8,
+    "position": 12,
     "filepath": "src/pages/slides/MtssTiers.tsx",
     "title": "MTSS — Tiered Interventions",
     "description": "Tier 2 and Tier 3 intervention plans with about two months of authentic data: goals, weekly monitoring, multiple staff, and a visible progression of supports.",
@@ -65,7 +97,7 @@
   },
   {
     "id": "ast-comp-time",
-    "position": 9,
+    "position": 13,
     "filepath": "src/pages/slides/AstCompTime.tsx",
     "title": "AST & Comp Time",
     "description": "Additional Service Time and Comp Time on one auditable five-step path: submit, approve, complete, verify, bank — for both AST and EST Comp Time.",
@@ -73,7 +105,7 @@
   },
   {
     "id": "family-pulse-dna",
-    "position": 10,
+    "position": 14,
     "filepath": "src/pages/slides/FamilyPulseDna.tsx",
     "title": "Family Communication — PulseDNA AI",
     "description": "The wow moment. From a rough idea, PulseDNA generates a family message, a social post, and a teleprompter script in the school's saved voice.",
@@ -81,7 +113,7 @@
   },
   {
     "id": "family-parent-heartbeat",
-    "position": 11,
+    "position": 15,
     "filepath": "src/pages/slides/FamilyParentHeartbeat.tsx",
     "title": "Family Communication — Family HeartBEAT",
     "description": "The Parent Portal as the family's direct window into daily campus life: hall passes and attendance, tardies and lost instructional time, FAST scores with next steps, interventions and accommodations, and acknowledged school messages.",
@@ -89,23 +121,31 @@
   },
   {
     "id": "leadership-insights",
-    "position": 12,
+    "position": 16,
     "filepath": "src/pages/slides/LeadershipInsights.tsx",
     "title": "Leadership Intelligence — Insights",
-    "description": "The Insights Hub: Algebra performance, learning trajectories, school-wide trends, and actionable insights that drill down to individual students.",
-    "speakerNotes": "Say the line: data should guide what we do next. Open Algebra readiness, then drill from a chart into a single student profile."
+    "description": "The Insights Hub: Algebra performance, learning trajectories, school-wide trends, and actionable per-student metrics — days absent and approximate percent, points to the next FAST sub-level, and points to proficiency — that drill down to individual students.",
+    "speakerNotes": "Say the line: data should guide what we do next. Open Algebra readiness, drill from a chart into a single student profile, and point at the three per-student numbers a teacher can act on."
   },
   {
     "id": "fast-coverage",
-    "position": 13,
+    "position": 17,
     "filepath": "src/pages/slides/FastCoverage.tsx",
     "title": "Leadership Intelligence — FAST Coverage",
     "description": "The FAST Coverage Report: standards analyzed, percent of curriculum taught, and instructional gaps surfaced early enough to act on.",
     "speakerNotes": "Frame the difference between scores and coverage. Show the gaps by standard for Grade 7 — this tells leaders what was actually taught."
   },
   {
+    "id": "leadership-school-grade",
+    "position": 18,
+    "filepath": "src/pages/slides/LeadershipSchoolGrade.tsx",
+    "title": "Leadership Intelligence — School Grade Projection",
+    "description": "The School Grade Estimated Calculator: an estimated Florida middle-school grade per progress-monitoring window across nine components (each out of 100). FAST achievement and learning-gains components compute from live data; run it at PM1, PM2, and PM3 to see the trajectory before the official grade.",
+    "speakerNotes": "Show the projected school grade at PM1, PM2, and PM3. Note that FAST components compute automatically and learning gains are projected early, then strict PM3-to-PM3 at the end."
+  },
+  {
     "id": "ops-ticketing",
-    "position": 14,
+    "position": 19,
     "filepath": "src/pages/slides/OpsTicketing.tsx",
     "title": "School Operations — Event Ticketing",
     "description": "Free-ticket events end to end: create with quotas, email QR tickets per student, no-login volunteer scanning, and atomic first-scan-wins duplicate blocking.",
@@ -113,15 +153,23 @@
   },
   {
     "id": "ops-signage",
-    "position": 15,
+    "position": 20,
     "filepath": "src/pages/slides/OpsSignage.tsx",
     "title": "School Operations — Digital Signage",
     "description": "Per-school digital signage for announcements, celebrations, and events, with live PBIS House Cup standings and one remote driving every TV.",
     "speakerNotes": "Show the live House Cup signage and the remote control driving multiple displays. This is school culture made visible."
   },
   {
+    "id": "ops-parent-pickup",
+    "position": 21,
+    "filepath": "src/pages/slides/OpsParentPickup.tsx",
+    "title": "School Operations — Parent Pick-Up",
+    "description": "The Parent Pick-Up module: a curb keypad parents enter a number into, a separate walker-gate release, office-authorized QR pickup tags printed to PDF, a classroom signage tile, and a 'still on campus' reconciliation tile — with a reason-required front-office manual override.",
+    "speakerNotes": "Show the curb keypad and the classroom tile updating, the walker gate, and the 'still on campus' reconciliation tile. Note QR tags are office-authorized and overrides require a reason."
+  },
+  {
     "id": "closing",
-    "position": 16,
+    "position": 22,
     "filepath": "src/pages/slides/Closing.tsx",
     "title": "The operating system thesis",
     "description": "Closing. PulseEDU is the operating system that connects students, teachers, families, and administrators into a single, actionable platform.",

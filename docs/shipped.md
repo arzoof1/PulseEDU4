@@ -3,6 +3,21 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **District Demo brochure — added missing-feature slides.** Expanded
+  the `pulseedu-district-demo` slides deck (16 → 22 slides) to cover
+  noteworthy app capabilities that were absent: **Student Points Store &
+  Wallet** and **Students Sign In** (ClassLink self-service) under Student
+  Experience; **Safety Plans** and the **Eligibility Hub** under Student
+  Support; **School Grade Projection** under Leadership Intelligence; and
+  **Parent Pick-Up** under School Operations. Also upgraded the
+  **Leadership Insights** slide with the three actionable per-student
+  metrics (Days absent + %, Pts to next FAST level, Pts to proficiency)
+  and refreshed an Agenda sub-label. New slides reuse the deck's design
+  system (Space Grotesk/IBM Plex, bg `#F3EFE6`, ink `#0B1F33`, teal
+  `#15B8A6`, card-grid + navy callout-bar pattern); manifest validated at
+  22 contiguous slides with Closing last. Brochure/marketing change only —
+  no app code touched.
+
 - **Insights per-student metrics — Days Absent, Pts to Next FAST
   Sub-Level, Pts to Proficiency.** Three READ-ONLY, additive numeric
   columns surfaced across four Insights surfaces, all sourced from
