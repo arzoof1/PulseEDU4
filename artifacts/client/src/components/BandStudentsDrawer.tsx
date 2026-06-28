@@ -311,7 +311,7 @@ const overlayStyle: React.CSSProperties = {
 };
 
 const panelStyle: React.CSSProperties = {
-  width: "min(520px, 100%)",
+  width: "min(860px, 100%)",
   background: "var(--surface, #0f172a)",
   borderLeft: "1px solid var(--border)",
   boxShadow: "-8px 0 24px rgba(0,0,0,0.4)",
