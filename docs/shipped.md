@@ -3,6 +3,37 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Parent Notifications control panel (Family Communication).** A new
+  admin-only panel (sidebar **Family → Parent Notifications**, gated by
+  `canManageSettings`) lets a school turn each automated/recurring parent
+  email on or off. Every switch **defaults to today's behavior** — nothing
+  changes until an admin flips it. Toggleable: Weekly HeartBEAT email,
+  Eligibility notices, PBIS milestone, Tardy alerts, Store item ready,
+  Family Messages broadcasts, Event ticket emails, E-sign signing requests,
+  Tour family nurture. **Reuses existing switches** instead of duplicating —
+  HeartBEAT → `school_heartbeat_settings.allow_weekly_email`; Family Messages
+  → `featureFamilyComm`; Store → `featureSchoolStoreNotify`; Tour →
+  `tourFamilyNurtureEnabled`. Five **new** `school_settings` boolean columns
+  (default TRUE) back the rest: `notifyParentEligibility`,
+  `notifyParentPbisMilestone`, `notifyParentTardy`,
+  `notifyParentEventTickets`, `notifyParentEsign`. Each toggle is enforced at
+  its **send site** (not just the UI) via the shared
+  `lib/parentNotify.ts` `isParentNotifyEnabled(schoolId, key)` helper
+  (returns `?? true` so a missing/null row preserves behavior):
+  eligibility gates ONLY the parent send (coach/principal/AD/digest copies
+  unaffected), PBIS milestone short-circuits before the claim loop, tardy
+  gates the SMS stub at the caller, event tickets skip the grant email,
+  e-sign skips the recipient email (staff can still copy the link). Portal
+  invites + password resets are **access-critical and intentionally not
+  listed** (always send). PUT `/api/school-settings` admin-gates the five
+  new columns + reused `tourFamilyNurtureEnabled` (stricter than the
+  settings-manager gate on other school-wide toggles); the feature flags
+  keep their existing admin/SuperUser dual-gate (locked in the panel when
+  the district tier is off). **Invariant: every parent-notification toggle
+  must be enforced at the server send site via `isParentNotifyEnabled`, not
+  just hidden in the panel — client gating is bypassable; and the helper's
+  `?? true` default is load-bearing (missing column/row = current behavior).**
+
 - **Insights drill-down — full Teacher Roster parity.** The shared
   `BandStudentsDrawer` (Academics band drill-ins + Academic Trajectories)
   now carries the same whole-child context as the Teacher Roster: an

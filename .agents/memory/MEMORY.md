@@ -84,4 +84,5 @@
 - [School Store redemption engine](school-store-redemption-engine.md) — derived wallet; all balance/stock writes lock per-(school,student) then re-read + status-guarded update; restore stock from stock_held col, not status.
 - [PBIS point-awarding staff](pbis-point-awarding-staff.md) — quiet-staff alert + Staff Active tile measure teachers ∪ active non-teaching awarders; both endpoints must share the population (numerator ⊆ denominator).
 - [Teacher allowlist bulk + zone rules](teacher-allowlist-bulk.md) — CSV bulk + zone auto-assign share computeAndApplyBulk; rollback snapshot MUST stay staffId-keyed array (names not unique) or same-name teachers clobber each other's undo.
+- [Parent notification toggles](parent-notify-gating.md) — enforce at server send site via isParentNotifyEnabled (?? true default = preserve behavior); fire-and-forget gate read goes INSIDE the existing try/catch.
 - [FAST level pill single-source](fast-pill-single-source.md) — share the level palette (FastScorePill) + placePmSet across Roster/Insights so pills can't drift; BOTH BandStudentsDrawer callers must set showScoreToggle.

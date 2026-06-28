@@ -19,6 +19,7 @@ import {
 } from "./components/HowToUseHelp";
 import AdminHubPage from "./components/AdminHubPage";
 import FamilyMessagesHub from "./components/FamilyMessagesHub";
+import ParentNotificationsPanel from "./components/ParentNotificationsPanel";
 import PulseDnaStudio from "./components/PulseDnaStudio";
 import HelpAssistant from "./components/HelpAssistant";
 import { TileHome, type Tile as TileHomeTile } from "./pages/TileHome";
@@ -4002,7 +4003,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "behaviorReview",
   ],
   specialPrograms: ["accommodations", "ese"],
-  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess", "callCampaign"],
+  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess", "callCampaign", "parentNotifications"],
   people: ["teacherRoster", "staffRoles"],
   // hallPassMgmt is reached via the Hall Passes admin tools; it has no
   // dedicated nav item so we anchor it to School Admin so the sidebar
@@ -5729,6 +5730,7 @@ function App() {
     | "contactRate"
     | "familyMessages"
     | "pulseDnaStudio"
+    | "parentNotifications"
     | "eligibility"
     | "tileHome"
     | "pbisWallets"
@@ -11996,6 +11998,12 @@ function App() {
                     })}
                   </FeatureGate>
                 )}
+                {canManageSettings &&
+                  renderNavItem({
+                    key: "parentNotifications",
+                    label: "Parent Notifications",
+                    icon: IconUser,
+                  })}
               </NavGroup>
             )}
             {/* People accordion removed — Teacher Roster lives in
@@ -23219,6 +23227,10 @@ function App() {
       {activeSection === "pulseDnaStudio" &&
         effectiveFeatures.FamilyComm &&
         isCoreTeamMember && <PulseDnaStudio />}
+
+      {activeSection === "parentNotifications" && canManageSettings && (
+        <ParentNotificationsPanel />
+      )}
 
       {activeSection === "insightsWatchlist" && (
         <InsightsWatchlist

@@ -168,6 +168,36 @@ export const schoolSettingsTable = pgTable(
     .notNull()
     .default(false),
   // -----------------------------------------------------------------
+  // Parent Notifications control panel (Family Communication).
+  //
+  // Per-school admin master switches for each automated/recurring parent
+  // notification. ALL default TRUE so existing behavior is preserved — a
+  // school sees no change until an admin flips one off. Each flag is an
+  // additive AND-gate layered on top of any existing gate at the send site
+  // (the send still respects feature flags, parent opt-ins, etc.).
+  //
+  // Notifications that already have a dedicated school switch are NOT
+  // duplicated here and are surfaced in the panel via their existing flag:
+  //   - Friday HeartBEAT   → school_heartbeat_settings.allow_weekly_email
+  //   - Family Messages    → feature_family_comm
+  //   - Store item ready   → feature_school_store_notify
+  //   - Tour family nurture→ tour_family_nurture_enabled
+  //
+  // Portal invite + password reset are intentionally absent — they are
+  // access-critical and always-on (never toggleable).
+  // -----------------------------------------------------------------
+  notifyParentEligibility: boolean("notify_parent_eligibility")
+    .notNull()
+    .default(true),
+  notifyParentPbisMilestone: boolean("notify_parent_pbis_milestone")
+    .notNull()
+    .default(true),
+  notifyParentTardy: boolean("notify_parent_tardy").notNull().default(true),
+  notifyParentEventTickets: boolean("notify_parent_event_tickets")
+    .notNull()
+    .default(true),
+  notifyParentEsign: boolean("notify_parent_esign").notNull().default(true),
+  // -----------------------------------------------------------------
   // Per-school feature flags (two-tier model).
   //
   //   super_feature_*  → SuperUser-controlled "is this feature available

@@ -8,6 +8,7 @@ import {
 } from "@workspace/db";
 import { eq, and, isNull } from "drizzle-orm";
 import { getUncachableResendClient } from "./resendClient";
+import { isParentNotifyEnabled } from "./parentNotify.js";
 
 export type MilestoneResult = {
   milestonePoints: number;
@@ -65,6 +66,14 @@ export async function processMilestonesForStudent(
     .filter((m) => !sentSet.has(m.points))
     .sort((a, b) => a.points - b.points);
   if (candidates.length === 0) return [];
+
+  // Parent Notifications panel — master switch for PBIS milestone emails.
+  // Return before claiming so no "pending" ledger row is created; if the
+  // school re-enables later, the (benign, positive) milestone email can
+  // still catch up.
+  if (!(await isParentNotifyEnabled(schoolId, "notifyParentPbisMilestone"))) {
+    return [];
+  }
 
   // CLAIM-BEFORE-SEND: insert a "pending" row per candidate; the unique
   // index on (student_id, milestone_points) ensures only one concurrent

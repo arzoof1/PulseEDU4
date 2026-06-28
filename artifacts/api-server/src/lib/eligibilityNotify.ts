@@ -8,6 +8,7 @@ import {
 import { and, eq, inArray } from "drizzle-orm";
 import { getUncachableResendClient } from "./resendClient.js";
 import { logger } from "./logger.js";
+import { isParentNotifyEnabled } from "./parentNotify.js";
 import {
   loadEligibilitySettings,
   loadActiveMembers,
@@ -183,6 +184,14 @@ export async function notifyEligibilityUpload(
   const notices = await buildNotices(schoolId, settings);
   if (notices.length === 0) return 0;
 
+  // Parent Notifications panel — master switch for parent-facing eligibility
+  // emails. Coach/principal/AD copies and the staff weekly digest are NOT
+  // gated by this (it is a PARENT toggle).
+  const parentNotifyOn = await isParentNotifyEnabled(
+    schoolId,
+    "notifyParentEligibility",
+  );
+
   // Coaches per activity.
   const coachRows = await db
     .select({
@@ -264,7 +273,7 @@ export async function notifyEligibilityUpload(
       </div>`;
 
     // Parent (one combined message).
-    if (n.parentEmail) {
+    if (n.parentEmail && parentNotifyOn) {
       const ok = await sendEmail(
         n.parentEmail,
         `Eligibility ${statusLabel(n.status)}: ${n.name}`,
