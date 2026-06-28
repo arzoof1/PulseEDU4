@@ -3,6 +3,20 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Insights drill-down — PM progression columns.** The shared
+  `BandStudentsDrawer` (Academic Trajectories drill-down + Academics
+  dashboard band drill-ins) now renders the full PM progression in order
+  **Prior PM3 · PM1 · PM2 · PM3** (was only PM1/PM3) via a shared exported
+  `INSIGHTS_PM_COLUMNS`, prepended to the existing `INSIGHTS_METRIC_COLUMNS`
+  so both surfaces stay identical. PM2/PM3 cells are colored by movement vs
+  the PM1 baseline: **green + bold** when above PM1 (gain), **red + bold**
+  when below (decline), plain when equal/missing (`movementCell` helper).
+  Drawer was also widened (520 → 860px) so all columns fit without
+  horizontal scroll. Server side: the trajectory-students and academics
+  band endpoints select + pass through `priorYearScore` + `pm2` (school-
+  scoped, additive only); trajectory CSV export gained `prior_pm3` + `pm2`.
+  Read-only/additive — no other drawer callers affected.
+
 - **District Demo brochure — added missing-feature slides.** Expanded
   the `pulseedu-district-demo` slides deck (16 → 22 slides) to cover
   noteworthy app capabilities that were absent: **Student Points Store &

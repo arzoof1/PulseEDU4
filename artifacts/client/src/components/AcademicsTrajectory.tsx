@@ -29,6 +29,7 @@ import {
 } from "./InsightsFilterBar";
 import InsightsPicker from "./InsightsPicker";
 import BandStudentsDrawer, {
+  INSIGHTS_PM_COLUMNS,
   INSIGHTS_METRIC_COLUMNS,
 } from "./BandStudentsDrawer";
 
@@ -345,7 +346,9 @@ interface TrajStudent {
   localSisId: string | null;
   studentName: string;
   grade: number | null;
+  priorYearScore: number | null;
   pm1: number | null;
+  pm2: number | null;
   pm3: number | null;
   programPill?: "ESE" | "504" | null;
   mtssPill?: "Tier 2+" | "Tier 3" | null;
@@ -467,13 +470,23 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
       const s = String(v);
       return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const header = ["local_sis_id", "student_name", "grade", "pm1", "pm3"];
+    const header = [
+      "local_sis_id",
+      "student_name",
+      "grade",
+      "prior_pm3",
+      "pm1",
+      "pm2",
+      "pm3",
+    ];
     const rows = drawerData.students.map((s) =>
       [
         esc(s.localSisId ?? ""),
         esc(s.studentName),
         esc(s.grade == null ? "" : s.grade === 0 ? "K" : s.grade),
+        esc(s.priorYearScore ?? ""),
         esc(s.pm1 ?? ""),
+        esc(s.pm2 ?? ""),
         esc(s.pm3 ?? ""),
       ].join(","),
     );
@@ -795,8 +808,7 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
         // for the Untested archetype rather than a fabricated 0.
         students={drawerData?.students ?? []}
         scoreColumns={[
-          { key: "pm1", label: "PM1" },
-          { key: "pm3", label: "PM3" },
+          ...INSIGHTS_PM_COLUMNS,
           ...INSIGHTS_METRIC_COLUMNS,
         ]}
         truncated={drawerData?.truncated}

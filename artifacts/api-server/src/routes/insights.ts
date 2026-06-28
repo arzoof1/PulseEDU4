@@ -2888,7 +2888,9 @@ router.get("/insights/academics/band", async (req, res) => {
   const fastRows = await db
     .select({
       studentId: studentFastScoresTable.studentId,
+      priorYearScore: studentFastScoresTable.priorYearScore,
       pm1: studentFastScoresTable.pm1,
+      pm2: studentFastScoresTable.pm2,
       pm3: studentFastScoresTable.pm3,
     })
     .from(studentFastScoresTable)
@@ -2909,7 +2911,9 @@ router.get("/insights/academics/band", async (req, res) => {
     studentId: string;
     studentName: string;
     grade: number | null;
+    priorYearScore: number | null;
     pm1: number | null;
+    pm2: number | null;
     pm3: number;
     // Additive read-only metrics (shared source of truth). daysAbsent /
     // attendancePct from the Eligibility Hub upload; ptsToNextLevel /
@@ -2930,7 +2934,9 @@ router.get("/insights/academics/band", async (req, res) => {
       studentId: r.studentId,
       studentName: nameById.get(r.studentId) ?? "—",
       grade,
+      priorYearScore: r.priorYearScore ?? null,
       pm1: r.pm1 ?? null,
+      pm2: r.pm2 ?? null,
       pm3: r.pm3,
     });
   }
@@ -3036,6 +3042,7 @@ interface TrajectoryStudentRec {
   localSisId: string | null;
   studentName: string;
   grade: number;
+  priorYearScore: number | null;
   pm1: number | null;
   pm2: number | null;
   pm3: number | null;
@@ -3256,6 +3263,7 @@ async function loadTrajectoryRecs(
   const fastRows = await db
     .select({
       studentId: studentFastScoresTable.studentId,
+      priorYearScore: studentFastScoresTable.priorYearScore,
       pm1: studentFastScoresTable.pm1,
       pm2: studentFastScoresTable.pm2,
       pm3: studentFastScoresTable.pm3,
@@ -3279,6 +3287,7 @@ async function loadTrajectoryRecs(
   // fr?.pm1 reports "Property pm1 does not exist on type {}".
   type TrajFastRow = {
     studentId: string;
+    priorYearScore: number | null;
     pm1: number | null;
     pm2: number | null;
     pm3: number | null;
@@ -3305,6 +3314,7 @@ async function loadTrajectoryRecs(
       localSisId: localSisById.get(sr.studentId) ?? null,
       studentName: nameById.get(sr.studentId) ?? "—",
       grade,
+      priorYearScore: fr?.priorYearScore ?? null,
       pm1,
       pm2,
       pm3,
@@ -3445,7 +3455,9 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
     localSisId: string | null;
     studentName: string;
     grade: number | null;
+    priorYearScore: number | null;
     pm1: number | null;
+    pm2: number | null;
     pm3: number | null;
     subject?: "ela" | "math";
     programPill?: "ESE" | "504" | null;
@@ -3473,7 +3485,9 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
           ? `${r.studentName} (${subj.toUpperCase()})`
           : r.studentName,
       grade: r.grade,
+      priorYearScore: r.priorYearScore,
       pm1: r.pm1,
+      pm2: r.pm2,
       pm3: r.pm3,
       subject: subj,
     });

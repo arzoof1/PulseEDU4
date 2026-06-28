@@ -40,6 +40,7 @@ import InsightsPicker, {
   topListsToCsv,
 } from "./InsightsPicker";
 import BandStudentsDrawer, {
+  INSIGHTS_PM_COLUMNS,
   INSIGHTS_METRIC_COLUMNS,
 } from "./BandStudentsDrawer";
 
@@ -100,7 +101,9 @@ interface BandStudent {
   studentId: string;
   studentName: string;
   grade: number | null;
+  priorYearScore: number | null;
   pm1: number | null;
+  pm2: number | null;
   pm3: number;
   daysAbsent?: number | null;
   attendancePct?: number | null;
@@ -376,8 +379,7 @@ export default function AcademicsDashboard({ onOpenProfile }: Props) {
         }
         students={drillData?.students ?? []}
         scoreColumns={[
-          { key: "pm1", label: "PM1" },
-          { key: "pm3", label: "PM3" },
+          ...INSIGHTS_PM_COLUMNS,
           ...INSIGHTS_METRIC_COLUMNS,
         ]}
         truncated={drillData?.truncated}

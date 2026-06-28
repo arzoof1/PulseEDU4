@@ -13,7 +13,11 @@ interface Student {
   studentId: string;
   studentName: string;
   grade?: number | null;
+  // Prior-year FAST score (the "previous year PM3" baseline). Optional so
+  // existing callers that never set it keep rendering "—".
+  priorYearScore?: number | null;
   pm1?: number | null;
+  pm2?: number | null;
   // Nullable so the Trajectory drawer can honestly render "—" for the
   // Untested archetype rather than fabricating a 0 score. The render
   // path below already null-checks so existing callers that always set
@@ -46,6 +50,53 @@ export interface ScoreColumn {
   label: string;
   render?: (s: Student) => React.ReactNode;
 }
+
+// Green/bold for upward movement, red/bold for a decline — used by the
+// shared PM columns to flag PM2 / PM3 relative to the PM1 baseline so a
+// reader spots momentum at a glance. Equal scores or a missing baseline
+// render plain.
+const upStyle: React.CSSProperties = { color: "#16a34a", fontWeight: 700 };
+const downStyle: React.CSSProperties = { color: "#dc2626", fontWeight: 700 };
+
+function movementCell(
+  value: number | null | undefined,
+  baseline: number | null | undefined,
+): React.ReactNode {
+  if (value == null) return "—";
+  if (baseline != null && value > baseline)
+    return <span style={upStyle}>{value}</span>;
+  if (baseline != null && value < baseline)
+    return <span style={downStyle}>{value}</span>;
+  return value;
+}
+
+// Shared PM progression columns for the Insights drill-downs: prior-year
+// PM3 baseline, then PM1 -> PM2 -> PM3. PM2 and PM3 are colored by their
+// movement vs the PM1 baseline (green up, red down). Callers prepend these
+// to INSIGHTS_METRIC_COLUMNS so the Academics band drawer and Academic
+// Trajectories render an identical table.
+export const INSIGHTS_PM_COLUMNS: ScoreColumn[] = [
+  {
+    key: "priorYearScore",
+    label: "Prior PM3",
+    render: (s) => (s.priorYearScore != null ? s.priorYearScore : "—"),
+  },
+  {
+    key: "pm1",
+    label: "PM1",
+    render: (s) => (s.pm1 != null ? s.pm1 : "—"),
+  },
+  {
+    key: "pm2",
+    label: "PM2",
+    render: (s) => movementCell(s.pm2, s.pm1),
+  },
+  {
+    key: "pm3",
+    label: "PM3",
+    render: (s) => movementCell(s.pm3, s.pm1),
+  },
+];
 
 // Shared additive metric columns for the Insights drill-downs (Academics
 // band drawer + Academic Trajectories). Renders Days Absent, approximate
