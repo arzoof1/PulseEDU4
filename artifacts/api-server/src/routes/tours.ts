@@ -15,8 +15,12 @@ import {
   tourRequestsTable,
   tourRequestEventsTable,
   tourSurveysTable,
+  tourWalksTable,
+  tourWalkStepsTable,
+  adminNotificationsTable,
   TOUR_STATUSES,
   TOUR_OUTCOMES,
+  TOUR_WALK_STATUSES,
   type TourChild,
   type TourPageSection,
   type TourFlyer,
@@ -24,11 +28,13 @@ import {
   type TourTranslation,
   type TourStatus,
   type TourOutcome,
+  type TourWalkRow,
+  type TourWalkStatus,
 } from "@workspace/db";
 import { and, eq, desc, asc, sql } from "drizzle-orm";
-import { randomUUID } from "crypto";
+import { randomUUID, createHash } from "crypto";
 import { requireSchool, getDistrictIdForSchool } from "../lib/scope.js";
-import { canManageTours } from "../lib/coreTeam.js";
+import { canManageTours, canGuideTours } from "../lib/coreTeam.js";
 import {
   ObjectStorageService,
   ObjectNotFoundError,
@@ -37,8 +43,11 @@ import { claimTourBragObjectPaths } from "./storage.js";
 import {
   sendNewLeadNotifyEmail,
   sendFamilyAckEmail,
+  sendLeadAssignedEmail,
 } from "../lib/tourEmails.js";
 import { sendSmsBatch } from "../lib/sms.js";
+import { addBusinessDays } from "../lib/businessDays.js";
+import { overdueFor } from "../lib/tourReminders.js";
 import {
   translateTourContent,
   isSupportedTargetLang,
@@ -49,7 +58,11 @@ import {
 import { buildTourBragSheetPdf } from "../lib/tourBragSheetPdf.js";
 import { buildTourLeaveBehindPdf } from "../lib/tourLeaveBehindPdf.js";
 import { buildTourRoadmapPdf } from "../lib/tourRoadmapPdf.js";
+import { buildTourRoadmapShortPdf } from "../lib/tourRoadmapShortPdf.js";
 import { buildTourNoteCatcherPdf } from "../lib/tourNoteCatcherPdf.js";
+import { mergePdfs } from "../lib/mergePdfs.js";
+import { genUrlSafeToken } from "../lib/urlSafeToken.js";
+import QRCode from "qrcode";
 import { logger } from "../lib/logger.js";
 
 const router: IRouter = Router();
@@ -117,6 +130,17 @@ async function pipeStorageResponse(
 // /storage/objects, which the public has no token for). Legacy external URLs
 // are passed through via redirect. `allowed` constrains which content-types may
 // render inline (see PUBLIC_*_TYPES).
+// Short content-version token derived from the object-storage key. Public
+// photo/flyer URLs are index-based (`/photo/0`, `/flyer/0`), so when a school
+// deletes an asset and uploads a replacement the new file lands at the SAME
+// index and the URL never changes — the browser then serves the previously
+// cached image (Cache-Control max-age) and the old "seed" picture appears to
+// persist. Appending `?v=<hash-of-key>` makes the URL change whenever the
+// underlying object changes (each upload mints a fresh key), busting the cache.
+function assetVersion(key: string): string {
+  return createHash("sha1").update(key).digest("hex").slice(0, 10);
+}
+
 async function streamTourAsset(
   key: string,
   req: Request,
@@ -199,6 +223,133 @@ function pipelineUrlFor(req?: Request): string {
   return `${publicAppOrigin(req)}/?settingsTile=school-tours`;
 }
 
+// Phase 4 "Live Tour Capture": the deep link a guide opens (QR on the roadmap
+// PDF + the on-screen lead view). Token-gated, unauthenticated-by-design — the
+// guide is walking the building with a phone and has no session. Mirrors the
+// survey URL shape.
+function walkUrlFor(token: string, req?: Request): string {
+  return `${publicAppOrigin(req)}/tour/walk/${encodeURIComponent(token)}`;
+}
+
+// Lazily mint (or fetch) the single live-walk session for a lead. The guide
+// defaults to the lead owner but is editable on the walk screen, so per-guide
+// metrics reflect who actually walked it. Race-safe: concurrent callers collide
+// on the tour_request_id unique index and fall back to a re-select.
+async function ensureWalkForLead(
+  schoolId: number,
+  leadId: number,
+  ownerStaffId: number | null,
+): Promise<TourWalkRow> {
+  const [existing] = await db
+    .select()
+    .from(tourWalksTable)
+    .where(
+      and(
+        eq(tourWalksTable.tourRequestId, leadId),
+        eq(tourWalksTable.schoolId, schoolId),
+      ),
+    );
+  if (existing) return existing;
+  const token = genUrlSafeToken(32); // ~190 bits, linkifier-safe (lib/urlSafeToken)
+  const [created] = await db
+    .insert(tourWalksTable)
+    .values({
+      schoolId,
+      tourRequestId: leadId,
+      token,
+      guideStaffId: ownerStaffId ?? null,
+    })
+    .onConflictDoNothing()
+    .returning();
+  if (created) return created;
+  const [again] = await db
+    .select()
+    .from(tourWalksTable)
+    .where(
+      and(
+        eq(tourWalksTable.tourRequestId, leadId),
+        eq(tourWalksTable.schoolId, schoolId),
+      ),
+    );
+  return again;
+}
+
+// The shared state shape for a live walk: lead context, the stops in page order
+// (family-selected + always-included school highlights), each merged with its
+// tapped completion + note, the guide picker options, and the current guide.
+// Consumed by the token-gated guide screen, the sync response, and the staff
+// lead-drawer route so all three always agree.
+async function buildWalkStatePayload(walk: TourWalkRow) {
+  const schoolId = walk.schoolId;
+  const [lead] = await db
+    .select()
+    .from(tourRequestsTable)
+    .where(
+      and(
+        eq(tourRequestsTable.id, walk.tourRequestId),
+        eq(tourRequestsTable.schoolId, schoolId),
+      ),
+    );
+  const page = await loadTourPage(schoolId);
+  const selectedSet = new Set(lead?.interestSelections ?? []);
+  const stepRows = await db
+    .select()
+    .from(tourWalkStepsTable)
+    .where(
+      and(
+        eq(tourWalkStepsTable.walkId, walk.id),
+        eq(tourWalkStepsTable.schoolId, schoolId),
+      ),
+    );
+  const stepByKey = new Map(stepRows.map((s) => [s.checkpointKey, s] as const));
+  const stops = (page?.checkpoints ?? [])
+    .filter((c) => selectedSet.has(c.key) || c.alwaysInclude === true)
+    .map((c, i) => {
+      const step = stepByKey.get(c.key);
+      return {
+        checkpointKey: c.key,
+        label: c.label,
+        location: c.location ?? "",
+        talkingPoints: c.talkingPoints ?? "",
+        plannedMinutes: c.minutes ?? 0,
+        order: i,
+        familyRequested: selectedSet.has(c.key),
+        schoolHighlight: c.alwaysInclude === true,
+        completedAt: step?.completedAt ?? null,
+        note: step?.note ?? "",
+      };
+    });
+  const staffRows = await db
+    .select()
+    .from(staffTable)
+    .where(and(eq(staffTable.schoolId, schoolId), eq(staffTable.active, true)));
+  const assignableStaff = staffRows
+    .filter((s) => canGuideTours(s))
+    .map((s) => ({ id: s.id, name: s.displayName }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const guideName =
+    walk.guideStaffId != null
+      ? staffRows.find((s) => s.id === walk.guideStaffId)?.displayName ?? null
+      : null;
+  return {
+    schoolName: await schoolName(schoolId),
+    familyName: lead?.familyName ?? "",
+    children: lead?.children ?? [],
+    leadStatus: lead?.status ?? null,
+    tourScheduledAt: lead?.tourScheduledAt ?? null,
+    walk: {
+      token: walk.token,
+      status: walk.status,
+      startedAt: walk.startedAt,
+      endedAt: walk.endedAt,
+      guideStaffId: walk.guideStaffId,
+      guideName,
+    },
+    stops,
+    assignableStaff,
+  };
+}
+
 type StaffRow = typeof staffTable.$inferSelect;
 
 async function requireStaff(req: Request, res: Response, next: NextFunction) {
@@ -226,6 +377,27 @@ function requireTourManager(req: Request, res: Response, next: NextFunction) {
     return;
   }
   next();
+}
+
+// Allows full tour managers AND lightweight Tour Guides. Routes that use this
+// must additionally enforce own-lead scoping for guides via canAccessLead().
+function requireTourGuide(req: Request, res: Response, next: NextFunction) {
+  const staff = (req as Request & { staff?: StaffRow }).staff;
+  if (!staff || !canGuideTours(staff)) {
+    res.status(403).json({ error: "Not authorized for School Tours" });
+    return;
+  }
+  next();
+}
+
+// Full managers can touch any lead; a Tour Guide may only act on a lead they
+// own. Returns true when the staff member is allowed to view/print this lead.
+function canAccessLead(
+  staff: StaffRow,
+  lead: { assignedStaffId: number | null },
+): boolean {
+  if (canManageTours(staff)) return true;
+  return lead.assignedStaffId === staff.id;
 }
 
 function sanitizeStrings(input: unknown, max: number): string[] {
@@ -294,7 +466,8 @@ function sanitizeCheckpoints(input: unknown): TourCheckpoint[] {
       Number.isFinite(minutesRaw) && minutesRaw > 0
         ? Math.min(Math.round(minutesRaw), 240)
         : 0;
-    out.push({ key, label, location, talkingPoints, minutes });
+    const alwaysInclude = r.alwaysInclude === true;
+    out.push({ key, label, location, talkingPoints, minutes, alwaysInclude });
     if (out.length >= 30) break;
   }
   return out;
@@ -616,11 +789,16 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
     subheadline: tr?.subheadline ?? page.subheadline,
     intro: tr?.intro ?? page.intro,
     sections: tr?.sections ?? page.sections,
-    // Public form only needs key + label — location / talking points / minutes
-    // are staff-facing and stay server-side.
+    // Public form only needs key + label + the always-include flag — location
+    // / talking points / minutes are staff-facing and stay server-side. The
+    // always-include flag lives only on the source row (translations cache
+    // key + label), so we look it up by key from the source checkpoints.
     checkpoints: (tr?.checkpoints ?? page.checkpoints ?? []).map((c) => ({
       key: c.key,
       label: c.label,
+      alwaysInclude:
+        (page.checkpoints ?? []).find((s) => s.key === c.key)?.alwaysInclude ===
+        true,
     })),
     programs: tr?.programs ?? page.programs,
     electives: tr?.electives ?? page.electives,
@@ -629,13 +807,14 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
     // unauthenticated families never touch the school-ACL object path. Keys
     // are never exposed to the client.
     photos: page.photos.map(
-      (_, i) => `/api/tours/public/${schoolId}/photo/${i}`,
+      (key, i) =>
+        `/api/tours/public/${schoolId}/photo/${i}?v=${assetVersion(key)}`,
     ),
     textPlacement: page.textPlacement === "bottom" ? "bottom" : "top",
     flyers: (page.flyers ?? []).map((f, i) => ({
       label: f.label,
       kind: f.kind,
-      url: `/api/tours/public/${schoolId}/flyer/${i}`,
+      url: `/api/tours/public/${schoolId}/flyer/${i}?v=${assetVersion(f.key)}`,
     })),
     ctaText: tr?.ctaText ?? page.ctaText,
     accentColor: page.accentColor,
@@ -650,7 +829,7 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
           tagline: branding.tagline,
           hasLogo: !!branding.logoObjectKey,
           logoUrl: branding.logoObjectKey
-            ? `/api/tours/public/${schoolId}/district-logo`
+            ? `/api/tours/public/${schoolId}/district-logo?v=${assetVersion(branding.logoObjectKey)}`
             : null,
           placements: {
             heroTop: branding.brandHeroTop,
@@ -907,9 +1086,32 @@ router.get("/tours/page", requireStaff, requireTourManager, async (req, res) => 
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
   const page = await loadTourPage(schoolId);
+  const [settings] = await db
+    .select({
+      tourSmsScope: schoolSettingsTable.tourSmsScope,
+      tourFirstContactHours: schoolSettingsTable.tourFirstContactHours,
+      tourFollowUpBusinessDays: schoolSettingsTable.tourFollowUpBusinessDays,
+      tourArchiveDays: schoolSettingsTable.tourArchiveDays,
+      tourEscalationEnabled: schoolSettingsTable.tourEscalationEnabled,
+      tourFamilyNurtureEnabled: schoolSettingsTable.tourFamilyNurtureEnabled,
+      tourReminderLeadHours: schoolSettingsTable.tourReminderLeadHours,
+    })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
   res.json({
     schoolName: await schoolName(schoolId),
     schoolId,
+    // School-level tour preference (lives on schoolSettings, surfaced here so
+    // the Tour Admin page can manage it alongside the brag page).
+    tourSmsScope: settings?.tourSmsScope ?? "all",
+    // Phase 2 "never lose a lead" SLA settings (also on schoolSettings).
+    tourFirstContactHours: settings?.tourFirstContactHours ?? 24,
+    tourFollowUpBusinessDays: settings?.tourFollowUpBusinessDays ?? 3,
+    tourArchiveDays: settings?.tourArchiveDays ?? 3,
+    tourEscalationEnabled: settings?.tourEscalationEnabled ?? true,
+    // Phase 3 "close the loop with families" family-nurture settings.
+    tourFamilyNurtureEnabled: settings?.tourFamilyNurtureEnabled ?? false,
+    tourReminderLeadHours: settings?.tourReminderLeadHours ?? 24,
     published: page?.published ?? false,
     headline: page?.headline ?? "Come See Our School",
     subheadline: page?.subheadline ?? "",
@@ -1037,6 +1239,59 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) => 
       },
     });
 
+  // Persist the school-level tour SMS scope (separate table). Only 'urgent'
+  // narrows alerts; anything else keeps the default 'all'.
+  if ("tourSmsScope" in body) {
+    const scope = body.tourSmsScope === "urgent" ? "urgent" : "all";
+    await db
+      .insert(schoolSettingsTable)
+      .values({ schoolId, tourSmsScope: scope })
+      .onConflictDoUpdate({
+        target: schoolSettingsTable.schoolId,
+        set: { tourSmsScope: scope },
+      });
+  }
+
+  // Persist the Phase 2 SLA settings (schoolSettings). Each is clamped to a
+  // sane range; only fields present in the body are touched.
+  const slaSet: Partial<typeof schoolSettingsTable.$inferInsert> = {};
+  const clampInt = (v: unknown, min: number, max: number, dflt: number) => {
+    const n = Math.round(Number(v));
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt;
+  };
+  if ("tourFirstContactHours" in body) {
+    slaSet.tourFirstContactHours = clampInt(body.tourFirstContactHours, 1, 720, 24);
+  }
+  if ("tourFollowUpBusinessDays" in body) {
+    slaSet.tourFollowUpBusinessDays = clampInt(
+      body.tourFollowUpBusinessDays,
+      1,
+      60,
+      3,
+    );
+  }
+  if ("tourArchiveDays" in body) {
+    slaSet.tourArchiveDays = clampInt(body.tourArchiveDays, 1, 365, 3);
+  }
+  if ("tourEscalationEnabled" in body) {
+    slaSet.tourEscalationEnabled = body.tourEscalationEnabled === true;
+  }
+  if ("tourFamilyNurtureEnabled" in body) {
+    slaSet.tourFamilyNurtureEnabled = body.tourFamilyNurtureEnabled === true;
+  }
+  if ("tourReminderLeadHours" in body) {
+    slaSet.tourReminderLeadHours = clampInt(body.tourReminderLeadHours, 1, 168, 24);
+  }
+  if (Object.keys(slaSet).length > 0) {
+    await db
+      .insert(schoolSettingsTable)
+      .values({ schoolId, ...slaSet })
+      .onConflictDoUpdate({
+        target: schoolSettingsTable.schoolId,
+        set: slaSet,
+      });
+  }
+
   res.json({
     ok: true,
     publicUrl: `${publicAppOrigin(req)}/tour/${schoolId}`,
@@ -1116,41 +1371,66 @@ router.get(
       for (const o of owners) ownerNames.set(o.id, o.name);
     }
 
+    // Default view hides archived (long-closed) leads; ?view=archived shows
+    // only them. Archive cutoff + first-contact window come from school settings.
+    const view = req.query.view === "archived" ? "archived" : "active";
+    const [settings] = await db
+      .select({
+        firstContactHours: schoolSettingsTable.tourFirstContactHours,
+        archiveDays: schoolSettingsTable.tourArchiveDays,
+      })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId));
+    const archiveMs = (settings?.archiveDays ?? 3) * 24 * 60 * 60 * 1000;
+
     const now = Date.now();
-    const ESCALATE_MS = 24 * 60 * 60 * 1000;
+    const nowDate = new Date(now);
+    const mapped = rows.map((r) => {
+      // Response clock: ms from creation to first contact (or to now if still
+      // un-contacted).
+      const responseMs = r.firstContactedAt
+        ? r.firstContactedAt.getTime() - r.createdAt.getTime()
+        : now - r.createdAt.getTime();
+      // Stage-aware overdue (Phase 2) via the shared overdueFor() helper — the
+      // single source of truth used by the list, the detail drawer, and the
+      // hourly escalation sweep, so they can never disagree on who is overdue.
+      const od = overdueFor(r, settings?.firstContactHours ?? 24, nowDate);
+      const overdue = od != null;
+      const overdueReason = od?.reason ?? null;
+      const archived =
+        r.status === "closed" &&
+        r.closedAt != null &&
+        now - r.closedAt.getTime() > archiveMs;
+      return {
+        id: r.id,
+        familyName: r.familyName,
+        phone: r.phone,
+        email: r.email,
+        children: r.children,
+        interests: r.interests,
+        source: r.source,
+        preferredLanguage: r.preferredLanguage,
+        status: r.status,
+        outcome: r.outcome,
+        outcomeReason: r.outcomeReason,
+        assignedStaffId: r.assignedStaffId,
+        assignedTo: r.assignedStaffId
+          ? ownerNames.get(r.assignedStaffId) ?? null
+          : null,
+        tourScheduledAt: r.tourScheduledAt,
+        firstContactedAt: r.firstContactedAt,
+        followUpDueAt: r.followUpDueAt,
+        closedAt: r.closedAt,
+        surveySubmittedAt: r.surveySubmittedAt,
+        createdAt: r.createdAt,
+        responseMs,
+        overdue,
+        overdueReason,
+        archived,
+      };
+    });
     res.json(
-      rows.map((r) => {
-        // Response clock: ms from creation to first contact (or to now if
-        // still un-contacted). Overdue when a 'new' lead has sat >24h.
-        const responseMs = r.firstContactedAt
-          ? r.firstContactedAt.getTime() - r.createdAt.getTime()
-          : now - r.createdAt.getTime();
-        const overdue =
-          r.status === "new" && now - r.createdAt.getTime() > ESCALATE_MS;
-        return {
-          id: r.id,
-          familyName: r.familyName,
-          phone: r.phone,
-          email: r.email,
-          children: r.children,
-          interests: r.interests,
-          source: r.source,
-          preferredLanguage: r.preferredLanguage,
-          status: r.status,
-          outcome: r.outcome,
-          outcomeReason: r.outcomeReason,
-          assignedStaffId: r.assignedStaffId,
-          assignedTo: r.assignedStaffId
-            ? ownerNames.get(r.assignedStaffId) ?? null
-            : null,
-          tourScheduledAt: r.tourScheduledAt,
-          firstContactedAt: r.firstContactedAt,
-          surveySubmittedAt: r.surveySubmittedAt,
-          createdAt: r.createdAt,
-          responseMs,
-          overdue,
-        };
-      }),
+      mapped.filter((m) => (view === "archived" ? m.archived : !m.archived)),
     );
   },
 );
@@ -1169,7 +1449,8 @@ router.get(
       .where(and(eq(staffTable.schoolId, schoolId), eq(staffTable.active, true)));
     res.json(
       staff
-        .filter((s) => canManageTours(s))
+        // Full tour managers AND lightweight Tour Guides can own a lead.
+        .filter((s) => canGuideTours(s))
         .map((s) => ({ id: s.id, name: s.displayName }))
         .sort((a, b) => a.name.localeCompare(b.name)),
     );
@@ -1180,10 +1461,11 @@ router.get(
 router.get(
   "/tours/requests/:id",
   requireStaff,
-  requireTourManager,
+  requireTourGuide,
   async (req, res) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) {
       res.status(400).json({ error: "Invalid id" });
@@ -1200,6 +1482,10 @@ router.get(
       );
     if (!lead) {
       res.status(404).json({ error: "Lead not found" });
+      return;
+    }
+    if (!canAccessLead(staff, lead)) {
+      res.status(403).json({ error: "Not your assigned lead" });
       return;
     }
 
@@ -1248,9 +1534,19 @@ router.get(
     const responseMs = lead.firstContactedAt
       ? lead.firstContactedAt.getTime() - lead.createdAt.getTime()
       : Date.now() - lead.createdAt.getTime();
-    const overdue =
-      lead.status === "new" &&
-      Date.now() - lead.createdAt.getTime() > 24 * 60 * 60 * 1000;
+    // Stage-aware overdue via the shared overdueFor() helper, so the drawer
+    // agrees with the pipeline list and the escalation sweep.
+    const [detailSettings] = await db
+      .select({ firstContactHours: schoolSettingsTable.tourFirstContactHours })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId));
+    const od = overdueFor(
+      lead,
+      detailSettings?.firstContactHours ?? 24,
+      new Date(),
+    );
+    const overdue = od != null;
+    const overdueReason = od?.reason ?? null;
 
     // Resolve the family's checkpoint selections to their current labels, in
     // the page's checkpoint order. Stops deleted since they were selected fall
@@ -1269,6 +1565,7 @@ router.get(
           : null,
         responseMs,
         overdue,
+        overdueReason,
         selectedCheckpoints,
         surveyUrl: surveyUrlFor(lead.surveyToken, req),
       },
@@ -1280,6 +1577,16 @@ router.get(
     });
   },
 );
+
+// Resolve a fresh "Still deciding" follow-up due date from the school's
+// configured business-day window (defaults to 3 if the row is missing).
+async function followUpDueDate(schoolId: number): Promise<Date> {
+  const [s] = await db
+    .select({ days: schoolSettingsTable.tourFollowUpBusinessDays })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
+  return addBusinessDays(new Date(), s?.days ?? 3);
+}
 
 // PATCH /tours/requests/:id — status / assignment / outcome / schedule.
 router.patch(
@@ -1312,6 +1619,14 @@ router.patch(
     const body = (req.body ?? {}) as Record<string, unknown>;
     const updates: Partial<typeof tourRequestsTable.$inferInsert> = {};
     const events: { eventType: string; body: string }[] = [];
+    // Set when this PATCH (re)assigns the lead to a real staff member, so we
+    // can fire the assignee notification AFTER the transaction commits.
+    let assignmentNotify: {
+      assigneeStaffId: number;
+      assigneeName: string;
+      assigneeEmail: string | null;
+      assigneeCell: string | null;
+    } | null = null;
 
     // Status change.
     if (
@@ -1329,6 +1644,27 @@ router.patch(
       if (next !== "new" && !lead.firstContactedAt) {
         updates.firstContactedAt = new Date();
       }
+      // Phase 2 lifecycle stamps tied to the new stage.
+      if (next === "deciding") {
+        // Entering "Still deciding" starts the business-day follow-up clock.
+        updates.followUpDueAt = await followUpDueDate(schoolId);
+        // Phase 3: re-arm the family deciding-nudge for this fresh cycle.
+        updates.familyDecidingNudgeSentAt = null;
+      } else if (lead.status === "deciding") {
+        // Leaving "Still deciding" clears the follow-up clock.
+        updates.followUpDueAt = null;
+      }
+      if (next === "closed") {
+        updates.closedAt = new Date();
+        updates.followUpDueAt = null;
+      } else if (lead.status === "closed") {
+        // Re-opening a closed lead clears the archive clock.
+        updates.closedAt = null;
+      }
+      // Any staff-driven stage change re-arms the escalation job so the next
+      // applicable overdue condition fires a fresh nudge.
+      updates.lastEscalatedAt = null;
+      updates.lastEscalatedReason = null;
     }
 
     // Assignment.
@@ -1345,7 +1681,11 @@ router.patch(
         let assigneeName = "Unassigned";
         if (nextId !== null) {
           const [a] = await db
-            .select({ name: staffTable.displayName })
+            .select({
+              name: staffTable.displayName,
+              email: staffTable.email,
+              cell: staffTable.cellPhone,
+            })
             .from(staffTable)
             .where(
               and(eq(staffTable.id, nextId), eq(staffTable.schoolId, schoolId)),
@@ -1355,6 +1695,12 @@ router.patch(
             return;
           }
           assigneeName = a.name;
+          assignmentNotify = {
+            assigneeStaffId: nextId,
+            assigneeName: a.name,
+            assigneeEmail: a.email ?? null,
+            assigneeCell: a.cell ?? null,
+          };
         }
         events.push({
           eventType: "assignment",
@@ -1390,23 +1736,46 @@ router.patch(
       }
     }
 
-    // Outcome (only meaningful with a status of toured/closed).
+    // Outcome. enrolled|chose_other are TERMINAL (close + start the archive
+    // clock). "deciding" is no longer a terminal outcome — it maps to the live
+    // "Still deciding" stage with a follow-up clock (back-compat for any client
+    // that still posts outcome:'deciding'; the Phase 2 UI drives it via status).
     if ("outcome" in body) {
       const raw = body.outcome;
+      const reason =
+        typeof body.outcomeReason === "string"
+          ? body.outcomeReason.slice(0, 1000)
+          : null;
       if (raw === null) {
         updates.outcome = null;
         updates.outcomeReason = null;
+      } else if (raw === "deciding") {
+        // Live holding stage, not a close.
+        updates.outcome = null;
+        updates.outcomeReason = reason;
+        updates.followUpDueAt = await followUpDueDate(schoolId);
+        updates.closedAt = null;
+        updates.lastEscalatedAt = null;
+        updates.lastEscalatedReason = null;
+        // Phase 3: re-arm the family deciding-nudge for this fresh cycle.
+        updates.familyDecidingNudgeSentAt = null;
+        if (lead.status !== "deciding") {
+          updates.status = "deciding";
+          events.push({
+            eventType: "status_change",
+            body: `Status: ${lead.status} → deciding.`,
+          });
+        }
       } else if (
         typeof raw === "string" &&
         (TOUR_OUTCOMES as readonly string[]).includes(raw)
       ) {
         updates.outcome = raw as TourOutcome;
-        updates.outcomeReason =
-          typeof body.outcomeReason === "string"
-            ? body.outcomeReason.slice(0, 1000)
-            : null;
-        // Recording an outcome closes the lead.
+        updates.outcomeReason = reason;
+        // Recording a terminal outcome closes the lead + starts the archive clock.
         updates.status = "closed";
+        updates.closedAt = new Date();
+        updates.followUpDueAt = null;
         events.push({
           eventType: "outcome",
           body: `Outcome: ${raw}${
@@ -1446,6 +1815,85 @@ router.patch(
         });
       }
     });
+
+    // Assignment notification (fire-and-forget). When a lead gains a new
+    // owner, alert the assignee directly (email always; SMS gated by the
+    // school's tour SMS scope) and CC the principals/admins for oversight.
+    // Best-effort: failures are logged, never block the PATCH response.
+    if (assignmentNotify) {
+      const notify = assignmentNotify;
+      void (async () => {
+        try {
+          const name = await schoolName(schoolId);
+          // Principals/admins to CC (excluding the assignee themselves).
+          const admins = await db
+            .select({
+              email: staffTable.email,
+              isAdmin: staffTable.isAdmin,
+              id: staffTable.id,
+            })
+            .from(staffTable)
+            .where(
+              and(
+                eq(staffTable.schoolId, schoolId),
+                eq(staffTable.active, true),
+                eq(staffTable.isAdmin, true),
+              ),
+            );
+          const ccEmails = admins
+            .filter((a) => a.id !== notify.assigneeStaffId)
+            .map((a) => a.email)
+            .filter((e): e is string => Boolean(e));
+
+          const childrenSummary =
+            lead.children
+              .map((c) => `${c.name}${c.grade ? ` (Grade ${c.grade})` : ""}`)
+              .join(", ") || "—";
+
+          if (notify.assigneeEmail) {
+            await sendLeadAssignedEmail({
+              to: notify.assigneeEmail,
+              cc: ccEmails,
+              schoolName: name,
+              familyName: lead.familyName,
+              phone: lead.phone,
+              childrenSummary,
+              assigneeName: notify.assigneeName,
+              assignedByName: staff.displayName,
+              pipelineUrl: pipelineUrlFor(req),
+            });
+          }
+
+          // SMS only when the school's scope allows standard alerts.
+          const [settings] = await db
+            .select({ scope: schoolSettingsTable.tourSmsScope })
+            .from(schoolSettingsTable)
+            .where(eq(schoolSettingsTable.schoolId, schoolId));
+          const smsAllowed = (settings?.scope ?? "all") === "all";
+          if (smsAllowed && notify.assigneeCell) {
+            await sendSmsBatch(
+              [notify.assigneeCell],
+              `You've been assigned a tour at ${name}: ${lead.familyName} (${lead.phone}). Open PulseEDU to follow up.`,
+            );
+          }
+
+          // In-app record for admin oversight.
+          await db.insert(adminNotificationsTable).values({
+            schoolId,
+            type: "tour_lead_assigned",
+            payload: {
+              leadId: id,
+              familyName: lead.familyName,
+              assigneeStaffId: notify.assigneeStaffId,
+              assigneeName: notify.assigneeName,
+              assignedByStaffId: staff.id,
+            },
+          });
+        } catch (err) {
+          req.log.warn({ err }, "tour assignment notification failed");
+        }
+      })();
+    }
 
     res.json({ ok: true });
   },
@@ -1501,11 +1949,26 @@ router.post(
       body: text.slice(0, 4000),
     });
 
-    // Logging a contact stamps the response clock the first time.
+    // Logging a contact stamps the response clock the first time, and — when
+    // the lead is "Still deciding" — pushes the follow-up clock forward and
+    // re-arms the escalation job (the owner just did the follow-up).
+    const contactUpdates: Partial<typeof tourRequestsTable.$inferInsert> = {};
     if (kind === "contact" && !lead.firstContactedAt) {
+      contactUpdates.firstContactedAt = new Date();
+    }
+    if (kind === "contact" && lead.status === "deciding") {
+      contactUpdates.followUpDueAt = await followUpDueDate(schoolId);
+      contactUpdates.lastEscalatedAt = null;
+      contactUpdates.lastEscalatedReason = null;
+      // Phase 3: logging a contact pushes the follow-up clock forward, so
+      // re-arm the family deciding-nudge for the next cycle.
+      contactUpdates.familyDecidingNudgeSentAt = null;
+    }
+    if (Object.keys(contactUpdates).length > 0) {
+      contactUpdates.updatedAt = new Date();
       await db
         .update(tourRequestsTable)
-        .set({ firstContactedAt: new Date(), updatedAt: new Date() })
+        .set(contactUpdates)
         .where(
           and(
             eq(tourRequestsTable.id, id),
@@ -1533,6 +1996,210 @@ async function loadLeadForPdf(schoolId: number, id: number) {
   return lead ?? null;
 }
 
+type LeadRow = NonNullable<Awaited<ReturnType<typeof loadLeadForPdf>>>;
+
+async function resolveAssignedTo(
+  schoolId: number,
+  lead: LeadRow,
+): Promise<string | null> {
+  if (!lead.assignedStaffId) return null;
+  const [a] = await db
+    .select({ name: staffTable.displayName })
+    .from(staffTable)
+    .where(
+      and(
+        eq(staffTable.id, lead.assignedStaffId),
+        eq(staffTable.schoolId, schoolId),
+      ),
+    );
+  return a?.name ?? null;
+}
+
+// --- Shared PDF builders -----------------------------------------------------
+// Each returns a rendered Buffer so a single route can serve one document AND
+// the "complete packet" route can stitch them all together (mergePdfs) without
+// the two paths drifting out of sync.
+async function renderBragSheetPdf(
+  schoolId: number,
+  lead: LeadRow,
+): Promise<Buffer> {
+  const assignedTo = await resolveAssignedTo(schoolId, lead);
+  const page = await loadTourPage(schoolId);
+  const selectedSet = new Set(lead.interestSelections ?? []);
+  const selectedStops = (page?.checkpoints ?? [])
+    .filter((c) => selectedSet.has(c.key))
+    .map((c) => c.label);
+  const docBranding = await loadDistrictDocumentBranding(schoolId);
+  return buildTourBragSheetPdf({
+    schoolName: await schoolName(schoolId),
+    familyName: lead.familyName,
+    phone: lead.phone,
+    email: lead.email,
+    preferredLanguage: lead.preferredLanguage,
+    children: lead.children,
+    selectedStops,
+    interests: lead.interests,
+    source: lead.source,
+    status: lead.status,
+    assignedTo,
+    requestedAt: lead.createdAt,
+    tourScheduledAt: lead.tourScheduledAt,
+    districtLogo: docBranding?.logo ?? null,
+    districtTagline: docBranding?.tagline ?? null,
+  });
+}
+
+async function renderLeaveBehindPdf(
+  schoolId: number,
+  lead: LeadRow,
+  req: Request,
+): Promise<Buffer> {
+  const page = await loadTourPage(schoolId);
+  const docBranding = await loadDistrictDocumentBranding(schoolId);
+  return buildTourLeaveBehindPdf({
+    schoolName: await schoolName(schoolId),
+    familyName: lead.familyName,
+    surveyUrl: surveyUrlFor(lead.surveyToken, req),
+    contactEmail: page?.contactEmail ?? null,
+    contactPhone: page?.contactPhone ?? null,
+    accentColor: page?.accentColor ?? "#0ea5a4",
+    districtLogo: docBranding?.logo ?? null,
+    districtTagline: docBranding?.tagline ?? null,
+  });
+}
+
+async function renderRoadmapPdf(
+  schoolId: number,
+  lead: LeadRow,
+  id: number,
+  req: Request,
+): Promise<Buffer> {
+  const assignedTo = await resolveAssignedTo(schoolId, lead);
+  const page = await loadTourPage(schoolId);
+  // Build the roadmap from the union of (a) the stops the family ticked and
+  // (b) the school's "always include" highlights — in page order. Each stop
+  // carries flags so the PDF can badge it: family pick (★), school highlight,
+  // or both. This is the "Option A" walkable route the guide follows.
+  const selectedSet = new Set(lead.interestSelections ?? []);
+  const stops = (page?.checkpoints ?? [])
+    .filter((c) => selectedSet.has(c.key) || c.alwaysInclude === true)
+    .map((c) => ({
+      label: c.label,
+      location: c.location,
+      talkingPoints: c.talkingPoints,
+      minutes: c.minutes,
+      familyRequested: selectedSet.has(c.key),
+      schoolHighlight: c.alwaysInclude === true,
+    }));
+  const docBranding = await loadDistrictDocumentBranding(schoolId);
+  // Phase 4: mint (or fetch) the live-walk session for this lead and render a
+  // QR that deep-links the guide to the token-gated offline walk screen.
+  const walk = await ensureWalkForLead(schoolId, id, lead.assignedStaffId);
+  const walkUrl = walkUrlFor(walk.token, req);
+  let walkQrPng: Buffer | null = null;
+  try {
+    walkQrPng = await QRCode.toBuffer(walkUrl, {
+      margin: 1,
+      width: 280,
+      errorCorrectionLevel: "M",
+    });
+  } catch {
+    walkQrPng = null; // never block the roadmap on QR rendering
+  }
+  return buildTourRoadmapPdf({
+    schoolName: await schoolName(schoolId),
+    familyName: lead.familyName,
+    phone: lead.phone,
+    email: lead.email,
+    preferredLanguage: lead.preferredLanguage,
+    children: lead.children,
+    status: lead.status,
+    assignedTo,
+    requestedAt: lead.createdAt,
+    tourScheduledAt: lead.tourScheduledAt,
+    contactEmail: page?.contactEmail ?? null,
+    contactPhone: page?.contactPhone ?? null,
+    notes: lead.interests,
+    stops,
+    accentColor: page?.accentColor ?? "#0ea5a4",
+    walkQrPng,
+    walkUrl,
+    districtLogo: docBranding?.logo ?? null,
+    districtTagline: docBranding?.tagline ?? null,
+  });
+}
+
+async function renderRoadmapShortPdf(
+  schoolId: number,
+  lead: LeadRow,
+  id: number,
+  req: Request,
+): Promise<Buffer> {
+  const assignedTo = await resolveAssignedTo(schoolId, lead);
+  const page = await loadTourPage(schoolId);
+  // Same route as the full roadmap (family picks + always-include highlights,
+  // in page order) — but rendered as plain tick-boxes with no prep detail.
+  const selectedSet = new Set(lead.interestSelections ?? []);
+  const stops = (page?.checkpoints ?? [])
+    .filter((c) => selectedSet.has(c.key) || c.alwaysInclude === true)
+    .map((c) => ({
+      label: c.label,
+      familyRequested: selectedSet.has(c.key),
+      schoolHighlight: c.alwaysInclude === true,
+    }));
+  const docBranding = await loadDistrictDocumentBranding(schoolId);
+  const walk = await ensureWalkForLead(schoolId, id, lead.assignedStaffId);
+  const walkUrl = walkUrlFor(walk.token, req);
+  let walkQrPng: Buffer | null = null;
+  try {
+    walkQrPng = await QRCode.toBuffer(walkUrl, {
+      margin: 1,
+      width: 280,
+      errorCorrectionLevel: "M",
+    });
+  } catch {
+    walkQrPng = null; // never block the roadmap on QR rendering
+  }
+  return buildTourRoadmapShortPdf({
+    schoolName: await schoolName(schoolId),
+    familyName: lead.familyName,
+    tourScheduledAt: lead.tourScheduledAt,
+    assignedTo,
+    children: lead.children,
+    stops,
+    accentColor: page?.accentColor ?? "#0ea5a4",
+    walkQrPng,
+    walkUrl,
+    districtLogo: docBranding?.logo ?? null,
+    districtTagline: docBranding?.tagline ?? null,
+  });
+}
+
+async function renderNoteCatcherPdf(
+  schoolId: number,
+  lead: LeadRow,
+): Promise<Buffer> {
+  const page = await loadTourPage(schoolId);
+  // Include the family's picks AND the school's always-include highlights so
+  // the family's take-along sheet matches the actual tour route.
+  const selectedSet = new Set(lead.interestSelections ?? []);
+  const stops = (page?.checkpoints ?? [])
+    .filter((c) => selectedSet.has(c.key) || c.alwaysInclude === true)
+    .map((c) => ({ label: c.label, requested: selectedSet.has(c.key) }));
+  const docBranding = await loadDistrictDocumentBranding(schoolId);
+  return buildTourNoteCatcherPdf({
+    schoolName: await schoolName(schoolId),
+    familyName: lead.familyName,
+    tourScheduledAt: lead.tourScheduledAt,
+    contactEmail: page?.contactEmail ?? null,
+    contactPhone: page?.contactPhone ?? null,
+    stops,
+    accentColor: page?.accentColor ?? "#0ea5a4",
+    districtLogo: docBranding?.logo ?? null,
+    districtTagline: docBranding?.tagline ?? null,
+  });
+}
+
 // GET /tours/requests/:id/brag-sheet.pdf
 router.get(
   "/tours/requests/:id/brag-sheet.pdf",
@@ -1551,42 +2218,7 @@ router.get(
       res.status(404).json({ error: "Lead not found" });
       return;
     }
-    let assignedTo: string | null = null;
-    if (lead.assignedStaffId) {
-      const [a] = await db
-        .select({ name: staffTable.displayName })
-        .from(staffTable)
-        .where(
-          and(
-            eq(staffTable.id, lead.assignedStaffId),
-            eq(staffTable.schoolId, schoolId),
-          ),
-        );
-      assignedTo = a?.name ?? null;
-    }
-    const page = await loadTourPage(schoolId);
-    const selectedSet = new Set(lead.interestSelections ?? []);
-    const selectedStops = (page?.checkpoints ?? [])
-      .filter((c) => selectedSet.has(c.key))
-      .map((c) => c.label);
-    const docBranding = await loadDistrictDocumentBranding(schoolId);
-    const pdf = await buildTourBragSheetPdf({
-      schoolName: await schoolName(schoolId),
-      familyName: lead.familyName,
-      phone: lead.phone,
-      email: lead.email,
-      preferredLanguage: lead.preferredLanguage,
-      children: lead.children,
-      selectedStops,
-      interests: lead.interests,
-      source: lead.source,
-      status: lead.status,
-      assignedTo,
-      requestedAt: lead.createdAt,
-      tourScheduledAt: lead.tourScheduledAt,
-      districtLogo: docBranding?.logo ?? null,
-      districtTagline: docBranding?.tagline ?? null,
-    });
+    const pdf = await renderBragSheetPdf(schoolId, lead);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
@@ -1614,18 +2246,7 @@ router.get(
       res.status(404).json({ error: "Lead not found" });
       return;
     }
-    const page = await loadTourPage(schoolId);
-    const docBranding = await loadDistrictDocumentBranding(schoolId);
-    const pdf = await buildTourLeaveBehindPdf({
-      schoolName: await schoolName(schoolId),
-      familyName: lead.familyName,
-      surveyUrl: surveyUrlFor(lead.surveyToken, req),
-      contactEmail: page?.contactEmail ?? null,
-      contactPhone: page?.contactPhone ?? null,
-      accentColor: page?.accentColor ?? "#0ea5a4",
-      districtLogo: docBranding?.logo ?? null,
-      districtTagline: docBranding?.tagline ?? null,
-    });
+    const pdf = await renderLeaveBehindPdf(schoolId, lead, req);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
@@ -1640,10 +2261,11 @@ router.get(
 router.get(
   "/tours/requests/:id/roadmap.pdf",
   requireStaff,
-  requireTourManager,
+  requireTourGuide,
   async (req, res) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) {
       res.status(400).json({ error: "Invalid id" });
@@ -1654,54 +2276,50 @@ router.get(
       res.status(404).json({ error: "Lead not found" });
       return;
     }
-    let assignedTo: string | null = null;
-    if (lead.assignedStaffId) {
-      const [a] = await db
-        .select({ name: staffTable.displayName })
-        .from(staffTable)
-        .where(
-          and(
-            eq(staffTable.id, lead.assignedStaffId),
-            eq(staffTable.schoolId, schoolId),
-          ),
-        );
-      assignedTo = a?.name ?? null;
+    if (!canAccessLead(staff, lead)) {
+      res.status(403).json({ error: "Not your assigned lead" });
+      return;
     }
-    const page = await loadTourPage(schoolId);
-    // Resolve the family's selected keys to full checkpoints, in page order.
-    const selectedSet = new Set(lead.interestSelections ?? []);
-    const stops = (page?.checkpoints ?? [])
-      .filter((c) => selectedSet.has(c.key))
-      .map((c) => ({
-        label: c.label,
-        location: c.location,
-        talkingPoints: c.talkingPoints,
-        minutes: c.minutes,
-      }));
-    const docBranding = await loadDistrictDocumentBranding(schoolId);
-    const pdf = await buildTourRoadmapPdf({
-      schoolName: await schoolName(schoolId),
-      familyName: lead.familyName,
-      phone: lead.phone,
-      email: lead.email,
-      preferredLanguage: lead.preferredLanguage,
-      children: lead.children,
-      status: lead.status,
-      assignedTo,
-      requestedAt: lead.createdAt,
-      tourScheduledAt: lead.tourScheduledAt,
-      contactEmail: page?.contactEmail ?? null,
-      contactPhone: page?.contactPhone ?? null,
-      notes: lead.interests,
-      stops,
-      accentColor: page?.accentColor ?? "#0ea5a4",
-      districtLogo: docBranding?.logo ?? null,
-      districtTagline: docBranding?.tagline ?? null,
-    });
+    const pdf = await renderRoadmapPdf(schoolId, lead, id, req);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
       `inline; filename="tour-roadmap-${id}.pdf"`,
+    );
+    res.send(pdf);
+  },
+);
+
+// GET /tours/requests/:id/roadmap-short.pdf — 1-page "quick roadmap": essential
+// family header + live-walk QR + plain tick-boxes (stop name only, ✓ requested /
+// ★ added). For a guide who doesn't need the full prep detail.
+router.get(
+  "/tours/requests/:id/roadmap-short.pdf",
+  requireStaff,
+  requireTourGuide,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const lead = await loadLeadForPdf(schoolId, id);
+    if (!lead) {
+      res.status(404).json({ error: "Lead not found" });
+      return;
+    }
+    if (!canAccessLead(staff, lead)) {
+      res.status(403).json({ error: "Not your assigned lead" });
+      return;
+    }
+    const pdf = await renderRoadmapShortPdf(schoolId, lead, id, req);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="tour-roadmap-1page-${id}.pdf"`,
     );
     res.send(pdf);
   },
@@ -1712,10 +2330,11 @@ router.get(
 router.get(
   "/tours/requests/:id/note-catcher.pdf",
   requireStaff,
-  requireTourManager,
+  requireTourGuide,
   async (req, res) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) {
       res.status(400).json({ error: "Invalid id" });
@@ -1726,29 +2345,315 @@ router.get(
       res.status(404).json({ error: "Lead not found" });
       return;
     }
-    const page = await loadTourPage(schoolId);
-    const selectedSet = new Set(lead.interestSelections ?? []);
-    const stops = (page?.checkpoints ?? [])
-      .filter((c) => selectedSet.has(c.key))
-      .map((c) => ({ label: c.label }));
-    const docBranding = await loadDistrictDocumentBranding(schoolId);
-    const pdf = await buildTourNoteCatcherPdf({
-      schoolName: await schoolName(schoolId),
-      familyName: lead.familyName,
-      tourScheduledAt: lead.tourScheduledAt,
-      contactEmail: page?.contactEmail ?? null,
-      contactPhone: page?.contactPhone ?? null,
-      stops,
-      accentColor: page?.accentColor ?? "#0ea5a4",
-      districtLogo: docBranding?.logo ?? null,
-      districtTagline: docBranding?.tagline ?? null,
-    });
+    if (!canAccessLead(staff, lead)) {
+      res.status(403).json({ error: "Not your assigned lead" });
+      return;
+    }
+    const pdf = await renderNoteCatcherPdf(schoolId, lead);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
       `inline; filename="tour-note-catcher-${id}.pdf"`,
     );
     res.send(pdf);
+  },
+);
+
+// GET /tours/requests/:id/packet.pdf — the COMPLETE tour packet: every
+// leave-behind merged into one print job, in the order a guide works through a
+// tour: (1) Brag sheet (who's coming / prep cover), (2) Roadmap (the walkable
+// route + live-walk QR), (3) Note catcher (family take-along), (4) Share Your
+// Feedback (handed to the family at the end). The individual buttons remain so
+// a single page can be reprinted if one is lost or damaged.
+router.get(
+  "/tours/requests/:id/packet.pdf",
+  requireStaff,
+  requireTourGuide,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    // Packet includes the manager-only brag sheet + leave-behind, so require a
+    // full tour manager (guides get the per-page guide docs, not the packet).
+    // Check authorization BEFORE loading the lead so a non-manager guide can't
+    // probe lead existence via the 404.
+    if (!canManageTours(staff)) {
+      res.status(403).json({ error: "Not authorized for the full packet" });
+      return;
+    }
+    const lead = await loadLeadForPdf(schoolId, id);
+    if (!lead) {
+      res.status(404).json({ error: "Lead not found" });
+      return;
+    }
+    const [bragSheet, roadmap, noteCatcher, leaveBehind] = await Promise.all([
+      renderBragSheetPdf(schoolId, lead),
+      renderRoadmapPdf(schoolId, lead, id, req),
+      renderNoteCatcherPdf(schoolId, lead),
+      renderLeaveBehindPdf(schoolId, lead, req),
+    ]);
+    const packet = await mergePdfs([
+      bragSheet,
+      roadmap,
+      noteCatcher,
+      leaveBehind,
+    ]);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="tour-packet-${id}.pdf"`,
+    );
+    res.send(packet);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Phase 4 "Live Tour Capture" — token-gated guide-facing live walk.
+// ---------------------------------------------------------------------------
+
+// GET /tours/walk/:token — UNAUTHENTICATED-by-design state for the guide screen.
+// The opaque per-walk token is the only gate (mirrors survey/kiosk). Returns the
+// lead context, the stops in page order (each with its tapped completion+note),
+// the guide picker options, and the current guide.
+router.get("/tours/walk/:token", async (req, res) => {
+  const token = String(req.params.token || "");
+  if (!token) {
+    res.status(404).json({ error: "Walk not found" });
+    return;
+  }
+  const [walk] = await db
+    .select()
+    .from(tourWalksTable)
+    .where(eq(tourWalksTable.token, token));
+  if (!walk) {
+    res.status(404).json({ error: "Walk not found" });
+    return;
+  }
+  res.json(await buildWalkStatePayload(walk));
+});
+
+// POST /tours/walk/:token/sync — UNAUTHENTICATED-by-design idempotent sync from
+// the offline-first guide screen. Accepts a partial walk update (guide, started,
+// ended, status) and a batch of checkpoint taps; step upserts are keyed
+// (walk_id, checkpoint_key) so re-syncing the same buffered taps is a no-op.
+// Everything is validated against the token's own school — checkpointKeys must
+// exist on this school's page and a guide must be a real same-school tour guide.
+router.post("/tours/walk/:token/sync", async (req, res) => {
+  const token = String(req.params.token || "");
+  if (!token) {
+    res.status(404).json({ error: "Walk not found" });
+    return;
+  }
+  const [walk] = await db
+    .select()
+    .from(tourWalksTable)
+    .where(eq(tourWalksTable.token, token));
+  if (!walk) {
+    res.status(404).json({ error: "Walk not found" });
+    return;
+  }
+  const schoolId = walk.schoolId;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+
+  const parseDate = (v: unknown): Date | undefined => {
+    if (typeof v !== "string" && typeof v !== "number") return undefined;
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? undefined : d;
+  };
+
+  const walkUpdate: Partial<typeof tourWalksTable.$inferInsert> = {
+    updatedAt: new Date(),
+  };
+
+  // --- guide (editable; default was the owner at create time) ---
+  if ("guideStaffId" in body) {
+    const gid = body.guideStaffId;
+    if (gid === null) {
+      walkUpdate.guideStaffId = null;
+    } else if (typeof gid === "number" && Number.isInteger(gid)) {
+      const [s] = await db
+        .select()
+        .from(staffTable)
+        .where(and(eq(staffTable.id, gid), eq(staffTable.schoolId, schoolId)));
+      if (s && s.active && canGuideTours(s)) walkUpdate.guideStaffId = s.id;
+    }
+  }
+
+  // --- times: start is first-tap (earliest wins), end is the explicit finish ---
+  const incomingStart = parseDate(body.startedAt);
+  if (
+    incomingStart &&
+    (!walk.startedAt || incomingStart.getTime() < walk.startedAt.getTime())
+  ) {
+    walkUpdate.startedAt = incomingStart;
+  }
+  const incomingEnd = parseDate(body.endedAt);
+  if (incomingEnd) walkUpdate.endedAt = incomingEnd;
+
+  // --- explicit status from the client, validated; else auto-derive below ---
+  if (
+    typeof body.status === "string" &&
+    (TOUR_WALK_STATUSES as readonly string[]).includes(body.status)
+  ) {
+    walkUpdate.status = body.status as TourWalkStatus;
+  }
+
+  // --- step taps (idempotent upsert keyed walk_id + checkpoint_key) ---
+  const steps = Array.isArray(body.steps) ? body.steps : [];
+  if (steps.length) {
+    const page = await loadTourPage(schoolId);
+    // Only the checkpoints this lead's tour is actually built from are
+    // acceptable: the family's selections plus the always-included highlights.
+    // Validating against the whole school catalog would let a token holder
+    // record completions/notes for stops not on this tour, inflating the
+    // step count + completion-note summary.
+    const [lead] = await db
+      .select({ interestSelections: tourRequestsTable.interestSelections })
+      .from(tourRequestsTable)
+      .where(
+        and(
+          eq(tourRequestsTable.id, walk.tourRequestId),
+          eq(tourRequestsTable.schoolId, schoolId),
+        ),
+      );
+    const selectedSet = new Set(lead?.interestSelections ?? []);
+    const cpByKey = new Map(
+      (page?.checkpoints ?? [])
+        .filter((c) => selectedSet.has(c.key) || c.alwaysInclude === true)
+        .map((c) => [c.key, c] as const),
+    );
+    for (const raw of steps) {
+      if (!raw || typeof raw !== "object") continue;
+      const r = raw as Record<string, unknown>;
+      const key = typeof r.checkpointKey === "string" ? r.checkpointKey : "";
+      if (!key) continue;
+      const cp = cpByKey.get(key);
+      if (!cp) continue; // not an eligible stop for this tour — skip
+      const completedAt = parseDate(r.completedAt);
+      if (!completedAt) continue;
+      const note = typeof r.note === "string" ? r.note.slice(0, 4000) : "";
+      await db
+        .insert(tourWalkStepsTable)
+        .values({
+          schoolId,
+          walkId: walk.id,
+          tourRequestId: walk.tourRequestId,
+          checkpointKey: key,
+          checkpointLabel: cp.label,
+          plannedMinutes: cp.minutes ?? 0,
+          completedAt,
+          note,
+        })
+        .onConflictDoUpdate({
+          target: [
+            tourWalkStepsTable.walkId,
+            tourWalkStepsTable.checkpointKey,
+          ],
+          set: {
+            completedAt,
+            note,
+            checkpointLabel: cp.label,
+            plannedMinutes: cp.minutes ?? 0,
+            updatedAt: new Date(),
+          },
+        });
+    }
+  }
+
+  // --- auto-coherence: never downgrade; bump pending→in_progress once started,
+  //     and to completed once ended (explicit client status still wins) ---
+  if (!walkUpdate.status) {
+    if (walkUpdate.endedAt || walk.endedAt) {
+      walkUpdate.status = "completed";
+    } else if (walkUpdate.startedAt || walk.startedAt) {
+      walkUpdate.status = "in_progress";
+    }
+  }
+
+  await db
+    .update(tourWalksTable)
+    .set(walkUpdate)
+    .where(eq(tourWalksTable.id, walk.id));
+
+  // Drop a timeline event the first time a walk reaches "completed" so the lead
+  // pipeline reflects that the tour was actually walked.
+  const becameCompleted =
+    walk.status !== "completed" && walkUpdate.status === "completed";
+  if (becameCompleted) {
+    const startedAt = walkUpdate.startedAt ?? walk.startedAt;
+    const endedAt = walkUpdate.endedAt ?? walk.endedAt;
+    const durMin =
+      startedAt && endedAt
+        ? Math.max(0, Math.round((endedAt.getTime() - startedAt.getTime()) / 60000))
+        : null;
+    const stepCount = await db
+      .select({ id: tourWalkStepsTable.id })
+      .from(tourWalkStepsTable)
+      .where(eq(tourWalkStepsTable.walkId, walk.id));
+    await db.insert(tourRequestEventsTable).values({
+      schoolId,
+      tourRequestId: walk.tourRequestId,
+      staffId: walkUpdate.guideStaffId ?? walk.guideStaffId ?? null,
+      eventType: "note",
+      body:
+        `Live tour walk completed — ${stepCount.length} stop` +
+        `${stepCount.length === 1 ? "" : "s"}` +
+        `${durMin != null ? `, ~${durMin} min` : ""}.`,
+    });
+  }
+
+  const [fresh] = await db
+    .select()
+    .from(tourWalksTable)
+    .where(eq(tourWalksTable.id, walk.id));
+  res.json(await buildWalkStatePayload(fresh ?? walk));
+});
+
+// GET /tours/requests/:id/walk — staff lead-drawer view. Ensures a walk exists
+// (mints the token lazily, guide defaulted to the lead owner) and returns the
+// state plus the shareable walk URL for the QR + "open live walk" link.
+router.get(
+  "/tours/requests/:id/walk",
+  requireStaff,
+  requireTourGuide,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [lead] = await db
+      .select()
+      .from(tourRequestsTable)
+      .where(
+        and(
+          eq(tourRequestsTable.id, id),
+          eq(tourRequestsTable.schoolId, schoolId),
+        ),
+      );
+    if (!lead) {
+      res.status(404).json({ error: "Lead not found" });
+      return;
+    }
+    if (!canAccessLead(staff, lead)) {
+      res.status(403).json({ error: "Not your assigned lead" });
+      return;
+    }
+    const walk = await ensureWalkForLead(schoolId, id, lead.assignedStaffId);
+    const payload = await buildWalkStatePayload(walk);
+    res.json({
+      ...payload,
+      walkUrl: walkUrlFor(walk.token, req),
+      walkToken: walk.token,
+    });
   },
 );
 
@@ -1779,6 +2684,135 @@ router.get(
     }
     const enrolled = byOutcome["enrolled"] ?? 0;
     const conversionRate = toured > 0 ? Math.round((enrolled / toured) * 100) : 0;
+
+    // Phase 4 "Live Tour Capture" metrics + per-guide effectiveness. Per-guide
+    // rows are keyed by the lead OWNER (assigned_staff_id) — the default tour
+    // guide — so conversion, ratings, response time and pacing all roll up under
+    // one consistent identity. Only completed walks with a sane duration (0-10h)
+    // feed length/pacing so a forgotten "end tap" cannot skew the average.
+    const walks = await db
+      .select()
+      .from(tourWalksTable)
+      .where(eq(tourWalksTable.schoolId, schoolId));
+    const steps = await db
+      .select()
+      .from(tourWalkStepsTable)
+      .where(eq(tourWalkStepsTable.schoolId, schoolId));
+    const surveysForGuides = await db
+      .select()
+      .from(tourSurveysTable)
+      .where(eq(tourSurveysTable.schoolId, schoolId));
+
+    const plannedByWalk = new Map<number, number>();
+    for (const st of steps) {
+      plannedByWalk.set(
+        st.walkId,
+        (plannedByWalk.get(st.walkId) ?? 0) + (st.plannedMinutes ?? 0),
+      );
+    }
+    const ratingByLead = new Map<number, number>();
+    for (const sv of surveysForGuides) {
+      if (sv.rating != null) ratingByLead.set(sv.tourRequestId, sv.rating);
+    }
+    const leadById = new Map<number, (typeof rows)[number]>();
+    for (const r of rows) leadById.set(r.id, r);
+
+    type GuideAgg = {
+      tours: number;
+      enrolled: number;
+      ratingSum: number;
+      ratingCount: number;
+      responseSum: number;
+      responseCount: number;
+      walks: number;
+      actualMin: number;
+      plannedMin: number;
+    };
+    const newGuideAgg = (): GuideAgg => ({
+      tours: 0,
+      enrolled: 0,
+      ratingSum: 0,
+      ratingCount: 0,
+      responseSum: 0,
+      responseCount: 0,
+      walks: 0,
+      actualMin: 0,
+      plannedMin: 0,
+    });
+    const guideAgg = new Map<number, GuideAgg>();
+
+    // Lead-derived metrics: conversion, family rating, first-contact response.
+    for (const r of rows) {
+      if (r.assignedStaffId == null) continue;
+      const g = guideAgg.get(r.assignedStaffId) ?? newGuideAgg();
+      if (r.status === "toured" || r.status === "closed") g.tours += 1;
+      if (r.outcome === "enrolled") g.enrolled += 1;
+      const rating = ratingByLead.get(r.id);
+      if (rating != null) {
+        g.ratingSum += rating;
+        g.ratingCount += 1;
+      }
+      if (r.firstContactedAt && r.createdAt) {
+        const min =
+          (r.firstContactedAt.getTime() - r.createdAt.getTime()) / 60000;
+        if (min >= 0) {
+          g.responseSum += min;
+          g.responseCount += 1;
+        }
+      }
+      guideAgg.set(r.assignedStaffId, g);
+    }
+
+    // Walk-derived metrics: tour length + pacing, attributed to the lead owner.
+    const durations: number[] = [];
+    for (const w of walks) {
+      if (w.status !== "completed" || !w.startedAt || !w.endedAt) continue;
+      const min = (w.endedAt.getTime() - w.startedAt.getTime()) / 60000;
+      if (!(min > 0 && min < 600)) continue;
+      durations.push(min);
+      const owner = leadById.get(w.tourRequestId)?.assignedStaffId ?? null;
+      if (owner == null) continue;
+      const g = guideAgg.get(owner) ?? newGuideAgg();
+      g.walks += 1;
+      g.actualMin += min;
+      g.plannedMin += plannedByWalk.get(w.id) ?? 0;
+      guideAgg.set(owner, g);
+    }
+    const walksCompleted = durations.length;
+    const avgTourMinutes = walksCompleted
+      ? Math.round(durations.reduce((a, b) => a + b, 0) / walksCompleted)
+      : null;
+    const guideNames = new Map<number, string>();
+    if (guideAgg.size) {
+      const nameRows = await db
+        .select({ id: staffTable.id, name: staffTable.displayName })
+        .from(staffTable)
+        .where(eq(staffTable.schoolId, schoolId));
+      for (const r of nameRows) guideNames.set(r.id, r.name);
+    }
+    const byGuide = [...guideAgg.entries()]
+      .map(([guideId, v]) => ({
+        guideId,
+        guideName: guideNames.get(guideId) ?? null,
+        tours: v.tours,
+        enrolled: v.enrolled,
+        conversionRate:
+          v.tours > 0 ? Math.round((v.enrolled / v.tours) * 100) : null,
+        avgRating: v.ratingCount
+          ? Math.round((v.ratingSum / v.ratingCount) * 10) / 10
+          : null,
+        avgResponseMin: v.responseCount
+          ? Math.round(v.responseSum / v.responseCount)
+          : null,
+        walks: v.walks,
+        avgMinutes: v.walks ? Math.round(v.actualMin / v.walks) : null,
+        avgPlannedMinutes:
+          v.walks && v.plannedMin > 0
+            ? Math.round(v.plannedMin / v.walks)
+            : null,
+      }))
+      .sort((a, b) => b.tours - a.tours || b.walks - a.walks);
+
     res.json({
       total: rows.length,
       byStatus,
@@ -1787,8 +2821,320 @@ router.get(
       enrolled,
       toured,
       conversionRate,
+      walksCompleted,
+      avgTourMinutes,
+      byGuide,
     });
   },
 );
+
+// --- "still wondering" theming ---------------------------------------------
+// Keyword buckets over post-tour survey free-text + guide walk notes, so guides
+// can pre-empt the questions families keep asking. Pure substring match (no AI)
+// keeps it deterministic + explainable; one snippet can land in several themes.
+const FEEDBACK_THEMES: { key: string; label: string; keywords: string[] }[] = [
+  {
+    key: "cost",
+    label: "Tuition & cost",
+    keywords: [
+      "tuition",
+      "cost",
+      "price",
+      "fee",
+      "scholarship",
+      "financial",
+      "afford",
+      "payment",
+    ],
+  },
+  {
+    key: "transport",
+    label: "Transportation & busing",
+    keywords: [
+      "bus",
+      "busing",
+      "transport",
+      "ride",
+      "car line",
+      "carpool",
+      "drop off",
+      "drop-off",
+    ],
+  },
+  {
+    key: "schedule",
+    label: "Bell schedule & hours",
+    keywords: [
+      "schedule",
+      "start time",
+      "end time",
+      "hours",
+      "bell",
+      "what time",
+      "dismissal",
+      "early release",
+    ],
+  },
+  {
+    key: "academics",
+    label: "Academics & AP / honors",
+    keywords: [
+      "academ",
+      "ap ",
+      "honors",
+      "advanced",
+      "gifted",
+      "curriculum",
+      "reading",
+      "math",
+      "grades",
+      "gpa",
+      "college",
+      "rigor",
+      "course",
+    ],
+  },
+  {
+    key: "athletics",
+    label: "Athletics & sports",
+    keywords: [
+      "sport",
+      "athletic",
+      "team",
+      "football",
+      "basketball",
+      "soccer",
+      "baseball",
+      "track",
+      "cheer",
+      "volleyball",
+      "tryout",
+    ],
+  },
+  {
+    key: "arts",
+    label: "Arts, music & electives",
+    keywords: [
+      "art",
+      "music",
+      "band",
+      "chorus",
+      "choir",
+      "drama",
+      "theater",
+      "theatre",
+      "elective",
+      "dance",
+      "media",
+    ],
+  },
+  {
+    key: "safety",
+    label: "Safety & discipline",
+    keywords: [
+      "safe",
+      "security",
+      "bully",
+      "discipline",
+      "behavior",
+      "fight",
+      "drill",
+      "lockdown",
+    ],
+  },
+  {
+    key: "sped",
+    label: "Special education (IEP/504/ESE)",
+    keywords: [
+      "iep",
+      "504",
+      "ese",
+      "special ed",
+      "disab",
+      "accommodation",
+      "therapy",
+      "speech",
+      "exceptional",
+    ],
+  },
+  {
+    key: "ell",
+    label: "Language & ESOL",
+    keywords: [
+      "esol",
+      "ell",
+      "english learner",
+      "spanish",
+      "bilingual",
+      "translat",
+      "language",
+    ],
+  },
+  {
+    key: "food",
+    label: "Lunch & food",
+    keywords: [
+      "lunch",
+      "food",
+      "cafeteria",
+      "breakfast",
+      "meal",
+      "menu",
+      "allerg",
+    ],
+  },
+  {
+    key: "uniform",
+    label: "Uniforms & dress code",
+    keywords: ["uniform", "dress code", "attire"],
+  },
+  {
+    key: "tech",
+    label: "Technology & devices",
+    keywords: [
+      "technology",
+      "laptop",
+      "device",
+      "ipad",
+      "chromebook",
+      "computer",
+      "wifi",
+      "phone policy",
+    ],
+  },
+  {
+    key: "afterschool",
+    label: "After-school & clubs",
+    keywords: [
+      "after school",
+      "after-school",
+      "aftercare",
+      "club",
+      "extracurricular",
+      "tutoring",
+      "activities",
+    ],
+  },
+  {
+    key: "enroll",
+    label: "Enrollment & application",
+    keywords: [
+      "enroll",
+      "apply",
+      "application",
+      "register",
+      "registration",
+      "waitlist",
+      "deadline",
+      "zoning",
+      "zone",
+    ],
+  },
+  {
+    key: "classsize",
+    label: "Class size & teachers",
+    keywords: ["class size", "how many students", "ratio", "teacher"],
+  },
+];
+
+function classifyFeedback(text: string): string[] {
+  const t = text.toLowerCase();
+  const hits: string[] = [];
+  for (const theme of FEEDBACK_THEMES) {
+    if (theme.keywords.some((k) => t.includes(k))) hits.push(theme.key);
+  }
+  return hits;
+}
+
+// GET /tours/feedback — post-tour survey results + themed "still wondering"
+// rollup for the Feedback tab. Themes pull from BOTH the family's survey
+// free-text AND the guide's per-stop walk notes.
+router.get("/tours/feedback", requireStaff, requireTourManager, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const leadRows = await db
+    .select()
+    .from(tourRequestsTable)
+    .where(eq(tourRequestsTable.schoolId, schoolId));
+  const leadById = new Map<number, (typeof leadRows)[number]>();
+  for (const r of leadRows) leadById.set(r.id, r);
+
+  const guideNames = new Map<number, string>();
+  const nameRows = await db
+    .select({ id: staffTable.id, name: staffTable.displayName })
+    .from(staffTable)
+    .where(eq(staffTable.schoolId, schoolId));
+  for (const r of nameRows) guideNames.set(r.id, r.name);
+
+  const surveyRows = await db
+    .select()
+    .from(tourSurveysTable)
+    .where(eq(tourSurveysTable.schoolId, schoolId));
+  const stepRows = await db
+    .select()
+    .from(tourWalkStepsTable)
+    .where(eq(tourWalkStepsTable.schoolId, schoolId));
+
+  const themeAgg = new Map<string, { count: number; examples: string[] }>();
+  const bump = (keys: string[], snippet: string) => {
+    const clean = snippet.trim();
+    if (!clean) return;
+    for (const k of keys) {
+      const a = themeAgg.get(k) ?? { count: 0, examples: [] };
+      a.count += 1;
+      if (a.examples.length < 4) a.examples.push(clean.slice(0, 160));
+      themeAgg.set(k, a);
+    }
+  };
+
+  let ratingSum = 0;
+  let ratingCount = 0;
+  const surveys = surveyRows
+    .map((sv) => {
+      const lead = leadById.get(sv.tourRequestId);
+      if (sv.rating != null) {
+        ratingSum += sv.rating;
+        ratingCount += 1;
+      }
+      const combined = [sv.questions, sv.comments].filter(Boolean).join(" ");
+      if (combined.trim()) {
+        bump(classifyFeedback(combined), sv.questions || sv.comments);
+      }
+      return {
+        requestId: sv.tourRequestId,
+        familyName: lead?.familyName ?? "Unknown family",
+        guideName:
+          lead?.assignedStaffId != null
+            ? guideNames.get(lead.assignedStaffId) ?? null
+            : null,
+        rating: sv.rating,
+        liked: sv.liked,
+        questions: sv.questions,
+        comments: sv.comments,
+        submittedAt: (lead?.surveySubmittedAt ?? sv.createdAt).toISOString(),
+      };
+    })
+    .sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1));
+
+  for (const st of stepRows) {
+    if (st.note && st.note.trim()) bump(classifyFeedback(st.note), st.note);
+  }
+
+  const themes = [...themeAgg.entries()]
+    .map(([key, v]) => ({
+      key,
+      label: FEEDBACK_THEMES.find((t) => t.key === key)?.label ?? key,
+      count: v.count,
+      examples: v.examples,
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  res.json({
+    avgRating: ratingCount ? Math.round((ratingSum / ratingCount) * 10) / 10 : null,
+    surveyCount: surveys.length,
+    surveys,
+    themes,
+  });
+});
 
 export default router;

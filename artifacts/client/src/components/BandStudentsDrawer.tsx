@@ -7,18 +7,44 @@
 // the close button to dismiss; ESC closes too. Scroll-locks the body
 // while open.
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import {
+  FastScorePill,
+  PillViewContext,
+  PillViewToggle,
+  type PillView,
+} from "./FastScorePill";
+
+// One PM window's FAST placement (level + sub-level). Mirrors the server
+// `Placement` shape carried on the `levels` field.
+interface PmCell {
+  level: 1 | 2 | 3 | 4 | 5;
+  subLevel: string;
+}
 
 interface Student {
   studentId: string;
   studentName: string;
   grade?: number | null;
+  // Prior-year FAST score (the "previous year PM3" baseline). Optional so
+  // existing callers that never set it keep rendering "—".
+  priorYearScore?: number | null;
   pm1?: number | null;
+  pm2?: number | null;
   // Nullable so the Trajectory drawer can honestly render "—" for the
   // Untested archetype rather than fabricating a 0 score. The render
   // path below already null-checks so existing callers that always set
   // a number remain safe.
   pm3?: number | null;
+  // Per-PM FAST placements for the roster-style level pills. Optional so
+  // callers that don't render the PM columns are unaffected; when absent
+  // the pill falls back to a neutral "—".
+  levels?: {
+    priorYearScore: PmCell | null;
+    pm1: PmCell | null;
+    pm2: PmCell | null;
+    pm3: PmCell | null;
+  } | null;
   // Optional per-student pills shown next to the name. Program (ESE|504)
   // and MTSS (Tier 2+|Tier 3) are mutually exclusive within their group;
   // BQ ELA / BQ Math are independent ("lowest 25% prior-year FAST").
@@ -26,7 +52,198 @@ interface Student {
   mtssPill?: "Tier 2+" | "Tier 3" | null;
   bqEla?: boolean;
   bqMath?: boolean;
+  // Teacher-Roster parity context (additive). ELL flag, active safety-plan
+  // summary (SP indicator), and the FAST learning-gain green-check. Optional
+  // so callers that don't supply them are unaffected.
+  ell?: boolean;
+  safetyPlan?: {
+    itemCount: number;
+    items?: unknown[];
+    notes?: string | null;
+    updatedAt?: string | null;
+    updatedByName?: string | null;
+  } | null;
+  learningGain?: boolean | null;
+  // Optional additive metrics (shared insights source of truth). Only
+  // rendered when the caller opts in via `scoreColumns`. daysAbsent /
+  // attendancePct from the Eligibility Hub upload; ptsToNextLevel /
+  // ptsToProficient from the FAST cut-score charts.
+  daysAbsent?: number | null;
+  attendancePct?: number | null;
+  ptsToNextLevel?: number | null;
+  ptsToProficient?: number | null;
 }
+
+// A score-table column. `key` is used as a React key and (when no custom
+// `render` is given) as the field read off the Student. `render` lets a
+// caller format a cell (e.g. "92%" or a "—") without the drawer needing to
+// know about the metric. Back-compat: existing callers pass only
+// { key: "pm1" | "pm3", label } and get the default numeric cell.
+export interface ScoreColumn {
+  key: string;
+  label: string;
+  render?: (s: Student) => React.ReactNode;
+}
+
+// Numeric scale-score delta shown directly under a PM pill — full parity
+// with the Teacher Roster ("+12 from PM2" / "−8 from PM1") so staff don't
+// have to do the subtraction in their head while scanning. Green for
+// growth, red for decline, neutral gray for flat. Renders nothing when
+// either side is missing (most common case: a window the student didn't
+// sit) — better empty than wrong.
+function PmDelta({
+  from,
+  to,
+  fromLabel,
+}: {
+  from: number | null | undefined;
+  to: number | null | undefined;
+  fromLabel: string;
+}) {
+  if (from == null || to == null) return null;
+  const delta = to - from;
+  const sign = delta > 0 ? "+" : delta < 0 ? "−" : "±";
+  const color = delta > 0 ? "#15803d" : delta < 0 ? "#b91c1c" : "#6b7280";
+  return (
+    <div
+      title={`${sign}${Math.abs(delta)} scale-score points vs ${fromLabel}`}
+      style={{
+        marginTop: 2,
+        fontSize: 10,
+        lineHeight: 1.2,
+        color,
+        fontWeight: 600,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {sign}
+      {Math.abs(delta)}{" "}
+      <span style={{ color: "#9ca3af", fontWeight: 400 }}>from {fromLabel}</span>
+    </div>
+  );
+}
+
+// Shared PM progression columns for the Insights drill-downs: prior-year
+// PM3 baseline, then PM1 -> PM2 -> PM3, each rendered as a roster-style
+// FAST achievement-level pill (level color, click to flip to the scale
+// score, surface-wide toggle). Each PM pill carries a numeric scale-score
+// delta below it (PM1 vs Prior, PM2 vs PM1, PM3 vs PM2) for full Teacher
+// Roster parity. Callers prepend these to INSIGHTS_METRIC_COLUMNS so the
+// Academics band drawer and Academic Trajectories render an identical
+// table.
+export const INSIGHTS_PM_COLUMNS: ScoreColumn[] = [
+  {
+    key: "priorYearScore",
+    label: "Prior PM3",
+    render: (s) => (
+      <FastScorePill
+        score={s.priorYearScore}
+        level={s.levels?.priorYearScore?.level}
+        subLevel={s.levels?.priorYearScore?.subLevel}
+        pmLabel="Prior PM3"
+      />
+    ),
+  },
+  {
+    key: "pm1",
+    label: "PM1",
+    render: (s) => (
+      <div style={pmCellStyle}>
+        <FastScorePill
+          score={s.pm1}
+          level={s.levels?.pm1?.level}
+          subLevel={s.levels?.pm1?.subLevel}
+          pmLabel="PM1"
+        />
+        <PmDelta from={s.priorYearScore} to={s.pm1} fromLabel="Prior" />
+      </div>
+    ),
+  },
+  {
+    key: "pm2",
+    label: "PM2",
+    render: (s) => (
+      <div style={pmCellStyle}>
+        <FastScorePill
+          score={s.pm2}
+          level={s.levels?.pm2?.level}
+          subLevel={s.levels?.pm2?.subLevel}
+          pmLabel="PM2"
+        />
+        <PmDelta from={s.pm1} to={s.pm2} fromLabel="PM1" />
+      </div>
+    ),
+  },
+  {
+    key: "pm3",
+    label: "PM3",
+    render: (s) => (
+      <div style={pmCellStyle}>
+        <span
+          style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+        >
+          <FastScorePill
+            score={s.pm3}
+            level={s.levels?.pm3?.level}
+            subLevel={s.levels?.pm3?.subLevel}
+            pmLabel="PM3"
+          />
+          {s.learningGain === true && (
+            <span
+              title="FAST learning gain met (PM3 vs prior-year PM3)"
+              aria-label="FAST learning gain met"
+              style={lgCheckStyle}
+            >
+              ✓
+            </span>
+          )}
+        </span>
+        <PmDelta from={s.pm2} to={s.pm3} fromLabel="PM2" />
+      </div>
+    ),
+  },
+];
+
+// Vertical stack for a PM cell: the level pill on top, the numeric
+// scale-score delta directly beneath it.
+const pmCellStyle: React.CSSProperties = {
+  display: "inline-flex",
+  flexDirection: "column",
+  alignItems: "center",
+};
+
+// Shared additive metric columns for the Insights drill-downs (Academics
+// band drawer + Academic Trajectories). Renders Days Absent, approximate
+// attendance % (estimate — see the drawer subtitle note), points to the
+// next FAST sub-level, and points to proficiency (Level 3). Callers append
+// these to their base PM columns so the two surfaces stay identical.
+export const INSIGHTS_METRIC_COLUMNS: ScoreColumn[] = [
+  {
+    key: "daysAbsent",
+    label: "Days Abs",
+    render: (s) => (s.daysAbsent != null ? s.daysAbsent : "—"),
+  },
+  {
+    key: "attendancePct",
+    label: "Att %*",
+    render: (s) => (s.attendancePct != null ? `${s.attendancePct}%` : "—"),
+  },
+  {
+    key: "ptsToNextLevel",
+    label: "→ Next",
+    render: (s) => (s.ptsToNextLevel != null ? s.ptsToNextLevel : "—"),
+  },
+  {
+    key: "ptsToProficient",
+    label: "→ L3",
+    render: (s) =>
+      s.ptsToProficient == null
+        ? "—"
+        : s.ptsToProficient === 0
+          ? "✓"
+          : s.ptsToProficient,
+  },
+];
 
 interface Props {
   open: boolean;
@@ -39,16 +256,21 @@ interface Props {
   error?: string;
   onClose: () => void;
   onOpenProfile: (studentId: string) => void;
-  // Optional column config for the score table — defaults to ELA/Math
-  // PM3 columns. Different dashboards can pass different columns.
-  scoreColumns?: { key: "pm1" | "pm3"; label: string }[];
+  // Optional column config for the score table — defaults to PM1/PM3
+  // columns. Different dashboards can pass different columns, including
+  // custom-rendered metric columns (attendance, FAST gaps).
+  scoreColumns?: ScoreColumn[];
   // Optional CSV download button rendered in the drawer header. Caller
   // generates the CSV (client- or server-side) and triggers the download
   // — drawer just exposes the button slot so it stays generic.
   onDownloadCsv?: () => void;
+  // When true, renders the "Show: Level | Scale score" toggle in the
+  // header and drives every FastScorePill in the table from it. Opt-in so
+  // callers that don't render the PM level pills get no stray toggle.
+  showScoreToggle?: boolean;
 }
 
-const DEFAULT_COLUMNS: { key: "pm1" | "pm3"; label: string }[] = [
+const DEFAULT_COLUMNS: ScoreColumn[] = [
   { key: "pm1", label: "PM1" },
   { key: "pm3", label: "PM3" },
 ];
@@ -66,7 +288,12 @@ export default function BandStudentsDrawer({
   onOpenProfile,
   scoreColumns = DEFAULT_COLUMNS,
   onDownloadCsv,
+  showScoreToggle,
 }: Props) {
+  // Surface-wide pill face ("Level" by default). Only meaningful when
+  // showScoreToggle is on; otherwise the provider just supplies the
+  // default so any pills still render their level face.
+  const [pillView, setPillView] = useState<PillView>("level");
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
@@ -105,6 +332,9 @@ export default function BandStudentsDrawer({
             )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {showScoreToggle && students.length > 0 && (
+              <PillViewToggle value={pillView} onChange={setPillView} />
+            )}
             {onDownloadCsv && students.length > 0 && (
               <button
                 type="button"
@@ -138,6 +368,7 @@ export default function BandStudentsDrawer({
           </div>
         </div>
 
+        <PillViewContext.Provider value={pillView}>
         <div style={bodyStyle}>
           {loading && (
             <p style={{ color: "var(--text-subtle)" }}>Loading…</p>
@@ -158,6 +389,7 @@ export default function BandStudentsDrawer({
                   : `${students.length} student${students.length === 1 ? "" : "s"}`}
                 {truncated ? ` — showing first ${students.length}` : ""}
               </p>
+              <style>{`.bsd-row:hover { background: #f8fafc; }`}</style>
               <table className="pulse-table" style={tableStyle}>
                 <thead>
                   <tr>
@@ -172,23 +404,58 @@ export default function BandStudentsDrawer({
                 </thead>
                 <tbody>
                   {students.map((s) => (
-                    <tr key={s.studentId}>
+                    <tr
+                      key={s.studentId}
+                      className="bsd-row"
+                      onClick={() => onOpenProfile(s.studentId)}
+                      style={{ cursor: "pointer" }}
+                      title="Open Student Profile"
+                    >
                       <td style={tdStyle}>
                         <button
                           type="button"
-                          onClick={() => onOpenProfile(s.studentId)}
+                          onClick={(e) => {
+                            // Row already handles open-profile; stop here so
+                            // the name click doesn't fire it twice.
+                            e.stopPropagation();
+                            onOpenProfile(s.studentId);
+                          }}
                           style={linkBtnStyle}
                         >
                           {s.studentName}
                         </button>
+                        {s.safetyPlan && (
+                          <span
+                            style={spPillStyle}
+                            title={`Active safety plan${
+                              s.safetyPlan.itemCount
+                                ? ` — ${s.safetyPlan.itemCount} item${
+                                    s.safetyPlan.itemCount === 1 ? "" : "s"
+                                  }`
+                                : ""
+                            }`}
+                            aria-label="Active safety plan"
+                          >
+                            SP
+                          </span>
+                        )}
                         {(s.programPill ||
                           s.mtssPill ||
+                          s.ell ||
                           s.bqEla ||
                           s.bqMath) && (
                           <span style={pillRowStyle}>
                             {s.programPill && (
                               <span style={pillStyle(PILL_TONES.program)}>
                                 {s.programPill}
+                              </span>
+                            )}
+                            {s.ell && (
+                              <span
+                                style={pillStyle(PILL_TONES.ell)}
+                                title="English Language Learner"
+                              >
+                                ELL
                               </span>
                             )}
                             {s.mtssPill && (
@@ -222,11 +489,28 @@ export default function BandStudentsDrawer({
                             : s.grade
                           : "—"}
                       </td>
-                      {scoreColumns.map((c) => (
-                        <td key={c.key} style={tdStyleNum}>
-                          {s[c.key] != null ? s[c.key] : "—"}
-                        </td>
-                      ))}
+                      {scoreColumns.map((c) => {
+                        const v = (s as unknown as Record<string, unknown>)[
+                          c.key
+                        ];
+                        return (
+                          <td
+                            key={c.key}
+                            style={tdStyleNum}
+                            // Score cells host click-to-flip FAST pills; stop
+                            // the click from bubbling to the row's
+                            // open-profile handler so flipping a pill never
+                            // navigates away.
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {c.render
+                              ? c.render(s)
+                              : v != null
+                                ? (v as React.ReactNode)
+                                : "—"}
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>
@@ -234,6 +518,7 @@ export default function BandStudentsDrawer({
             </>
           )}
         </div>
+        </PillViewContext.Provider>
       </div>
     </div>
   );
@@ -249,7 +534,7 @@ const overlayStyle: React.CSSProperties = {
 };
 
 const panelStyle: React.CSSProperties = {
-  width: "min(520px, 100%)",
+  width: "min(860px, 100%)",
   background: "var(--surface, #0f172a)",
   borderLeft: "1px solid var(--border)",
   boxShadow: "-8px 0 24px rgba(0,0,0,0.4)",
@@ -343,7 +628,37 @@ const PILL_TONES = {
   tier3: { bg: "#fee2e2", fg: "#b91c1c", border: "#fecaca" },
   // BQ = "lowest 25% prior-year FAST" — violet to match insights accent.
   bq: { bg: "#ede9fe", fg: "#5b21b6", border: "#ddd6fe" },
+  // ELL — green, matching the Teacher Roster program chip palette.
+  ell: { bg: "#dcfce7", fg: "#14532d", border: "#bbf7d0" },
 } as const;
+
+// Solid-red "SP" indicator shown right after the name when a student has an
+// active safety plan — mirrors the Teacher Roster SafetyPlanPill so the cue
+// reads identically across surfaces.
+const spPillStyle: React.CSSProperties = {
+  display: "inline-block",
+  marginLeft: 6,
+  padding: "1px 7px",
+  borderRadius: 999,
+  background: "#dc2626",
+  color: "#fff",
+  fontSize: 10,
+  fontWeight: 800,
+  letterSpacing: "0.04em",
+  lineHeight: 1.4,
+  verticalAlign: "middle",
+  whiteSpace: "nowrap",
+};
+
+// Green check appended to the PM3 pill when the student met the FAST
+// learning gain (PM3 vs prior-year PM3) — same green-check cue as the
+// Teacher Roster.
+const lgCheckStyle: React.CSSProperties = {
+  color: "#16a34a",
+  fontSize: 13,
+  fontWeight: 900,
+  lineHeight: 1,
+};
 
 function pillStyle(tone: { bg: string; fg: string; border: string }): React.CSSProperties {
   return {

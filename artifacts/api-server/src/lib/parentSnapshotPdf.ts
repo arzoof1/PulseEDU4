@@ -92,6 +92,7 @@ function drawDocument(
 
   drawHeader(doc, s, opts);
   drawIdentityStrip(doc, s);
+  drawHeartbeatNoteBlock(doc, s);
 
   if (sec.attendance || sec.hallPasses) drawLostInstructionBlock(doc, s);
   if (sec.recognition) drawRecognitionBlock(doc, s);
@@ -193,6 +194,46 @@ function drawIdentityStrip(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
     });
 
   doc.y = top + h + 14;
+  doc.fillColor(COLORS.text);
+}
+
+// ---------- This week's HeartBEAT message ----------
+// Staff-authored, parent-facing note written from the Student Snapshot page.
+// Rendered near the top so families see it first. Skipped entirely when empty.
+function drawHeartbeatNoteBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
+  const note = (s.student.heartbeatNote ?? "").trim();
+  if (!note) return;
+
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const width = right - left;
+  const innerPad = 12;
+  const textWidth = width - innerPad * 2;
+
+  doc.font("Helvetica").fontSize(11);
+  const textH = doc.heightOfString(note, { width: textWidth });
+  const labelH = 16;
+  const boxH = labelH + textH + innerPad * 2;
+  ensureSpace(doc, boxH + 14);
+
+  const top = doc.y;
+  doc
+    .roundedRect(left, top, width, boxH, 6)
+    .fillAndStroke(COLORS.accentSoft, COLORS.accent);
+  doc
+    .fillColor(COLORS.accent)
+    .font("Helvetica-Bold")
+    .fontSize(10)
+    .text("A message from your child's school", left + innerPad, top + innerPad, {
+      width: textWidth,
+    });
+  doc
+    .fillColor(COLORS.text)
+    .font("Helvetica")
+    .fontSize(11)
+    .text(note, left + innerPad, top + innerPad + labelH, { width: textWidth });
+
+  doc.y = top + boxH + 14;
   doc.fillColor(COLORS.text);
 }
 

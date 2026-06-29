@@ -75,6 +75,8 @@ const ROLE_FLAGS = [
   "isSro",
   "isGuardian",
   "isCoreTeam",
+  "isConfidentialSecretary",
+  "isAthleticDirector",
 ] as const;
 type RoleFlag = (typeof ROLE_FLAGS)[number];
 
@@ -104,7 +106,9 @@ const CAP_FLAGS = [
   "capCarRiderMonitor",
   "capManageDismissal",
   "capTourNotify",
+  "capTourGuide",
   "capManageEsign",
+  "capManageContactInfo",
 ] as const;
 type CapFlag = (typeof CAP_FLAGS)[number];
 
@@ -146,6 +150,8 @@ const STAFF_SELECT = {
   isSro: staffTable.isSro,
   isGuardian: staffTable.isGuardian,
   isCoreTeam: staffTable.isCoreTeam,
+  isConfidentialSecretary: staffTable.isConfidentialSecretary,
+  isAthleticDirector: staffTable.isAthleticDirector,
   exemptStatus: staffTable.exemptStatus,
   capHallPasses: staffTable.capHallPasses,
   capTardies: staffTable.capTardies,
@@ -172,7 +178,9 @@ const STAFF_SELECT = {
   capCarRiderMonitor: staffTable.capCarRiderMonitor,
   capManageDismissal: staffTable.capManageDismissal,
   capTourNotify: staffTable.capTourNotify,
+  capTourGuide: staffTable.capTourGuide,
   capManageEsign: staffTable.capManageEsign,
+  capManageContactInfo: staffTable.capManageContactInfo,
   defaultRoom: staffTable.defaultRoom,
   houseId: staffTable.houseId,
   department: staffTable.department,
@@ -259,6 +267,7 @@ function roleLabelsFor(s: StaffRow): string {
   if (s.isSocialWorker) labels.push("Social Worker");
   if (s.isIssTeacher) labels.push("ISS Teacher");
   if (s.isFrontOffice) labels.push("Front Office");
+  if (s.isAthleticDirector) labels.push("Athletic Director");
   if (s.isSro) labels.push("SRO");
   if (s.isGuardian) labels.push("Guardian/Monitor");
   if (s.isNonExemptRole) labels.push("Non-Exempt Staff");

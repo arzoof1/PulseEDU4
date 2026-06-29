@@ -9,12 +9,15 @@ import {
   ensureBenchmarkDeliveriesSchema,
   ensureClassComposerPlansSchema,
   ensureClassComposerSkillClusterSchema,
+  ensureCommunicationSchema,
   ensureDataImporterRollbackSchema,
   ensureDistrictIntegrationsSchema,
   ensureDemoAdminAccountOnce,
+  ensureEligibilitySchema,
   ensureFastItemResponsesSchema,
   ensureFeaturePlansColumns,
   ensureFeaturePlansSchema,
+  ensureHallPassAllowlistSchema,
   ensureHallPassPriorityBypassColumn,
   ensureKioskCardsSchema,
   ensureKioskWelcomeSchema,
@@ -24,6 +27,7 @@ import {
   ensureParentMessagesSchema,
   ensurePbisInvisibleTierColumns,
   ensurePickupDemoFamily,
+  ensurePickupOverrideAuditSchema,
   ensurePickupSchema,
   ensurePulseBrainLabGroupsSchema,
   ensurePulseDnaVideosSchema,
@@ -45,6 +49,7 @@ import {
   seedBenchmarkDeliveriesOnce,
   seedBenchmarkDescriptions,
   seedEngagementEventsIfEmpty,
+  seedEligibilityForSchool1,
   seedFastScoresIfEmpty,
   seedHousesIfEmpty,
   seedIfEmpty,
@@ -106,11 +111,13 @@ export async function runSeed(): Promise<void> {
   await ensureDataImporterRollbackSchema();
   await ensureDistrictIntegrationsSchema();
   await ensurePickupSchema();
+  await ensurePickupOverrideAuditSchema();
   await ensurePickupDemoFamily();
   await ensureAstSchema();
   await ensureFeaturePlansSchema();
   await ensureKioskCardsSchema();
   await ensureHallPassPriorityBypassColumn();
+  await ensureHallPassAllowlistSchema();
   await ensureOneWayPassSchema();
   await ensureKioskWelcomeSchema();
   await ensurePbisInvisibleTierColumns();
@@ -118,11 +125,13 @@ export async function runSeed(): Promise<void> {
   await ensureClassComposerSkillClusterSchema();
   await ensureFastItemResponsesSchema();
   await ensureSchoolGradeSchema();
+  await ensureEligibilitySchema();
   await ensureStaffPasswordResetsSchema();
   await ensureSchoolsTimezoneColumn();
   await ensureStudentPhotoColumns();
   await ensureOnTimeTestModeColumns();
   await ensureParentMessagesSchema();
+  await ensureCommunicationSchema();
   await ensurePulseDnaVideosSchema();
   await ensureStudentLocalSisIdBackfill();
   try {
@@ -172,6 +181,11 @@ export async function runSeed(): Promise<void> {
     await seedDistrictDemoExtras();
   } catch (err) {
     logger.error({ err }, "[boot] district demo extras seed failed");
+  }
+  try {
+    await seedEligibilityForSchool1();
+  } catch (err) {
+    logger.error({ err }, "[boot] eligibility demo seed failed");
   }
 }
 

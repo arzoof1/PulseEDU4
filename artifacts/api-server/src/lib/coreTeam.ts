@@ -11,9 +11,10 @@
 //
 // Members: SuperUser, District Admin, school Admin, Behavior Specialist,
 // MTSS Coordinator, School Psychologist — plus any staff member an admin
-// explicitly adds to the Core Team via the assignable `isCoreTeam` flag in
-// Settings → Staff & Roles. The explicit flag grants the full Core Team
-// power set everywhere this gate (and every gate that composes it) is used.
+// explicitly adds to the Core Team via the assignable `isCoreTeam` flag, or
+// anyone assigned the Confidential Secretary role (`isConfidentialSecretary`)
+// in Settings → Staff & Roles. Either flag grants the full Core Team power set
+// everywhere this gate (and every gate that composes it) is used.
 export function isCoreTeam(staff: {
   isSuperUser?: boolean | null;
   isDistrictAdmin?: boolean | null;
@@ -22,6 +23,7 @@ export function isCoreTeam(staff: {
   isMtssCoordinator?: boolean | null;
   isSchoolPsychologist?: boolean | null;
   isCoreTeam?: boolean | null;
+  isConfidentialSecretary?: boolean | null;
 }): boolean {
   return Boolean(
     staff.isSuperUser ||
@@ -30,7 +32,8 @@ export function isCoreTeam(staff: {
       staff.isBehaviorSpecialist ||
       staff.isMtssCoordinator ||
       staff.isSchoolPsychologist ||
-      staff.isCoreTeam,
+      staff.isCoreTeam ||
+      staff.isConfidentialSecretary,
   );
 }
 
@@ -90,19 +93,35 @@ export function canEditSafetyPlan(staff: {
   return Boolean(staff.isGuidanceCounselor) || isCoreTeam(staff);
 }
 
-// Dismissal-mode editor gate. Admins can always set a student's
-// dismissal mode (car_rider / walker / bus / etc.); the cap_manage_
-// dismissal capability extends that permission to a non-admin clerk
-// (typically front office) without inheriting the rest of the admin
-// surface. Used by the /pickup/students/:id/dismissal-mode PATCH and
-// by the inline chip on the Student Profile.
+// Dismissal-mode editor gate. Per product spec the audience is admin,
+// Core Team (BS / MTSS / school psych / district / super / assignable
+// isCoreTeam), school counselor (guidance OR generic counselor flag),
+// and front-office secretary (the `cap_manage_dismissal` capability —
+// the same desk that owns the pickup tags). These roles can set a
+// student's dismissal mode (car_rider / walker / bus / etc.) either
+// from the /pickup/students/:id/dismissal-mode PATCH or the inline chip
+// on the Student Profile. Mirrors `canManagePickup` minus confidential
+// secretary; teachers are intentionally excluded.
 export function canManageDismissal(staff: {
   isSuperUser?: boolean | null;
   isDistrictAdmin?: boolean | null;
   isAdmin?: boolean | null;
+  isBehaviorSpecialist?: boolean | null;
+  isMtssCoordinator?: boolean | null;
+  isSchoolPsychologist?: boolean | null;
+  isCoreTeam?: boolean | null;
+  isCounselor?: boolean | null;
+  isGuidanceCounselor?: boolean | null;
   capManageDismissal?: boolean | null;
 }): boolean {
-  return isAdminOrSuperUser(staff) || Boolean(staff.capManageDismissal);
+  return (
+    isCoreTeam(staff) ||
+    Boolean(
+      staff.isCounselor ||
+        staff.isGuidanceCounselor ||
+        staff.capManageDismissal,
+    )
+  );
 }
 
 // Pickup-number management gate — who can issue, reissue, reprint, and
@@ -234,6 +253,28 @@ export function canManageTours(staff: {
   );
 }
 
+// Lightweight "Tour Guide" gate. Anyone who can fully manage tours qualifies,
+// plus anyone an admin opts in via the assignable `capTourGuide` flag. Guides
+// who are NOT full managers can be assigned leads and open the Tour Roadmap
+// for leads assigned to them, but the calling route is responsible for the
+// per-lead ownership check (assignedStaffId === staff.id) — this gate only
+// answers "is this person allowed in the guide surface at all?".
+export function canGuideTours(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  isBehaviorSpecialist?: boolean | null;
+  isMtssCoordinator?: boolean | null;
+  isSchoolPsychologist?: boolean | null;
+  isCounselor?: boolean | null;
+  isGuidanceCounselor?: boolean | null;
+  canApproveAst?: boolean | null;
+  capTourNotify?: boolean | null;
+  capTourGuide?: boolean | null;
+}): boolean {
+  return canManageTours(staff) || Boolean(staff.capTourGuide);
+}
+
 // Event Ticketing management gate (Phase 1). Per product spec the audience
 // that can create events, allocate tickets, send/print, manage scanner links,
 // and void/reissue is: admin + Core Team + counselor (school OR guidance) +
@@ -298,6 +339,31 @@ export function canManageEsign(staff: {
   capManageEsign?: boolean | null;
 }): boolean {
   return isAdminOrSuperUser(staff) || Boolean(staff.capManageEsign);
+}
+
+// Eligibility Hub management gate. Per product spec the management
+// audience (create activities, assign coaches, edit rosters/jersey
+// numbers, run the daily attendance upload, log parent notes, change
+// thresholds) is: admin tier + Core Team + Athletic Director + the
+// front-office secretary (`capManageDismissal` — the attendance-desk
+// secretary who runs the daily upload + logs parent notes). Assigned
+// coaches get a read-only view of their own rosters, enforced
+// per-activity inside the routes — they are NOT admitted by this gate.
+export function canManageEligibility(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  isBehaviorSpecialist?: boolean | null;
+  isMtssCoordinator?: boolean | null;
+  isSchoolPsychologist?: boolean | null;
+  isCoreTeam?: boolean | null;
+  isAthleticDirector?: boolean | null;
+  capManageDismissal?: boolean | null;
+}): boolean {
+  return (
+    isCoreTeam(staff) ||
+    Boolean(staff.isAthleticDirector || staff.capManageDismissal)
+  );
 }
 
 // Student photo manager gate. Per spec: admin / front-office staff /

@@ -638,10 +638,10 @@ router.post("/pbis/:id/void", async (req: Request, res: Response) => {
 });
 
 // Aggregate KPIs for the PBIS Hub home panel.
-// Returns 8 weeks of school-week buckets (Mon-Fri, no weekends) with
-// pointsAwarded, distinct studentsRecognized, distinct teachersActive,
-// and avgPointsPerStudent (over the full student body). Voided entries
-// are excluded everywhere.
+// Returns 8 weeks of full Mon-Sun week buckets (weekend entries roll into
+// their Monday-anchored week) with pointsAwarded, distinct
+// studentsRecognized, distinct teachersActive, and avgPointsPerStudent
+// (over the full student body). Voided entries are excluded everywhere.
 router.get("/pbis/home-stats", async (req: Request, res: Response) => {
   const staff = await loadSessionStaff(req);
   if (!staff) {
@@ -670,11 +670,13 @@ router.get("/pbis/home-stats", async (req: Request, res: Response) => {
   thisMonday.setHours(0, 0, 0, 0);
   thisMonday.setDate(thisMonday.getDate() - daysSinceMonday);
 
-  // Window: WEEKS weeks back, ending Friday end-of-day this week.
+  // Window: WEEKS weeks back, ending at next Monday 00:00 (covers the full
+  // Mon-Sun week, so points awarded on a weekend still roll into that week
+  // instead of falling into an uncounted Sat-Mon gap).
   const windowStart = new Date(thisMonday);
   windowStart.setDate(windowStart.getDate() - 7 * (WEEKS - 1));
   const windowEnd = new Date(thisMonday);
-  windowEnd.setDate(windowEnd.getDate() + 5); // Saturday 00:00 = end of Fri
+  windowEnd.setDate(windowEnd.getDate() + 7); // next Monday 00:00
 
   // Pull all non-voided entries in the window.
   const entries = await db
@@ -707,7 +709,7 @@ router.get("/pbis/home-stats", async (req: Request, res: Response) => {
     const wStart = new Date(windowStart);
     wStart.setDate(wStart.getDate() + 7 * i);
     const wEnd = new Date(wStart);
-    wEnd.setDate(wEnd.getDate() + 5); // Sat 00:00
+    wEnd.setDate(wEnd.getDate() + 7); // next Mon 00:00
     buckets.push({
       weekStart: wStart.toISOString().slice(0, 10),
       weekEnd: new Date(wEnd.getTime() - 1).toISOString().slice(0, 10),
@@ -719,8 +721,6 @@ router.get("/pbis/home-stats", async (req: Request, res: Response) => {
 
   for (const e of entries) {
     const created = new Date(e.createdAt);
-    const dow = created.getDay(); // 0=Sun..6=Sat
-    if (dow === 0 || dow === 6) continue; // Mon-Fri only
     const idx = Math.floor(
       (created.getTime() - windowStart.getTime()) / (7 * 24 * 60 * 60 * 1000),
     );
@@ -758,14 +758,44 @@ router.get("/pbis/home-stats", async (req: Request, res: Response) => {
       teachingStaffSet.add(r.staffId);
     }
   }
-  const totalTeachingStaff = teachingStaffSet.size;
+
+  // "Point-awarding staff" population = classroom teachers PLUS any active
+  // non-teaching staff (admins, coordinators, deans) who actually award PBIS
+  // points. Per product decision, anyone who awards points counts as active,
+  // so the denominator and the "active" numerator share this same set (and
+  // stays consistent with /pbis/needs-attention).
+  const activeStaffRows = await db
+    .select({ id: staffTable.id })
+    .from(staffTable)
+    .where(
+      and(eq(staffTable.schoolId, req.schoolId!), eq(staffTable.active, true)),
+    );
+  const activeStaffIdSet = new Set<number>(activeStaffRows.map((r) => r.id));
+  const awarderRows = await db
+    .select({ staffId: pbisEntriesTable.staffId })
+    .from(pbisEntriesTable)
+    .where(
+      and(
+        eq(pbisEntriesTable.schoolId, req.schoolId!),
+        isNull(pbisEntriesTable.voidedAt),
+      ),
+    );
+  const pointAwardingStaffSet = new Set<number>(teachingStaffSet);
+  for (const r of awarderRows) {
+    if (r.staffId != null && activeStaffIdSet.has(r.staffId)) {
+      pointAwardingStaffSet.add(r.staffId);
+    }
+  }
+  const totalTeachingStaff = pointAwardingStaffSet.size;
 
   const weeks = buckets.map((b) => ({
     weekStart: b.weekStart,
     weekEnd: b.weekEnd,
     pointsAwarded: b.points,
     studentsRecognized: b.studentIds.size,
-    teachersActive: b.staffIds.size,
+    teachersActive: [...b.staffIds].filter((id) =>
+      pointAwardingStaffSet.has(id),
+    ).length,
     avgPointsPerStudent:
       totalStudents > 0 ? +(b.points / totalStudents).toFixed(2) : 0,
   }));
@@ -866,8 +896,26 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
   for (const r of teachingRows) {
     if (!r.isPlanning) teachingStaffIds.add(r.staffId);
   }
-  const teachingStaff = allStaff.filter(
-    (s) => s.active && teachingStaffIds.has(s.id),
+  // "Point-awarding staff" = classroom teachers PLUS any active non-teaching
+  // staff (admins, coordinators, deans) who actually award PBIS points. Per
+  // product decision, an admin awarding points counts as active, so this
+  // alert measures the whole point-awarding population, not just teachers.
+  const everAwardedRows = await db
+    .select({ staffId: pbisEntriesTable.staffId })
+    .from(pbisEntriesTable)
+    .where(
+      and(
+        eq(pbisEntriesTable.schoolId, req.schoolId!),
+        isNull(pbisEntriesTable.voidedAt),
+      ),
+    );
+  const everAwardedStaffIds = new Set<number>();
+  for (const r of everAwardedRows) {
+    if (r.staffId != null) everAwardedStaffIds.add(r.staffId);
+  }
+  const pointAwardingStaff = allStaff.filter(
+    (s) =>
+      s.active && (teachingStaffIds.has(s.id) || everAwardedStaffIds.has(s.id)),
   );
   const allStudents = await db
     .select({
@@ -885,8 +933,9 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     ]),
   );
 
-  // ---------- 1. Quiet teachers ----------
-  // Teachers with no non-voided entries in the last QUIET_DAYS school days.
+  // ---------- 1. Quiet staff ----------
+  // Point-awarding staff with no non-voided entries in the last QUIET_DAYS
+  // school days.
   const quietWindow = subtractSchoolDays(QUIET_DAYS);
   const recentTeacherEntries = await db
     .select({ staffId: pbisEntriesTable.staffId })
@@ -902,7 +951,9 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
   for (const r of recentTeacherEntries) {
     if (r.staffId != null) activeStaffIds.add(r.staffId);
   }
-  const quietTeachers = teachingStaff.filter((s) => !activeStaffIds.has(s.id));
+  const quietTeachers = pointAwardingStaff.filter(
+    (s) => !activeStaffIds.has(s.id),
+  );
   const quietTeacherSample = quietTeachers
     .slice(0, 3)
     .map((s) => s.displayName);
@@ -1180,7 +1231,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     },
     quietTeachers: {
       count: quietTeachers.length,
-      total: teachingStaff.length,
+      total: pointAwardingStaff.length,
       sampleNames: quietTeacherSample,
     },
     invisibleStudents: {

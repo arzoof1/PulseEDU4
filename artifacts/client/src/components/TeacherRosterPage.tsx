@@ -30,6 +30,7 @@ import GroupInsightsTab from "./GroupInsightsTab";
 import TeacherInstructionLogTab from "./TeacherInstructionLogTab";
 import Tier3WeeklyForm from "./Tier3WeeklyForm";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
+import { LEVEL_BG, LEVEL_FG } from "./FastScorePill";
 
 // Top-level tab in this page. "roster" is the original FAST PM
 // pills + flags table; "benchmarks" is the FAST Phase 2 per-item
@@ -181,6 +182,14 @@ interface RosterRow {
   // Grades the student was retained in (ascending). Empty when none.
   // Drives the small black "R" pill rendered after the chain icon.
   retainedGrades: number[];
+  // Additive read-only attendance (from the Eligibility Hub upload).
+  // daysAbsent is the raw absence total; attendancePct is an ESTIMATE
+  // (weekday denominator since the semester start). Null when missing.
+  attendance?: {
+    daysAbsent: number | null;
+    daysTardy: number | null;
+    attendancePct: number | null;
+  } | null;
 }
 
 interface RosterResponse {
@@ -373,23 +382,9 @@ function SafetyPlanPill({
   );
 }
 
-// Level → background color. Per product preference:
-// L1 red, L2 orange, L3 green, L4 blue, L5 purple.
-const LEVEL_BG: Record<1 | 2 | 3 | 4 | 5, string> = {
-  1: "#dc2626", // red
-  2: "#f59e0b", // orange
-  3: "#16a34a", // green
-  4: "#2563eb", // blue
-  5: "#7c3aed", // purple
-};
-// All chosen backgrounds are dark enough to take white text legibly.
-const LEVEL_FG: Record<1 | 2 | 3 | 4 | 5, string> = {
-  1: "#fff",
-  2: "#fff",
-  3: "#fff",
-  4: "#fff",
-  5: "#fff",
-};
+// Level → background/foreground colors live in the shared FastScorePill
+// module so the Roster pills and the Insights drill-down level pills can
+// never silently diverge. Imported above as LEVEL_BG / LEVEL_FG.
 
 // Pastel fill + dark text/stroke for the bucket icon, keyed to the
 // student's CURRENT FAST level (per the FAST palette: L1 red, L2
@@ -1423,6 +1418,360 @@ function BqPills({ row }: { row: RosterRow }) {
   );
 }
 
+// ----- Quick Log (behavior + classroom interventions) -----
+// Lightweight types for the roster quick-log modal. Behaviors come from the
+// existing negative `pbis_reasons`; interventions from `intervention_types`.
+type NegBehavior = { id: number; name: string; defaultPoints: number };
+type IvType = { id: number; name: string; category?: string | null };
+type EffByType = Record<
+  string,
+  { worked: number; recurred: number; pending: number }
+>;
+
+// Self-contained roster quick-log form. Lets any signed-in teacher record a
+// low-level behavior + the classroom intervention(s) they tried in one shot,
+// reusing POST /api/pbis (negative) and POST /api/interventions (with the new
+// behaviorReason link). Shows "what's worked before" effectiveness for the
+// selected student+behavior so the teacher can pick a proven intervention.
+function QuickLogForm({
+  studentId,
+  studentName,
+  localSisId,
+  behaviors,
+  interventionTypes,
+  onSaved,
+  onCancel,
+}: {
+  studentId: string;
+  studentName: string;
+  localSisId?: string | null;
+  behaviors: NegBehavior[];
+  interventionTypes: IvType[];
+  onSaved: () => void;
+  onCancel: () => void;
+}) {
+  const [behaviorId, setBehaviorId] = useState<number | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [note, setNote] = useState("");
+  const [eff, setEff] = useState<EffByType | null>(null);
+  const [effLoading, setEffLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectedBehavior =
+    behaviors.find((b) => b.id === behaviorId) ?? null;
+
+  // Load "what's worked before" for this student + behavior whenever the
+  // selected behavior changes. School-wide across teachers.
+  useEffect(() => {
+    setEff(null);
+    if (!selectedBehavior) return;
+    let cancelled = false;
+    setEffLoading(true);
+    authFetch(
+      `/api/interventions/effectiveness?studentId=${encodeURIComponent(
+        studentId,
+      )}&behaviorReason=${encodeURIComponent(selectedBehavior.name)}`,
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { byType?: EffByType } | null) => {
+        if (!cancelled && j) setEff(j.byType ?? {});
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setEffLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [behaviorId, studentId, selectedBehavior]);
+
+  function toggleIv(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const canSubmit = Boolean(selectedBehavior) && selected.size > 0 && !submitting;
+
+  async function submit() {
+    if (!selectedBehavior || selected.size === 0) return;
+    setSubmitting(true);
+    setError(null);
+    const trimmedNote = note.trim() || undefined;
+    try {
+      // Single atomic write — the server records the behavior + every selected
+      // intervention in one transaction, so a partial failure can't leave a
+      // behavior without its interventions (or vice versa).
+      const res = await authFetch("/api/interventions/quick-log", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId,
+          reasonId: selectedBehavior.id,
+          interventionTypeIds: [...selected],
+          note: trimmedNote,
+        }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        throw new Error(
+          (j && typeof j.error === "string" && j.error) ||
+            "Could not save. Please try again.",
+        );
+      }
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div>
+      <div style={{ marginBottom: 14 }}>
+        <h3 style={{ margin: "0 0 2px", fontSize: 18 }}>
+          Log behavior &amp; intervention
+        </h3>
+        <div style={{ fontSize: 13, color: "#6b7280" }}>
+          {studentName}
+          {localSisId ? (
+            <span style={{ fontFamily: "ui-monospace, monospace" }}>
+              {" "}
+              · ID {localSisId}
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      {/* Behavior */}
+      <label
+        style={{
+          display: "block",
+          fontSize: 13,
+          fontWeight: 600,
+          color: "#374151",
+          marginBottom: 6,
+        }}
+      >
+        Behavior
+      </label>
+      <select
+        value={behaviorId ?? ""}
+        onChange={(e) => {
+          setBehaviorId(e.target.value ? Number(e.target.value) : null);
+          setSelected(new Set());
+        }}
+        style={{
+          width: "100%",
+          padding: "8px 10px",
+          borderRadius: 8,
+          border: "1px solid #d1d5db",
+          fontSize: 14,
+          marginBottom: 16,
+        }}
+      >
+        <option value="">Select a behavior…</option>
+        {behaviors.map((b) => (
+          <option key={b.id} value={b.id}>
+            {b.name}
+          </option>
+        ))}
+      </select>
+      {behaviors.length === 0 && (
+        <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 16 }}>
+          No negative behaviors are configured yet. An admin can add them under
+          PBIS reasons.
+        </div>
+      )}
+
+      {/* Interventions */}
+      <label
+        style={{
+          display: "block",
+          fontSize: 13,
+          fontWeight: 600,
+          color: "#374151",
+          marginBottom: 6,
+        }}
+      >
+        Intervention(s) tried
+        {selectedBehavior && effLoading && (
+          <span style={{ fontWeight: 400, color: "#9ca3af" }}>
+            {" "}
+            · checking what's worked…
+          </span>
+        )}
+      </label>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+          maxHeight: 260,
+          overflowY: "auto",
+          border: "1px solid #e5e7eb",
+          borderRadius: 8,
+          padding: 8,
+          marginBottom: 16,
+        }}
+      >
+        {interventionTypes.length === 0 && (
+          <div style={{ fontSize: 12, color: "#9ca3af" }}>
+            No intervention types are configured yet.
+          </div>
+        )}
+        {interventionTypes.map((iv) => {
+          const stats = eff?.[iv.name];
+          const worked = stats?.worked ?? 0;
+          const recurred = stats?.recurred ?? 0;
+          const checked = selected.has(iv.id);
+          return (
+            <label
+              key={iv.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "6px 8px",
+                borderRadius: 6,
+                cursor: "pointer",
+                background: checked ? "#ecfdf5" : "transparent",
+                border: checked
+                  ? "1px solid #a7f3d0"
+                  : "1px solid transparent",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={() => toggleIv(iv.id)}
+              />
+              <span style={{ flex: 1, fontSize: 14, color: "#111827" }}>
+                {iv.name}
+              </span>
+              {selectedBehavior && worked > 0 && (
+                <span
+                  title={`Worked ${worked}× before for this student (behavior did not recur within the window)`}
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: "#047857",
+                    background: "#d1fae5",
+                    borderRadius: 999,
+                    padding: "1px 8px",
+                  }}
+                >
+                  ✓ Worked {worked}×
+                </span>
+              )}
+              {selectedBehavior && worked === 0 && recurred > 0 && (
+                <span
+                  title={`Behavior recurred within the window ${recurred}× after this intervention`}
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: "#92400e",
+                    background: "#fef3c7",
+                    borderRadius: 999,
+                    padding: "1px 8px",
+                  }}
+                >
+                  recurred {recurred}×
+                </span>
+              )}
+            </label>
+          );
+        })}
+      </div>
+
+      {/* Note */}
+      <label
+        style={{
+          display: "block",
+          fontSize: 13,
+          fontWeight: 600,
+          color: "#374151",
+          marginBottom: 6,
+        }}
+      >
+        Note (optional)
+      </label>
+      <textarea
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        rows={2}
+        placeholder="Context, what you observed…"
+        style={{
+          width: "100%",
+          padding: "8px 10px",
+          borderRadius: 8,
+          border: "1px solid #d1d5db",
+          fontSize: 14,
+          resize: "vertical",
+          marginBottom: 16,
+        }}
+      />
+
+      {error && (
+        <div
+          style={{
+            fontSize: 13,
+            color: "#b91c1c",
+            background: "#fee2e2",
+            borderRadius: 8,
+            padding: "8px 10px",
+            marginBottom: 12,
+          }}
+        >
+          {error}
+        </div>
+      )}
+
+      <div
+        style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}
+      >
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={submitting}
+          style={{
+            padding: "8px 14px",
+            borderRadius: 8,
+            border: "1px solid #d1d5db",
+            background: "white",
+            fontSize: 14,
+            cursor: "pointer",
+          }}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!canSubmit}
+          style={{
+            padding: "8px 14px",
+            borderRadius: 8,
+            border: "none",
+            background: canSubmit ? "#4f46e5" : "#c7d2fe",
+            color: "white",
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: canSubmit ? "pointer" : "not-allowed",
+          }}
+        >
+          {submitting ? "Saving…" : "Log it"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function TeacherRosterPage({
   isCoreTeam,
   defaultTeacherId,
@@ -1498,6 +1847,7 @@ export default function TeacherRosterPage({
     pm1: boolean;
     pm2: boolean;
     programs: boolean;
+    attendance: boolean;
     subject: SubjectFilter;
   };
   const VIS_DEFAULT: Visibility = {
@@ -1509,6 +1859,7 @@ export default function TeacherRosterPage({
     pm1: true,
     pm2: true,
     programs: true,
+    attendance: true,
     subject: "both",
   };
   // Bumped to v3 because the Programs (ESE / 504 / ELL) toggle was
@@ -1535,6 +1886,7 @@ export default function TeacherRosterPage({
         pm1: parsed.pm1 ?? true,
         pm2: parsed.pm2 ?? true,
         programs: parsed.programs ?? true,
+        attendance: parsed.attendance ?? true,
         subject,
       };
     } catch {
@@ -1681,6 +2033,56 @@ export default function TeacherRosterPage({
     studentId: string;
     studentName: string;
   } | null>(null);
+
+  // ----- Quick Log modal (behavior + intervention) -----
+  const [logModal, setLogModal] = useState<{
+    studentId: string;
+    studentName: string;
+    localSisId?: string | null;
+  } | null>(null);
+  const [negBehaviors, setNegBehaviors] = useState<NegBehavior[]>([]);
+  const [ivTypes, setIvTypes] = useState<IvType[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    authFetch("/api/pbis-reasons")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: unknown) => {
+        if (cancelled || !Array.isArray(rows)) return;
+        setNegBehaviors(
+          rows
+            .filter(
+              (r) =>
+                r &&
+                r.polarity === "negative" &&
+                r.active !== false,
+            )
+            .map((r) => ({
+              id: r.id,
+              name: r.name,
+              defaultPoints: Number(r.defaultPoints) || 1,
+            })),
+        );
+      })
+      .catch(() => {});
+    authFetch("/api/intervention-types")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: unknown) => {
+        if (cancelled || !Array.isArray(rows)) return;
+        setIvTypes(
+          rows
+            .filter((r) => r && r.active !== false)
+            .map((r) => ({
+              id: r.id,
+              name: r.name,
+              category: r.category ?? null,
+            })),
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const periodOptions = data?.availablePeriods ?? [];
 
@@ -2393,6 +2795,17 @@ export default function TeacherRosterPage({
         </label>
         <label
           style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+          title="Show or hide the Attendance column (days absent + estimated %)"
+        >
+          <input
+            type="checkbox"
+            checked={visibility.attendance}
+            onChange={() => toggleVis("attendance")}
+          />
+          Attendance
+        </label>
+        <label
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
           title="Show or hide the invisible-student eye icon column"
         >
           <input
@@ -2476,6 +2889,15 @@ export default function TeacherRosterPage({
                 <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
                   Grade
                 </th>
+                {visibility.attendance && (
+                  <th
+                    rowSpan={2}
+                    style={{ padding: "8px 10px", verticalAlign: "bottom" }}
+                    title="Days absent (from the Eligibility Hub upload) and an ESTIMATED attendance % (weekday denominator since the semester start)"
+                  >
+                    Attend.
+                  </th>
+                )}
                 {(() => {
                   const groupCols =
                     (visibility.priorPm3 ? 1 : 0) +
@@ -2664,6 +3086,35 @@ export default function TeacherRosterPage({
                           <span>Spider</span>
                         </button>
                       )}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setLogModal({
+                            studentId: row.studentId,
+                            studentName: `${row.firstName} ${row.lastName}`,
+                            localSisId: row.localSisId,
+                          })
+                        }
+                        title={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
+                        aria-label={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          border: "1px solid #fbcfe8",
+                          background: "#fdf2f8",
+                          color: "#9d174d",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          lineHeight: 1.2,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span aria-hidden="true">📝</span>
+                        <span>Log</span>
+                      </button>
                       {sepSectionId != null && (() => {
                         const n = sepCountByStudent.get(row.studentId) ?? 0;
                         // Two-state icon per the product spec:
@@ -2787,6 +3238,29 @@ export default function TeacherRosterPage({
                     </td>
                   )}
                   <td style={{ padding: "6px 10px" }}>{row.grade}</td>
+                  {visibility.attendance && (
+                    <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
+                      {row.attendance?.daysAbsent != null ? (
+                        <span
+                          title={
+                            row.attendance.attendancePct != null
+                              ? `${row.attendance.attendancePct}% estimated attendance${row.attendance.daysTardy != null ? ` · ${row.attendance.daysTardy} tardies` : ""}`
+                              : "Attendance % unavailable (no semester start configured)"
+                          }
+                        >
+                          {row.attendance.daysAbsent}d
+                          {row.attendance.attendancePct != null && (
+                            <span style={{ color: "#6b7280", fontSize: 11 }}>
+                              {" "}
+                              (~{row.attendance.attendancePct}%)
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        <span style={{ color: "#d1d5db", fontSize: 12 }}>—</span>
+                      )}
+                    </td>
+                  )}
                   {showEla && (
                     <SubjectCells
                       block={row.ela}
@@ -2870,6 +3344,47 @@ export default function TeacherRosterPage({
                 refresh();
               }}
               onCancel={() => setTier3Modal(null)}
+            />
+          </div>
+        </div>
+      )}
+      {logModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.45)",
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "center",
+            padding: "3vh 16px",
+            overflowY: "auto",
+            zIndex: 1000,
+          }}
+          onClick={() => setLogModal(null)}
+        >
+          <div
+            style={{
+              background: "white",
+              borderRadius: 10,
+              padding: "1.25rem",
+              maxWidth: 560,
+              width: "100%",
+              boxShadow: "0 20px 50px rgba(0,0,0,0.25)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <QuickLogForm
+              studentId={logModal.studentId}
+              studentName={logModal.studentName}
+              localSisId={logModal.localSisId}
+              behaviors={negBehaviors}
+              interventionTypes={ivTypes}
+              onSaved={() => {
+                setLogModal(null);
+                refresh();
+              }}
+              onCancel={() => setLogModal(null)}
             />
           </div>
         </div>

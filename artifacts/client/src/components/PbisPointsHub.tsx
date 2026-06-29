@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import { fetchAllStudents } from "../lib/students";
 import StudentPhoto from "./StudentPhoto";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
+import InterventionTypesAdmin from "./InterventionTypesAdmin";
+import PulloutReasonsAdmin from "./PulloutReasonsAdmin";
+import DictateButton, { appendDictated } from "./DictateButton";
 
 // =============================================================================
 // PBIS Points Hub
@@ -55,6 +58,7 @@ type Reason = {
 
 type SchoolSettings = {
   pbisNegativeAffectsTotal: boolean;
+  interventionEffectivenessDays: number;
 };
 
 type NoteTemplate = {
@@ -94,9 +98,24 @@ type Me = {
   isMtssCoordinator?: boolean;
   isBehaviorSpecialist?: boolean;
   isPbisCoordinator?: boolean;
+  isDean?: boolean;
 };
 
 type Teacher = { id: number; name: string };
+
+// Classroom intervention types (the "Intervention(s) tried" list). Used by the
+// Negative-behavior logging path, which mirrors the Teacher Roster quick-log.
+type IvType = {
+  id: number;
+  name: string;
+  category: string;
+  requiresNote: boolean;
+  active: boolean;
+};
+
+// Color-first entry mode. "choose" shows the green/red picker; the others
+// render the positive award hub or the negative behavior+intervention flow.
+type Mode = "choose" | "positive" | "negative" | "communication";
 
 const TAB_LABELS: { key: Tab; label: string }[] = [
   { key: "classes", label: "Classes" },
@@ -106,10 +125,22 @@ const TAB_LABELS: { key: Tab; label: string }[] = [
   { key: "settings", label: "Settings" },
 ];
 
-export default function PbisPointsHub() {
+export default function PbisPointsHub({
+  classroomStoreEnabled = false,
+  onSetClassroomStoreEnabled,
+}: {
+  // Per-teacher Classroom Store opt-in, owned by App (authUser). When the
+  // setter is provided, the hub renders a self-serve toggle so a teacher can
+  // reveal/hide the Classroom Store (sidebar item + view) for themselves.
+  classroomStoreEnabled?: boolean;
+  onSetClassroomStoreEnabled?: (next: boolean) => Promise<void>;
+} = {}) {
   const [tab, setTab] = useState<Tab>("classes");
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Classroom Store toggle UI state (local to the toggle card below).
+  const [storeToggleBusy, setStoreToggleBusy] = useState(false);
+  const [storeToggleErr, setStoreToggleErr] = useState<string | null>(null);
 
   const [me, setMe] = useState<Me | null>(null);
   const [sections, setSections] = useState<Section[]>([]);
@@ -138,6 +169,14 @@ export default function PbisPointsHub() {
   // Bulk selection — set of studentIds checked across all sections.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
+  // Color-first entry: teacher picks Positive or Negative before anything else.
+  // Positive = the existing award hub; Negative = pick a student then log a
+  // behavior + the intervention(s) tried (same write path as the Teacher
+  // Roster quick-log).
+  const [mode, setMode] = useState<Mode>("choose");
+  const [interventionTypes, setInterventionTypes] = useState<IvType[]>([]);
+  const [loggingNegFor, setLoggingNegFor] = useState<Student | null>(null);
+  const [loggingCommFor, setLoggingCommFor] = useState<Student | null>(null);
 
   // Clear bulk selection whenever the visible roster changes (period filter
   // or admin's teacher picker). Otherwise a teacher could "Select all" in
@@ -159,6 +198,29 @@ export default function PbisPointsHub() {
     me?.isBehaviorSpecialist
   );
 
+  // The Settings tab manages school-wide PBIS settings, so it only surfaces
+  // for admins/SuperUser and the PBIS coordinator / behavior & MTSS
+  // specialists. Plain teachers never see it. The two store tabs (School
+  // Store / Classroom Store) have moved to the Recognition sidebar group,
+  // so they're filtered out of the in-hub tab bar entirely.
+  const canSeeSettingsTab = !!(
+    me?.isSuperUser ||
+    me?.isAdmin ||
+    me?.isBehaviorSpecialist ||
+    me?.isMtssCoordinator ||
+    me?.isPbisCoordinator
+  );
+  const visibleTabs = TAB_LABELS.filter((t) => {
+    if (t.key === "rubric" || t.key === "rewards") return false;
+    // Reports (the wallets / Points Bank ledger) was promoted to its own
+    // "Points Bank" Recognition sidebar item, so it no longer appears as a
+    // buried tab here. The render branch below is left in place but is now
+    // unreachable from this hub (default tab is "classes").
+    if (t.key === "reports") return false;
+    if (t.key === "settings") return canSeeSettingsTab;
+    return true;
+  });
+
   // ---- Initial data load
   useEffect(() => {
     let cancelled = false;
@@ -179,24 +241,30 @@ export default function PbisPointsHub() {
           meJson.isEseCoordinator
         );
 
-        const [schedRes, reasonsRes, pbisRes, tplRes] = await Promise.all([
-          authFetch(adminScope ? "/api/schedule?all=1" : "/api/schedule"),
-          authFetch("/api/pbis-reasons"),
-          authFetch("/api/pbis"),
-          authFetch("/api/pbis-note-templates"),
-        ]);
+        const [schedRes, studRes, reasonsRes, pbisRes, tplRes, ivRes] =
+          await Promise.all([
+            authFetch(adminScope ? "/api/schedule?all=1" : "/api/schedule"),
+            authFetch("/api/students"),
+            authFetch("/api/pbis-reasons"),
+            authFetch("/api/pbis"),
+            authFetch("/api/pbis-note-templates"),
+            authFetch("/api/intervention-types"),
+          ]);
         if (!schedRes.ok) throw new Error("Failed to load class schedule");
         if (!reasonsRes.ok) throw new Error("Failed to load PBIS reasons");
         if (!pbisRes.ok) throw new Error("Failed to load PBIS entries");
         // Note templates are non-critical — if they fail, fall back to empty.
 
         const schedJson = (await schedRes.json()) as { sections: Section[] };
-        const studJson = await fetchAllStudents<Student>();
+        const studJson = studRes.ok
+          ? ((await studRes.json()) as Student[])
+          : await fetchAllStudents<Student>();
         const reasonsJson = (await reasonsRes.json()) as Reason[];
         const pbisJson = (await pbisRes.json()) as PbisEntry[];
         const tplJson = tplRes.ok
           ? ((await tplRes.json()) as NoteTemplate[])
           : [];
+        const ivJson = ivRes.ok ? ((await ivRes.json()) as IvType[]) : [];
 
         if (cancelled) return;
 
@@ -208,6 +276,7 @@ export default function PbisPointsHub() {
         setStudents(studJson);
         setReasons(reasonsJson.filter((r) => r.active));
         setNoteTemplates(tplJson);
+        setInterventionTypes(ivJson.filter((i) => i.active));
 
         // Default the teacher picker to the viewer when they have any
         // sections; otherwise pick the first teacher alphabetically so the
@@ -260,6 +329,18 @@ export default function PbisPointsHub() {
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [sections]);
+
+  // Split reasons by polarity. Positive feeds the green award hub; negative
+  // feeds the red behavior-logging flow. This is what visually separates the
+  // two paths the user asked for.
+  const positiveReasons = useMemo(
+    () => reasons.filter((r) => r.polarity === "positive"),
+    [reasons],
+  );
+  const negativeReasons = useMemo(
+    () => reasons.filter((r) => r.polarity === "negative"),
+    [reasons],
+  );
 
   // Sections to display in the Classes tab — narrowed to the selected
   // teacher (or all of the viewer's own when not admin).
@@ -446,6 +527,25 @@ export default function PbisPointsHub() {
     });
   }
 
+  // Refetch PBIS totals after a negative behavior is logged (the quick-log
+  // endpoint writes a negative entry server-side), so the roster badges stay
+  // accurate without a full page reload.
+  async function refreshTotals() {
+    try {
+      const res = await authFetch("/api/pbis");
+      if (!res.ok) return;
+      const rows = (await res.json()) as PbisEntry[];
+      const t = new Map<string, number>();
+      for (const e of rows) {
+        if (e.voidedAt) continue;
+        t.set(e.studentId, (t.get(e.studentId) ?? 0) + e.points);
+      }
+      setTotals(t);
+    } catch {
+      // ignore — totals will refresh on next full load
+    }
+  }
+
   return (
     <section className="card">
       <div className="section-header-bar-teal" />
@@ -472,14 +572,236 @@ export default function PbisPointsHub() {
         </div>
       </div>
 
-      <TabBar tab={tab} onChange={setTab} />
+      {/* Per-teacher Classroom Store opt-in. The Classroom Store is hidden by
+          default for everyone; this self-serve toggle lets a teacher reveal it
+          (Recognition sidebar item + the store view) just for themselves. */}
+      {onSetClassroomStoreEnabled && (
+        <div
+          style={{
+            margin: "0.85rem 0",
+            padding: "0.7rem 0.9rem",
+            border: "1px solid var(--border)",
+            borderRadius: "0.5rem",
+            background: "#f8fafc",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "1rem",
+            flexWrap: "wrap",
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 700, fontSize: "0.95rem" }}>
+              Classroom Store
+            </div>
+            <div style={{ fontSize: "0.82rem", color: "#475569" }}>
+              {classroomStoreEnabled
+                ? "On — your private rewards list appears in the Recognition menu."
+                : "Off — turn it on to build your own private list of rewards students can redeem."}
+            </div>
+            {storeToggleErr && (
+              <div
+                style={{
+                  fontSize: "0.8rem",
+                  color: "#b91c1c",
+                  marginTop: 2,
+                }}
+              >
+                {storeToggleErr}
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            disabled={storeToggleBusy}
+            onClick={async () => {
+              setStoreToggleErr(null);
+              setStoreToggleBusy(true);
+              try {
+                await onSetClassroomStoreEnabled(!classroomStoreEnabled);
+              } catch {
+                setStoreToggleErr("Couldn't update — please try again.");
+              } finally {
+                setStoreToggleBusy(false);
+              }
+            }}
+            style={{
+              padding: "0.4rem 0.9rem",
+              borderRadius: "0.4rem",
+              border: classroomStoreEnabled
+                ? "1px solid #cbd5e1"
+                : "1px solid #0e7490",
+              background: classroomStoreEnabled ? "white" : "#0e7490",
+              color: classroomStoreEnabled ? "#334155" : "white",
+              fontSize: "0.85rem",
+              fontWeight: 600,
+              cursor: storeToggleBusy ? "default" : "pointer",
+              opacity: storeToggleBusy ? 0.6 : 1,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {storeToggleBusy
+              ? "Saving…"
+              : classroomStoreEnabled
+                ? "Turn off"
+                : "Turn on"}
+          </button>
+        </div>
+      )}
+
+      {mode === "choose" && <ModeChooser onPick={(m) => setMode(m)} />}
+
+      {mode !== "choose" && (
+        <div style={{ marginBottom: "0.75rem" }}>
+          <button
+            type="button"
+            onClick={() => {
+              setMode("choose");
+              setAwardingFor(null);
+              setBulkOpen(false);
+              setLoggingNegFor(null);
+              setLoggingCommFor(null);
+            }}
+            style={{
+              background: "none",
+              border: "none",
+              color: "#0e7490",
+              fontSize: "0.9rem",
+              fontWeight: 600,
+              cursor: "pointer",
+              padding: 0,
+            }}
+          >
+            ← Back to Positive / Negative
+          </button>
+        </div>
+      )}
+
+      {mode === "negative" &&
+        (loading ? (
+          <div
+            style={{ padding: "2rem", textAlign: "center", color: "#64748b" }}
+          >
+            Loading…
+          </div>
+        ) : errorMsg ? (
+          <div
+            style={{
+              padding: "1rem",
+              background: "#fee2e2",
+              color: "#991b1b",
+              borderRadius: "0.4rem",
+              margin: "1rem 0",
+            }}
+          >
+            {errorMsg}
+          </div>
+        ) : (
+          <>
+            <div
+              style={{
+                margin: "0 0 1rem",
+                padding: "0.6rem 0.85rem",
+                background: "#fef2f2",
+                border: "1px solid #fecaca",
+                borderRadius: "0.5rem",
+                color: "#991b1b",
+                fontSize: "0.9rem",
+                fontWeight: 600,
+              }}
+            >
+              Pick a student to log a behavior and the intervention(s) you tried.
+            </div>
+            <ClassesView
+              sections={visibleSectionsForTeacher}
+              students={students}
+              totals={totals}
+              activePeriod={activePeriod}
+              onChangePeriod={setActivePeriod}
+              onSelectStudent={setLoggingNegFor}
+              teachers={canViewAllTeachers ? teachers : null}
+              selectedTeacherId={selectedTeacherId}
+              onChangeTeacher={setSelectedTeacherId}
+              selectedIds={selectedIds}
+              onToggleSelect={() => {}}
+              onSelectMany={() => {}}
+              onUnselectMany={() => {}}
+              onClearSelection={() => {}}
+              onOpenBulk={() => {}}
+              hideBulk
+            />
+          </>
+        ))}
+
+      {mode === "communication" &&
+        (loading ? (
+          <div
+            style={{ padding: "2rem", textAlign: "center", color: "#64748b" }}
+          >
+            Loading…
+          </div>
+        ) : errorMsg ? (
+          <div
+            style={{
+              padding: "1rem",
+              background: "#fee2e2",
+              color: "#991b1b",
+              borderRadius: "0.4rem",
+              margin: "1rem 0",
+            }}
+          >
+            {errorMsg}
+          </div>
+        ) : (
+          <>
+            <div
+              style={{
+                margin: "0 0 1rem",
+                padding: "0.6rem 0.85rem",
+                background: "#eff6ff",
+                border: "1px solid #bfdbfe",
+                borderRadius: "0.5rem",
+                color: "#1e40af",
+                fontSize: "0.9rem",
+                fontWeight: 600,
+              }}
+            >
+              Pick a student to log a call, email, or message home to their
+              family.
+            </div>
+            <ClassesView
+              sections={visibleSectionsForTeacher}
+              students={students}
+              totals={totals}
+              activePeriod={activePeriod}
+              onChangePeriod={setActivePeriod}
+              onSelectStudent={setLoggingCommFor}
+              teachers={canViewAllTeachers ? teachers : null}
+              selectedTeacherId={selectedTeacherId}
+              onChangeTeacher={setSelectedTeacherId}
+              selectedIds={selectedIds}
+              onToggleSelect={() => {}}
+              onSelectMany={() => {}}
+              onUnselectMany={() => {}}
+              onClearSelection={() => {}}
+              onOpenBulk={() => {}}
+              hideBulk
+            />
+          </>
+        ))}
+
+      {mode === "positive" && (
+        <>
+      <TabBar tab={tab} onChange={setTab} labels={visibleTabs} />
 
       <HowToUseHelp title="How to use PBIS Points">
         <HowToSection title="What this hub is">
           One page for awarding points, browsing the rewards catalogs,
-          and (if you have permission) editing the rubric and store
-          inventory. Use the tab bar above to switch between awarding,
-          recent activity, the Classroom Store, and the School Store.
+          recent activity, and reports. Use the tab bar above to switch
+          between them. The reward catalogs now live in the Recognition
+          menu: <strong>School Store</strong> (school-wide, read-only for
+          teachers) and <strong>Classroom Store</strong> (your own private
+          list).
         </HowToSection>
         <RoleSection for="teacher" title="Awarding points (teachers)">
           <ul style={howtoListStyle}>
@@ -556,7 +878,7 @@ export default function PbisPointsHub() {
           onClearSelection={() => setSelectedIds(new Set())}
           onOpenBulk={() => setBulkOpen(true)}
         />
-      ) : tab === "settings" ? (
+      ) : tab === "settings" && canSeeSettingsTab ? (
         <SettingsView
           me={me}
           reasons={reasons}
@@ -571,14 +893,18 @@ export default function PbisPointsHub() {
         // intentionally disabled here for everyone (including admins) — use
         // the BS hub, MTSS hub, or the "School Store" admin section instead.
         <SchoolStoreView canEdit={false} />
+      ) : tab === "reports" ? (
+        <PbisPointsReportView me={me} />
       ) : (
         <ComingSoon tab={tab} />
+      )}
+        </>
       )}
 
       {awardingFor && (
         <AwardModal
           student={awardingFor}
-          reasons={reasons}
+          reasons={positiveReasons}
           templates={noteTemplates}
           onSaveTemplate={saveNoteTemplate}
           onClose={() => setAwardingFor(null)}
@@ -598,7 +924,7 @@ export default function PbisPointsHub() {
         <BulkAwardModal
           studentIds={Array.from(selectedIds)}
           students={students}
-          reasons={reasons}
+          reasons={positiveReasons}
           templates={noteTemplates}
           onSaveTemplate={saveNoteTemplate}
           onClose={() => setBulkOpen(false)}
@@ -614,6 +940,27 @@ export default function PbisPointsHub() {
           }}
         />
       )}
+
+      {loggingNegFor && (
+        <NegativeLogModal
+          student={loggingNegFor}
+          behaviors={negativeReasons}
+          interventionTypes={interventionTypes}
+          onClose={() => setLoggingNegFor(null)}
+          onSaved={() => {
+            setLoggingNegFor(null);
+            void refreshTotals();
+          }}
+        />
+      )}
+
+      {loggingCommFor && (
+        <CommunicationLogModal
+          student={loggingCommFor}
+          onClose={() => setLoggingCommFor(null)}
+          onSaved={() => setLoggingCommFor(null)}
+        />
+      )}
     </section>
   );
 }
@@ -622,12 +969,1143 @@ export default function PbisPointsHub() {
 // Sub-components
 // -----------------------------------------------------------------------------
 
+// Color-first entry screen. Two large buttons separate the positive award
+// flow from the negative behavior+intervention flow.
+function ModeChooser({
+  onPick,
+}: {
+  onPick: (m: "positive" | "negative" | "communication") => void;
+}) {
+  const base: React.CSSProperties = {
+    flex: "1 1 220px",
+    minHeight: 170,
+    border: "none",
+    borderRadius: 16,
+    cursor: "pointer",
+    padding: "1.5rem",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "0.5rem",
+    color: "white",
+  };
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: "1rem",
+        flexWrap: "wrap",
+        padding: "1.5rem 0 0.75rem",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => onPick("positive")}
+        style={{
+          ...base,
+          background: "linear-gradient(135deg,#16a34a,#15803d)",
+          boxShadow: "0 8px 22px rgba(22,163,74,0.32)",
+        }}
+      >
+        <span style={{ fontSize: "2.75rem", lineHeight: 1, fontWeight: 800 }}>
+          +
+        </span>
+        <span style={{ fontSize: "1.4rem", fontWeight: 800 }}>Positive</span>
+        <span
+          style={{ fontSize: "0.9rem", opacity: 0.92, textAlign: "center" }}
+        >
+          Award PBIS recognition points
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => onPick("negative")}
+        style={{
+          ...base,
+          background: "linear-gradient(135deg,#dc2626,#b91c1c)",
+          boxShadow: "0 8px 22px rgba(220,38,38,0.32)",
+        }}
+      >
+        <span style={{ fontSize: "2.75rem", lineHeight: 1, fontWeight: 800 }}>
+          −
+        </span>
+        <span style={{ fontSize: "1.4rem", fontWeight: 800 }}>Negative</span>
+        <span
+          style={{ fontSize: "0.9rem", opacity: 0.92, textAlign: "center" }}
+        >
+          Log a behavior &amp; intervention tried
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => onPick("communication")}
+        style={{
+          ...base,
+          background: "linear-gradient(135deg,#2563eb,#1d4ed8)",
+          boxShadow: "0 8px 22px rgba(37,99,235,0.32)",
+        }}
+      >
+        <span style={{ fontSize: "2.75rem", lineHeight: 1, fontWeight: 800 }}>
+          ☎
+        </span>
+        <span style={{ fontSize: "1.4rem", fontWeight: 800 }}>
+          Communication Log
+        </span>
+        <span
+          style={{ fontSize: "0.9rem", opacity: 0.92, textAlign: "center" }}
+        >
+          Log a call, email, or message home
+        </span>
+      </button>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Communication Log modal — log a call, email, or message home to a family.
+// Auto-loads the student's family contacts (primary guardian + emergency),
+// captures Type / Who / Outcome / Tone / optional backdated time + voice notes,
+// and POSTs to /api/communications.
+// -----------------------------------------------------------------------------
+
+type CommType = { id: number; name: string; active: boolean };
+type CommFamilyContact = {
+  contactSlot: number;
+  name: string;
+  relationship: string | null;
+  phone: string | null;
+  phoneLabel: string | null;
+  email: string | null;
+  badFlag: {
+    id: number;
+    status: string;
+    reason: string;
+    correctedPhone: string | null;
+  } | null;
+};
+
+const COMM_OUTCOMES = [
+  "Reached",
+  "Left message",
+  "No answer",
+  "Wrong number",
+  "Inbound",
+];
+const COMM_TONES: { value: string; label: string; color: string }[] = [
+  { value: "positive", label: "Positive", color: "#16a34a" },
+  { value: "neutral", label: "Neutral", color: "#64748b" },
+  { value: "concern", label: "Concern", color: "#dc2626" },
+];
+
+// Convert a Date to the value a <input type="datetime-local"> expects
+// (local time, no timezone suffix): YYYY-MM-DDTHH:mm.
+function toLocalInput(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours(),
+  )}:${pad(d.getMinutes())}`;
+}
+
+export type CommLogStudent = Student;
+
+export function CommunicationLogModal({
+  student,
+  onClose,
+  onSaved,
+}: {
+  student: Student;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [types, setTypes] = useState<CommType[]>([]);
+  const [contacts, setContacts] = useState<CommFamilyContact[]>([]);
+  const [loadingFamily, setLoadingFamily] = useState(true);
+
+  const [type, setType] = useState("");
+  const [whoContacted, setWhoContacted] = useState("");
+  const [outcome, setOutcome] = useState("Reached");
+  const [tone, setTone] = useState("positive");
+  const [note, setNote] = useState("");
+  const [backdate, setBackdate] = useState(false);
+  const [contactedAt, setContactedAt] = useState(() => toLocalInput(new Date()));
+
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Inline "Flag bad number" — which contact slot has its reason picker open,
+  // and which slots have been flagged this session (optimistic).
+  const [flagOpenSlot, setFlagOpenSlot] = useState<number | null>(null);
+  const [flaggingSlot, setFlaggingSlot] = useState<number | null>(null);
+
+  async function flagBadNumber(c: CommFamilyContact, reason: string) {
+    setFlaggingSlot(c.contactSlot);
+    try {
+      const res = await authFetch("/api/communications/bad-number-flag", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: student.studentId,
+          contactSlot: c.contactSlot,
+          reason,
+          badPhone: c.phone,
+          contactLabel: c.relationship
+            ? `${c.name} (${c.relationship})`
+            : c.name,
+        }),
+      });
+      if (res.ok) {
+        setContacts((prev) =>
+          prev.map((x) =>
+            x.contactSlot === c.contactSlot
+              ? {
+                  ...x,
+                  badFlag: {
+                    id: 0,
+                    status: "open",
+                    reason,
+                    correctedPhone: null,
+                  },
+                }
+              : x,
+          ),
+        );
+      }
+    } catch {
+      /* non-fatal */
+    } finally {
+      setFlaggingSlot(null);
+      setFlagOpenSlot(null);
+    }
+  }
+
+  // Load editable communication types (seeds Phone/Email/Parent Square lazily).
+  useEffect(() => {
+    let cancelled = false;
+    authFetch("/api/communication-types")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { types?: CommType[] } | null) => {
+        if (cancelled || !j?.types) return;
+        const active = j.types.filter((t) => t.active);
+        setTypes(active);
+        setType((prev) => prev || active[0]?.name || "");
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load the student's family contacts.
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingFamily(true);
+    authFetch(`/api/communications/family/${encodeURIComponent(student.studentId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { contacts?: CommFamilyContact[] } | null) => {
+        if (cancelled) return;
+        const list = j?.contacts ?? [];
+        setContacts(list);
+        // Default "Who contacted" to the primary guardian when present.
+        setWhoContacted((prev) => prev || list[0]?.name || "");
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoadingFamily(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [student.studentId]);
+
+  const noteOver = note.length > 1000;
+  const canSubmit = !!type && COMM_OUTCOMES.includes(outcome) && !noteOver && !submitting;
+
+  async function submit() {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await authFetch("/api/communications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: student.studentId,
+          type,
+          ...(whoContacted.trim() ? { whoContacted: whoContacted.trim() } : {}),
+          outcome,
+          tone,
+          ...(note.trim() ? { note: note.trim() } : {}),
+          ...(backdate ? { contactedAt: new Date(contactedAt).toISOString() } : {}),
+        }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(
+          (j && typeof j.error === "string" && j.error) ||
+            "Could not save. Please try again.",
+        );
+      }
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const labelStyle: React.CSSProperties = {
+    display: "block",
+    fontSize: "0.8rem",
+    fontWeight: 700,
+    color: "#334155",
+    marginBottom: "0.3rem",
+  };
+  const inputStyle: React.CSSProperties = {
+    width: "100%",
+    padding: "0.55rem 0.6rem",
+    borderRadius: "0.5rem",
+    border: "1px solid #cbd5e1",
+    fontSize: "0.95rem",
+    background: "white",
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,23,42,0.5)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 50,
+        padding: "1rem",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "white",
+          borderRadius: 12,
+          width: "min(560px, 100%)",
+          maxHeight: "90vh",
+          overflowY: "auto",
+          boxShadow: "0 20px 50px rgba(0,0,0,0.3)",
+        }}
+      >
+        <div
+          style={{
+            padding: "1rem 1.25rem",
+            borderTop: "4px solid #2563eb",
+            borderBottom: "1px solid #f1f5f9",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "0.78rem",
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              color: "#2563eb",
+            }}
+          >
+            Communication Log
+          </div>
+          <div style={{ fontSize: "1.15rem", fontWeight: 700, color: "#0f172a" }}>
+            {student.firstName} {student.lastName}
+          </div>
+        </div>
+
+        <div style={{ padding: "1.25rem" }}>
+          {/* Family contacts card */}
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>Family contacts</label>
+            {loadingFamily ? (
+              <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
+                Loading contacts…
+              </div>
+            ) : contacts.length === 0 ? (
+              <div style={{ fontSize: "0.85rem", color: "#b45309" }}>
+                No family contacts on file for this student.
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.4rem",
+                }}
+              >
+                {contacts.map((c) => {
+                  const flagged = c.badFlag && c.badFlag.status !== "resolved";
+                  const corrected =
+                    c.badFlag &&
+                    c.badFlag.status === "resolved" &&
+                    c.badFlag.correctedPhone;
+                  const selected = whoContacted === c.name;
+                  const flagOpen = flagOpenSlot === c.contactSlot;
+                  return (
+                    <div
+                      key={c.contactSlot}
+                      style={{
+                        border: selected
+                          ? "1px solid #2563eb"
+                          : "1px solid #e2e8f0",
+                        background: selected ? "#eff6ff" : "#f8fafc",
+                        borderRadius: "0.5rem",
+                        padding: "0.5rem 0.65rem",
+                      }}
+                    >
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setWhoContacted(c.name)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ")
+                            setWhoContacted(c.name);
+                        }}
+                        style={{ cursor: "pointer", textAlign: "left" }}
+                      >
+                        <div
+                          style={{
+                            fontWeight: 700,
+                            fontSize: "0.9rem",
+                            color: "#0f172a",
+                          }}
+                        >
+                          {c.name}
+                          {c.relationship ? (
+                            <span
+                              style={{
+                                fontWeight: 500,
+                                color: "#64748b",
+                                marginLeft: "0.4rem",
+                              }}
+                            >
+                              {c.relationship}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div style={{ fontSize: "0.82rem", color: "#475569" }}>
+                          {c.phone ? (
+                            <span
+                              style={{
+                                textDecoration: flagged
+                                  ? "line-through"
+                                  : undefined,
+                                color: flagged ? "#dc2626" : undefined,
+                              }}
+                            >
+                              {c.phone}
+                            </span>
+                          ) : (
+                            <span style={{ color: "#94a3b8" }}>No phone</span>
+                          )}
+                          {corrected ? (
+                            <span
+                              style={{
+                                marginLeft: "0.5rem",
+                                color: "#16a34a",
+                                fontWeight: 600,
+                              }}
+                            >
+                              → {c.badFlag!.correctedPhone}
+                            </span>
+                          ) : null}
+                          {c.email ? (
+                            <span style={{ marginLeft: "0.5rem" }}>
+                              • {c.email}
+                            </span>
+                          ) : null}
+                          {flagged ? (
+                            <span
+                              style={{
+                                marginLeft: "0.5rem",
+                                fontWeight: 700,
+                                color: "#dc2626",
+                              }}
+                            >
+                              ⚠ Bad number
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                      {/* Flag bad number affordance */}
+                      {!flagged && c.phone ? (
+                        flagOpen ? (
+                          <div
+                            style={{
+                              marginTop: "0.4rem",
+                              display: "flex",
+                              flexWrap: "wrap",
+                              gap: "0.3rem",
+                              alignItems: "center",
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: "0.72rem",
+                                color: "#64748b",
+                              }}
+                            >
+                              Reason:
+                            </span>
+                            {[
+                              "Disconnected",
+                              "Not in service",
+                              "Wrong person",
+                              "Voicemail full",
+                              "Other",
+                            ].map((r) => (
+                              <button
+                                key={r}
+                                type="button"
+                                disabled={flaggingSlot === c.contactSlot}
+                                onClick={() => flagBadNumber(c, r)}
+                                style={{
+                                  fontSize: "0.72rem",
+                                  padding: "0.2rem 0.45rem",
+                                  borderRadius: "0.35rem",
+                                  border: "1px solid #fca5a5",
+                                  background: "#fef2f2",
+                                  color: "#b91c1c",
+                                  cursor: "pointer",
+                                }}
+                              >
+                                {r}
+                              </button>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => setFlagOpenSlot(null)}
+                              style={{
+                                fontSize: "0.72rem",
+                                padding: "0.2rem 0.45rem",
+                                borderRadius: "0.35rem",
+                                border: "1px solid #e2e8f0",
+                                background: "#fff",
+                                color: "#64748b",
+                                cursor: "pointer",
+                              }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setFlagOpenSlot(c.contactSlot)}
+                            style={{
+                              marginTop: "0.35rem",
+                              fontSize: "0.72rem",
+                              padding: 0,
+                              border: "none",
+                              background: "none",
+                              color: "#dc2626",
+                              cursor: "pointer",
+                              textDecoration: "underline",
+                            }}
+                          >
+                            Flag bad number
+                          </button>
+                        )
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Type */}
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>Type</label>
+            <select
+              value={type}
+              onChange={(e) => setType(e.target.value)}
+              style={inputStyle}
+            >
+              {types.length === 0 && <option value="">Loading…</option>}
+              {types.map((t) => (
+                <option key={t.id} value={t.name}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Who contacted */}
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>Who did you contact?</label>
+            <input
+              type="text"
+              value={whoContacted}
+              onChange={(e) => setWhoContacted(e.target.value)}
+              placeholder="Name of the person contacted"
+              style={inputStyle}
+            />
+          </div>
+
+          {/* Outcome */}
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>Outcome</label>
+            <select
+              value={outcome}
+              onChange={(e) => setOutcome(e.target.value)}
+              style={inputStyle}
+            >
+              {COMM_OUTCOMES.map((o) => (
+                <option key={o} value={o}>
+                  {o}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Tone */}
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>Tone</label>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              {COMM_TONES.map((t) => {
+                const on = tone === t.value;
+                return (
+                  <button
+                    key={t.value}
+                    type="button"
+                    onClick={() => setTone(t.value)}
+                    style={{
+                      flex: 1,
+                      padding: "0.5rem",
+                      borderRadius: "0.5rem",
+                      border: on
+                        ? `2px solid ${t.color}`
+                        : "1px solid #cbd5e1",
+                      background: on ? `${t.color}14` : "white",
+                      color: on ? t.color : "#475569",
+                      fontWeight: 700,
+                      fontSize: "0.88rem",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Date / time */}
+          <div style={{ marginBottom: "1rem" }}>
+            <label
+              style={{
+                ...labelStyle,
+                display: "flex",
+                alignItems: "center",
+                gap: "0.4rem",
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={backdate}
+                onChange={(e) => setBackdate(e.target.checked)}
+              />
+              Backdate this contact
+            </label>
+            {backdate ? (
+              <input
+                type="datetime-local"
+                value={contactedAt}
+                max={toLocalInput(new Date())}
+                onChange={(e) => setContactedAt(e.target.value)}
+                style={inputStyle}
+              />
+            ) : (
+              <div style={{ fontSize: "0.82rem", color: "#64748b" }}>
+                Logged with the current date and time.
+              </div>
+            )}
+          </div>
+
+          {/* Note + voice-to-text */}
+          <div style={{ marginBottom: "1rem" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: "0.3rem",
+              }}
+            >
+              <label style={{ ...labelStyle, marginBottom: 0 }}>Notes</label>
+              <DictateButton
+                onAppend={(chunk) =>
+                  setNote((prev) => appendDictated(prev, chunk))
+                }
+                borderColor="#bfdbfe"
+                inkSoft="#2563eb"
+              />
+            </div>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={3}
+              placeholder="What was discussed? (optional)"
+              style={{ ...inputStyle, resize: "vertical" }}
+            />
+            {noteOver && (
+              <div
+                style={{
+                  marginTop: "0.3rem",
+                  fontSize: "0.8rem",
+                  color: "#dc2626",
+                }}
+              >
+                Notes are too long (max 1000 characters).
+              </div>
+            )}
+          </div>
+
+          {error && (
+            <div
+              style={{
+                marginBottom: "1rem",
+                padding: "0.6rem 0.75rem",
+                background: "#fee2e2",
+                color: "#991b1b",
+                borderRadius: "0.5rem",
+                fontSize: "0.85rem",
+              }}
+            >
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: "0.6rem", justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                padding: "0.6rem 1rem",
+                borderRadius: "0.5rem",
+                border: "1px solid #cbd5e1",
+                background: "white",
+                color: "#475569",
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void submit()}
+              disabled={!canSubmit}
+              style={{
+                padding: "0.6rem 1.25rem",
+                borderRadius: "0.5rem",
+                border: "none",
+                background: canSubmit ? "#2563eb" : "#93c5fd",
+                color: "white",
+                fontWeight: 800,
+                cursor: canSubmit ? "pointer" : "not-allowed",
+              }}
+            >
+              {submitting ? "Saving…" : "Save communication"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Negative behavior logger. Mirrors the Teacher Roster quick-log: choose the
+// behavior (a negative PBIS reason), check the intervention(s) tried, add an
+// optional note, and submit atomically to /api/interventions/quick-log.
+function NegativeLogModal({
+  student,
+  behaviors,
+  interventionTypes,
+  onClose,
+  onSaved,
+}: {
+  student: Student;
+  behaviors: Reason[];
+  interventionTypes: IvType[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [behaviorId, setBehaviorId] = useState<number | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [note, setNote] = useState("");
+  const [eff, setEff] = useState<Record<
+    string,
+    { worked: number; recurred: number }
+  > | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectedBehavior = behaviors.find((b) => b.id === behaviorId) ?? null;
+
+  // Pull per-intervention effectiveness history for this student + behavior so
+  // the teacher can see what has worked before (same endpoint the roster uses).
+  useEffect(() => {
+    setEff(null);
+    if (!selectedBehavior) return;
+    let cancelled = false;
+    authFetch(
+      `/api/interventions/effectiveness?studentId=${encodeURIComponent(
+        student.studentId,
+      )}&behaviorReason=${encodeURIComponent(selectedBehavior.name)}`,
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then(
+        (
+          j: {
+            byType?: Record<string, { worked: number; recurred: number }>;
+          } | null,
+        ) => {
+          if (!cancelled && j) setEff(j.byType ?? {});
+        },
+      )
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [behaviorId, student.studentId, selectedBehavior]);
+
+  function toggleIv(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const noteOver = note.length > 500;
+  const canSubmit =
+    !!selectedBehavior && selected.size > 0 && !noteOver && !submitting;
+
+  async function submit() {
+    if (!selectedBehavior || selected.size === 0) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await authFetch("/api/interventions/quick-log", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: student.studentId,
+          reasonId: selectedBehavior.id,
+          interventionTypeIds: [...selected],
+          ...(note.trim() ? { note: note.trim() } : {}),
+        }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(
+          (j && typeof j.error === "string" && j.error) ||
+            "Could not save. Please try again.",
+        );
+      }
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // Group intervention types by category for a tidy checklist.
+  const ivByCategory = useMemo(() => {
+    const m = new Map<string, IvType[]>();
+    for (const iv of interventionTypes) {
+      const k = iv.category || "Other";
+      if (!m.has(k)) m.set(k, []);
+      m.get(k)!.push(iv);
+    }
+    return Array.from(m.entries());
+  }, [interventionTypes]);
+
+  const labelStyle: React.CSSProperties = {
+    display: "block",
+    fontSize: "0.8rem",
+    fontWeight: 700,
+    color: "#334155",
+    marginBottom: "0.3rem",
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,23,42,0.5)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 50,
+        padding: "1rem",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "white",
+          borderRadius: 12,
+          width: "min(560px, 100%)",
+          maxHeight: "90vh",
+          overflowY: "auto",
+          boxShadow: "0 20px 50px rgba(0,0,0,0.3)",
+        }}
+      >
+        <div
+          style={{
+            padding: "1rem 1.25rem",
+            borderTop: "4px solid #dc2626",
+            borderBottom: "1px solid #f1f5f9",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "0.78rem",
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              color: "#dc2626",
+            }}
+          >
+            Log negative behavior
+          </div>
+          <div
+            style={{ fontSize: "1.15rem", fontWeight: 700, color: "#0f172a" }}
+          >
+            {student.firstName} {student.lastName}
+          </div>
+        </div>
+
+        <div style={{ padding: "1.25rem" }}>
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>Behavior</label>
+            <select
+              value={behaviorId ?? ""}
+              onChange={(e) =>
+                setBehaviorId(e.target.value ? Number(e.target.value) : null)
+              }
+              style={{
+                width: "100%",
+                padding: "0.55rem 0.6rem",
+                borderRadius: "0.5rem",
+                border: "1px solid #cbd5e1",
+                fontSize: "0.95rem",
+                background: "white",
+              }}
+            >
+              <option value="">Select a behavior…</option>
+              {behaviors.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+            {behaviors.length === 0 && (
+              <div
+                style={{
+                  marginTop: "0.4rem",
+                  fontSize: "0.8rem",
+                  color: "#b45309",
+                }}
+              >
+                No negative behaviors configured yet. Add some under Settings →
+                Categories &amp; reasons.
+              </div>
+            )}
+          </div>
+
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>Intervention(s) tried</label>
+            {interventionTypes.length === 0 ? (
+              <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
+                No intervention types configured yet.
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.75rem",
+                }}
+              >
+                {ivByCategory.map(([cat, items]) => (
+                  <div key={cat}>
+                    <div
+                      style={{
+                        fontSize: "0.72rem",
+                        fontWeight: 700,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.04em",
+                        color: "#94a3b8",
+                        marginBottom: "0.3rem",
+                      }}
+                    >
+                      {cat}
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: "0.4rem",
+                      }}
+                    >
+                      {items.map((iv) => {
+                        const on = selected.has(iv.id);
+                        const stat = eff?.[iv.name];
+                        return (
+                          <button
+                            key={iv.id}
+                            type="button"
+                            onClick={() => toggleIv(iv.id)}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "0.35rem",
+                              padding: "0.4rem 0.6rem",
+                              borderRadius: "999px",
+                              border: on
+                                ? "1px solid #0e7490"
+                                : "1px solid #cbd5e1",
+                              background: on ? "#0e7490" : "white",
+                              color: on ? "white" : "#334155",
+                              fontSize: "0.85rem",
+                              fontWeight: 600,
+                              cursor: "pointer",
+                            }}
+                          >
+                            {on ? "✓ " : ""}
+                            {iv.name}
+                            {stat && (stat.worked > 0 || stat.recurred > 0) && (
+                              <span
+                                style={{
+                                  fontSize: "0.72rem",
+                                  fontWeight: 700,
+                                  color: on ? "rgba(255,255,255,0.85)" : "#64748b",
+                                }}
+                                title="Past results for this student + behavior"
+                              >
+                                ({stat.worked}✓/{stat.recurred}↻)
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>Note (optional)</label>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={3}
+              placeholder="What happened? (optional)"
+              style={{
+                width: "100%",
+                padding: "0.55rem 0.6rem",
+                borderRadius: "0.5rem",
+                border: noteOver ? "1px solid #dc2626" : "1px solid #cbd5e1",
+                fontSize: "0.92rem",
+                resize: "vertical",
+                fontFamily: "inherit",
+              }}
+            />
+            {noteOver && (
+              <div style={{ fontSize: "0.78rem", color: "#dc2626" }}>
+                Note must be 500 characters or fewer.
+              </div>
+            )}
+          </div>
+
+          {error && (
+            <div
+              style={{
+                marginBottom: "0.75rem",
+                padding: "0.5rem 0.7rem",
+                background: "#fee2e2",
+                color: "#991b1b",
+                borderRadius: "0.4rem",
+                fontSize: "0.85rem",
+              }}
+            >
+              {error}
+            </div>
+          )}
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: "0.6rem",
+            }}
+          >
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                padding: "0.55rem 1rem",
+                borderRadius: "0.5rem",
+                border: "1px solid #cbd5e1",
+                background: "white",
+                color: "#334155",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={submit}
+              disabled={!canSubmit}
+              style={{
+                padding: "0.55rem 1.1rem",
+                borderRadius: "0.5rem",
+                border: "none",
+                background: canSubmit ? "#dc2626" : "#fca5a5",
+                color: "white",
+                fontWeight: 700,
+                cursor: canSubmit ? "pointer" : "not-allowed",
+              }}
+            >
+              {submitting ? "Saving…" : "Log behavior"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TabBar({
   tab,
   onChange,
+  labels = TAB_LABELS,
 }: {
   tab: Tab;
   onChange: (t: Tab) => void;
+  labels?: { key: Tab; label: string }[];
 }) {
   return (
     <div
@@ -639,7 +2117,7 @@ function TabBar({
         flexWrap: "wrap",
       }}
     >
-      {TAB_LABELS.map(({ key, label }) => {
+      {labels.map(({ key, label }) => {
         const active = key === tab;
         return (
           <button
@@ -684,6 +2162,7 @@ function ClassesView({
   onUnselectMany,
   onClearSelection,
   onOpenBulk,
+  hideBulk = false,
 }: {
   sections: Section[];
   students: Student[];
@@ -701,6 +2180,9 @@ function ClassesView({
   onUnselectMany: (ids: string[]) => void;
   onClearSelection: () => void;
   onOpenBulk: () => void;
+  // When true (negative-logging picker) the bulk-award UI is suppressed —
+  // negatives are logged one student at a time with their interventions.
+  hideBulk?: boolean;
 }) {
   // Build the period filter from the actual periods present in the schedule.
   const periods = useMemo(() => {
@@ -869,7 +2351,7 @@ function ClassesView({
                   · {sectionStudents.length} students
                 </span>
                 <div style={{ flex: 1 }} />
-                {sectionStudents.length > 0 && (
+                {!hideBulk && sectionStudents.length > 0 && (
                   <button
                     type="button"
                     onClick={() => {
@@ -924,6 +2406,7 @@ function ClassesView({
                       onClick={() => onSelectStudent(s)}
                       selected={selectedIds.has(s.studentId)}
                       onToggleSelect={() => onToggleSelect(s.studentId)}
+                      hideBulk={hideBulk}
                     />
                   ))}
                 </div>
@@ -935,7 +2418,7 @@ function ClassesView({
       </>)}
 
       {/* Floating bulk-award action bar — shows whenever 1+ students are picked. */}
-      {selectedIds.size > 0 && (
+      {!hideBulk && selectedIds.size > 0 && (
         <div
           style={{
             position: "sticky",
@@ -1028,12 +2511,14 @@ function StudentCard({
   onClick,
   selected,
   onToggleSelect,
+  hideBulk = false,
 }: {
   student: Student;
   total: number;
   onClick: () => void;
   selected: boolean;
   onToggleSelect: () => void;
+  hideBulk?: boolean;
 }) {
   // Color the bottom badge by point bucket. Green = positive momentum,
   // amber = a couple of points, gray = none yet.
@@ -1067,34 +2552,36 @@ function StudentCard({
       }}
     >
       {/* Checkbox in top-right — its own click target, doesn't trigger award */}
-      <label
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          position: "absolute",
-          top: "0.3rem",
-          right: "0.35rem",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          width: "1.4rem",
-          height: "1.4rem",
-          cursor: "pointer",
-          zIndex: 1,
-        }}
-        title={selected ? "Deselect" : "Select for bulk award"}
-      >
-        <input
-          type="checkbox"
-          checked={selected}
-          onChange={onToggleSelect}
+      {!hideBulk && (
+        <label
+          onClick={(e) => e.stopPropagation()}
           style={{
-            width: "1rem",
-            height: "1rem",
+            position: "absolute",
+            top: "0.3rem",
+            right: "0.35rem",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: "1.4rem",
+            height: "1.4rem",
             cursor: "pointer",
-            accentColor: "#0e7490",
+            zIndex: 1,
           }}
-        />
-      </label>
+          title={selected ? "Deselect" : "Select for bulk award"}
+        >
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSelect}
+            style={{
+              width: "1rem",
+              height: "1rem",
+              cursor: "pointer",
+              accentColor: "#0e7490",
+            }}
+          />
+        </label>
+      )}
       <button
         type="button"
         onClick={onClick}
@@ -2222,7 +3709,7 @@ function BulkAwardModal({
 // the rubric in Settings. Any staff sees the picker; only PBIS admins edit.
 // =============================================================================
 
-function NoteTemplatesSection({
+export function NoteTemplatesSection({
   me,
   canEdit,
   templates,
@@ -2636,6 +4123,8 @@ export function SettingsView({
   templates,
   onTemplatesChanged,
   lockedScope,
+  initialFilter = "all",
+  hideTemplates = false,
 }: {
   me: Me | null;
   reasons: Reason[];
@@ -2646,6 +4135,12 @@ export function SettingsView({
   // Used by the BS Hub and MTSS Coordinator Hub to expose a school-wide-only
   // editor without bringing the entire teacher workflow with it.
   lockedScope?: "school" | "teacher";
+  // Default polarity filter. The Manage Lists tab opens this editor pre-filtered
+  // to "negative" so admins land directly on the negative-behavior list.
+  initialFilter?: "all" | "positive" | "negative";
+  // When true, the Note Templates section is omitted — used by Manage Lists,
+  // which surfaces note templates as its own standalone sub-tab.
+  hideTemplates?: boolean;
 }) {
   const [viewScope, setViewScope] = useState<"school" | "teacher">(
     lockedScope ?? "teacher",
@@ -2681,7 +4176,9 @@ export function SettingsView({
   }, [reasons]);
 
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<"all" | "positive" | "negative">("all");
+  const [filter, setFilter] = useState<"all" | "positive" | "negative">(
+    initialFilter,
+  );
   const [showArchived, setShowArchived] = useState(false);
   const [editing, setEditing] = useState<Reason | "new" | null>(null);
   const [saving, setSaving] = useState(false);
@@ -2721,6 +4218,43 @@ export function SettingsView({
       setSettings((s) =>
         s ? { ...s, pbisNegativeAffectsTotal: !next } : s,
       );
+      setErr("Could not save setting. Try again.");
+    }
+  }
+
+  // Draft value for the effectiveness-window input (kept separate so the user
+  // can type freely; committed on blur / Enter). Synced when settings load.
+  const [windowDraft, setWindowDraft] = useState<string>("");
+  useEffect(() => {
+    if (settings) setWindowDraft(String(settings.interventionEffectivenessDays));
+  }, [settings?.interventionEffectivenessDays]);
+
+  async function saveEffectivenessDays(raw: string) {
+    if (!settings) return;
+    const prev = settings.interventionEffectivenessDays;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 1 || n > 90) {
+      setWindowDraft(String(prev));
+      setErr("Effectiveness window must be a whole number of days (1–90).");
+      return;
+    }
+    if (n === prev) return;
+    setSettings((s) => (s ? { ...s, interventionEffectivenessDays: n } : s));
+    try {
+      const res = await authFetch("/api/school-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ interventionEffectivenessDays: n }),
+      });
+      if (!res.ok) throw new Error("Save failed");
+      const json = (await res.json()) as SchoolSettings;
+      setSettings(json);
+      setErr(null);
+    } catch {
+      setSettings((s) =>
+        s ? { ...s, interventionEffectivenessDays: prev } : s,
+      );
+      setWindowDraft(String(prev));
       setErr("Could not save setting. Try again.");
     }
   }
@@ -3038,6 +4572,92 @@ export function SettingsView({
         </div>
       )}
 
+      {/* Intervention effectiveness window */}
+      {settings && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "space-between",
+            gap: "1rem",
+            padding: "0.85rem 1rem",
+            background: "#eff6ff",
+            border: "1px solid #bfdbfe",
+            borderRadius: "0.5rem",
+            marginBottom: "1rem",
+          }}
+        >
+          <div style={{ maxWidth: "42rem" }}>
+            <div style={{ fontWeight: 600, color: "#1e3a8a" }}>
+              Intervention effectiveness window
+            </div>
+            <div
+              style={{
+                fontSize: "0.85rem",
+                color: "#1e40af",
+                marginTop: "0.2rem",
+                lineHeight: 1.45,
+              }}
+            >
+              When a teacher logs an intervention for a negative behavior,
+              PulseEDU automatically grades whether it{" "}
+              <strong>worked</strong>. If the same behavior does{" "}
+              <strong>not</strong> happen again for that student within this many
+              days, the intervention is marked <strong>Worked&nbsp;✓</strong>. If
+              the behavior comes back inside the window, it is marked{" "}
+              <strong>Recurred&nbsp;↻</strong>. While the window is still open it
+              shows as <strong>Pending</strong>. Teachers never grade this by
+              hand — these outcomes appear on the per-student Classroom
+              Intervention Report and as the “what’s worked before” badges shown
+              while logging.
+              <br />
+              <em>
+                Shorter windows (e.g. 7 days) judge interventions faster but are
+                stricter; longer windows (e.g. 21–30 days) give an intervention
+                more time to prove it stuck. 14 days is the default.
+              </em>
+            </div>
+          </div>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.4rem",
+              whiteSpace: "nowrap",
+              color: "#1e3a8a",
+              fontWeight: 600,
+              fontSize: "0.9rem",
+            }}
+          >
+            <input
+              type="number"
+              min={1}
+              max={90}
+              step={1}
+              value={windowDraft}
+              disabled={!canEdit}
+              onChange={(e) => setWindowDraft(e.target.value)}
+              onBlur={(e) => saveEffectivenessDays(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+              style={{
+                width: "4.5rem",
+                padding: "0.4rem 0.5rem",
+                border: "1px solid #93c5fd",
+                borderRadius: "0.4rem",
+                fontSize: "0.95rem",
+                textAlign: "center",
+                background: canEdit ? "#fff" : "#f1f5f9",
+              }}
+            />
+            days
+          </label>
+        </div>
+      )}
+
       {err && (
         <div
           style={{
@@ -3126,24 +4746,28 @@ export function SettingsView({
         ))
       )}
 
-      {/* Visual separator between behaviors and templates */}
-      <hr
-        style={{
-          border: 0,
-          borderTop: "1px solid #e2e8f0",
-          margin: "1.5rem 0 1.25rem",
-        }}
-      />
+      {!hideTemplates && (
+        <>
+          {/* Visual separator between behaviors and templates */}
+          <hr
+            style={{
+              border: 0,
+              borderTop: "1px solid #e2e8f0",
+              margin: "1.5rem 0 1.25rem",
+            }}
+          />
 
-      {/* Note Templates — share the same scope as the rubric above */}
-      <NoteTemplatesSection
-        me={me}
-        canEdit={canEdit}
-        templates={templates}
-        onTemplatesChanged={onTemplatesChanged}
-        onError={setErr}
-        scope={viewScope}
-      />
+          {/* Note Templates — share the same scope as the rubric above */}
+          <NoteTemplatesSection
+            me={me}
+            canEdit={canEdit}
+            templates={templates}
+            onTemplatesChanged={onTemplatesChanged}
+            onError={setErr}
+            scope={viewScope}
+          />
+        </>
+      )}
 
       {editing && canEdit && (
         <BehaviorEditModal
@@ -3155,6 +4779,196 @@ export function SettingsView({
           onSave={saveBehavior}
           saving={saving}
         />
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// ManageListsView — admin-only tab grouping the three editable list surfaces:
+// negative classroom behaviors, the intervention list, and pullout reasons.
+// Each is rendered behind a sub-tab so the top tab bar stays tidy.
+// =============================================================================
+export function ManageListsView() {
+  const [me, setMe] = useState<Me | null>(null);
+  const [reasons, setReasons] = useState<Reason[]>([]);
+  const [templates, setTemplates] = useState<NoteTemplate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Non-fatal error channel for the Note Templates sub-tab. Kept separate from
+  // errorMsg (which gates the whole tile into a blocking panel) so a failed
+  // template save/delete shows inline and the tabs stay usable.
+  const [templateErr, setTemplateErr] = useState<string | null>(null);
+  const [subTab, setSubTab] = useState<
+    "behaviors" | "templates" | "interventions" | "pullouts"
+  >("behaviors");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setErrorMsg(null);
+      try {
+        const [meRes, reasonsRes, tplRes] = await Promise.all([
+          authFetch("/api/auth/me"),
+          authFetch("/api/pbis-reasons?scope=school"),
+          authFetch("/api/pbis-note-templates?scope=school"),
+        ]);
+        if (!meRes.ok) throw new Error("Failed to load your account");
+        if (!reasonsRes.ok) throw new Error("Failed to load PBIS reasons");
+        if (cancelled) return;
+        setMe((await meRes.json()) as Me);
+        setReasons((await reasonsRes.json()) as Reason[]);
+        if (tplRes.ok) {
+          setTemplates((await tplRes.json()) as NoteTemplate[]);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setErrorMsg(err instanceof Error ? err.message : "Failed to load");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const SUBTABS: {
+    key: "behaviors" | "templates" | "interventions" | "pullouts";
+    label: string;
+  }[] = [
+    { key: "behaviors", label: "Negative Behaviors" },
+    { key: "templates", label: "Note Templates" },
+    { key: "interventions", label: "Interventions" },
+    { key: "pullouts", label: "Pullout Reasons" },
+  ];
+
+  // School-scope edit gate — mirrors SettingsView's school-view canEdit
+  // (admin / BS / MTSS). Note templates here are always school-scoped.
+  const canEditTemplates = !!(
+    me?.isSuperUser ||
+    me?.isAdmin ||
+    me?.isBehaviorSpecialist ||
+    me?.isMtssCoordinator
+  );
+
+  if (loading) {
+    return (
+      <div style={{ padding: "2rem", textAlign: "center", color: "#64748b" }}>
+        Loading…
+      </div>
+    );
+  }
+  if (errorMsg) {
+    return (
+      <div
+        style={{
+          padding: "1rem",
+          background: "#fee2e2",
+          color: "#991b1b",
+          borderRadius: "0.4rem",
+        }}
+      >
+        {errorMsg}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div
+        style={{
+          display: "flex",
+          gap: "0.4rem",
+          flexWrap: "wrap",
+          marginBottom: "1rem",
+        }}
+      >
+        {SUBTABS.map(({ key, label }) => {
+          const active = key === subTab;
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setSubTab(key)}
+              style={{
+                padding: "0.45rem 0.9rem",
+                borderRadius: "999px",
+                border: active ? "1px solid #0e7490" : "1px solid #cbd5e1",
+                background: active ? "#0e7490" : "white",
+                color: active ? "white" : "#475569",
+                fontSize: "0.9rem",
+                fontWeight: active ? 600 : 500,
+                cursor: "pointer",
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {subTab === "behaviors" ? (
+        <SettingsView
+          me={me}
+          reasons={reasons}
+          onReasonsChanged={setReasons}
+          templates={templates}
+          onTemplatesChanged={setTemplates}
+          lockedScope="school"
+          initialFilter="negative"
+          hideTemplates
+        />
+      ) : subTab === "templates" ? (
+        <>
+          {templateErr && (
+            <div
+              style={{
+                padding: "0.7rem 0.9rem",
+                marginBottom: "0.85rem",
+                background: "#fee2e2",
+                color: "#991b1b",
+                borderRadius: "0.4rem",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "0.6rem",
+              }}
+            >
+              <span>{templateErr}</span>
+              <button
+                type="button"
+                onClick={() => setTemplateErr(null)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#991b1b",
+                  cursor: "pointer",
+                  fontWeight: 700,
+                  fontSize: "1rem",
+                  lineHeight: 1,
+                }}
+                aria-label="Dismiss error"
+              >
+                ×
+              </button>
+            </div>
+          )}
+          <NoteTemplatesSection
+            me={me}
+            canEdit={canEditTemplates}
+            templates={templates}
+            onTemplatesChanged={setTemplates}
+            onError={setTemplateErr}
+            scope="school"
+          />
+        </>
+      ) : subTab === "interventions" ? (
+        <InterventionTypesAdmin />
+      ) : (
+        <PulloutReasonsAdmin />
       )}
     </div>
   );
@@ -3820,14 +5634,20 @@ type StoreConfig = {
 function StoreView({
   config,
   canEdit,
+  canPurchase = false,
 }: {
   config: StoreConfig;
   canEdit: boolean;
+  // When true, render a "Purchase for a student" header action that opens
+  // the on-behalf redemption flow. Used by the School Store for the catalog
+  // crew + Core Team; the Classroom Store leaves this off.
+  canPurchase?: boolean;
 }) {
   const [items, setItems] = useState<StoreItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState<StoreItem | "new" | null>(null);
+  const [purchasing, setPurchasing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -3913,6 +5733,24 @@ function StoreView({
             + Add item
           </button>
         )}
+        {canPurchase && (
+          <button
+            type="button"
+            onClick={() => setPurchasing(true)}
+            style={{
+              padding: "0.55rem 1rem",
+              background: "rgba(255,255,255,0.16)",
+              color: "white",
+              border: "1px solid rgba(255,255,255,0.65)",
+              borderRadius: "0.4rem",
+              fontWeight: 700,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            🛒 Purchase for a student
+          </button>
+        )}
       </div>
 
       {err && (
@@ -3994,13 +5832,21 @@ function StoreView({
           }}
         />
       )}
+
+      {purchasing && (
+        <PurchaseForStudentModal
+          apiPath={config.apiPath}
+          items={items}
+          onClose={() => setPurchasing(false)}
+        />
+      )}
     </div>
   );
 }
 
 // Per-teacher Classroom Store: each staffer manages their own catalog. Any
 // signed-in staffer can add to their own list (server enforces ownership).
-function ClassroomStoreView() {
+export function ClassroomStoreView() {
   return (
     <StoreView
       config={{
@@ -4025,7 +5871,522 @@ function ClassroomStoreView() {
 // Coordinator / PBIS Coordinator (server enforces this too). Exported so
 // it can be embedded in the BS hub, MTSS hub, and a top-level read-only
 // sidebar entry — see App.tsx.
-export function SchoolStoreView({ canEdit }: { canEdit: boolean }) {
+// =============================================================================
+// PurchaseForStudentModal — staff-initiated "buy on behalf of a student"
+// flow for the School Store. Step 1: search + pick a student (reuses the
+// shared /api/student-finder/search endpoint). Step 2: see the student's
+// available points and redeem an item against the SAME engine the family
+// + student portals use (POST <apiPath>/:id/redeem). FLEID is never shown —
+// the student id is a join key only; the UI renders localSisId.
+// =============================================================================
+
+interface FinderHit {
+  studentId: string;
+  localSisId?: string | null;
+  firstName: string;
+  lastName: string;
+  grade: number;
+}
+
+interface PickedStudent {
+  studentId: string;
+  name: string;
+  localSisId: string | null;
+  grade: number;
+}
+
+interface WalletInfo {
+  earned: number;
+  spent: number;
+  available: number;
+}
+
+function PurchaseForStudentModal({
+  apiPath,
+  items,
+  onClose,
+}: {
+  apiPath: string;
+  items: StoreItem[];
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<FinderHit[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [student, setStudent] = useState<PickedStudent | null>(null);
+  const [wallet, setWallet] = useState<WalletInfo | null>(null);
+  const [walletLoading, setWalletLoading] = useState(false);
+  const [confirmItem, setConfirmItem] = useState<StoreItem | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  // Close on Escape.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // Debounced student typeahead (paused once a student is picked).
+  useEffect(() => {
+    if (student) return;
+    const q = query.trim();
+    if (q.length < 1) {
+      setHits([]);
+      return;
+    }
+    setSearching(true);
+    const handle = window.setTimeout(async () => {
+      try {
+        const r = await authFetch(
+          `/api/student-finder/search?q=${encodeURIComponent(q)}`,
+        );
+        if (!r.ok) throw new Error("Search failed");
+        const data = (await r.json()) as { students?: FinderHit[] };
+        setHits(Array.isArray(data.students) ? data.students : []);
+      } catch {
+        setHits([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [query, student]);
+
+  async function loadWallet(studentId: string) {
+    setWalletLoading(true);
+    setWallet(null);
+    try {
+      const r = await authFetch(`${apiPath}/wallet/${studentId}`);
+      if (!r.ok) throw new Error("Could not load this student's points");
+      const data = (await r.json()) as WalletInfo & {
+        localSisId: string | null;
+        studentName: string;
+      };
+      setWallet({
+        earned: data.earned,
+        spent: data.spent,
+        available: data.available,
+      });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not load points");
+    } finally {
+      setWalletLoading(false);
+    }
+  }
+
+  function pickStudent(h: FinderHit) {
+    setErr(null);
+    setSuccess(null);
+    setConfirmItem(null);
+    setStudent({
+      studentId: h.studentId,
+      name: `${h.firstName} ${h.lastName}`.trim(),
+      localSisId: h.localSisId ?? null,
+      grade: h.grade,
+    });
+    void loadWallet(h.studentId);
+  }
+
+  function changeStudent() {
+    setStudent(null);
+    setWallet(null);
+    setConfirmItem(null);
+    setErr(null);
+    setSuccess(null);
+    setQuery("");
+    setHits([]);
+  }
+
+  async function confirmPurchase(item: StoreItem) {
+    if (!student) return;
+    setSubmitting(true);
+    setErr(null);
+    setSuccess(null);
+    try {
+      const r = await authFetch(`${apiPath}/${item.id}/redeem`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentId: student.studentId }),
+      });
+      const data = (await r.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      if (!r.ok) {
+        throw new Error(data.error || "Purchase failed");
+      }
+      setSuccess(
+        `Purchased “${item.name}” for ${student.name}. Sent to the fulfillment queue.`,
+      );
+      setConfirmItem(null);
+      // Reflect the new balance so the buyer can keep going.
+      await loadWallet(student.studentId);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Purchase failed");
+      setConfirmItem(null);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const active = items.filter((i) => !i.archived);
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15, 23, 42, 0.55)",
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "center",
+        padding: "3rem 1rem",
+        zIndex: 1000,
+        overflowY: "auto",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "white",
+          borderRadius: "0.7rem",
+          width: "min(640px, 100%)",
+          maxHeight: "100%",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          boxShadow: "0 20px 50px rgba(15, 23, 42, 0.35)",
+        }}
+      >
+        <div
+          style={{
+            padding: "1rem 1.25rem",
+            borderBottom: "1px solid #e2e8f0",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.75rem",
+          }}
+        >
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: "1.15rem", fontWeight: 700, color: "#0f172a" }}>
+              🛒 Purchase for a student
+            </div>
+            <div style={{ fontSize: "0.85rem", color: "#64748b", marginTop: 2 }}>
+              {student
+                ? "Choose a reward to redeem with this student's points."
+                : "Search for the student you're buying for."}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              border: "none",
+              background: "transparent",
+              fontSize: "1.4rem",
+              cursor: "pointer",
+              color: "#64748b",
+              lineHeight: 1,
+            }}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{ padding: "1.25rem", overflowY: "auto" }}>
+          {err && (
+            <div
+              style={{
+                marginBottom: "0.85rem",
+                padding: "0.6rem 0.8rem",
+                background: "#fee2e2",
+                color: "#991b1b",
+                borderRadius: "0.4rem",
+                fontSize: "0.9rem",
+              }}
+            >
+              {err}
+            </div>
+          )}
+          {success && (
+            <div
+              style={{
+                marginBottom: "0.85rem",
+                padding: "0.6rem 0.8rem",
+                background: "#dcfce7",
+                color: "#166534",
+                borderRadius: "0.4rem",
+                fontSize: "0.9rem",
+              }}
+            >
+              {success}
+            </div>
+          )}
+
+          {!student ? (
+            <>
+              <input
+                autoFocus
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search by student name or local ID…"
+                style={{
+                  width: "100%",
+                  padding: "0.6rem 0.8rem",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: "0.45rem",
+                  fontSize: "0.95rem",
+                  boxSizing: "border-box",
+                }}
+              />
+              <div style={{ marginTop: "0.85rem" }}>
+                {searching ? (
+                  <div style={{ color: "#64748b", fontSize: "0.9rem" }}>
+                    Searching…
+                  </div>
+                ) : query.trim() && hits.length === 0 ? (
+                  <div style={{ color: "#64748b", fontSize: "0.9rem" }}>
+                    No students match “{query.trim()}”.
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {hits.map((h) => (
+                      <button
+                        key={h.studentId}
+                        type="button"
+                        onClick={() => pickStudent(h)}
+                        style={{
+                          textAlign: "left",
+                          padding: "0.55rem 0.75rem",
+                          border: "1px solid #e2e8f0",
+                          borderRadius: "0.45rem",
+                          background: "white",
+                          cursor: "pointer",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <span style={{ fontWeight: 600, color: "#0f172a" }}>
+                          {h.firstName} {h.lastName}
+                        </span>
+                        <span style={{ fontSize: "0.82rem", color: "#64748b" }}>
+                          Grade {h.grade}
+                          {h.localSisId ? ` · ID ${h.localSisId}` : ""}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  padding: "0.7rem 0.85rem",
+                  background: "#f1f5f9",
+                  borderRadius: "0.5rem",
+                  marginBottom: "1rem",
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 700, color: "#0f172a" }}>
+                    {student.name}
+                  </div>
+                  <div style={{ fontSize: "0.82rem", color: "#64748b" }}>
+                    Grade {student.grade}
+                    {student.localSisId ? ` · ID ${student.localSisId}` : ""}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: "0.72rem", color: "#64748b" }}>
+                    Available
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "1.25rem",
+                      fontWeight: 800,
+                      color: "#1d4ed8",
+                    }}
+                  >
+                    {walletLoading || !wallet ? "…" : `${wallet.available} pts`}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={changeStudent}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "#1d4ed8",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  fontSize: "0.85rem",
+                  padding: 0,
+                  marginBottom: "0.85rem",
+                }}
+              >
+                ← Choose a different student
+              </button>
+
+              {active.length === 0 ? (
+                <div style={{ color: "#64748b", fontSize: "0.9rem" }}>
+                  No items available in the store.
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {active.map((item) => {
+                    const affordable =
+                      !!wallet && wallet.available >= item.pointsCost;
+                    const isConfirming = confirmItem?.id === item.id;
+                    return (
+                      <div
+                        key={item.id}
+                        style={{
+                          border: "1px solid #e2e8f0",
+                          borderRadius: "0.5rem",
+                          padding: "0.7rem 0.85rem",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            gap: 10,
+                          }}
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <div
+                              style={{
+                                fontWeight: 600,
+                                color: "#0f172a",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {item.name}
+                            </div>
+                            <div
+                              style={{ fontSize: "0.82rem", color: "#64748b" }}
+                            >
+                              {item.pointsCost} pts
+                            </div>
+                          </div>
+                          {!isConfirming && (
+                            <button
+                              type="button"
+                              disabled={!affordable || walletLoading}
+                              onClick={() => {
+                                setErr(null);
+                                setSuccess(null);
+                                setConfirmItem(item);
+                              }}
+                              style={{
+                                padding: "0.45rem 0.85rem",
+                                background: affordable ? "#1d4ed8" : "#cbd5e1",
+                                color: "white",
+                                border: "none",
+                                borderRadius: "0.4rem",
+                                fontWeight: 700,
+                                cursor:
+                                  affordable && !walletLoading
+                                    ? "pointer"
+                                    : "not-allowed",
+                                whiteSpace: "nowrap",
+                                fontSize: "0.85rem",
+                              }}
+                            >
+                              {affordable ? "Purchase" : "Not enough pts"}
+                            </button>
+                          )}
+                        </div>
+                        {isConfirming && (
+                          <div
+                            style={{
+                              marginTop: "0.6rem",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              flexWrap: "wrap",
+                            }}
+                          >
+                            <span
+                              style={{ fontSize: "0.85rem", color: "#0f172a" }}
+                            >
+                              Spend {item.pointsCost} pts for {student.name}?
+                            </span>
+                            <button
+                              type="button"
+                              disabled={submitting}
+                              onClick={() => void confirmPurchase(item)}
+                              style={{
+                                padding: "0.4rem 0.8rem",
+                                background: "#166534",
+                                color: "white",
+                                border: "none",
+                                borderRadius: "0.4rem",
+                                fontWeight: 700,
+                                cursor: submitting ? "wait" : "pointer",
+                                fontSize: "0.82rem",
+                              }}
+                            >
+                              {submitting ? "Purchasing…" : "Confirm"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={submitting}
+                              onClick={() => setConfirmItem(null)}
+                              style={{
+                                padding: "0.4rem 0.8rem",
+                                background: "white",
+                                color: "#475569",
+                                border: "1px solid #cbd5e1",
+                                borderRadius: "0.4rem",
+                                fontWeight: 600,
+                                cursor: "pointer",
+                                fontSize: "0.82rem",
+                              }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function SchoolStoreView({
+  canEdit,
+  canPurchase = false,
+}: {
+  canEdit: boolean;
+  canPurchase?: boolean;
+}) {
   return (
     <StoreView
       config={{
@@ -4046,6 +6407,7 @@ export function SchoolStoreView({ canEdit }: { canEdit: boolean }) {
           : "Check back later — your admin hasn't added any items yet.",
       }}
       canEdit={canEdit}
+      canPurchase={canPurchase}
     />
   );
 }
@@ -4683,6 +7045,875 @@ function StoreItemModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PBIS Points Report — roster of lifetime EARNED points alongside current BANK
+// balance (available), filterable by house / class / teacher, exportable as
+// CSV and PDF. Backed by GET /api/reports/pbis-wallets. Privileged staff
+// (admin / ESE / PBIS coord / SuperUser) get the school-wide + house + teacher
+// filters; plain teachers are pinned server-side to their own roster.
+// ---------------------------------------------------------------------------
+type WalletReportRow = {
+  localSisId: string | null;
+  studentName: string;
+  grade: number | null;
+  houseName: string | null;
+  earned: number;
+  spent: number;
+  available: number;
+};
+type WalletReport = {
+  scope: string;
+  totals: {
+    students: number;
+    earned: number;
+    spent: number;
+    available: number;
+  };
+  rows: WalletReportRow[];
+};
+type HouseOpt = { id: number; name: string };
+type TeacherOpt = { id: number; name: string };
+type SectionOpt = {
+  id: number;
+  period: number;
+  courseName: string;
+  teacherStaffId: number;
+  teacherName: string;
+};
+
+export function PbisPointsReportView({ me }: { me: Me | null }) {
+  const isPrivileged = !!(
+    me?.isSuperUser ||
+    me?.isAdmin ||
+    me?.isEseCoordinator ||
+    me?.isPbisCoordinator
+  );
+
+  const [houses, setHouses] = useState<HouseOpt[]>([]);
+  const [teacherOpts, setTeacherOpts] = useState<TeacherOpt[]>([]);
+  const [sectionOpts, setSectionOpts] = useState<SectionOpt[]>([]);
+  const [houseId, setHouseId] = useState<string>("");
+  const [teacherStaffId, setTeacherStaffId] = useState<string>("");
+  const [sectionId, setSectionId] = useState<string>("");
+  const [report, setReport] = useState<WalletReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState<"csv" | "pdf" | null>(null);
+
+  // House options (privileged only — plain teachers can't filter by house).
+  useEffect(() => {
+    if (!isPrivileged) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authFetch("/api/houses");
+        if (!r.ok) return;
+        const j = (await r.json()) as { houses?: HouseOpt[] };
+        if (!cancelled) setHouses(j.houses ?? []);
+      } catch {
+        /* non-critical */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isPrivileged]);
+
+  // Filter options (teachers + sections) scoped to the viewer's report
+  // privilege server-side — privileged get the whole school, others get only
+  // their own sections. Self-contained so this view does not depend on the
+  // hub's narrower section/teacher props.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authFetch("/api/reports/pbis-wallets/options");
+        if (!r.ok) return;
+        const j = (await r.json()) as {
+          teachers?: TeacherOpt[];
+          sections?: SectionOpt[];
+        };
+        if (!cancelled) {
+          setTeacherOpts(j.teachers ?? []);
+          setSectionOpts(j.sections ?? []);
+        }
+      } catch {
+        /* non-critical */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Class options — narrowed to the selected teacher when one is picked.
+  const classOptions = useMemo(() => {
+    const base =
+      isPrivileged && teacherStaffId
+        ? sectionOpts.filter(
+            (s) => s.teacherStaffId === Number(teacherStaffId),
+          )
+        : sectionOpts;
+    return [...base].sort(
+      (a, b) =>
+        a.teacherName.localeCompare(b.teacherName) ||
+        String(a.period).localeCompare(String(b.period)),
+    );
+  }, [sectionOpts, teacherStaffId, isPrivileged]);
+
+  // If the selected class no longer belongs to the selected teacher, clear it.
+  useEffect(() => {
+    if (sectionId && !classOptions.some((s) => String(s.id) === sectionId)) {
+      setSectionId("");
+    }
+  }, [classOptions, sectionId]);
+
+  const buildQuery = useCallback(() => {
+    const p = new URLSearchParams();
+    if (isPrivileged && houseId) p.set("houseId", houseId);
+    if (isPrivileged && teacherStaffId) p.set("teacherStaffId", teacherStaffId);
+    if (sectionId) p.set("sectionId", sectionId);
+    return p;
+  }, [isPrivileged, houseId, teacherStaffId, sectionId]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const qs = buildQuery().toString();
+      const r = await authFetch(
+        `/api/reports/pbis-wallets${qs ? `?${qs}` : ""}`,
+        { cache: "no-store" },
+      );
+      if (!r.ok) {
+        setError("Could not load the points report.");
+        return;
+      }
+      setReport((await r.json()) as WalletReport);
+    } catch {
+      setError("Could not load the points report.");
+    } finally {
+      setLoading(false);
+    }
+  }, [buildQuery]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function download(format: "csv" | "pdf") {
+    setDownloading(format);
+    try {
+      const qs = buildQuery();
+      qs.set("format", format);
+      const r = await authFetch(`/api/reports/pbis-wallets?${qs.toString()}`);
+      if (!r.ok) {
+        setError(`Download failed (${r.status}).`);
+        return;
+      }
+      const blob = await r.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const dispo = r.headers.get("content-disposition") || "";
+      const match = /filename="?([^"]+)"?/i.exec(dispo);
+      const filename =
+        match?.[1] ||
+        `pbis-points-report-${new Date().toISOString().slice(0, 10)}.${format}`;
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objUrl);
+    } catch (e) {
+      setError(`Download failed: ${String((e as Error)?.message ?? e)}`);
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  const selectStyle: React.CSSProperties = {
+    padding: "0.4rem 0.6rem",
+    borderRadius: 8,
+    border: "1px solid var(--border, #e2e8f0)",
+    background: "var(--card, #fff)",
+    color: "var(--text, #0f172a)",
+  };
+  const btnStyle: React.CSSProperties = {
+    padding: "0.45rem 0.85rem",
+    borderRadius: 8,
+    border: "1px solid var(--border, #e2e8f0)",
+    background: "var(--card, #fff)",
+    color: "var(--text, #0f172a)",
+    fontWeight: 600,
+    cursor: "pointer",
+  };
+  const numTd: React.CSSProperties = {
+    padding: "10px 12px",
+    textAlign: "right",
+    whiteSpace: "nowrap",
+  };
+  const card: React.CSSProperties = {
+    background: "var(--card, #fff)",
+    border: "1px solid var(--border, #e2e8f0)",
+    borderRadius: 12,
+    padding: "1rem",
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+      <p style={{ margin: 0, color: "var(--muted, #64748b)", fontSize: "0.9rem" }}>
+        Lifetime points <strong>earned</strong> alongside each student's current
+        spendable <strong>bank</strong> balance. Filter, then export for
+        conferences or admin review.
+      </p>
+
+      <div
+        style={{
+          display: "flex",
+          gap: "0.75rem",
+          flexWrap: "wrap",
+          alignItems: "flex-end",
+        }}
+      >
+        {isPrivileged && (
+          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontSize: "0.78rem", color: "var(--muted, #64748b)" }}>
+              House
+            </span>
+            <select
+              value={houseId}
+              onChange={(e) => setHouseId(e.target.value)}
+              style={selectStyle}
+            >
+              <option value="">All houses</option>
+              {houses.map((h) => (
+                <option key={h.id} value={String(h.id)}>
+                  {h.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {isPrivileged && (
+          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontSize: "0.78rem", color: "var(--muted, #64748b)" }}>
+              Teacher
+            </span>
+            <select
+              value={teacherStaffId}
+              onChange={(e) => setTeacherStaffId(e.target.value)}
+              style={selectStyle}
+            >
+              <option value="">All teachers</option>
+              {teacherOpts.map((t) => (
+                <option key={t.id} value={String(t.id)}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: "0.78rem", color: "var(--muted, #64748b)" }}>
+            Class
+          </span>
+          <select
+            value={sectionId}
+            onChange={(e) => setSectionId(e.target.value)}
+            style={selectStyle}
+          >
+            <option value="">All classes</option>
+            {classOptions.map((s) => (
+              <option key={s.id} value={String(s.id)}>
+                {isPrivileged ? `${s.teacherName} · ` : ""}P{s.period}
+                {s.courseName ? ` · ${s.courseName}` : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div style={{ display: "flex", gap: "0.5rem", marginLeft: "auto" }}>
+          <button
+            type="button"
+            style={{ ...btnStyle, opacity: downloading ? 0.6 : 1 }}
+            disabled={!!downloading || loading}
+            onClick={() => void download("csv")}
+          >
+            {downloading === "csv" ? "…" : "Export CSV"}
+          </button>
+          <button
+            type="button"
+            style={{ ...btnStyle, opacity: downloading ? 0.6 : 1 }}
+            disabled={!!downloading || loading}
+            onClick={() => void download("pdf")}
+          >
+            {downloading === "pdf" ? "…" : "Export PDF"}
+          </button>
+        </div>
+      </div>
+
+      {loading ? (
+        <p style={{ color: "var(--muted, #64748b)" }}>Loading…</p>
+      ) : error ? (
+        <div style={card}>
+          <p style={{ margin: 0, color: "#b91c1c" }}>{error}</p>
+        </div>
+      ) : !report || report.rows.length === 0 ? (
+        <div style={card}>
+          <p style={{ margin: 0 }}>No students match these filters.</p>
+        </div>
+      ) : (
+        <>
+          <div
+            style={{
+              display: "flex",
+              gap: "1rem",
+              flexWrap: "wrap",
+              color: "var(--muted, #64748b)",
+              fontSize: "0.85rem",
+            }}
+          >
+            <span>
+              <strong style={{ color: "var(--text, #0f172a)" }}>
+                {report.totals.students}
+              </strong>{" "}
+              students · {report.scope}
+            </span>
+            <span>
+              Earned:{" "}
+              <strong style={{ color: "var(--text, #0f172a)" }}>
+                {report.totals.earned}
+              </strong>
+            </span>
+            <span>
+              Bank:{" "}
+              <strong style={{ color: "#15803d" }}>
+                {report.totals.available}
+              </strong>
+            </span>
+          </div>
+          <div style={{ ...card, padding: 0, overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr
+                  style={{
+                    textAlign: "left",
+                    color: "var(--muted, #64748b)",
+                    fontSize: "0.82rem",
+                  }}
+                >
+                  <th style={{ padding: "10px 12px" }}>Student</th>
+                  <th style={{ padding: "10px 12px" }}>SIS ID</th>
+                  <th style={{ padding: "10px 12px", textAlign: "right" }}>Gr</th>
+                  <th style={{ padding: "10px 12px" }}>House</th>
+                  <th style={{ padding: "10px 12px", textAlign: "right" }}>
+                    Earned
+                  </th>
+                  <th style={{ padding: "10px 12px", textAlign: "right" }}>
+                    Spent
+                  </th>
+                  <th style={{ padding: "10px 12px", textAlign: "right" }}>
+                    Bank
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.rows.map((r, i) => (
+                  <tr
+                    key={`${r.localSisId ?? "x"}-${i}`}
+                    style={{ borderTop: "1px solid var(--border, #e2e8f0)" }}
+                  >
+                    <td style={{ padding: "10px 12px" }}>{r.studentName}</td>
+                    <td
+                      style={{
+                        padding: "10px 12px",
+                        color: "var(--muted, #64748b)",
+                      }}
+                    >
+                      {r.localSisId ?? "—"}
+                    </td>
+                    <td style={numTd}>{r.grade ?? "—"}</td>
+                    <td style={{ padding: "10px 12px" }}>
+                      {r.houseName ?? "—"}
+                    </td>
+                    <td style={numTd}>{r.earned}</td>
+                    <td
+                      style={{ ...numTd, color: "var(--muted, #64748b)" }}
+                    >
+                      {r.spent}
+                    </td>
+                    <td style={{ ...numTd, fontWeight: 700, color: "#15803d" }}>
+                      {r.available}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Standalone "Points Bank" page — the wallets / Earned·Spent·Bank ledger,
+// promoted to its own Recognition sidebar item so it is reachable in one
+// click instead of being buried behind PBIS Points -> Positive -> Reports
+// tab. Self-fetches the signed-in account so App can mount it with no props;
+// PbisPointsReportView uses `me` only to decide school-wide vs own-awarded
+// scope (server enforces the same).
+export function PbisWalletsPage() {
+  const [me, setMe] = useState<Me | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authFetch("/api/auth/me");
+        if (!res.ok || cancelled) return;
+        setMe((await res.json()) as Me);
+      } catch {
+        // Non-fatal: PbisPointsReportView renders with me=null (own-scope),
+        // and the server still scopes results by the authenticated session.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return <PbisPointsReportView me={me} />;
+}
+
+// ---------------------------------------------------------------------------
+// My PBIS Usage — anonymized, school-wide point-awarding benchmark.
+// Visible to ALL staff. Shows the signed-in teacher's OWN positive-recognition
+// numbers boldly, alongside anonymized peer aggregates (school average, per
+// department, per period) and the top awarded behaviors. No teacher names ever
+// appear; comparison buckets with fewer than `threshold` distinct awarding
+// teachers come back suppressed so a small group can't identify one person.
+// Backed by GET /api/reports/pbis-usage (the server identifies the caller via
+// the session, so this page needs no /api/auth/me round-trip).
+// ---------------------------------------------------------------------------
+type UsageDept = {
+  department: string;
+  teacherCount: number | null;
+  avgPointsPerTeacher: number | null;
+  avgRecognitionsPerTeacher: number | null;
+  suppressed: boolean;
+  isMine: boolean;
+};
+type UsagePeriod = {
+  period: string;
+  teacherCount: number | null;
+  totalPoints: number | null;
+  avgPointsPerTeacher: number | null;
+  suppressed: boolean;
+};
+type UsageReport = {
+  window: { from: string; to: string; days: number };
+  threshold: number;
+  me: {
+    department: string;
+    points: number;
+    recognitions: number;
+    studentsRecognized: number;
+  };
+  school: {
+    awardingTeachers: number | null;
+    totalPoints: number | null;
+    totalRecognitions: number | null;
+    avgPointsPerTeacher: number | null;
+    avgRecognitionsPerTeacher: number | null;
+    suppressed: boolean;
+  };
+  byDepartment: UsageDept[];
+  byPeriod: UsagePeriod[];
+  topBehaviors: { reason: string; count: number; points: number }[];
+};
+
+const USAGE_RANGES: { key: string; label: string; days: number }[] = [
+  { key: "7", label: "Last 7 days", days: 7 },
+  { key: "30", label: "Last 30 days", days: 30 },
+  { key: "90", label: "Last 90 days", days: 90 },
+];
+
+function usageLocalIso(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export function PbisUsagePage() {
+  const [rangeKey, setRangeKey] = useState<string>("30");
+  const [data, setData] = useState<UsageReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    const days = USAGE_RANGES.find((r) => r.key === rangeKey)?.days ?? 30;
+    const to = new Date();
+    const from = new Date();
+    from.setDate(from.getDate() - (days - 1));
+    const qs = `from=${usageLocalIso(from)}&to=${usageLocalIso(to)}`;
+    (async () => {
+      try {
+        const res = await authFetch(`/api/reports/pbis-usage?${qs}`);
+        if (cancelled) return;
+        if (!res.ok) {
+          setError("Could not load PBIS usage. Please try again.");
+          setData(null);
+          return;
+        }
+        setData((await res.json()) as UsageReport);
+      } catch {
+        if (!cancelled) {
+          setError("Could not load PBIS usage. Please try again.");
+          setData(null);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rangeKey]);
+
+  const suppressedMsg = (n: number) => `Not enough teachers to compare (need ${n}+)`;
+  const fmt = (n: number | null) => (n == null ? "—" : String(n));
+
+  // Bar scale for the me-vs-peers headline comparison.
+  const schoolAvg = data?.school.avgPointsPerTeacher ?? null;
+  const myDept = data?.byDepartment.find((d) => d.isMine) ?? null;
+  const myDeptAvg = myDept && !myDept.suppressed ? myDept.avgPointsPerTeacher : null;
+  const barMax = Math.max(
+    data?.me.points ?? 0,
+    schoolAvg ?? 0,
+    myDeptAvg ?? 0,
+    1,
+  );
+
+  return (
+    <div style={{ maxWidth: 980, margin: "0 auto", padding: "1.25rem 1rem 3rem" }}>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          gap: "0.75rem",
+          marginBottom: "1rem",
+        }}
+      >
+        <div>
+          <h1 style={{ fontSize: "1.5rem", fontWeight: 800, margin: 0, color: "#0f172a" }}>
+            My PBIS Usage
+          </h1>
+          <p style={{ margin: "0.35rem 0 0", color: "#475569", maxWidth: 620 }}>
+            See how your positive recognitions compare to your peers. Your own
+            numbers are shown in <strong>bold</strong>; everyone else appears only
+            as anonymized averages — <strong>no teacher names</strong>.
+          </p>
+        </div>
+        <select
+          value={rangeKey}
+          onChange={(e) => setRangeKey(e.target.value)}
+          style={{
+            padding: "0.45rem 0.6rem",
+            borderRadius: "0.5rem",
+            border: "1px solid #cbd5e1",
+            background: "#fff",
+            color: "#0f172a",
+            fontWeight: 600,
+          }}
+        >
+          {USAGE_RANGES.map((r) => (
+            <option key={r.key} value={r.key}>
+              {r.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {loading && <div style={{ color: "#64748b", padding: "2rem 0" }}>Loading…</div>}
+      {error && !loading && (
+        <div
+          style={{
+            background: "#fef2f2",
+            border: "1px solid #fecaca",
+            color: "#b91c1c",
+            borderRadius: "0.6rem",
+            padding: "1rem",
+          }}
+        >
+          {error}
+        </div>
+      )}
+
+      {data && !loading && !error && (
+        <>
+          {/* ---- Your numbers (bold hero) ---- */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+              gap: "0.75rem",
+              marginBottom: "1.25rem",
+            }}
+          >
+            {[
+              { label: "Your points awarded", value: data.me.points },
+              { label: "Your recognitions", value: data.me.recognitions },
+              { label: "Students you recognized", value: data.me.studentsRecognized },
+            ].map((c) => (
+              <div
+                key={c.label}
+                style={{
+                  background: "linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%)",
+                  border: "1px solid #bfdbfe",
+                  borderRadius: "0.7rem",
+                  padding: "1rem",
+                }}
+              >
+                <div style={{ fontSize: "1.9rem", fontWeight: 800, color: "#1e3a8a" }}>
+                  {c.value}
+                </div>
+                <div style={{ color: "#1e40af", fontWeight: 600, fontSize: "0.85rem" }}>
+                  {c.label}
+                </div>
+              </div>
+            ))}
+            <div
+              style={{
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+                borderRadius: "0.7rem",
+                padding: "1rem",
+              }}
+            >
+              <div style={{ fontSize: "1rem", fontWeight: 800, color: "#0f172a" }}>
+                {data.me.department}
+              </div>
+              <div style={{ color: "#64748b", fontWeight: 600, fontSize: "0.85rem" }}>
+                Your department
+              </div>
+            </div>
+          </div>
+
+          {/* ---- Me vs peers headline bars ---- */}
+          <section
+            style={{
+              border: "1px solid #e2e8f0",
+              borderRadius: "0.7rem",
+              padding: "1.1rem 1.2rem",
+              marginBottom: "1.25rem",
+              background: "#fff",
+            }}
+          >
+            <h2 style={{ fontSize: "1.05rem", fontWeight: 700, margin: "0 0 0.85rem", color: "#0f172a" }}>
+              You vs. your peers (points awarded)
+            </h2>
+            {[
+              { label: "You", value: data.me.points, mine: true, suppressed: false },
+              {
+                label: "School average / teacher",
+                value: schoolAvg,
+                mine: false,
+                suppressed: data.school.suppressed,
+              },
+              {
+                label: `${data.me.department} average / teacher`,
+                value: myDeptAvg,
+                mine: false,
+                suppressed: !myDept || myDept.suppressed,
+              },
+            ].map((row) => (
+              <div key={row.label} style={{ marginBottom: "0.7rem" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    fontSize: "0.85rem",
+                    marginBottom: "0.25rem",
+                    color: row.mine ? "#1e3a8a" : "#475569",
+                    fontWeight: row.mine ? 800 : 600,
+                  }}
+                >
+                  <span>{row.label}</span>
+                  <span>
+                    {row.suppressed ? suppressedMsg(data.threshold) : fmt(row.value)}
+                  </span>
+                </div>
+                {!row.suppressed && (
+                  <div
+                    style={{
+                      height: 10,
+                      background: "#f1f5f9",
+                      borderRadius: 999,
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      style={{
+                        height: "100%",
+                        width: `${Math.min(100, ((row.value ?? 0) / barMax) * 100)}%`,
+                        background: row.mine ? "#2563eb" : "#94a3b8",
+                        borderRadius: 999,
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
+            <p style={{ margin: "0.5rem 0 0", color: "#94a3b8", fontSize: "0.78rem" }}>
+              {data.school.suppressed ? (
+                <>{suppressedMsg(data.threshold)}</>
+              ) : (
+                <>
+                  School-wide: {data.school.totalPoints} points from{" "}
+                  {data.school.awardingTeachers} teacher
+                  {data.school.awardingTeachers === 1 ? "" : "s"} over the last{" "}
+                  {data.window.days} days.
+                </>
+              )}
+            </p>
+          </section>
+
+          {/* ---- By department ---- */}
+          <section style={{ marginBottom: "1.25rem" }}>
+            <h2 style={{ fontSize: "1.05rem", fontWeight: 700, margin: "0 0 0.6rem", color: "#0f172a" }}>
+              By department (avg per teacher)
+            </h2>
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: "0.6rem", overflow: "hidden" }}>
+              {data.byDepartment.length === 0 && (
+                <div style={{ padding: "1rem", color: "#64748b" }}>No awards in this window.</div>
+              )}
+              {data.byDepartment.map((d) => (
+                <div
+                  key={d.department}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "0.65rem 0.9rem",
+                    borderTop: "1px solid #f1f5f9",
+                    background: d.isMine ? "#eff6ff" : "#fff",
+                  }}
+                >
+                  <div style={{ fontWeight: d.isMine ? 800 : 600, color: "#0f172a" }}>
+                    {d.department}
+                    {d.isMine && (
+                      <span style={{ color: "#2563eb", fontWeight: 700 }}> (you)</span>
+                    )}
+                  </div>
+                  <div style={{ textAlign: "right", color: "#334155" }}>
+                    {d.suppressed ? (
+                      <span style={{ color: "#94a3b8", fontSize: "0.85rem" }}>
+                        {suppressedMsg(data.threshold)}
+                      </span>
+                    ) : (
+                      <span style={{ fontWeight: 700 }}>
+                        {fmt(d.avgPointsPerTeacher)} pts
+                        <span style={{ color: "#94a3b8", fontWeight: 500 }}>
+                          {" "}· {d.teacherCount} teachers
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* ---- By period ---- */}
+          <section style={{ marginBottom: "1.25rem" }}>
+            <h2 style={{ fontSize: "1.05rem", fontWeight: 700, margin: "0 0 0.6rem", color: "#0f172a" }}>
+              By class period (avg per teacher)
+            </h2>
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: "0.6rem", overflow: "hidden" }}>
+              {data.byPeriod.length === 0 && (
+                <div style={{ padding: "1rem", color: "#64748b" }}>No awards in this window.</div>
+              )}
+              {data.byPeriod.map((p) => (
+                <div
+                  key={p.period}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "0.65rem 0.9rem",
+                    borderTop: "1px solid #f1f5f9",
+                  }}
+                >
+                  <div style={{ fontWeight: 600, color: "#0f172a" }}>
+                    {p.period === "Unmatched" ? "Other / unmatched" : `Period ${p.period}`}
+                  </div>
+                  <div style={{ textAlign: "right", color: "#334155" }}>
+                    {p.suppressed ? (
+                      <span style={{ color: "#94a3b8", fontSize: "0.85rem" }}>
+                        {suppressedMsg(data.threshold)}
+                      </span>
+                    ) : (
+                      <span style={{ fontWeight: 700 }}>
+                        {fmt(p.avgPointsPerTeacher)} pts
+                        <span style={{ color: "#94a3b8", fontWeight: 500 }}>
+                          {" "}· {p.teacherCount} teachers
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* ---- Top behaviors ---- */}
+          <section style={{ marginBottom: "1.25rem" }}>
+            <h2 style={{ fontSize: "1.05rem", fontWeight: 700, margin: "0 0 0.6rem", color: "#0f172a" }}>
+              Top awarded behaviors (school-wide)
+            </h2>
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: "0.6rem", overflow: "hidden" }}>
+              {data.topBehaviors.length === 0 && (
+                <div style={{ padding: "1rem", color: "#64748b" }}>No awards in this window.</div>
+              )}
+              {data.topBehaviors.map((b, i) => (
+                <div
+                  key={b.reason}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "0.6rem 0.9rem",
+                    borderTop: i === 0 ? "none" : "1px solid #f1f5f9",
+                  }}
+                >
+                  <div style={{ color: "#0f172a" }}>{b.reason}</div>
+                  <div style={{ color: "#334155", fontWeight: 700 }}>
+                    {b.points} pts
+                    <span style={{ color: "#94a3b8", fontWeight: 500 }}>
+                      {" "}· {b.count}×
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <p style={{ color: "#94a3b8", fontSize: "0.78rem", margin: 0 }}>
+            Comparisons are anonymized. Any department or period with fewer than{" "}
+            {data.threshold} awarding teachers is hidden so no single teacher can
+            be identified.
+          </p>
+        </>
+      )}
     </div>
   );
 }

@@ -49,6 +49,8 @@ function requireAdminOrSuper() {
 
 const KINDS = new Set(["classroom", "common_area", "restroom", "office"]);
 
+const GENDERS = new Set(["boys", "girls"]);
+
 function parseLocationBody(body: unknown): {
   name?: string;
   kind?: string;
@@ -56,6 +58,9 @@ function parseLocationBody(body: unknown): {
   isDestination?: boolean;
   studentVisible?: boolean;
   active?: boolean;
+  restroomArea?: string | null;
+  gender?: string | null;
+  schoolWideDefault?: boolean;
   error?: string;
 } {
   const b = (body ?? {}) as Record<string, unknown>;
@@ -66,6 +71,9 @@ function parseLocationBody(body: unknown): {
     isDestination?: boolean;
     studentVisible?: boolean;
     active?: boolean;
+    restroomArea?: string | null;
+    gender?: string | null;
+    schoolWideDefault?: boolean;
     error?: string;
   } = {};
   if ("name" in b) {
@@ -90,6 +98,44 @@ function parseLocationBody(body: unknown): {
       }
       out[f] = b[f] as boolean;
     }
+  }
+  // restroom_area: free text grouping; "" / null clears it.
+  if ("restroomArea" in b) {
+    if (b.restroomArea === null) {
+      out.restroomArea = null;
+    } else if (typeof b.restroomArea === "string") {
+      const v = b.restroomArea.trim();
+      out.restroomArea = v.length > 0 ? v : null;
+    } else {
+      out.error = "restroomArea must be a string or null";
+      return out;
+    }
+  }
+  // gender: 'boys' | 'girls' | null.
+  if ("gender" in b) {
+    if (b.gender === null) {
+      out.gender = null;
+    } else if (typeof b.gender === "string") {
+      const v = b.gender.trim().toLowerCase();
+      if (v.length === 0) {
+        out.gender = null;
+      } else if (GENDERS.has(v)) {
+        out.gender = v;
+      } else {
+        out.error = "gender must be 'boys', 'girls', or null";
+        return out;
+      }
+    } else {
+      out.error = "gender must be a string or null";
+      return out;
+    }
+  }
+  if ("schoolWideDefault" in b) {
+    if (typeof b.schoolWideDefault !== "boolean") {
+      out.error = "schoolWideDefault must be boolean";
+      return out;
+    }
+    out.schoolWideDefault = b.schoolWideDefault;
   }
   return out;
 }
@@ -128,6 +174,9 @@ router.post("/locations", requireAdminOrSuper(), async (req, res) => {
         isDestination: parsed.isDestination ?? false,
         studentVisible: parsed.studentVisible ?? false,
         active: parsed.active ?? true,
+        restroomArea: parsed.restroomArea ?? null,
+        gender: parsed.gender ?? null,
+        schoolWideDefault: parsed.schoolWideDefault ?? false,
       })
       .returning();
     res.status(201).json(row);
@@ -281,6 +330,9 @@ router.patch("/locations/:id", requireAdminOrSuper(), async (req, res) => {
     "isDestination",
     "studentVisible",
     "active",
+    "restroomArea",
+    "gender",
+    "schoolWideDefault",
   ] as const) {
     if (parsed[k] !== undefined) updates[k] = parsed[k];
   }

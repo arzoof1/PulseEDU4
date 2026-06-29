@@ -544,6 +544,113 @@ function Card({
   );
 }
 
+// Per-student class/period schedule, collapsed behind a "View schedule"
+// button (closed by default). Lazy-loads from the visibility-scoped
+// /api/student-lookup/:id/schedule endpoint only once, on first open.
+function ScheduleSection({ studentId }: { studentId: string }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [rows, setRows] = useState<
+    Array<{
+      period: number;
+      courseName: string;
+      teacherName: string;
+    }>
+  >([]);
+
+  useEffect(() => {
+    if (!open || loaded) return;
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    (async () => {
+      try {
+        const r = await authFetch(
+          `/api/student-lookup/${encodeURIComponent(studentId)}/schedule`,
+        );
+        if (!r.ok) {
+          const b = await r.json().catch(() => ({}));
+          throw new Error(b?.error || "Could not load schedule");
+        }
+        const data = (await r.json()) as {
+          schedule: Array<{
+            period: number;
+            courseName: string;
+            teacherName: string;
+          }>;
+        };
+        if (cancelled) return;
+        setRows(data.schedule ?? []);
+        setLoaded(true);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Load failed");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, loaded, studentId]);
+
+  return (
+    <div className="card" style={{ marginBottom: 0 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "0.75rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <h3 style={{ margin: 0, fontSize: "1rem" }}>Student schedule</h3>
+        <button className="btn-secondary" onClick={() => setOpen((v) => !v)}>
+          {open ? "Hide schedule" : "View schedule"}
+        </button>
+      </div>
+      {open && (
+        <div style={{ marginTop: "0.75rem" }}>
+          {loading && <div style={{ color: "var(--muted)" }}>Loading…</div>}
+          {error && (
+            <div style={{ color: "#b91c1c", fontSize: "0.85rem" }}>{error}</div>
+          )}
+          {!loading && !error && rows.length === 0 && (
+            <div style={{ color: "#9ca3af", fontSize: "0.9rem" }}>
+              No scheduled classes found.
+            </div>
+          )}
+          {!loading && !error && rows.length > 0 && (
+            <table
+              className="pulse-table"
+              style={{ width: "100%", fontSize: "0.85rem" }}
+            >
+              <thead>
+                <tr style={{ color: "#6b7280", textAlign: "left" }}>
+                  <th>Period</th>
+                  <th>Course</th>
+                  <th>Teacher</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((s) => (
+                  <tr key={s.period}>
+                    <td>{s.period}</td>
+                    <td>{s.courseName}</td>
+                    <td>{s.teacherName || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function scoreColor(score: number): string {
   if (score >= 75) return "#16a34a"; // green
   if (score >= 50) return "#ca8a04"; // amber
@@ -2189,6 +2296,12 @@ function DismissalModeChip({
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // A dismissal-mode change is an office override of the RosterOne record,
+  // so it requires a reason (captured inline — the preview iframe blocks
+  // window.prompt). The staff member picks the new mode, types a reason,
+  // then confirms.
+  const [pendingMode, setPendingMode] = useState<DismissalMode | null>(null);
+  const [reason, setReason] = useState("");
 
   // Two modes carry safety/operational weight that the front desk
   // needs to spot at a glance:
@@ -2213,7 +2326,14 @@ function DismissalModeChip({
     cursor: canEdit ? "pointer" : "default",
   };
 
-  async function save(next: DismissalMode) {
+  function resetEditor() {
+    setEditing(false);
+    setPendingMode(null);
+    setReason("");
+    setErr(null);
+  }
+
+  async function save(next: DismissalMode, why: string) {
     setBusy(true);
     setErr(null);
     try {
@@ -2222,7 +2342,7 @@ function DismissalModeChip({
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ dismissalMode: next }),
+          body: JSON.stringify({ dismissalMode: next, reason: why }),
         },
       );
       if (!r.ok) {
@@ -2230,7 +2350,7 @@ function DismissalModeChip({
         throw new Error(j.error ?? `Save failed (${r.status})`);
       }
       onSaved(next);
-      setEditing(false);
+      resetEditor();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Save failed");
     } finally {
@@ -2256,6 +2376,9 @@ function DismissalModeChip({
     );
   }
 
+  const selected = pendingMode ?? (value as DismissalMode) ?? "car_rider";
+  const reasonOk = reason.trim().length >= 5;
+
   return (
     <span
       style={{
@@ -2263,12 +2386,13 @@ function DismissalModeChip({
         alignItems: "center",
         gap: 4,
         marginLeft: 4,
+        flexWrap: "wrap",
       }}
     >
       <select
-        value={value ?? "car_rider"}
+        value={selected}
         disabled={busy}
-        onChange={(e) => void save(e.target.value as DismissalMode)}
+        onChange={(e) => setPendingMode(e.target.value as DismissalMode)}
         style={{
           padding: "0.18rem 0.4rem",
           borderRadius: 6,
@@ -2282,12 +2406,43 @@ function DismissalModeChip({
           </option>
         ))}
       </select>
+      <input
+        value={reason}
+        disabled={busy}
+        onChange={(e) => setReason(e.target.value)}
+        placeholder="Reason (min 5 chars) — required"
+        style={{
+          padding: "0.18rem 0.4rem",
+          borderRadius: 6,
+          border: "1px solid #94a3b8",
+          fontSize: "0.78rem",
+          minWidth: 220,
+        }}
+      />
       <button
         type="button"
-        onClick={() => {
-          setEditing(false);
-          setErr(null);
+        onClick={() => void save(selected, reason.trim())}
+        disabled={busy || !reasonOk}
+        title={
+          reasonOk
+            ? "Save dismissal-mode change (recorded in the audit log)"
+            : "Enter a reason of at least 5 characters"
+        }
+        style={{
+          background: reasonOk ? "#1d4ed8" : "#93c5fd",
+          color: "#fff",
+          border: "none",
+          borderRadius: 6,
+          padding: "0.15rem 0.5rem",
+          fontSize: "0.72rem",
+          cursor: busy || !reasonOk ? "not-allowed" : "pointer",
         }}
+      >
+        {busy ? "Saving…" : "Save"}
+      </button>
+      <button
+        type="button"
+        onClick={resetEditor}
         disabled={busy}
         style={{
           background: "transparent",
@@ -2337,6 +2492,20 @@ export default function StudentProfile({
   >([]);
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
+  // Family communication timeline (read-only). Loaded in a parallel fetch keyed
+  // to the student so switching students never shows stale rows.
+  const [commLogs, setCommLogs] = useState<
+    Array<{
+      id: number;
+      type: string;
+      whoContacted: string | null;
+      outcome: string;
+      tone: string;
+      note: string | null;
+      staffName: string;
+      contactedAt: string;
+    }>
+  >([]);
   // Inline demographics editor — closed by default. When opened it
   // hydrates from the loaded profile; Save PATCHes only the changed
   // fields so the server-side merge stays minimal.
@@ -2451,6 +2620,25 @@ export default function StudentProfile({
       .then((j: { emergencyContacts?: typeof emergencyContacts } | null) => {
         if (cancelled || !j) return;
         setEmergencyContacts(j.emergencyContacts ?? []);
+      })
+      .catch(() => {
+        /* non-fatal — block just stays empty */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setCommLogs([]);
+    authFetch(
+      `/api/communications/student/${encodeURIComponent(studentId)}`,
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { logs?: typeof commLogs } | null) => {
+        if (cancelled || !j) return;
+        setCommLogs(j.logs ?? []);
       })
       .catch(() => {
         /* non-fatal — block just stays empty */
@@ -3042,9 +3230,20 @@ export default function StudentProfile({
         </div>
       </div>
 
-      {/* Risk callout rail */}
-      {riskFlags.length > 0 && (
-        <div className="card" style={{ marginBottom: 0 }}>
+      {/* Reordered whole-child sections — single top-to-bottom column.
+          Source order is irrelevant; the visual order is controlled by the
+          `order` on each flex child:
+          1 schedule · 2 family · 3 radar · 4 attendance · 5 behavior ·
+          6 academics · 7 supports · 8 intervention history ·
+          9 things-to-know · 10 FAST analysis. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+        <div style={{ order: 1 }}>
+          <ScheduleSection key={studentId} studentId={studentId} />
+        </div>
+
+        {/* Risk callout rail */}
+        {riskFlags.length > 0 && (
+          <div className="card" style={{ marginBottom: 0, order: 9 }}>
           <h3 style={{ margin: "0 0 0.5rem 0", fontSize: "1rem" }}>Things to know</h3>
           <div>
             {riskFlags.map((f) => {
@@ -3069,15 +3268,17 @@ export default function StudentProfile({
         </div>
       )}
 
-      {/* Whole-child radar */}
-      <WholeChildRadar axes={data.radar.axes} />
+      {/* Whole-child radar (spider report) */}
+      <div style={{ order: 3 }}>
+        <WholeChildRadar axes={data.radar.axes} />
+      </div>
 
       {/* FAST Analysis Over Time — full-width section above the
           pillars grid. Pulled out of the Academics card so each
           subject gets ~half the page width, the trend sparkline is
           readable at a glance, and the page reads as "trajectory
           first, pillar deep-dives below". */}
-      <div className="card" style={{ marginBottom: 0 }}>
+      <div className="card" style={{ marginBottom: 0, order: 10 }}>
         <div
           style={{
             display: "flex",
@@ -3125,14 +3326,10 @@ export default function StudentProfile({
         </div>
       </div>
 
-      {/* Pillars grid */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-          gap: "0.75rem",
-        }}
-      >
+      {/* Pillars — now individual full-width sections in the reordered
+          column (grid removed so each pillar can be ordered independently
+          relative to the radar / FAST / history sections). */}
+      <div style={{ order: 6, minWidth: 0 }}>
         <Card
           title="Academics"
           empty={
@@ -3371,7 +3568,9 @@ export default function StudentProfile({
               gets ~half the page width and the trend sparkline is
               readable. */}
         </Card>
+      </div>
 
+      <div style={{ order: 5, minWidth: 0 }}>
         <Card
           title="Behavior"
           empty={
@@ -3481,7 +3680,9 @@ export default function StudentProfile({
             </div>
           )}
         </Card>
+      </div>
 
+      <div style={{ order: 4, minWidth: 0 }}>
         <Card
           title="Attendance & Flow"
           empty={
@@ -3568,7 +3769,9 @@ export default function StudentProfile({
             </div>
           )}
         </Card>
+      </div>
 
+      <div style={{ order: 7, minWidth: 0 }}>
         <Card
           title="Supports"
           empty={
@@ -3692,7 +3895,9 @@ export default function StudentProfile({
             </div>
           )}
         </Card>
+      </div>
 
+      <div style={{ order: 2, minWidth: 0 }}>
         <Card
           title="Family"
           empty={
@@ -3752,9 +3957,91 @@ export default function StudentProfile({
         </Card>
       </div>
 
+      <div style={{ order: 2, minWidth: 0 }}>
+        <Card title="Family Communication" empty={commLogs.length === 0}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.6rem",
+            }}
+          >
+            {commLogs.map((l) => {
+              const toneColor =
+                l.tone === "positive"
+                  ? "#16a34a"
+                  : l.tone === "concern"
+                    ? "#dc2626"
+                    : "#64748b";
+              const toneLabel =
+                l.tone === "positive"
+                  ? "Positive"
+                  : l.tone === "concern"
+                    ? "Concern"
+                    : "Neutral";
+              const when = new Date(l.contactedAt);
+              const whenLabel = Number.isNaN(when.getTime())
+                ? l.contactedAt
+                : when.toLocaleString("en-US", {
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                    hour: "numeric",
+                    minute: "2-digit",
+                  });
+              return (
+                <div
+                  key={l.id}
+                  style={{
+                    borderLeft: `3px solid ${toneColor}`,
+                    paddingLeft: "0.6rem",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "0.85rem",
+                      fontWeight: 700,
+                      color: "#0f172a",
+                    }}
+                  >
+                    {l.type} · {l.outcome}
+                    <span
+                      style={{
+                        marginLeft: "0.5rem",
+                        fontSize: "0.72rem",
+                        fontWeight: 700,
+                        color: toneColor,
+                      }}
+                    >
+                      {toneLabel}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: "0.78rem", color: "#6b7280" }}>
+                    {whenLabel}
+                    {l.whoContacted ? ` · to ${l.whoContacted}` : ""} · by{" "}
+                    {l.staffName}
+                  </div>
+                  {l.note && (
+                    <div
+                      style={{
+                        fontSize: "0.82rem",
+                        color: "#334155",
+                        marginTop: "0.15rem",
+                      }}
+                    >
+                      {l.note}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      </div>
+
       <div
         className="card"
-        style={{ marginTop: "1rem", padding: "1rem 1.25rem" }}
+        style={{ marginTop: 0, padding: "1rem 1.25rem", order: 8 }}
       >
         <div
           style={{
@@ -3920,6 +4207,7 @@ export default function StudentProfile({
             </table>
           </div>
         )}
+      </div>
       </div>
       {changeHouseOpen && data && (
         <ChangeHouseModal

@@ -62,12 +62,68 @@ export const schoolSettingsTable = pgTable(
   pbisColdPeriodMultiple: integer("pbis_cold_period_multiple")
     .notNull()
     .default(5),
+  // Classroom-intervention effectiveness window (days). A logged intervention
+  // counts as having WORKED if the behavior it targeted does not recur for that
+  // student within this many days; if it recurs inside the window it RECURRED;
+  // before the window elapses it is PENDING. School-configurable on the
+  // Negative Behaviors tab. Default 14.
+  interventionEffectivenessDays: integer("intervention_effectiveness_days")
+    .notNull()
+    .default(14),
+  // School Tours — SMS notification scope. 'all' sends a text for every tour
+  // alert (new lead, lead assigned, …); 'urgent' limits texts to time-
+  // sensitive alerts only (the alert helper passes a tier and standard alerts
+  // are suppressed). Email is always sent regardless. Defaults to 'all' so
+  // existing behavior is unchanged.
+  tourSmsScope: text("tour_sms_scope")
+    .$type<"all" | "urgent">()
+    .notNull()
+    .default("all"),
+  // School Tours — Phase 2 "never lose a lead" SLA settings. The background
+  // escalation job + the pipeline overdue flags read these.
+  //   tourFirstContactHours — a 'new' lead uncontacted longer than this is
+  //     overdue (legacy hard-coded 24h is now the default).
+  //   tourFollowUpBusinessDays — when a lead is moved to "Still deciding", its
+  //     follow-up becomes due this many business days later.
+  //   tourArchiveDays — closed leads older than this drop off the default
+  //     pipeline board (still queryable via ?view=archived).
+  //   tourEscalationEnabled — master switch for the automated overdue emails.
+  //     Sending is ALSO gated globally on EMAIL_REMINDERS_ENABLED.
+  tourFirstContactHours: integer("tour_first_contact_hours")
+    .notNull()
+    .default(24),
+  tourFollowUpBusinessDays: integer("tour_follow_up_business_days")
+    .notNull()
+    .default(3),
+  tourArchiveDays: integer("tour_archive_days").notNull().default(3),
+  tourEscalationEnabled: boolean("tour_escalation_enabled")
+    .notNull()
+    .default(true),
+  // School Tours — Phase 3 "close the loop with families" master switch for the
+  // automated FAMILY nurture cadence (pre-tour reminder, post-tour thank-you +
+  // survey, gentle "still deciding" nudge, enrollment welcome). Defaults OFF so
+  // no school starts emailing families automatically without opting in.
+  tourFamilyNurtureEnabled: boolean("tour_family_nurture_enabled")
+    .notNull()
+    .default(false),
+  // How many hours before the scheduled tour the pre-tour reminder goes out.
+  tourReminderLeadHours: integer("tour_reminder_lead_hours")
+    .notNull()
+    .default(24),
   // When true, awarding a negative behavior subtracts its point value from
   // the student's running total. When false (default), the entry is logged
   // on the student's record as a red entry but does not affect the total.
   pbisNegativeAffectsTotal: boolean("pbis_negative_affects_total")
     .notNull()
     .default(false),
+  // School Store inventory mode — how item availability is tracked.
+  //   "simple"   → each item has a manual in/out-of-stock toggle.
+  //   "quantity" → each item tracks a quantity-on-hand that decrements on
+  //                redemption and restores on cancellation.
+  // Default "simple" so existing catalogs keep working without setup.
+  schoolStoreInventoryMode: text("school_store_inventory_mode")
+    .notNull()
+    .default("simple"),
   // Finder ("Where is this student right now?") — show the "Absent today"
   // banner when the student's attendance day is marked absent. Off by
   // default because attendance currently arrives from the SIS on a delay
@@ -112,6 +168,36 @@ export const schoolSettingsTable = pgTable(
     .notNull()
     .default(false),
   // -----------------------------------------------------------------
+  // Parent Notifications control panel (Family Communication).
+  //
+  // Per-school admin master switches for each automated/recurring parent
+  // notification. ALL default TRUE so existing behavior is preserved — a
+  // school sees no change until an admin flips one off. Each flag is an
+  // additive AND-gate layered on top of any existing gate at the send site
+  // (the send still respects feature flags, parent opt-ins, etc.).
+  //
+  // Notifications that already have a dedicated school switch are NOT
+  // duplicated here and are surfaced in the panel via their existing flag:
+  //   - Friday HeartBEAT   → school_heartbeat_settings.allow_weekly_email
+  //   - Family Messages    → feature_family_comm
+  //   - Store item ready   → feature_school_store_notify
+  //   - Tour family nurture→ tour_family_nurture_enabled
+  //
+  // Portal invite + password reset are intentionally absent — they are
+  // access-critical and always-on (never toggleable).
+  // -----------------------------------------------------------------
+  notifyParentEligibility: boolean("notify_parent_eligibility")
+    .notNull()
+    .default(true),
+  notifyParentPbisMilestone: boolean("notify_parent_pbis_milestone")
+    .notNull()
+    .default(true),
+  notifyParentTardy: boolean("notify_parent_tardy").notNull().default(true),
+  notifyParentEventTickets: boolean("notify_parent_event_tickets")
+    .notNull()
+    .default(true),
+  notifyParentEsign: boolean("notify_parent_esign").notNull().default(true),
+  // -----------------------------------------------------------------
   // Per-school feature flags (two-tier model).
   //
   //   super_feature_*  → SuperUser-controlled "is this feature available
@@ -146,6 +232,14 @@ export const schoolSettingsTable = pgTable(
   featureAcademicEvidence: boolean("feature_academic_evidence")
     .notNull()
     .default(true),
+  // School Store fulfillment notification (email families when a redeemed
+  // store item is fulfilled). NEW opt-in feature: BOTH halves default FALSE
+  // so no family email goes out until the district enables it AND the school
+  // admin turns it on — a deliberate deviation from the default(true)
+  // convention because this sends external email.
+  featureSchoolStoreNotify: boolean("feature_school_store_notify")
+    .notNull()
+    .default(false),
   superFeatureFamilyComm: boolean("super_feature_family_comm").notNull().default(true),
   superFeaturePbis: boolean("super_feature_pbis").notNull().default(true),
   superFeatureSchoolStore: boolean("super_feature_school_store").notNull().default(true),
@@ -177,6 +271,11 @@ export const schoolSettingsTable = pgTable(
   superFeatureCompTime: boolean("super_feature_comp_time")
     .notNull()
     .default(true),
+  // SuperUser/district half of the School Store fulfillment notification.
+  // Defaults FALSE — the district must explicitly license it (plan/override).
+  superFeatureSchoolStoreNotify: boolean("super_feature_school_store_notify")
+    .notNull()
+    .default(false),
   // -----------------------------------------------------------------
   // Time Tracking nuances (governs both AST + Comp Time so a school
   // configures workweek once for the whole "Time Tracking" surface).
@@ -316,6 +415,53 @@ export const schoolSettingsTable = pgTable(
   inRouteOverdueMinutes: integer("in_route_overdue_minutes")
     .notNull()
     .default(10),
+  // -----------------------------------------------------------------
+  // Eligibility Hub (attendance-based participation eligibility for
+  // athletics / clubs / activities). Thresholds are uniform school-wide
+  // across every activity (district default; set by district admin +
+  // Athletic Director + SuperUser).
+  //   eligibilityIneligibilityThreshold — counted absences at/above this
+  //     make a student INELIGIBLE.
+  //   eligibilityWarningWindowDays — when counted absences are within this
+  //     many of the threshold (and below it), the student is in the
+  //     WARNING zone.
+  //   eligibilityTardyToAbsenceRatio — every N tardies count as one
+  //     absence. 0 = tardies never roll into the absence count.
+  //   eligibilityParentNoteCap — max approved parent notes per student per
+  //     semester (each note excuses one absence).
+  //   eligibilityDistrictAdNotify — when true, the district AD is BCC'd on
+  //     warning / ineligible notifications.
+  //   eligibilitySemester* — the CURRENT semester label + date window. The
+  //     absence/note ledger is keyed by this label, so changing it starts
+  //     a clean count (old rows remain under the old label).
+  // -----------------------------------------------------------------
+  eligibilityIneligibilityThreshold: integer(
+    "eligibility_ineligibility_threshold",
+  )
+    .notNull()
+    .default(10),
+  eligibilityWarningWindowDays: integer("eligibility_warning_window_days")
+    .notNull()
+    .default(4),
+  eligibilityTardyToAbsenceRatio: integer("eligibility_tardy_to_absence_ratio")
+    .notNull()
+    .default(0),
+  eligibilityParentNoteCap: integer("eligibility_parent_note_cap")
+    .notNull()
+    .default(5),
+  eligibilityDistrictAdNotify: boolean("eligibility_district_ad_notify")
+    .notNull()
+    .default(false),
+  eligibilitySemesterLabel: text("eligibility_semester_label")
+    .notNull()
+    .default(""),
+  eligibilitySemesterStart: text("eligibility_semester_start"),
+  eligibilitySemesterEnd: text("eligibility_semester_end"),
+  // Eligibility Hub feature flag (two-tier, like the others above).
+  featureEligibility: boolean("feature_eligibility").notNull().default(true),
+  superFeatureEligibility: boolean("super_feature_eligibility")
+    .notNull()
+    .default(true),
   kioskWelcomeTemplate: text("kiosk_welcome_template")
     .notNull()
     .default("Welcome, {firstName}!"),

@@ -18,6 +18,7 @@ const SECRET = requireTokenSecret();
 /** Short TTL when bearer is enabled — limits XSS / post-logout exposure. */
 const STAFF_BEARER_TTL_MS = 1000 * 60 * 30; // 30 minutes
 const PARENT_BEARER_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours (parent portal unchanged here)
+const STUDENT_BEARER_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours
 
 export type VerifiedStaffToken = {
   staffId: number;
@@ -118,6 +119,52 @@ export function verifyParentAuthToken(token: string): number | null {
       typeof json.sid !== "number" ||
       typeof json.exp !== "number" ||
       json.kind !== "parent"
+    ) {
+      return null;
+    }
+    if (json.exp < Date.now()) return null;
+    return json.sid;
+  } catch {
+    return null;
+  }
+}
+
+// Student tokens carry an explicit `kind: "student"` so a student bearer can
+// never be mistaken for a staff or parent bearer at the middleware layer,
+// even though all three are signed with the same SESSION_SECRET. `sid` here
+// is the NUMERIC students.id row id (NOT the FLEID — the FLEID is never put
+// in a client-held token).
+export function issueStudentAuthToken(
+  studentRowId: number,
+  ttlMs = STUDENT_BEARER_TTL_MS,
+): string {
+  const payload = JSON.stringify({
+    sid: studentRowId,
+    kind: "student",
+    exp: Date.now() + ttlMs,
+  });
+  const body = b64url(payload);
+  return `${body}.${sign(body)}`;
+}
+
+export function verifyStudentAuthToken(token: string): number | null {
+  if (typeof token !== "string" || !token.includes(".")) return null;
+  const [body, sig] = token.split(".");
+  if (!body || !sig) return null;
+  const expected = sign(body);
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try {
+    const json = JSON.parse(fromB64url(body).toString("utf8")) as {
+      sid?: unknown;
+      exp?: unknown;
+      kind?: unknown;
+    };
+    if (
+      typeof json.sid !== "number" ||
+      typeof json.exp !== "number" ||
+      json.kind !== "student"
     ) {
       return null;
     }

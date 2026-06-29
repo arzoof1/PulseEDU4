@@ -21,7 +21,7 @@ export default function Agenda() {
           <span className="font-display text-[2.6vw] font-bold leading-none text-[#F2A33C] w-[3.4vw]">01</span>
           <div>
             <div className="font-display text-[2vw] font-bold tracking-[-0.01em]">Student Experience</div>
-            <div className="font-body text-[1.5vw] text-[#5B6B79]">Hall pass, attendance, recognition, the school tour</div>
+            <div className="font-body text-[1.5vw] text-[#5B6B79]">Hall pass, attendance, recognition, the points store, sign-in</div>
           </div>
         </div>
         <div className="flex items-start gap-[1.4vw]">

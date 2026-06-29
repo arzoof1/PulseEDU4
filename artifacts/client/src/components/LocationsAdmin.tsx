@@ -10,6 +10,9 @@ type LocationRow = {
   isDestination: boolean;
   studentVisible: boolean;
   active: boolean;
+  restroomArea: string | null;
+  gender: string | null;
+  schoolWideDefault: boolean;
 };
 
 type PairRow = {
@@ -46,6 +49,9 @@ export default function LocationsAdmin({ onChanged }: Props) {
   const [newIsOrigin, setNewIsOrigin] = useState(true);
   const [newIsDestination, setNewIsDestination] = useState(false);
   const [newStudentVisible, setNewStudentVisible] = useState(false);
+  const [newRestroomArea, setNewRestroomArea] = useState("");
+  const [newGender, setNewGender] = useState("");
+  const [newSchoolWideDefault, setNewSchoolWideDefault] = useState(false);
   const [creating, setCreating] = useState(false);
 
   async function reload() {
@@ -127,6 +133,12 @@ export default function LocationsAdmin({ onChanged }: Props) {
           isOrigin: newIsOrigin,
           isDestination: newIsDestination,
           studentVisible: newStudentVisible,
+          restroomArea:
+            newKind === "restroom" && newRestroomArea.trim()
+              ? newRestroomArea.trim()
+              : null,
+          gender: newKind === "restroom" && newGender ? newGender : null,
+          schoolWideDefault: newSchoolWideDefault,
         }),
       });
       if (!res.ok) {
@@ -138,6 +150,9 @@ export default function LocationsAdmin({ onChanged }: Props) {
       setNewIsOrigin(true);
       setNewIsDestination(false);
       setNewStudentVisible(false);
+      setNewRestroomArea("");
+      setNewGender("");
+      setNewSchoolWideDefault(false);
       await reload();
       onChanged?.();
     } catch (e) {
@@ -339,7 +354,56 @@ export default function LocationsAdmin({ onChanged }: Props) {
               />
               <span>Student-visible at Kiosk</span>
             </label>
+            <label style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
+              <input
+                type="checkbox"
+                checked={newSchoolWideDefault}
+                onChange={(e) => setNewSchoolWideDefault(e.target.checked)}
+              />
+              <span title="Granted to every teacher automatically (offices, clinic, nurse). Kept out of the bulk upload.">
+                School-wide default (facility)
+              </span>
+            </label>
           </div>
+          {newKind === "restroom" && (
+            <div
+              style={{
+                display: "flex",
+                gap: "0.75rem",
+                flexWrap: "wrap",
+                padding: "0.5rem 0.6rem",
+                border: "1px dashed var(--border)",
+                borderRadius: 6,
+              }}
+            >
+              <label style={{ display: "grid", gap: "0.25rem", flex: "1 1 200px" }}>
+                <span style={{ fontSize: 13 }}>
+                  Restroom area (group name)
+                </span>
+                <input
+                  type="text"
+                  value={newRestroomArea}
+                  onChange={(e) => setNewRestroomArea(e.target.value)}
+                  placeholder="e.g. B-Wing, Cafeteria"
+                />
+                <span style={{ fontSize: 11, color: "var(--text-subtle)" }}>
+                  Restrooms sharing an area name are granted together when a
+                  teacher is assigned that area.
+                </span>
+              </label>
+              <label style={{ display: "grid", gap: "0.25rem" }}>
+                <span style={{ fontSize: 13 }}>Gender variant</span>
+                <select
+                  value={newGender}
+                  onChange={(e) => setNewGender(e.target.value)}
+                >
+                  <option value="">—</option>
+                  <option value="boys">Boys</option>
+                  <option value="girls">Girls</option>
+                </select>
+              </label>
+            </div>
+          )}
           <div>
             <button
               type="button"
@@ -400,6 +464,12 @@ export default function LocationsAdmin({ onChanged }: Props) {
               <th style={{ padding: "0.4rem 0.5rem" }}>Origin</th>
               <th style={{ padding: "0.4rem 0.5rem" }}>Destination</th>
               <th style={{ padding: "0.4rem 0.5rem" }}>Kiosk-visible</th>
+              <th
+                style={{ padding: "0.4rem 0.5rem" }}
+                title="Restroom area + gender variant (restrooms), or school-wide facility default (offices)."
+              >
+                Area / Facility
+              </th>
               <th style={{ padding: "0.4rem 0.5rem" }}>Active</th>
               <th style={{ padding: "0.4rem 0.5rem" }}></th>
             </tr>
@@ -432,7 +502,7 @@ export default function LocationsAdmin({ onChanged }: Props) {
             {filteredLocations.length === 0 && (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={8}
                   style={{ padding: "0.75rem", color: "var(--text-subtle)" }}
                 >
                   No locations match.
@@ -568,6 +638,66 @@ function FragmentRow({
             onChange={(e) => onPatch({ studentVisible: e.target.checked })}
           />
         </td>
+        <td style={{ padding: "0.4rem 0.5rem" }}>
+          {loc.kind === "restroom" ? (
+            <span
+              style={{
+                display: "inline-flex",
+                gap: "0.3rem",
+                alignItems: "center",
+                flexWrap: "wrap",
+              }}
+            >
+              <input
+                type="text"
+                value={loc.restroomArea ?? ""}
+                disabled={saving}
+                placeholder="Area…"
+                title="Restroom area group name"
+                onChange={(e) =>
+                  onPatch({ restroomArea: e.target.value })
+                }
+                onBlur={(e) =>
+                  onPatch({ restroomArea: e.target.value.trim() || null })
+                }
+                style={{ width: 110 }}
+              />
+              <select
+                value={loc.gender ?? ""}
+                disabled={saving}
+                title="Gender variant"
+                onChange={(e) =>
+                  onPatch({ gender: e.target.value || null })
+                }
+              >
+                <option value="">—</option>
+                <option value="boys">B</option>
+                <option value="girls">G</option>
+              </select>
+            </span>
+          ) : (
+            <label
+              style={{
+                display: "inline-flex",
+                gap: "0.35rem",
+                alignItems: "center",
+                fontSize: 12,
+                color: "var(--text-subtle)",
+              }}
+              title="School-wide default: granted to every teacher automatically (offices, clinic, nurse). Kept out of the bulk upload."
+            >
+              <input
+                type="checkbox"
+                checked={loc.schoolWideDefault}
+                disabled={saving}
+                onChange={(e) =>
+                  onPatch({ schoolWideDefault: e.target.checked })
+                }
+              />
+              <span>School-wide</span>
+            </label>
+          )}
+        </td>
         <td style={{ padding: "0.4rem 0.5rem", textAlign: "center" }}>
           <input
             type="checkbox"
@@ -611,7 +741,7 @@ function FragmentRow({
       {isExpanded && loc.isOrigin && (
         <tr>
           <td
-            colSpan={7}
+            colSpan={8}
             style={{
               padding: "0.5rem 0.75rem 0.75rem 1.5rem",
               background: "var(--surface-muted, #fafafa)",

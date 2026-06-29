@@ -3,6 +3,372 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Parent Notifications control panel (Family Communication).** A new
+  admin-only panel (sidebar **Family → Parent Notifications**, gated by
+  `canManageSettings`) lets a school turn each automated/recurring parent
+  email on or off. Every switch **defaults to today's behavior** — nothing
+  changes until an admin flips it. Toggleable: Weekly HeartBEAT email,
+  Eligibility notices, PBIS milestone, Tardy alerts, Store item ready,
+  Family Messages broadcasts, Event ticket emails, E-sign signing requests,
+  Tour family nurture. **Reuses existing switches** instead of duplicating —
+  HeartBEAT → `school_heartbeat_settings.allow_weekly_email`; Family Messages
+  → `featureFamilyComm`; Store → `featureSchoolStoreNotify`; Tour →
+  `tourFamilyNurtureEnabled`. Five **new** `school_settings` boolean columns
+  (default TRUE) back the rest: `notifyParentEligibility`,
+  `notifyParentPbisMilestone`, `notifyParentTardy`,
+  `notifyParentEventTickets`, `notifyParentEsign`. Each toggle is enforced at
+  its **send site** (not just the UI) via the shared
+  `lib/parentNotify.ts` `isParentNotifyEnabled(schoolId, key)` helper
+  (returns `?? true` so a missing/null row preserves behavior):
+  eligibility gates ONLY the parent send (coach/principal/AD/digest copies
+  unaffected), PBIS milestone short-circuits before the claim loop, tardy
+  gates the SMS stub at the caller, event tickets skip the grant email,
+  e-sign skips the recipient email (staff can still copy the link). Portal
+  invites + password resets are **access-critical and intentionally not
+  listed** (always send). PUT `/api/school-settings` admin-gates the five
+  new columns + reused `tourFamilyNurtureEnabled` (stricter than the
+  settings-manager gate on other school-wide toggles); the feature flags
+  keep their existing admin/SuperUser dual-gate (locked in the panel when
+  the district tier is off). **Invariant: every parent-notification toggle
+  must be enforced at the server send site via `isParentNotifyEnabled`, not
+  just hidden in the panel — client gating is bypassable; and the helper's
+  `?? true` default is load-bearing (missing column/row = current behavior).**
+
+- **Insights drill-down — full Teacher Roster parity.** The shared
+  `BandStudentsDrawer` (Academics band drill-ins + Academic Trajectories)
+  now carries the same whole-child context as the Teacher Roster: an
+  **ELL** chip (green, alongside ESE/504), a red **SP** indicator for an
+  active safety plan (rendered right after the name), and the FAST
+  **learning-gain green-check** appended to the PM3 pill. Each student row
+  is also fully clickable → opens that student's **Student Profile** (reuses
+  the existing `onOpenProfile`; score cells `stopPropagation` so the
+  click-to-flip FAST pills still work). Server (`insights.ts`): both the
+  band and trajectory drill-in endpoints decorate their visible slice via
+  two shared helpers — `loadDrilldownContext` (ELL flag + active
+  safety-plan summary, school-scoped to the visible IDs) and
+  `computeRowLearningGain` (strict PM3-to-PM3 using `loadFastHistory`
+  historical PM3 placed on the grade-1 chart + `decideLearningGain`,
+  **never `priorYearScore`** — same source as the roster green-check).
+  Trajectory reused its existing flag SQL by adding the `ell` column.
+  **Invariant: the learning-gain check on the drill-downs and the Teacher
+  Roster green-check must agree — both flow from `loadFastHistory`
+  historical PM3 + `decideLearningGain`, never `priorYearScore`.**
+
+- **Insights drill-down — PM progression as FAST level pills.** The
+  Prior PM3 · PM1 · PM2 · PM3 columns in the shared `BandStudentsDrawer`
+  (Academic Trajectories drill-down + Academics band drill-ins) now render
+  as roster-style **FAST achievement-level pills** instead of plain
+  numbers: pill background = the FAST level color (L1 red → L5 purple),
+  face shows the sub-level, click a pill to flip it to the raw scale score.
+  A header **"Show: Level | Scale score"** toggle (`showScoreToggle` prop)
+  drives every pill on the surface; per-pill overrides reset when the
+  global toggle changes. Each PM pill now carries a **numeric scale-score
+  delta** directly beneath it (PM1 vs Prior, PM2 vs PM1, PM3 vs PM2 — green
+  growth / red decline) via the shared `PmDelta`, full Teacher Roster parity
+  (replaced the earlier ▲/▼ direction-only marker and the old green/red
+  `movementCell` bold-number coloring). New shared `FastScorePill.tsx` owns the
+  `LEVEL_BG`/`LEVEL_FG` palette (now imported by the Teacher Roster too, so
+  the two surfaces can't drift) plus `PillViewContext`, `FastScorePill`,
+  and `PillViewToggle`. Server: new `placePmSet()` in `fastCutScores.ts` is
+  the single source for the four PM placements (prior & current PM3 →
+  `placePm3`; PM1/PM2 → `placeOnChart`); trajectory banding now derives from
+  the same call, and a `levels` field rides on the band endpoint, the
+  trajectory recs, and `/trajectory/students`. Read-only/additive — other
+  drawer callers (which don't pass `showScoreToggle`) are unaffected.
+
+- **Insights drill-down — PM progression columns.** The shared
+  `BandStudentsDrawer` (Academic Trajectories drill-down + Academics
+  dashboard band drill-ins) now renders the full PM progression in order
+  **Prior PM3 · PM1 · PM2 · PM3** (was only PM1/PM3) via a shared exported
+  `INSIGHTS_PM_COLUMNS`, prepended to the existing `INSIGHTS_METRIC_COLUMNS`
+  so both surfaces stay identical. PM2/PM3 cells are colored by movement vs
+  the PM1 baseline: **green + bold** when above PM1 (gain), **red + bold**
+  when below (decline), plain when equal/missing (`movementCell` helper).
+  Drawer was also widened (520 → 860px) so all columns fit without
+  horizontal scroll. Server side: the trajectory-students and academics
+  band endpoints select + pass through `priorYearScore` + `pm2` (school-
+  scoped, additive only); trajectory CSV export gained `prior_pm3` + `pm2`.
+  Read-only/additive — no other drawer callers affected.
+
+- **District Demo brochure — added missing-feature slides.** Expanded
+  the `pulseedu-district-demo` slides deck (16 → 22 slides) to cover
+  noteworthy app capabilities that were absent: **Student Points Store &
+  Wallet** and **Students Sign In** (ClassLink self-service) under Student
+  Experience; **Safety Plans** and the **Eligibility Hub** under Student
+  Support; **School Grade Projection** under Leadership Intelligence; and
+  **Parent Pick-Up** under School Operations. Also upgraded the
+  **Leadership Insights** slide with the three actionable per-student
+  metrics (Days absent + %, Pts to next FAST level, Pts to proficiency)
+  and refreshed an Agenda sub-label. New slides reuse the deck's design
+  system (Space Grotesk/IBM Plex, bg `#F3EFE6`, ink `#0B1F33`, teal
+  `#15B8A6`, card-grid + navy callout-bar pattern); manifest validated at
+  22 contiguous slides with Closing last. Brochure/marketing change only —
+  no app code touched.
+
+- **Insights per-student metrics — Days Absent, Pts to Next FAST
+  Sub-Level, Pts to Proficiency.** Three READ-ONLY, additive numeric
+  columns surfaced across four Insights surfaces, all sourced from
+  shared server helpers so the numbers agree everywhere (no writes; no
+  impact on points-on-scan, `class_signins`, or official ledgers).
+  **(1) Days Absent + approx %** comes from a new single-source helper
+  `lib/attendanceMetrics.ts` → `loadAttendanceMetrics(schoolId,
+  studentIds)`, which batch-reads the latest Eligibility Hub upload
+  (`eligibility_absences.absence_total` / `days_tardy`) for the current
+  semester, school-scoped, keyed by canonical `studentId`. The raw
+  uploaded count is surfaced (not the eligibility-rule "counted"
+  figure). The **%** is APPROXIMATE by design (product-accepted):
+  there is no instructional-day calendar, so the denominator is the
+  count of **weekdays** (Mon–Fri) from the configured semester start to
+  today (school-local IANA tz, clamped at semester end); it does not
+  subtract holidays/workdays so it reads a few points low, and is always
+  labeled an estimate in the UI. When no semester start is configured,
+  `attendancePct` is null (raw count still renders); students with no
+  upload row are absent from the map and render "—" (never a fabricated
+  0%). **(2) Pts to Next FAST Sub-Level** reuses `bucketFor().gap` and
+  **(3) Pts to Proficiency** uses the new `proficiencyGap(pm3, subject,
+  grade)` (= `levelMin(subject, grade, 3) − PM3`) in
+  `lib/fastCutScores.ts`, so Teacher Roster and the Insights drawers
+  share the exact same FAST cut-score source. **Surfaces:** Academic
+  Trajectories drill-down + Academics band drill-in both render all
+  three via the now-generic `BandStudentsDrawer` (exported `ScoreColumn`
+  interface + opt-in `INSIGHTS_METRIC_COLUMNS`; `scoreColumns` prop is
+  backward-compatible so other callers are unaffected); Teacher Roster
+  gains an **Attendance** column ("Nd (~X%)") with a visibility toggle
+  (FAST gaps already existed there); Early Warning gains **Days abs.**
+  and **→ L3** (worst proficiency gap across ela/math) columns next to
+  the risk score. The band endpoint guards `grade != null` before the
+  gap math. **Invariant: all three metrics MUST flow from the shared
+  helpers (`loadAttendanceMetrics` + `bucketFor`/`proficiencyGap`) on
+  every surface, or the same student would show different numbers across
+  Trajectory / Academics / Roster / Early Warning.**
+
+- **Class Sign-Ins roll-call — date + teacher + period filters.**
+  The kiosk class-sign-in roll-call panel (`RollCallPanel.tsx`, backed
+  by `GET /api/class-signins/today`) gained a top filter bar: a **date
+  picker** (defaults to today, capped at today) so staff can review any
+  prior day, a **Teacher dropdown** (populated from teachers present
+  that day), a **Period dropdown**, and the existing free-text
+  name/student-id search. Period is **inferred server-side** from each
+  sign-in's time-of-day against the school's default+active bell
+  schedule (`loadDefaultBellPeriods` + `hhmmInTz` + `periodForTime` in
+  `routes/kiosk.ts`); the `class_signins` ledger stores no period, so
+  rows outside any period window (or when no default schedule exists)
+  show "—" and the Period dropdown disables. The endpoint now accepts
+  an optional `?date=YYYY-MM-DD` (strictly validated to reject
+  normalized/invalid dates, school-IANA-tz day window via
+  `startOfDayUtc` + a 36h re-floor for the exclusive upper bound) and
+  returns `{periodNumber, periodName}` per row plus a canonical date
+  string. The client resets the teacher/period selection if the chosen
+  value disappears after a date change. **Entirely read-only**: it never
+  touches the scan/write path or the on-time points ledger
+  (`attendance_checkins`) — points-on-scan behavior is unchanged.
+  `requireAdmin` gate preserved.
+- **Feature Licensing — Starter / Starter Plus plans + dependency
+  highlighting.** Seeded two new plans (`starter`, `starter_plus`) via
+  `ensureFeaturePlansSchema` (`INSERT ... ON CONFLICT DO NOTHING`;
+  Starter Plus additionally carries `schoolStore`). Added a two-level
+  feature **dependency graph** to the registry: each `FeatureSpec` in
+  `lib/featureLicensing.ts` (`FEATURE_KEYS`) may declare `requires` (HARD —
+  blocks save) and `recommends` (SOFT — warns only). The
+  `/feature-licensing/feature-keys` endpoint returns `FEATURE_KEYS`
+  verbatim, so the edges flow to the client with no route change. Edges —
+  **Required:** `schoolStore→pbis`, `schoolStoreNotify→schoolStore`,
+  `houses→pbis`; **Recommended:** `hallPasses→bellSchedule`,
+  `tardyPass→bellSchedule`, `schoolStoreNotify→familyComm`,
+  `parentPortal→familyComm`, `mtssPlans→academics`,
+  `earlyWarning→academics`, `behaviorSpecialist→mtssPlans`. The client
+  (`FeatureLicensingAdminPage.tsx`) added a shared
+  `computeDepIssues(features, enabledMap)` helper + `DepBanner` /
+  `RowDepNote` and wired it into **all three** feature-toggle surfaces:
+  `PlanEditorModal`, `FeaturePickerModal`, and the per-row `OverridesDrawer`
+  (made plan-aware: effective = `override ?? plan default`). Required
+  violations block save (button disabled + `save()` guard) on the modal
+  surfaces; the drawer's immediate-write paths (`upsert`, Clear/`remove`)
+  reject any write that would persist an unmet Required dep. `resetAll`
+  is intentionally unguarded (it only reverts to already-guarded plan
+  defaults). **Invariant: every UI surface that toggles a feature must run
+  `computeDepIssues` on the EFFECTIVE feature set and block writes that
+  leave a Required dep unmet — adding a new toggle surface without it
+  reopens the bypass.**
+
+- **Feature Licensing — Enterprise plan is all-features + school search.** The
+  enterprise plan now carries EVERY feature by default (its `features` JSONB is
+  derived from `FEATURE_KEYS`, the single source of truth, in
+  `ensureFeaturePlansSchema`), so only true deviations remain as per-school
+  overrides. An idempotent `UPDATE` folds newly-added features into the existing
+  plan row (the seed `INSERT ... ON CONFLICT DO NOTHING` cannot), and a one-shot
+  migration (`enterprise_plan_fold_redundant_overrides_v1`) drops redundant
+  force-ON overrides (`enabled`, no upsell, no expiry, plan already enables the
+  feature) on enterprise schools and reapplies licensing so `super_feature_*`
+  flags come from the plan — force-OFF and expiring/trial overrides are left
+  intact. This zeroed out D.S. Parrott's 3 stale overrides (compTime,
+  eligibility, schoolStoreNotify). The Feature Licensing admin page's Schools
+  section also got a name search box (client-side filter + result count) for
+  scaling to hundreds of schools.
+
+- **Hall Pass — bulk teacher destination management (3 phases)** — replaced the
+  cumbersome 187-row teacher destination allow-list grid with a bulk,
+  school-managed flow while keeping the grid as the manual edge-case editor.
+  **Phase 1 (model):** added `restroom_area` / `gender` / `school_wide_default`
+  to `locations` and `staff_id` to `teacher_destination_allowlist` (boot
+  migration in `ensureHallPassAllowlistSchema`). The data layer now keys grants
+  by stable `staffId` (display-name fallback only for legacy null rows;
+  `resolveStaffIdByName` for the still-name-addressed grid). **Restroom areas**
+  bundle the boys+girls variant rows — assigning the area once expands to both
+  grants (`restroomAreas.ts`: `loadRestroomAreas`,
+  `resolveDestinationsToLocationIds`). **Facilities** flagged
+  `school_wide_default` are granted to every teacher and kept out of the upload
+  (`loadSchoolWideDefaults`). Kiosk/hall-pass destination precedence preserved
+  (teacher allowlist authoritative over the room matrix; staffId preferred over
+  name). LocationsAdmin gained area/gender/school-wide editing. **Phase 2 (CSV
+  round-trip):** `GET /teacher-allowlist/template` returns one pre-filled row
+  per active teacher (Teacher · LOCKED email matcher · Room · Restroom Area);
+  the client builds the CSV with formula-injection-neutralized cells
+  (`csvCell`). `POST /teacher-allowlist/bulk` does preview (`commit:false`) then
+  commit (`commit:true`) — matched by **email** (display name only when
+  unambiguous), replaces only listed teachers, preserves their non-restroom
+  grants, and loudly surfaces unmatched teachers + unknown areas.
+  `GET /teacher-allowlist/bulk/last` + `POST /bulk/:batchId/rollback` provide
+  one-click undo via a new ledger table `teacher_allowlist_import_batches`
+  (`prior_json` = a **staffId-keyed array** of `{staffId, staffName,
+  locationIds}` snapshots so duplicate display names each restore correctly).
+  **Phase 3 (zone rules):** refactored the bulk apply into a shared
+  `computeAndApplyBulk(schoolId, createdBy, rawRows, commit)`; added
+  `teacher_allowlist_zone_rules` (inclusive room-NUMBER range → restroom area,
+  first match wins by `sort_order`) with `GET` / `PUT` (replace-all)
+  `/teacher-allowlist/zone-rules` and `POST /zone-rules/auto-assign`
+  (preview/commit). Auto-assign builds rows from every active teacher's room
+  (via `staff_defaults.default_location_name`, keyed staffId then name) →
+  zone-suggested area, then calls `computeAndApplyBulk` so it shares the
+  preview/commit + rollback batch path. The template pre-fill now falls back to
+  the zone suggestion when a teacher has no single current restroom area. Client
+  `TeacherAllowlistAdmin.tsx` gained the bulk panel (download/upload/preview/
+  commit/undo) and a collapsible zone-rule editor (room from/to → area datalist)
+  + "Auto-assign all from rules" reusing the bulk preview/commit UI. All
+  endpoints `requireAdmin()` + `requireSchool()`; every read/write `school_id`
+  scoped; no FLEID leak. Architect-flagged severe bug fixed pre-merge: the
+  rollback snapshot was name-keyed (would clobber same-name teachers) → now a
+  staffId-keyed array.
+
+- **Classroom Intervention Report — evaluate-by-teacher + exports** — the
+  per-student admin report (Core Team only) now has a **Teacher** dropdown
+  filter (defaults to **All teachers**); records always sort by teacher name
+  then most-recent-first so each teacher's behaviors/interventions cluster for
+  side-by-side evaluation. Added **Download CSV** (client-side, UTF-8 BOM,
+  formula-injection-hardened cells) and **Print PDF** (server-streamed pdfkit
+  attachment, designed to staple to an ODR file) — both honor the selected
+  teacher filter. Server-side, the JSON route
+  `GET /interventions/student-report/:studentId` was refactored to share a
+  `loadStudentReport()` loader + `summarizeInterventions()` +
+  `filterReportByTeacher()` with the new
+  `GET /interventions/student-report/:studentId/pdf?teacher=` route; both gated
+  `requireStaff` + `isCoreTeam`, JSON response shape unchanged. PDF renders the
+  student's `localSisId` only (never the FLEID) and uses WinAnsi-safe glyphs.
+  The PDF **Behaviors** section is a bordered **table** (Behavior · Date ·
+  Subject · Teacher) sorted teacher → behavior → date (newest first) so admins
+  can scan repeating patterns per teacher; **Subject** = the logging teacher's
+  academic `department` (school-scoped staff lookup, `—` when unset). An
+  **"Include notes in PDF"** checkbox (server `?notes=1`) is **off by default**;
+  when on, each behavior's note renders as a full-width sub-row (and intervention
+  notes are included too). Table has manual page-break handling that redraws the
+  header row on each new page.
+- **Student Profile (Student Lookup evolved)** — the Quick Access "Student
+  Lookup" surface is now labeled **Student Profile** (sidebar nav item, quick
+  tile, and page heading); the internal `activeSection` key stays `studentLookup`
+  (the separate insights `studentProfile` deep page is untouched). The shared
+  whole-child `StudentProfile.tsx` was reordered into a single top-to-bottom flex
+  column via CSS `order`: pinned header → **Student schedule** (collapsed) →
+  Family → Spider/radar → Attendance & Flow → Behavior → Academics → Supports →
+  Intervention history → Things-to-know → **FAST Analysis (bottom)**. New
+  collapsed **Student schedule** block behind a "View schedule" button, backed by
+  `GET /api/student-lookup/:studentId/schedule` (visibility-scoped via
+  `getVisibleStudentIds`; `section_roster ⨝ class_sections ⨝ staff`, school-scoped,
+  non-planning, ordered by period). The schedule fetch lazy-loads on first open and
+  is keyed `key={studentId}` so switching students remounts it (no stale
+  cross-student rows). Car-rider / dismissal-mode editing is gated by
+  `canManageDismissal` (admin tier OR `cap_manage_dismissal`), threaded App →
+  StudentLookupPage → SnapshotView → StudentProfile (read-only otherwise). The
+  HeartBEAT note editor is collapsed behind a button, closed by default. NO FLEID
+  forward-facing — the schedule renders no student id.
+
+- **Student Lookup** — a search-first, read-only "one-stop-shop" Student
+  Snapshot in the staff app's Quick Access sidebar. Staff type a name (or local
+  SIS id), pick a student, and get the existing whole-child Student Profile
+  rendered fully read-only (every edit affordance disabled), under the same
+  `PrivacyGate` as the Teacher Roster. The ONE editable field is a per-student
+  parent-facing **"Message for this week's HeartBEAT"** note that surfaces on
+  the Friday HeartBEAT family communication — a highlighted block near the top
+  of the snapshot PDF and an inline block in the weekly email (both skipped when
+  empty). Note stored on `students` (`heartbeat_note` + `heartbeat_note_updated_by`
+  / `heartbeat_note_updated_at`; additive boot ALTERs). New route file
+  `routes/studentLookup.ts`: `GET /student-lookup/search?q=` (typeahead),
+  `GET /student-lookup/:id/heartbeat-note` (read), and
+  `PUT /student-lookup/:id/heartbeat-note` (write/clear) — **all three
+  visibility-scoped via the now-exported `getVisibleStudentIds`** so teachers
+  only ever find/read/write their own roster (+ trusted-adult) students while
+  core team / admin / counselor reach school-wide, matching the Student Profile
+  endpoint's allowed set exactly (no "found but can't open" mismatch). The note
+  read deliberately does NOT reuse the school-only-scoped `GET /students/:id`,
+  which would leak out-of-roster notes. NO FLEID forward-facing — search results
+  and the snapshot render `localSisId` only; `studentId` stays the lookup key.
+
+- Parent Pick-Up — **front-office manual override of car-tag / rider /
+  pickup-authorization details**. Pickup authorizations normally flow in from
+  RosterOne (via ClassLink); the front office can now override them by hand when
+  the SIS is wrong or behind. Every override path carries a required reason (min
+  5 chars) and writes to a new `pickup_override_audit` log. Authorizations gained
+  `source` ('sis' | 'portal' | 'manual'), `override_reason`, `override_by`,
+  `override_at`, and `expires_at` (null = permanent) columns. Overrides come in
+  two flavors: **temporary** (an `expires_at`; auto-retired by an idempotent
+  expiry sweep that runs before any office read / the curb lookup, and excluded
+  from `/pickup/lookup` the instant it lapses) and **permanent** (sticky until
+  cleared). An override **wins until manually cleared** — bulk-assign's
+  legacy-upgrade loop skips any office-owned row (`isSyncProtected` = source
+  'manual' OR carries an override reason) so a roster re-import never clobbers it;
+  "manually cleared" = Deactivate-with-reason. A new **reconciliation tile** on
+  the Parent Pickup screen (`GET /pickup/overrides/reconciliation`) lists every
+  active override with who/when/why + temporary-vs-permanent state and **loudly
+  flags rows where RosterOne disagrees** (best-effort: the SIS emergency-contact
+  feed has no matching contact for the guardian label). The table also shows an
+  "Office — reason" badge and a temporary/expired chip per authorization. A
+  dismissal-mode change (walker / car_rider / parent_pickup_only / …) is likewise
+  treated as a safety-relevant override and now requires an inline reason captured
+  on the `StudentProfile` chip. All override surfaces sit behind the single
+  existing `canManagePickup` gate (dismissal mode keeps its `canManageDismissal`
+  gate). Each data mutation + its audit row(s) commit in one DB transaction, so a
+  mutated row can never exist without its audit trail. NO FLEID forward-facing:
+  the reconciliation tile renders `localSisId` only. Reason capture is
+  iframe-safe (inline modal / inline field — never `window.prompt`). Expiry from
+  the client `datetime-local` is converted to a UTC ISO instant before send.
+
+- School Tours — **Phase 4 (Live Tour Capture)**. A QR on the tour roadmap
+  (printed PDF + on-screen lead drawer) opens a token-gated, guide-facing,
+  offline-first live-walk screen at `/tour/walk/:token` (unauthenticated by
+  design — mirrors the survey/kiosk token pattern; the printed QR can't pre-auth
+  a guide so the screen asks the guide to confirm who is guiding, default = lead
+  owner, editable, before the clock starts). The guide taps ONCE per checkpoint
+  (client-timestamped), jots optional staff-only per-stop notes (never
+  family-facing; meant to catch a family follow-up question), and ends the tour.
+  Offline-first: every change is written to a `localStorage` buffer keyed by the
+  token and optimistically reflected; a debounced flush POSTs the FULL buffer to
+  `/tours/walk/:token/sync` (idempotent upserts keyed `walk_id` + `checkpoint_key`),
+  retries on the `online` event + a slow interval, and a synced/saving/offline
+  pill keeps the guide informed. **Sync race fix:** flush snapshots exactly what
+  it sends and only clears the dirty flag if the buffer is unchanged on return,
+  so taps made mid-request aren't silently dropped. Captured timings feed the
+  lead drawer (`WalkSection`: guide, total length vs planned, per-stop
+  planned-vs-actual computed in chronological completion order, follow-up notes
+  highlighted) and extend `/tours/outcomes/summary` with `walksCompleted`,
+  `avgTourMinutes`, and a per-guide rollup. Tables `tour_walks` (one per lead,
+  unique `tour_request_id` + unique `token`) + `tour_walk_steps`
+  (unique `walk_id` + `checkpoint_key`) in `lib/db/src/schema/tourWalks.ts`,
+  wired via `ensureTourWalksSchema()` boot migration. Server validates step taps
+  against the lead's eligible stops (family selections + always-included), the
+  guide against same-school active tour guides, and writes a one-time "walk
+  completed" timeline event. Roadmap PDF (`tourRoadmapPdf.ts`) renders a
+  "Start the digital tour" QR box; the roadmap route lazily ensures a walk +
+  embeds the QR. NO FLEID (tour leads carry none; the guide is staff).
+
 - PulseDNA Studio — **Phase 1 (profile + AI drafting)**. A per-school saved
   "communication profile" (PulseDNA) that schools upload (client-side parse of
   .txt/.md/.pdf/.docx) and/or paste, edit/replace anytime, with an

@@ -99,6 +99,7 @@ async function emailLotteryReveal(args: {
       isMtssCoordinator: staffTable.isMtssCoordinator,
       isSchoolPsychologist: staffTable.isSchoolPsychologist,
       isCoreTeam: staffTable.isCoreTeam,
+      isConfidentialSecretary: staffTable.isConfidentialSecretary,
     })
     .from(staffTable)
     .where(

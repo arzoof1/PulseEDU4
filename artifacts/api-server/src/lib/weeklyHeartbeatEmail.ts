@@ -278,9 +278,16 @@ export async function sendWeeklyHeartbeatEmails(
       const greetingName = c.parentDisplayName?.trim() || "";
       const greeting = greetingName ? `Hi ${greetingName},` : "Hi,";
 
+      // Staff-authored, parent-facing note for this week (from the Student
+      // Snapshot page). Surfaced inline above the PDF pointer when present.
+      const heartbeatNote = (snap.data.student.heartbeatNote ?? "").trim();
+
       const textBody =
         `${greeting}\n\n` +
         `Here is this week's HeartBEAT update for ${studentFirst} ${studentLast} from ${brand.name}.\n\n` +
+        (heartbeatNote
+          ? `A message from your child's school:\n${heartbeatNote}\n\n`
+          : "") +
         `The full report is attached as a PDF.\n\n` +
         `To stop these weekly emails, sign in to the parent portal and turn off "Weekly email" under "What I see".\n\n` +
         `— ${brand.name}\n`;
@@ -290,6 +297,12 @@ export async function sendWeeklyHeartbeatEmails(
         `<p>Here is this week's HeartBEAT update for <strong>${escapeHtml(
           `${studentFirst} ${studentLast}`,
         )}</strong> from ${escapeHtml(brand.name)}.</p>` +
+        (heartbeatNote
+          ? `<div style="margin:12px 0;padding:12px 16px;border-left:3px solid #6366f1;background:#f5f5ff;border-radius:6px;">` +
+            `<div style="font-size:12px;font-weight:600;color:#6366f1;margin-bottom:4px;">A message from your child's school</div>` +
+            `<div style="color:#222;white-space:pre-wrap;">${escapeHtml(heartbeatNote)}</div>` +
+            `</div>`
+          : "") +
         `<p>The full report is attached as a PDF.</p>` +
         `<p style="color:#666;font-size:12px;">To stop these weekly emails, sign in to the parent portal and turn off <em>Weekly email</em> under <em>What I see</em>.</p>` +
         `<p>— ${escapeHtml(brand.name)}</p>`;

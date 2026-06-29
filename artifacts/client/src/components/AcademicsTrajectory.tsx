@@ -28,7 +28,10 @@ import {
   type InsightsFilterValue,
 } from "./InsightsFilterBar";
 import InsightsPicker from "./InsightsPicker";
-import BandStudentsDrawer from "./BandStudentsDrawer";
+import BandStudentsDrawer, {
+  INSIGHTS_PM_COLUMNS,
+  INSIGHTS_METRIC_COLUMNS,
+} from "./BandStudentsDrawer";
 
 // =============================================================================
 // Types
@@ -343,12 +346,26 @@ interface TrajStudent {
   localSisId: string | null;
   studentName: string;
   grade: number | null;
+  priorYearScore: number | null;
   pm1: number | null;
+  pm2: number | null;
   pm3: number | null;
   programPill?: "ESE" | "504" | null;
   mtssPill?: "Tier 2+" | "Tier 3" | null;
   bqEla?: boolean;
   bqMath?: boolean;
+  daysAbsent?: number | null;
+  attendancePct?: number | null;
+  ptsToNextLevel?: number | null;
+  ptsToProficient?: number | null;
+  // Per-PM FAST placements for the roster-style level pills (rides along
+  // straight into BandStudentsDrawer's matching `levels` field).
+  levels?: {
+    priorYearScore: { level: 1 | 2 | 3 | 4 | 5; subLevel: string } | null;
+    pm1: { level: 1 | 2 | 3 | 4 | 5; subLevel: string } | null;
+    pm2: { level: 1 | 2 | 3 | 4 | 5; subLevel: string } | null;
+    pm3: { level: 1 | 2 | 3 | 4 | 5; subLevel: string } | null;
+  } | null;
 }
 
 interface TrajectoryStudentsResponse {
@@ -461,13 +478,23 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
       const s = String(v);
       return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const header = ["local_sis_id", "student_name", "grade", "pm1", "pm3"];
+    const header = [
+      "local_sis_id",
+      "student_name",
+      "grade",
+      "prior_pm3",
+      "pm1",
+      "pm2",
+      "pm3",
+    ];
     const rows = drawerData.students.map((s) =>
       [
         esc(s.localSisId ?? ""),
         esc(s.studentName),
         esc(s.grade == null ? "" : s.grade === 0 ? "K" : s.grade),
+        esc(s.priorYearScore ?? ""),
         esc(s.pm1 ?? ""),
+        esc(s.pm2 ?? ""),
         esc(s.pm3 ?? ""),
       ].join(","),
     );
@@ -781,13 +808,18 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
         title={drawerTitle}
         subtitle={
           drawerData
-            ? `${drawerData.total} student${drawerData.total === 1 ? "" : "s"}${drawerData.truncated ? ` (showing first ${drawerData.students.length})` : ""}`
+            ? `${drawerData.total} student${drawerData.total === 1 ? "" : "s"}${drawerData.truncated ? ` (showing first ${drawerData.students.length})` : ""} · Att % is an estimate`
             : undefined
         }
         // Pass pm1/pm3 through as-is (including nulls). The drawer
         // renders "—" for missing scores, which is the honest signal
         // for the Untested archetype rather than a fabricated 0.
         students={drawerData?.students ?? []}
+        scoreColumns={[
+          ...INSIGHTS_PM_COLUMNS,
+          ...INSIGHTS_METRIC_COLUMNS,
+        ]}
+        showScoreToggle
         truncated={drawerData?.truncated}
         total={drawerData?.total}
         loading={drawerLoading}

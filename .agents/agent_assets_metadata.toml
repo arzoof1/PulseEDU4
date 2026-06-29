@@ -299,7 +299,7 @@ title = "Hall Pass Demo Run-Book (PDF)"
 id = "0767g4Kr8xlePWgq1JKjR"
 uri = "file://docs/brochure/PulseEDU-Brochure.pdf"
 type = "pdf"
-title = "PulseEDU Brochure (updated)"
+title = "PulseEDU Brochure v2 (updated) — with Eligibility Hub"
 
 [[outputs]]
 id = "gIHf9NKaqUecy0RGLZi8d"
@@ -372,3 +372,75 @@ id = "6c-AcUXBEPPh0IBJkGl00"
 uri = "file://docs/demo/print/README.pdf"
 type = "pdf"
 title = "Demo Kit — README (print)"
+
+[[outputs]]
+id = "JlmLaw-9A_1nY8RkcKy3p"
+uri = "file://docs/school-tours-user-guide.md"
+type = "text"
+title = "PulseEDU School Tours — User Guide for Schools"
+
+[[outputs]]
+id = "E2rE4XUreKx4laFwiowf5"
+uri = "file://docs/PulseEDU-School-Tours-Brochure.pdf"
+type = "pdf"
+title = "PulseEDU School Tours — District Brochure"
+
+[[outputs]]
+id = "cdXEvB-Ze2T-T8KwiLnjw"
+uri = "file://docs/school-tours-live-tour-capture-MIGRATION.md"
+type = "text"
+title = "School Tours — Live Tour Capture: Production Migration Report"
+
+[[outputs]]
+id = "WbOKnP93r2ffwXzWivx4z"
+uri = "file://docs/dev-changes-2026-06-19_to_2026-06-25.md"
+type = "text"
+title = "Developer Changes Pack — June 19–25, 2026"
+
+[[outputs]]
+id = "CqCcd6vmMM5c3QYnByXyT"
+uri = "file://docs/migration-report-2026-06-26.md"
+type = "text"
+title = "Dev Migration Report — 2026-06-26"
+
+[[outputs]]
+id = "3R_5zdi8bEZsHF50UPDwa"
+uri = "file://docs/sidebar-role-aware-nav-migration.md"
+type = "text"
+title = "Sidebar Role-Aware Nav — Developer Migration Doc"
+
+[[outputs]]
+id = "RQNSwX8jj45FQxBU81EYZ"
+uri = "file://docs/migration-roadmap-2026-06-22_to_2026-06-27.md"
+type = "text"
+title = "Full Developer Migration Roadmap (June 22 → 27)"
+
+[[outputs]]
+id = "2VB3QqU93xN7MNN3GLPgY"
+uri = "file://exports/PulseEDU-Pre-Demo-Feature-Preview.pdf"
+type = "pdf"
+title = "PulseEDU — Pre-Demo Feature Preview (PDF)"
+
+[[outputs]]
+id = "sSma8vwECxH9XxLqO56U9"
+uri = "file://docs/migration-report-2026-06-29.md"
+type = "text"
+title = "Dev → Live Migration Report (2026-06-29)"
+
+[[outputs]]
+id = "mS17kwsuUcXheB_wBbeld"
+uri = "file://exports/PulseEDU-Migration-Handoff-2026-06-29.pdf"
+type = "pdf"
+title = "PulseEDU — Dev → Live Migration Handoff (PDF, shareable)"
+
+[[outputs]]
+id = "tTcveRF4zgbYkdfaX0Sk7"
+uri = "file://exports/pulseedu-dev-to-live-2026-06-29.patch.txt"
+type = "text"
+title = "PulseEDU code changes — git patch (5aaa9a80 → fbd6847b)"
+
+[[outputs]]
+id = "06aP-xjweorZoU_7b1WZ7"
+uri = "file://exports/PulseEDU-Migration-Handoff-2026-06-29.zip"
+type = "unspecified"
+title = "PulseEDU Migration Handoff — PDF + code patch + report (zip)"

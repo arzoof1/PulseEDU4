@@ -21,6 +21,11 @@ export const pbisEntriesTable = pgTable("pbis_entries", {
   // ("Class earned this together because…") and for context teachers want
   // visible on a student's record.
   note: text("note"),
+  // Set when this row was created by a CSV import (currently only the PBIS
+  // point-balance migration importer's "count as earned" path). Lets a
+  // rollback delete exactly the rows a given import job inserted
+  // (DELETE WHERE import_job_id = X). NULL for all hand-entered awards.
+  importJobId: integer("import_job_id"),
 });
 
 export type PbisEntryRow = typeof pbisEntriesTable.$inferSelect;

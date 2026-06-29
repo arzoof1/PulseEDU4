@@ -1,0 +1,174 @@
+---
+name: Relocating a gated nav item between sidebar NavGroups
+description: The three lockstep edits required when moving a capability-gated sidebar item from one NavGroup to another in artifacts/client/src/App.tsx, plus the silent-hide trap.
+---
+
+Moving a capability-gated nav item from one sidebar `NavGroup` to another is NOT a
+one-line JSX move. Three things must change in lockstep or you silently break access
+or deep links:
+
+1. **The destination group's `show<Group>` visibility flag must be a SUPERSET of the
+   moved item's gate.** Each `NavGroup` only renders when its `show*` flag is true. If
+   the moved item's viewers aren't all covered by the destination group's flag, those
+   users see neither the group nor the item — a silent hide. Fix by *additively* OR-ing
+   the item's exact gate into the destination flag (e.g. `showSchoolAdmin = ... || (canManageBehaviorLists && !isBehaviorSpec)`).
+
+2. **`NAV_GROUP_OWNERSHIP` must move the `activeSection` key too** (remove from the old
+   group's array, add to the new one). This drives force-expand: when the user is on
+   that page, `groupContainsActive` expands the owning group. Wrong owner = the group
+   collapses on top of the page you're viewing.
+
+3. **Keep the item's per-item gate verbatim.** Broadening the group flag is safe ONLY
+   because every item inside the group keeps its own gate, so a newly-admitted group
+   viewer still sees only items they're individually authorized for — no privilege leak.
+
+**Why:** Done for the "Interventions" behavior-lists editor (Phase 1 sidebar
+consolidation). Its gate is `canManageBehaviorLists && !isBehaviorSpec` = MTSS
+coordinators + Deans (admins & behavior-specs are excluded because `isBehaviorSpec`
+includes `isAdmin`). The old admin-group flag `canManageBellSchedules || isAdmin`
+covered MTSS coords (via `isMtss`) but NOT pure Deans, so the naive move would have
+hidden the item from Deans.
+
+**Role-flag facts (App.tsx, ~9470-9484):** `isBehaviorSpec = isBehaviorSpecialist || isAdmin`;
+`isDean = isDean || isAdmin`; `isMtss = isMtssCoordinator || isAdmin`. So `isMtss` and
+`isMtssCoordinator` are effectively the same for non-admins. A `!isBehaviorSpec` filter
+therefore *also* excludes admins.
+
+**How to apply:** Before moving any gated sidebar item, write out who currently sees it,
+confirm the destination group's `show*` flag admits all of them (broaden additively if
+not), and update `NAV_GROUP_OWNERSHIP`. Don't leave the source group's `show*` clause if
+it becomes the source of an empty rendered group for some role.
+
+## Folding a redundant entry point (Phase 2)
+
+When the SAME capability has two sidebar entry points and one audience can reach it
+through both, gate the redundant row out for that audience instead of deleting it.
+Concretely: the standalone read-only "School Store" row was visible to everyone, but
+every `canAccessPbisHub` user is also `canEditSchoolStore` (identical role set) and so
+already reaches the store via the PBIS Hub's manage tile. Gating the standalone row
+`effectiveFeatures.SchoolStore && !canAccessPbisHub` removes it for hub-havers while
+keeping it for non-hub teachers (their only catalog entry) — no access lost.
+
+**Why:** "fold hubs" means one canonical entry point PER AUDIENCE, not deleting the
+page. The `schoolStore` activeSection + its `NAV_GROUP_OWNERSHIP.recognition` entry must
+stay so deep links still render + force-expand the group.
+
+**Companion trap — stale `show<Group>` OR-terms make empty headers.** A group's `show*`
+flag must stay in lockstep with the items that can actually render inside it. After PBIS
+Points was promoted to Quick Access, `showRecognition` still OR-ed `effectiveFeatures.Pbis`
+even though no Recognition row is gated on it — a Pbis-on / no-hub / store-off user saw an
+empty "Recognition" header. Fix: make the flag exactly the OR of its children's gates
+(`effectiveFeatures.SchoolStore || canAccessPbisHub`). **How to apply:** whenever you
+add/remove/move a row in a group, re-derive that group's `show*` as the disjunction of
+the surviving rows' gates.
+
+## Healing a split workflow / promoting an unrendered nav-section (Phase 3)
+
+When one workflow is split across two sidebar GROUPS, give the missing piece a
+sidebar row in the group that already holds the rest of the workflow — don't move
+everything into a new group. Concretely: MTSS plan management (mtssPlans,
+interventionReports) lived in the behaviorSupport group, but the MTSS Coordinator
+hub (mtssCoordinator + its mtssTemplates sub-page) had NO sidebar row (only an
+Insights Hub page tile). Fix = render the already-defined-but-unused
+`mtssCoordNavSections` inside behaviorSupport, gated `canAccessMtssHub` (the page's
+own gate), and move mtssCoordinator+mtssTemplates ownership from insights →
+behaviorSupport. academicsTrajectory stayed in insights (it's a dashboard, not the
+plan workflow).
+
+**Why two gates matter here:** `canAccessMtssHub` (SU/Admin/MTSS/BehaviorSpec) is a
+strict SUBSET of `canManageMtssPlans` (adds PbisCoord), and showBehaviorSupport
+already ORs canManageMtssPlans — so the new row can never appear in a hidden group,
+and the row gate == page-render gate means zero widen/narrow. ALWAYS check the new
+row's gate against the group's `show*` superset before adding it.
+
+**Parallel-discovery convention (don't fight it):** a page reachable from BOTH a
+sidebar row AND a hub tile is owned (force-expand) by whichever group holds the
+SIDEBAR ROW; the hub tile is just discovery. So when you promote a hub sub-page to a
+sidebar row, move its NAV_GROUP_OWNERSHIP entry to the new group even though the old
+hub still launches it. **How to apply:** after any such move, re-audit that every
+activeSection key is owned by exactly ONE group (zero = no force-expand, two =
+wrong group wins).
+
+**Naming is an owner decision:** the target IA calls this group "Student Support"
+but it's still labeled "Academic and Behavior Supports" — renaming was deferred as
+an explicit open decision (muscle-memory cost). Don't unilaterally rename nav groups
+during a structural consolidation. (Owner later approved the "Student Support" rename;
+only the visible `label` changed — the `behaviorSupport` id + activeSection keys stay.)
+
+## Quick Access is NOT purely duplicative — the sole-home trap (Phase 4a)
+
+Before converting a "Quick Access"/shortcuts strip into a user-pinnable favorites
+layer, audit whether each shortcut ALSO has a permanent group home. It often does
+NOT: organic cleanup tends to remove an item from its group and leave it ONLY in
+Quick Access "to avoid duplication." Here `pbis`, `houseRankings`, `requestPullout`,
+and `accommodations` each lived ONLY in Quick Access. If you then make Quick Access
+pinnable (user can unpin), an unpinned sole-home item becomes unreachable from the
+sidebar = capability removal. Fix BEFORE making it pinnable: restore each item to its
+group (same per-item gate verbatim), so the grouped nav is the complete map and
+unpinning never orphans anything.
+
+**Restoring an item re-REQUIRES broadening the group's `show*` flag back to a superset
+of the item's gate** — i.e. you may be reversing an earlier tightening. Phase 2 had
+narrowed `showRecognition` to `SchoolStore || canAccessPbisHub` once PBIS Points left
+for Quick Access; restoring pbis/houseRankings (gate `effectiveFeatures.Pbis`) means
+`showRecognition` must again OR in `effectiveFeatures.Pbis` or PBIS-only teachers get
+no Recognition home. The companion-trap rule still holds: `show*` == disjunction of the
+rows that can actually render inside. **How to apply:** for each restored key, confirm
+the destination group's `show*` admits its full audience, add the key to
+NAV_GROUP_OWNERSHIP if it had no owner (houseRankings had none), and expect an interim
+state where the item shows in BOTH Quick Access and its group until the pinnable layer
+removes the static list.
+
+## Pinnable-favorites no-orphan invariant (Phase 4b)
+
+Converting the static Quick Access strip into a per-user pinnable favorites layer
+(localStorage `pulseedu.quickaccess.${userId}.v1`, cap 5, inline "Customize"
+checklist) re-opens the sole-home trap: if a user can UNPIN an item, that item
+needs a permanent home elsewhere or unpinning = capability removal. Phase 4a only
+gave group homes to 4 of the 8 pinnables (pbis, houseRankings, requestPullout,
+accommodations). The OTHER 4 (hallPasses, teacherRoster, studentLookup,
+partneringWithParents) have NO sidebar group home — their permanent home is the
+**always-on Tile Home launcher** (`goToTileHome()` header button in
+`.header-controls`, never gated/pinnable → full-screen `<TileHome tiles onPick>`;
+every pinnable key is a navigable tile).
+
+**The actual invariant to enforce: each pinnable item's pin gate (`canShow`) must
+IMPLY its Tile Home tile is visible.** Audit gate-by-gate against the Tile Home
+`add(condition, {...})` block. They matched for 7/8; the gap was hallPasses —
+its tile is gated `effectiveFeatures.HallPasses !== false` but the old Quick
+Access rendered it unconditionally, so canShow had to be tightened from `true`
+to `HallPasses !== false` (a deliberate, documented tightening). **Why:** the
+no-orphan rule outranks "preserve gate verbatim" at the feature-off edge — an
+item you can pin but whose only permanent home (the tile) is hidden orphans on
+unpin. **How to apply:** don't assume a 4a-style group home exists for every
+shortcut; the Tile Home is a legitimate permanent home, but only if its tile
+gate is a superset of the pin gate. The first architect pass FAILED because it
+only grepped grouped `renderNavItem` calls and missed the Tile Home launcher.
+
+## Role-aware nav = exact disjunction of children (Phase 5)
+
+"Role-aware nav with zero access loss" has ONE provably-safe lever: make each
+group's `show<Group>` visibility flag the EXACT disjunction (OR) of every
+per-item gate rendered inside that group. Then a group appears precisely when
+≥1 item inside is visible — no empty header (show broader than children) and no
+suppressed-but-authorized item (show narrower than children).
+
+**Why:** the appealing "shrink the sidebar by hiding things a role can technically
+see today" inherently REMOVES access → violates a no-damage constraint. The only
+change that's access-non-decreasing is fixing show-flag/children mismatches.
+A NARROWER-than-children show flag is a real bug: the role has the item gated
+visible but the group header is hidden, so it's unreachable from the sidebar.
+Broadening to the exact OR only ever REVEALS an already-authorized item (strict
+superset) — it never removes access.
+
+**How to apply:** audit each group's show flag against the union of its rendered
+children's gates. Found two narrower-than-children (suppression) cases:
+showBehaviorSupport omitted `canEditSafetyPlanClient` (Guidance Counselor /
+School Psych → Safety Plans) + `isDistrictAdmin`/`isDean` (Log ODR /
+Investigations); showSchoolAdmin omitted `canManageStaffRoles` (per-staff
+capStaffRoles), `canManageDisplays` (cap_manage_displays), `canManageSettings`
+(District Admin), `canApproveAst`, `canManageEligibility`, `canAccessMtssHub`.
+This is a show-flag-only edit: no items move, NAV_GROUP_OWNERSHIP unchanged
+(ownership only needs lockstep when items MOVE groups), 800px strip untouched.
+A redundant OR term that can only ADD coverage is safe to keep — don't remove it
+just for "exact union" tidiness when a no-damage constraint is in force.

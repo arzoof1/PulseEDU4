@@ -1,0 +1,39 @@
+bjective
+Standardize every student/staff search box in the STAFF app to the look, feel, and keyboard behavior of the Family Communication search (the inline StudentCombobox in artifacts/client/src/App.tsx, ~lines 3724–3917). Do this by extracting ONE shared, reusable picker component that supports both an instant-local mode and a debounced-async mode. Hard constraint: do not change which results any screen returns (preserve all visibility scoping) and make zero database changes. Migrate screen-by-screen so the app is never in a broken state.
+
+Background / current state
+Reference component: StudentCombobox in App.tsx — custom <input> + absolute <ul> listbox, ↑/↓/Enter/Esc keyboard nav, rows formatted Name · localSisId · Grade, filters a local students array (instant, no debounce).
+Three families of search exist today:
+StudentCombobox (Family Communication, plus SuperUser/District placeholders) — instant local filter.
+Bespoke server-search boxes — Student Lookup (/api/student-lookup/search), Student Finder (/api/student-finder/search, has a Student/Staff toggle), Watchlist LogInteractionModal (/api/student-finder/search), Communication Log AddDisciplineLogModal (/api/students?q=). Debounced; enforce visibility scoping server-side.
+Native <datalist> pickers (weakest, buggy matcher) — Request Pullout (request-pullout-student-options), MTSS Plans (mtss-plan-students), My Interventions (my-interventions-student-list), ISS roster (iss-roster-add-student-options), called-in pullout (called-in-pullout-students).
+FLEID rule: never render studentId; always render localSisId ?? "—".
+Phases (build order)
+P1: Extract the shared component
+Create a reusable component (e.g. StudentPicker) in artifacts/client/src/components/, based on the existing StudentCombobox: styled input + absolute listbox, ↑/↓/Enter/Esc nav, row = Name · localSisId · Grade.
+Two data modes:
+mode="local": takes a students array, filters in-memory, rank starts-with before includes (match CreatePassModal behavior).
+mode="async": takes a fetcher/endpoint, debounced (~200–250ms), with loading + empty states.
+Optional per-row renderMeta slot for extra detail (current room/teacher, ESE/504 flags).
+kind="student" | "staff" so it also covers staff search (Finder toggle).
+Always render localSisId ?? "—", never studentId.
+Switch Family Communication to the new component first as the reference; it must behave identically.
+Acceptance: typecheck passes; Family Communication search unchanged in behavior.
+P2: Migrate the native <datalist> pickers (highest value, lowest risk)
+Replace: Request Pullout, MTSS Plans, My Interventions, ISS roster, called-in pullout.
+Keep each screen's existing local data source and scope; this retires the datalist matcher bug.
+Acceptance: selection works; any id-gated submit buttons still enable correctly.
+P3: Migrate the bespoke server-search boxes (async mode)
+Convert: Student Lookup, Student Finder (incl. staff toggle), Watchlist LogInteractionModal, Communication Log AddDisciplineLogModal.
+Use mode="async" with each screen's existing endpoint — do not change result sets or scoping. Preserve extra metadata (room/teacher, flags) via renderMeta.
+Acceptance: results and shown metadata identical to before; debounced.
+P4 (optional): Create Hall Pass modal
+Convert CreatePassModal step-1 student search to the shared component (local mode + ranking), keeping the wizard flow.
+Acceptance: hall pass creation behavior unchanged.
+Out of scope — do NOT convert
+Kiosk barcode/ID entry (student-facing, intentionally no dropdown).
+@-mention pickers (MentionSuggestStrip — different interaction model).
+Data Importer column mapping.
+Verify
+pnpm run typecheck; restart api-server + client; manually test at least one screen per mode + screenshot; architect review.
+Confirm no DB changes / no migrations were introduced.

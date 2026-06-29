@@ -45,9 +45,24 @@ export default function LeadershipInsights() {
         </div>
       </div>
 
-      <div className="mt-[4vh] inline-flex w-fit items-center gap-[0.8vw] rounded-[0.6vw] bg-[#0B1F33] px-[1.4vw] py-[1.1vh]">
-        <span className="font-body text-[1.5vw] font-bold tracking-[0.18em] uppercase text-[#2DD4BF]">Live demo</span>
-        <span className="font-body text-[1.5vw] text-[#EAF2F0]">Drill from a school-wide trend down to a single student profile</span>
+      <div className="mt-[3.4vh] grid grid-cols-3 gap-[1.6vw]">
+        <div className="rounded-[0.7vw] border border-[#0B1F33]/12 bg-[#FBF9F4] px-[1.4vw] py-[1.6vh]">
+          <div className="font-display text-[1.7vw] font-bold">Days absent &amp; %</div>
+          <div className="mt-[0.4vh] font-body text-[1.4vw] text-[#5B6B79]">How much class time is being missed.</div>
+        </div>
+        <div className="rounded-[0.7vw] border border-[#0B1F33]/12 bg-[#FBF9F4] px-[1.4vw] py-[1.6vh]">
+          <div className="font-display text-[1.7vw] font-bold">Points to next FAST level</div>
+          <div className="mt-[0.4vh] font-body text-[1.4vw] text-[#5B6B79]">How close to the next sub-level.</div>
+        </div>
+        <div className="rounded-[0.7vw] border border-[#0B1F33]/12 bg-[#FBF9F4] px-[1.4vw] py-[1.6vh]">
+          <div className="font-display text-[1.7vw] font-bold">Points to proficiency</div>
+          <div className="mt-[0.4vh] font-body text-[1.4vw] text-[#5B6B79]">The gap to grade-level Level 3.</div>
+        </div>
+      </div>
+
+      <div className="mt-[3.4vh] inline-flex w-fit items-center gap-[0.8vw] rounded-[0.6vw] bg-[#0B1F33] px-[1.4vw] py-[1.1vh]">
+        <span className="font-body text-[1.5vw] font-bold tracking-[0.18em] uppercase text-[#2DD4BF]">Actionable</span>
+        <span className="font-body text-[1.5vw] text-[#EAF2F0]">Drill from a school-wide trend to one student — with the exact numbers a teacher can act on.</span>
       </div>
     </div>
   );

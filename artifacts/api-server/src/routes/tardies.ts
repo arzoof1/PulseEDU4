@@ -4,6 +4,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { resolveStudentIdInput } from "../lib/studentIdResolver.js";
 import { sendTardySmsStub } from "../lib/tardySms.js";
+import { isParentNotifyEnabled } from "../lib/parentNotify.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import {
   loadDefaultPeriodWindows,
@@ -167,6 +168,13 @@ router.post("/tardies", async (req, res) => {
   // fail or block the 201 response after the tardy row is already inserted.
   if (type === "tardy") {
     try {
+      // Toggle read is INSIDE the try so a settings-read failure can never
+      // fail the request after the tardy row is already inserted (same
+      // best-effort contract as the stub itself).
+      if (!(await isParentNotifyEnabled(schoolId, "notifyParentTardy"))) {
+        res.status(201).json(tardy);
+        return;
+      }
       const [stu] = await db
         .select({
           firstName: studentsTable.firstName,

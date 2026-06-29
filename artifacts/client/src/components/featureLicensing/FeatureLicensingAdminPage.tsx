@@ -24,7 +24,144 @@ type FeatureSpec = {
   description: string;
   schoolSettingsKey: string | null;
   quotas: { name: string; type: "number" | "stringList"; label: string; hint?: string }[];
+  // Dependency metadata (mirrors the server FEATURE_KEYS registry). `requires`
+  // is a HARD dep — enabling this feature while a required one is off blocks
+  // save. `recommends` is a SOFT dep — non-blocking warning only.
+  requires?: string[];
+  recommends?: string[];
 };
+
+// ---------------------------------------------------------------------------
+// Feature dependency checks (shared by the Plan + per-school override editors
+// so they never disagree about what's broken). A feature's `requires` deps
+// are HARD (incoherent without them → block save); `recommends` deps are SOFT
+// (works without, just better with → warn only).
+// ---------------------------------------------------------------------------
+type DepIssue = {
+  key: string;
+  missingRequired: string[];
+  missingRecommended: string[];
+};
+function computeDepIssues(
+  features: FeatureSpec[],
+  enabled: Record<string, boolean>,
+): { byKey: Map<string, DepIssue>; blockingKeys: string[] } {
+  const on = (k: string) => enabled[k] === true;
+  const byKey = new Map<string, DepIssue>();
+  const blockingKeys: string[] = [];
+  for (const f of features) {
+    if (!on(f.key)) continue;
+    const missingRequired = (f.requires ?? []).filter((k) => !on(k));
+    const missingRecommended = (f.recommends ?? []).filter((k) => !on(k));
+    if (missingRequired.length || missingRecommended.length) {
+      byKey.set(f.key, { key: f.key, missingRequired, missingRecommended });
+    }
+    if (missingRequired.length) blockingKeys.push(f.key);
+  }
+  return { byKey, blockingKeys };
+}
+function labelFor(features: FeatureSpec[], key: string): string {
+  return features.find((f) => f.key === key)?.label ?? key;
+}
+const DEP_REQUIRED_BG = "#fdecea";
+const DEP_RECOMMENDED_BG = "#fff8e1";
+
+// Banner summarizing all unmet deps for the current selection. Required
+// (blocking) deps render red; recommended (soft) deps render amber.
+function DepBanner({
+  features,
+  dep,
+}: {
+  features: FeatureSpec[];
+  dep: { byKey: Map<string, DepIssue>; blockingKeys: string[] };
+}) {
+  const soft = [...dep.byKey.values()].filter(
+    (i) => i.missingRequired.length === 0 && i.missingRecommended.length > 0,
+  );
+  if (dep.blockingKeys.length === 0 && soft.length === 0) return null;
+  return (
+    <>
+      {dep.blockingKeys.length > 0 && (
+        <div
+          style={{
+            background: DEP_REQUIRED_BG,
+            border: "1px solid #f5c2c7",
+            color: "#842029",
+            borderRadius: 6,
+            padding: "8px 10px",
+            margin: "8px 0",
+            fontSize: "0.85em",
+          }}
+        >
+          <strong>Can't save — required features are missing:</strong>
+          <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+            {dep.blockingKeys.map((k) => {
+              const issue = dep.byKey.get(k);
+              return (
+                <li key={k}>
+                  <strong>{labelFor(features, k)}</strong> requires{" "}
+                  {(issue?.missingRequired ?? [])
+                    .map((d) => labelFor(features, d))
+                    .join(", ")}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+      {soft.length > 0 && (
+        <div
+          style={{
+            background: DEP_RECOMMENDED_BG,
+            border: "1px solid #ffe69c",
+            color: "#664d03",
+            borderRadius: 6,
+            padding: "8px 10px",
+            margin: "8px 0",
+            fontSize: "0.85em",
+          }}
+        >
+          <strong>Heads up — recommended features are off (you can still save):</strong>
+          <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+            {soft.map((i) => (
+              <li key={i.key}>
+                <strong>{labelFor(features, i.key)}</strong> works better with{" "}
+                {i.missingRecommended.map((d) => labelFor(features, d)).join(", ")}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </>
+  );
+}
+
+// Per-row note listing this feature's own unmet deps.
+function RowDepNote({
+  features,
+  issue,
+}: {
+  features: FeatureSpec[];
+  issue: DepIssue | undefined;
+}) {
+  if (!issue) return null;
+  return (
+    <div style={{ fontSize: "0.78em", marginTop: 2 }}>
+      {issue.missingRequired.length > 0 && (
+        <div style={{ color: "#b02a37" }}>
+          Requires:{" "}
+          {issue.missingRequired.map((k) => labelFor(features, k)).join(", ")}
+        </div>
+      )}
+      {issue.missingRecommended.length > 0 && (
+        <div style={{ color: "#997404" }}>
+          Recommends:{" "}
+          {issue.missingRecommended.map((k) => labelFor(features, k)).join(", ")}
+        </div>
+      )}
+    </div>
+  );
+}
 
 type Plan = {
   id: number;
@@ -215,6 +352,13 @@ export default function FeatureLicensingAdminPage() {
             schools.find((s) => s.schoolId === editingSchoolId)?.schoolName ?? ""
           }
           features={features}
+          plan={
+            plans.find(
+              (p) =>
+                p.id ===
+                schools.find((s) => s.schoolId === editingSchoolId)?.planId,
+            ) ?? null
+          }
           onClose={() => setEditingSchoolId(null)}
           onChanged={async () => {
             await reload();
@@ -639,8 +783,16 @@ function PlanEditorModal({
   const [quotasJson, setQuotasJson] = useState(
     JSON.stringify(plan.quotas ?? {}, null, 2),
   );
+  const depIssues = useMemo(
+    () => computeDepIssues(features, enabled),
+    [features, enabled],
+  );
 
   async function save() {
+    if (depIssues.blockingKeys.length > 0) {
+      onError("Resolve required feature dependencies before saving.");
+      return;
+    }
     try {
       let parsedQuotas: unknown = {};
       try {
@@ -683,6 +835,7 @@ function PlanEditorModal({
         />
       </label>
       <h4 style={{ marginBottom: 4 }}>Features</h4>
+      <DepBanner features={features} dep={depIssues} />
       <div
         style={{
           maxHeight: 260,
@@ -692,10 +845,25 @@ function PlanEditorModal({
           borderRadius: 4,
         }}
       >
-        {features.map((f) => (
+        {features.map((f) => {
+          const issue = depIssues.byKey.get(f.key);
+          const bg = issue
+            ? issue.missingRequired.length
+              ? DEP_REQUIRED_BG
+              : DEP_RECOMMENDED_BG
+            : undefined;
+          return (
           <label
             key={f.key}
-            style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 4 }}
+            style={{
+              display: "flex",
+              gap: 8,
+              alignItems: "flex-start",
+              marginBottom: 4,
+              background: bg,
+              borderRadius: 4,
+              padding: bg ? "2px 4px" : undefined,
+            }}
           >
             <input
               type="checkbox"
@@ -710,9 +878,11 @@ function PlanEditorModal({
               <div style={{ fontSize: "0.85em", color: "var(--text-subtle, #777)" }}>
                 {f.description}
               </div>
+              <RowDepNote features={features} issue={issue} />
             </span>
           </label>
-        ))}
+          );
+        })}
       </div>
       <h4 style={{ marginBottom: 4 }}>Quotas (raw JSON)</h4>
       <textarea
@@ -723,7 +893,17 @@ function PlanEditorModal({
       />
       <div style={{ marginTop: 12, textAlign: "right" }}>
         <button onClick={onClose}>Cancel</button>{" "}
-        <button onClick={save}>Save</button>
+        <button
+          onClick={save}
+          disabled={depIssues.blockingKeys.length > 0}
+          title={
+            depIssues.blockingKeys.length > 0
+              ? "Resolve required feature dependencies first"
+              : undefined
+          }
+        >
+          Save
+        </button>
       </div>
     </ModalShell>
   );
@@ -747,6 +927,8 @@ function SchoolsSection({
   onReload: () => void | Promise<void>;
   onError: (msg: string) => void;
 }) {
+  const [query, setQuery] = useState("");
+
   async function changePlan(schoolId: number, planId: number | null) {
     try {
       await sendJson(`/api/feature-licensing/schools/${schoolId}/plan`, "PATCH", {
@@ -758,9 +940,40 @@ function SchoolsSection({
     }
   }
 
+  const q = query.trim().toLowerCase();
+  const visibleSchools = q
+    ? schools.filter((s) => s.schoolName.toLowerCase().includes(q))
+    : schools;
+
   return (
     <section>
-      <h3 style={{ marginBottom: "0.5rem" }}>Schools</h3>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          marginBottom: "0.5rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <h3 style={{ margin: 0 }}>Schools</h3>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search schools…"
+            aria-label="Search schools by name"
+            style={{ minWidth: 220 }}
+          />
+          <span style={{ fontSize: "0.85em", color: "#777", whiteSpace: "nowrap" }}>
+            {q
+              ? `${visibleSchools.length} of ${schools.length}`
+              : `${schools.length} school${schools.length === 1 ? "" : "s"}`}
+          </span>
+        </div>
+      </div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr style={{ textAlign: "left" }}>
@@ -771,7 +984,7 @@ function SchoolsSection({
           </tr>
         </thead>
         <tbody>
-          {schools.map((s) => (
+          {visibleSchools.map((s) => (
             <tr key={s.schoolId} style={{ borderTop: "1px solid var(--border, #eee)" }}>
               <td>{s.schoolName}</td>
               <td>
@@ -806,10 +1019,12 @@ function SchoolsSection({
               </td>
             </tr>
           ))}
-          {schools.length === 0 && (
+          {visibleSchools.length === 0 && (
             <tr>
               <td colSpan={4} style={{ color: "var(--text-subtle, #777)" }}>
-                No schools.
+                {schools.length === 0
+                  ? "No schools."
+                  : `No schools match "${query.trim()}".`}
               </td>
             </tr>
           )}
@@ -823,6 +1038,7 @@ function OverridesDrawer({
   schoolId,
   schoolName,
   features,
+  plan,
   onClose,
   onChanged,
   onError,
@@ -830,12 +1046,27 @@ function OverridesDrawer({
   schoolId: number;
   schoolName: string;
   features: FeatureSpec[];
+  plan: Plan | null;
   onClose: () => void;
   onChanged: () => void | Promise<void>;
   onError: (msg: string) => void;
 }) {
   const [rows, setRows] = useState<Override[]>([]);
   const byKey = useMemo(() => new Map(rows.map((r) => [r.featureKey, r])), [rows]);
+  // Effective enablement = override row wins, else the plan default. Deps are
+  // evaluated on this effective set so we don't false-flag a feature that's on
+  // via the plan but has no override row here.
+  const enabledMap = useMemo(() => {
+    const m: Record<string, boolean> = {};
+    for (const f of features) {
+      m[f.key] = byKey.get(f.key)?.enabled ?? Boolean(plan?.features?.[f.key]);
+    }
+    return m;
+  }, [features, byKey, plan]);
+  const depIssues = useMemo(
+    () => computeDepIssues(features, enabledMap),
+    [features, enabledMap],
+  );
 
   async function reload() {
     try {
@@ -857,6 +1088,28 @@ function OverridesDrawer({
     featureKey: string,
     patch: { enabled: boolean; showUpsell: boolean; reason?: string },
   ) {
+    // Coherence guard: only when this write actually flips enablement, block
+    // it if the resulting effective set would leave a REQUIRED dependency
+    // unmet (enabling a feature whose required dep is off, or disabling a dep
+    // an enabled feature requires). showUpsell-only toggles skip the check.
+    if (patch.enabled !== enabledMap[featureKey]) {
+      const prospective = { ...enabledMap, [featureKey]: patch.enabled };
+      const dep = computeDepIssues(features, prospective);
+      if (dep.blockingKeys.length > 0) {
+        const msg = dep.blockingKeys
+          .map((k) => {
+            const issue = dep.byKey.get(k);
+            return `${labelFor(features, k)} requires ${(
+              issue?.missingRequired ?? []
+            )
+              .map((d) => labelFor(features, d))
+              .join(", ")}`;
+          })
+          .join("; ");
+        onError(`Can't apply — ${msg}. Enable the required feature first.`);
+        return;
+      }
+    }
     try {
       await sendJson(
         `/api/feature-licensing/schools/${schoolId}/overrides`,
@@ -870,7 +1123,40 @@ function OverridesDrawer({
     }
   }
 
-  async function remove(overrideId: number) {
+  // Clearing an override reverts the feature to its plan default. Block the
+  // clear if reverting would leave a REQUIRED dependency unmet (e.g. an
+  // override forced PBIS on for a school whose plan defaults it off, while
+  // School Store is on — clearing PBIS would orphan School Store).
+  function clearBreaksDeps(featureKey: string): boolean {
+    const prospective = {
+      ...enabledMap,
+      [featureKey]: Boolean(plan?.features?.[featureKey]),
+    };
+    return computeDepIssues(features, prospective).blockingKeys.length > 0;
+  }
+
+  async function remove(overrideId: number, featureKey: string) {
+    if (clearBreaksDeps(featureKey)) {
+      const prospective = {
+        ...enabledMap,
+        [featureKey]: Boolean(plan?.features?.[featureKey]),
+      };
+      const dep = computeDepIssues(features, prospective);
+      const msg = dep.blockingKeys
+        .map(
+          (k) =>
+            `${labelFor(features, k)} requires ${(
+              dep.byKey.get(k)?.missingRequired ?? []
+            )
+              .map((d) => labelFor(features, d))
+              .join(", ")}`,
+        )
+        .join("; ");
+      onError(
+        `Can't clear — reverting to the plan default would break: ${msg}.`,
+      );
+      return;
+    }
     try {
       await deleteRequest(
         `/api/feature-licensing/schools/${schoolId}/overrides/${overrideId}`,
@@ -911,6 +1197,7 @@ function OverridesDrawer({
         opts this school into the Hybrid upsell surface (locked nav item
         + "contact admin to upgrade" page) when the feature is off.
       </p>
+      <DepBanner features={features} dep={depIssues} />
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr style={{ textAlign: "left" }}>
@@ -923,11 +1210,24 @@ function OverridesDrawer({
         <tbody>
           {features.map((f) => {
             const r = byKey.get(f.key);
+            const issue = depIssues.byKey.get(f.key);
+            const bg = issue
+              ? issue.missingRequired.length
+                ? DEP_REQUIRED_BG
+                : DEP_RECOMMENDED_BG
+              : undefined;
             return (
-              <tr key={f.key} style={{ borderTop: "1px solid var(--border, #eee)" }}>
+              <tr
+                key={f.key}
+                style={{
+                  borderTop: "1px solid var(--border, #eee)",
+                  background: bg,
+                }}
+              >
                 <td>
                   <strong>{f.label}</strong>{" "}
                   <code style={{ fontSize: "0.8em", color: "#777" }}>{f.key}</code>
+                  <RowDepNote features={features} issue={issue} />
                 </td>
                 <td>
                   <input
@@ -954,7 +1254,19 @@ function OverridesDrawer({
                   />
                 </td>
                 <td style={{ textAlign: "right" }}>
-                  {r && <button onClick={() => remove(r.id)}>Clear</button>}
+                  {r && (
+                    <button
+                      onClick={() => remove(r.id, f.key)}
+                      disabled={clearBreaksDeps(f.key)}
+                      title={
+                        clearBreaksDeps(f.key)
+                          ? "Clearing this would leave a required dependency unmet"
+                          : undefined
+                      }
+                    >
+                      Clear
+                    </button>
+                  )}
                 </td>
               </tr>
             );
@@ -1023,6 +1335,10 @@ function FeaturePickerModal({
   const [existingOverrides, setExistingOverrides] = useState<Override[]>([]);
   const [saving, setSaving] = useState(false);
   const [reason, setReason] = useState("");
+  const depIssues = useMemo(
+    () => computeDepIssues(features, selected ?? {}),
+    [features, selected],
+  );
 
   // Initial state: feature is "on" if there's an enabled override OR if
   // the plan defaults it on AND no disable override.
@@ -1074,6 +1390,10 @@ function FeaturePickerModal({
   // Net effect: overrideCount reflects only real deviations.
   async function save() {
     if (!selected) return;
+    if (depIssues.blockingKeys.length > 0) {
+      onError("Resolve required feature dependencies before saving.");
+      return;
+    }
     setSaving(true);
     try {
       const showUpsellByKey = new Map(
@@ -1159,6 +1479,8 @@ function FeaturePickerModal({
             </span>
           </div>
 
+          <DepBanner features={features} dep={depIssues} />
+
           <div
             style={{
               display: "grid",
@@ -1171,16 +1493,24 @@ function FeaturePickerModal({
               overflowY: "auto",
             }}
           >
-            {features.map((f) => (
+            {features.map((f) => {
+              const issue = depIssues.byKey.get(f.key);
+              const bg = issue
+                ? issue.missingRequired.length
+                  ? DEP_REQUIRED_BG
+                  : DEP_RECOMMENDED_BG
+                : undefined;
+              return (
               <label
                 key={f.key}
                 style={{
                   display: "flex",
                   gap: 8,
-                  alignItems: "center",
+                  alignItems: "flex-start",
                   padding: "4px 6px",
                   borderRadius: 4,
                   cursor: "pointer",
+                  background: bg,
                 }}
               >
                 <input
@@ -1193,9 +1523,11 @@ function FeaturePickerModal({
                   <code style={{ fontSize: "0.8em", color: "#888" }}>
                     {f.key}
                   </code>
+                  <RowDepNote features={features} issue={issue} />
                 </span>
               </label>
-            ))}
+              );
+            })}
           </div>
 
           <div style={{ marginTop: 12 }}>
@@ -1232,7 +1564,16 @@ function FeaturePickerModal({
             <button type="button" onClick={onClose} disabled={saving}>
               Cancel
             </button>
-            <button type="button" onClick={save} disabled={saving}>
+            <button
+              type="button"
+              onClick={save}
+              disabled={saving || depIssues.blockingKeys.length > 0}
+              title={
+                depIssues.blockingKeys.length > 0
+                  ? "Resolve required feature dependencies first"
+                  : undefined
+              }
+            >
               {saving ? "Saving…" : "Save"}
             </button>
           </div>

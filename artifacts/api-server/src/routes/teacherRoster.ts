@@ -58,6 +58,7 @@ import {
   type BucketInfo,
 } from "../lib/fastCutScores.js";
 import { decideLearningGain } from "../lib/learningGains.js";
+import { loadAttendanceMetrics } from "../lib/attendanceMetrics.js";
 
 // Per-PM placement enriched with the gap-to-next-sublevel caption used
 // by the roster pills. Gap is computed on the CURRENT-grade chart (same
@@ -763,6 +764,14 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     return an.localeCompare(bn);
   });
 
+  // Additive read-only attendance metric (shared source of truth). Batch-
+  // loaded once for the roster's students; FAST gap columns already exist
+  // on the subject blocks via buildSubjectBlock/bucketFor.
+  const attMap = await loadAttendanceMetrics(
+    schoolId,
+    studentSorted.map((s) => s.studentId),
+  );
+
   const out = studentSorted.map((stu) => {
     const grade = Number(stu.grade);
     const elaRow = scoreMap.get(scoreKey(stu.studentId, "ela"));
@@ -792,6 +801,18 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
       // memorize their names.
       photoObjectKey: stu.photoObjectKey,
       photoConsent: stu.photoConsent,
+      // Additive read-only attendance (from the Eligibility Hub upload).
+      // daysAbsent is the raw absence total; attendancePct is an ESTIMATE
+      // (weekday denominator since the semester start). Null when the
+      // student has no eligibility row / no semester start configured.
+      attendance: (() => {
+        const a = attMap.get(stu.studentId);
+        return {
+          daysAbsent: a?.daysAbsent ?? null,
+          daysTardy: a?.daysTardy ?? null,
+          attendancePct: a?.attendancePct ?? null,
+        };
+      })(),
       ela: buildSubjectBlock(
         elaRow,
         "ela",

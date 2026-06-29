@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
 import studentsRouter from "./students";
+import studentLookupRouter from "./studentLookup";
 import hallPassesRouter from "./hallPasses";
 import coverageRouter from "./coverage";
 import tardiesRouter from "./tardies";
@@ -62,6 +63,9 @@ import parentInvitesRouter from "./parentInvites";
 import parentPreviewRouter from "./parentPreview";
 import staffPreviewRouter from "./staffPreview";
 import parentSnapshotRouter from "./parentSnapshot";
+import parentStoreRouter from "./parentStore";
+import studentAuthRouter from "./studentAuth";
+import studentPortalRouter from "./studentPortal";
 import schoolBrandingRouter from "./schoolBranding";
 import pulseRouter from "./pulse";
 import demoHeartbeatRouter from "./demoHeartbeat";
@@ -114,6 +118,8 @@ import pulseBrainLabParentRouter from "./pulseBrainLabParent";
 import academicEvidenceRouter from "./academicEvidence";
 import academicEvidenceParentRouter from "./academicEvidenceParent";
 import sisSyncRouter from "./sisSync";
+import { eligibilityRouter } from "./eligibility";
+import communicationsRouter from "./communications";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -127,6 +133,7 @@ router.use(healthRouter);
 // students router exposes `GET /students/:studentId`, which would
 // otherwise shadow `GET /students/id-badges.pdf`.
 router.use(studentIdBadgesRouter);
+router.use(studentLookupRouter);
 router.use(studentsRouter);
 router.use(hallPassesRouter);
 router.use(coverageRouter);
@@ -208,6 +215,7 @@ router.use(
   "/parent/heartbeat-prefs",
   requireFeatureForParent("parentPortal"),
 );
+router.use("/parent/store", requireFeatureForParent("parentPortal"));
 
 // Family Messages — Core-Team → parent broadcast. Staff compose/monitor
 // surface gated on the school's `familyComm` license; the parent-facing inbox
@@ -248,6 +256,9 @@ router.use(parentInvitesRouter);
 router.use(parentPreviewRouter);
 router.use(staffPreviewRouter);
 router.use(parentSnapshotRouter);
+router.use(parentStoreRouter);
+router.use(studentAuthRouter);
+router.use(studentPortalRouter);
 router.use(schoolBrandingRouter);
 router.use(pulseRouter);
 router.use(demoHeartbeatRouter);
@@ -300,5 +311,7 @@ router.use(pulseBrainLabParentRouter);
 router.use(academicEvidenceRouter);
 router.use(academicEvidenceParentRouter);
 router.use(sisSyncRouter);
+router.use(eligibilityRouter);
+router.use(communicationsRouter);
 
 export default router;

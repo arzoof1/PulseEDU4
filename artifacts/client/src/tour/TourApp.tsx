@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import TourWalk from "./TourWalk";
 
 // =============================================================================
 // TourApp — public, UNAUTHENTICATED enrollment surface for School Tours.
@@ -31,6 +32,8 @@ const T = {
     addStudent: "+ Add another student",
     checkpointsHeading: "What would you like to see on your tour?",
     checkpointsHint: "Pick any that interest you — we'll build your tour around them.",
+    alwaysIncludedHeading: "Always included on every tour",
+    alwaysIncludedHint: "We'll make sure you see these highlights.",
     interests: "Anything else? (optional)",
     interestsPh:
       "Programs, electives, sports, after-school care, anything on your mind…",
@@ -76,6 +79,8 @@ const T = {
     checkpointsHeading: "¿Qué le gustaría ver en su recorrido?",
     checkpointsHint:
       "Elija las que le interesen — organizaremos su recorrido en torno a ellas.",
+    alwaysIncludedHeading: "Siempre incluido en cada recorrido",
+    alwaysIncludedHint: "Nos aseguraremos de que vea estos lugares destacados.",
     interests: "¿Algo más? (opcional)",
     interestsPh:
       "Programas, materias optativas, deportes, cuidado después de clases…",
@@ -117,7 +122,7 @@ type TourPage = {
   subheadline: string;
   intro: string;
   sections: { title: string; body: string }[];
-  checkpoints: { key: string; label: string }[];
+  checkpoints: { key: string; label: string; alwaysInclude?: boolean }[];
   programs: string[];
   electives: string[];
   proudOf: string[];
@@ -891,7 +896,7 @@ function RequestForm({
   accent: string;
   source: string;
   schoolName: string;
-  checkpoints: { key: string; label: string }[];
+  checkpoints: { key: string; label: string; alwaysInclude?: boolean }[];
   onClose: () => void;
 }) {
   const t = T[lang];
@@ -903,6 +908,10 @@ function RequestForm({
   ]);
   const [interests, setInterests] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
+  // Split checkpoints: the school's "always include" stops are shown as a
+  // read-only highlight list; the rest are the family's selectable picks.
+  const selectableCheckpoints = checkpoints.filter((c) => !c.alwaysInclude);
+  const alwaysIncludedCheckpoints = checkpoints.filter((c) => c.alwaysInclude);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [done, setDone] = useState(false);
@@ -1126,7 +1135,7 @@ function RequestForm({
                 {t.addStudent}
               </button>
 
-              {checkpoints.length > 0 && (
+              {selectableCheckpoints.length > 0 && (
                 <div style={{ marginBottom: 16 }}>
                   <label style={label}>{t.checkpointsHeading}</label>
                   <div
@@ -1139,7 +1148,7 @@ function RequestForm({
                     {t.checkpointsHint}
                   </div>
                   <div style={{ display: "grid", gap: 8 }}>
-                    {checkpoints.map((c) => {
+                    {selectableCheckpoints.map((c) => {
                       const on = selected.includes(c.key);
                       return (
                         <label
@@ -1172,6 +1181,42 @@ function RequestForm({
                         </label>
                       );
                     })}
+                  </div>
+                </div>
+              )}
+
+              {alwaysIncludedCheckpoints.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <label style={label}>{t.alwaysIncludedHeading}</label>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      color: "#64748b",
+                      marginBottom: 8,
+                    }}
+                  >
+                    {t.alwaysIncludedHint}
+                  </div>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {alwaysIncludedCheckpoints.map((c) => (
+                      <div
+                        key={c.key}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                          padding: "10px 12px",
+                          borderRadius: 10,
+                          border: `1px solid ${accent}`,
+                          background: `${accent}14`,
+                          fontSize: 15,
+                          color: "#0f172a",
+                        }}
+                      >
+                        <span style={{ color: accent, fontWeight: 700 }}>★</span>
+                        <span>{c.label}</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -1429,6 +1474,11 @@ function SurveyPage({ token }: { token: string }) {
 
 export default function TourApp() {
   const path = window.location.pathname;
+  // /tour/walk/<token> — guide-facing live tour capture (Phase 4)
+  const walkMatch = path.match(/\/tour\/walk\/([^/]+)/);
+  if (walkMatch) {
+    return <TourWalk token={decodeURIComponent(walkMatch[1])} />;
+  }
   // /tour/survey/<token>
   const surveyMatch = path.match(/\/tour\/survey\/([^/]+)/);
   if (surveyMatch) {

@@ -13,10 +13,85 @@
 //                                        hard delete — no redemption history
 //                                        exists yet, so safe to remove)
 import { Router, type IRouter } from "express";
-import { db, schoolStoreItemsTable, staffTable } from "@workspace/db";
+import {
+  db,
+  schoolStoreItemsTable,
+  schoolStoreRedemptionsTable,
+  staffTable,
+} from "@workspace/db";
 import { and, eq, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { bindObjectToSchool } from "./storage.js";
+import {
+  redeemItem,
+  approveRedemption,
+  cancelRedemption,
+  fulfillRedemption,
+  listRedemptions,
+  computeWallet,
+  getStudentDisplay,
+  canManageStoreFulfillment,
+  countPendingFulfillment,
+  buildFulfillmentDistribution,
+  loadPickSheet,
+  type RedeemResult,
+} from "../lib/storeRedemptions.js";
+import PDFDocument from "pdfkit";
+
+// Map a redemption-engine failure code to an HTTP status.
+function redeemErrorStatus(code: string): number {
+  switch (code) {
+    case "not_found":
+      return 404;
+    case "insufficient_points":
+    case "out_of_stock":
+    case "limit_reached":
+    case "archived":
+    case "invalid_state":
+      return 409;
+    default:
+      return 400;
+  }
+}
+
+// Sanitize a raw redemption row for the wire. The FLEID (`studentId`) must
+// NEVER leave the server — strip it and attach the display-safe `localSisId`
+// + student name (looked up school-scoped). Everything else on the row is
+// non-PII operational state the Core Team UI needs.
+async function sendRedeemResult(
+  res: import("express").Response,
+  schoolId: number,
+  result: RedeemResult,
+  okStatus = 200,
+) {
+  if (result.ok) {
+    const { studentId, ...rest } = result.redemption;
+    const display = await getStudentDisplay(schoolId, studentId);
+    res.status(okStatus).json({
+      ...rest,
+      localSisId: display?.localSisId ?? null,
+      studentName: display?.studentName ?? "Unknown student",
+    });
+    return;
+  }
+  res
+    .status(redeemErrorStatus(result.code))
+    .json({ error: result.message, code: result.code });
+}
+
+// Parse + validate an optional non-negative integer body field. Returns
+// `undefined` when the field is absent, `null` when explicitly cleared, a
+// number when valid, or the sentinel `INVALID` when malformed.
+const INVALID = Symbol("invalid");
+function parseOptionalNonNegInt(
+  value: unknown,
+): number | null | undefined | typeof INVALID {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return INVALID;
+  return n;
+}
 
 const router: IRouter = Router();
 
@@ -45,20 +120,44 @@ async function loadStaff(
 // admins (everything), Behavior Specialists, MTSS Coordinators, and PBIS
 // Coordinators. Plain teachers (and any other role) get a 403. Kept in
 // sync with the client's `canEditSchoolStore` in App.tsx.
+function hasStoreWriteAccess(staff: typeof staffTable.$inferSelect): boolean {
+  return Boolean(
+    staff.isSuperUser ||
+      staff.isAdmin ||
+      staff.isBehaviorSpecialist ||
+      staff.isMtssCoordinator ||
+      staff.isPbisCoordinator,
+  );
+}
+
 function requireWriteAccess(
   staff: typeof staffTable.$inferSelect,
   res: import("express").Response,
 ) {
-  const allowed =
-    staff.isSuperUser ||
-    staff.isAdmin ||
-    staff.isBehaviorSpecialist ||
-    staff.isMtssCoordinator ||
-    staff.isPbisCoordinator;
+  const allowed = hasStoreWriteAccess(staff);
   if (!allowed) {
     res.status(403).json({
       error:
         "Only admins, Behavior Specialists, MTSS Coordinators, and PBIS Coordinators can edit the school store",
+    });
+    return false;
+  }
+  return true;
+}
+
+// Purchasing on behalf of a student is shared by the catalog owners
+// (hasStoreWriteAccess) AND the fulfillment crew (Core Team + PBIS
+// coordinator, via canManageStoreFulfillment) who run the redemption
+// queue. Kept in sync with the client's `canPurchaseSchoolStore`
+// (canEditSchoolStore || canFulfillStore) in App.tsx.
+function requirePurchaseAccess(
+  staff: typeof staffTable.$inferSelect,
+  res: import("express").Response,
+): boolean {
+  if (!(hasStoreWriteAccess(staff) || canManageStoreFulfillment(staff))) {
+    res.status(403).json({
+      error:
+        "Only the school store crew or the Core Team can purchase on behalf of a student",
     });
     return false;
   }
@@ -95,7 +194,16 @@ router.post("/school-store", async (req, res) => {
   if (!requireWriteAccess(staff, res)) return;
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
-  const { name, description, pointsCost, imageUrl } = req.body ?? {};
+  const {
+    name,
+    description,
+    pointsCost,
+    imageUrl,
+    inStock,
+    quantityOnHand,
+    perStudentLimit,
+    requiresApproval,
+  } = req.body ?? {};
   if (typeof name !== "string" || !name.trim()) {
     res.status(400).json({ error: "name is required" });
     return;
@@ -113,6 +221,20 @@ router.post("/school-store", async (req, res) => {
       return;
     }
     pts = n;
+  }
+  const qty = parseOptionalNonNegInt(quantityOnHand);
+  if (qty === INVALID) {
+    res
+      .status(400)
+      .json({ error: "quantityOnHand must be a non-negative integer or null" });
+    return;
+  }
+  const perStudent = parseOptionalNonNegInt(perStudentLimit);
+  if (perStudent === INVALID || perStudent === 0) {
+    res.status(400).json({
+      error: "perStudentLimit must be a positive integer or null",
+    });
+    return;
   }
   let cleanImage: string | null = null;
   if (typeof imageUrl === "string" && imageUrl.trim()) {
@@ -145,6 +267,11 @@ router.post("/school-store", async (req, res) => {
       imageUrl: cleanImage,
       sortOrder: order,
       archived: false,
+      inStock: typeof inStock === "boolean" ? inStock : true,
+      quantityOnHand: qty === undefined ? null : qty,
+      perStudentLimit: perStudent === undefined ? null : perStudent,
+      requiresApproval:
+        typeof requiresApproval === "boolean" ? requiresApproval : false,
       createdAt: nowIso(),
       updatedAt: nowIso(),
     })
@@ -197,8 +324,18 @@ router.patch("/school-store/:id", async (req, res) => {
     res.status(404).json({ error: "Not found" });
     return;
   }
-  const { name, description, pointsCost, imageUrl, archived, sortOrder } =
-    req.body ?? {};
+  const {
+    name,
+    description,
+    pointsCost,
+    imageUrl,
+    archived,
+    sortOrder,
+    inStock,
+    quantityOnHand,
+    perStudentLimit,
+    requiresApproval,
+  } = req.body ?? {};
   const updates: Partial<typeof schoolStoreItemsTable.$inferInsert> = {};
   if (typeof name === "string" && name.trim()) {
     updates.name = name.trim().slice(0, 80);
@@ -237,6 +374,30 @@ router.patch("/school-store/:id", async (req, res) => {
       return;
     }
     updates.sortOrder = sortOrder;
+  }
+  if (typeof inStock === "boolean") updates.inStock = inStock;
+  if (typeof requiresApproval === "boolean") {
+    updates.requiresApproval = requiresApproval;
+  }
+  if (quantityOnHand !== undefined) {
+    const qty = parseOptionalNonNegInt(quantityOnHand);
+    if (qty === INVALID) {
+      res.status(400).json({
+        error: "quantityOnHand must be a non-negative integer or null",
+      });
+      return;
+    }
+    updates.quantityOnHand = qty;
+  }
+  if (perStudentLimit !== undefined) {
+    const perStudent = parseOptionalNonNegInt(perStudentLimit);
+    if (perStudent === INVALID || perStudent === 0) {
+      res.status(400).json({
+        error: "perStudentLimit must be a positive integer or null",
+      });
+      return;
+    }
+    updates.perStudentLimit = perStudent;
   }
   if (Object.keys(updates).length === 0) {
     res.status(400).json({ error: "No updates" });
@@ -300,6 +461,26 @@ router.delete("/school-store/:id", async (req, res) => {
     res.status(404).json({ error: "Not found" });
     return;
   }
+  // Preserve redemption history: once a student has redeemed this item we
+  // refuse the hard delete so the ledger (and the wallet math derived from
+  // it) stays intact. The caller should archive the item instead.
+  const [{ refs }] = await db
+    .select({ refs: sql<number>`count(*)::int` })
+    .from(schoolStoreRedemptionsTable)
+    .where(
+      and(
+        eq(schoolStoreRedemptionsTable.schoolId, schoolId),
+        eq(schoolStoreRedemptionsTable.itemId, id),
+      ),
+    );
+  if (refs > 0) {
+    res.status(409).json({
+      error:
+        "This item has redemption history and can't be deleted. Archive it instead.",
+      code: "has_redemptions",
+    });
+    return;
+  }
   await db
     .delete(schoolStoreItemsTable)
     .where(
@@ -309,6 +490,438 @@ router.delete("/school-store/:id", async (req, res) => {
       ),
     );
   res.json({ ok: true });
+});
+
+// =========================================================================
+// Redemption engine — staff-facing endpoints. Family (Parent Portal) and
+// student (ClassLink) redeem surfaces are added in their own tasks; they
+// call the same `../lib/storeRedemptions` helpers from their auth contexts.
+// =========================================================================
+
+// Gate for the fulfillment queue (list / approve / cancel / fulfill) and the
+// staff wallet read. Wider than the catalog-write gate: it includes the full
+// Core Team plus the PBIS Coordinator.
+function requireFulfillmentAccess(
+  staff: typeof staffTable.$inferSelect,
+  res: import("express").Response,
+): boolean {
+  if (!canManageStoreFulfillment(staff)) {
+    res.status(403).json({
+      error: "Only the Core Team can manage School Store redemptions",
+    });
+    return false;
+  }
+  return true;
+}
+
+function parseRedemptionId(
+  req: import("express").Request,
+  res: import("express").Response,
+): number | null {
+  const rid = Number(req.params.rid);
+  if (!Number.isInteger(rid) || rid < 1) {
+    res.status(400).json({ error: "Invalid redemption id" });
+    return null;
+  }
+  return rid;
+}
+
+// ---- WALLET (staff read) ----
+// `studentId` here is the FLEID join key (path param), never rendered. The
+// response carries `localSisId` for display.
+router.get("/school-store/wallet/:studentId", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  // Reading a student's points wallet is a store-management action: gate it
+  // to the same staff who can redeem on their behalf (write access) or run
+  // the fulfillment queue. A plain teacher does not get arbitrary
+  // student-wallet lookups through this endpoint.
+  if (
+    !(
+      hasStoreWriteAccess(staff) ||
+      canManageStoreFulfillment(staff)
+    )
+  ) {
+    res.status(403).json({
+      error: "You don't have access to School Store wallets",
+    });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const studentId = String(req.params.studentId || "").trim();
+  if (!studentId) {
+    res.status(400).json({ error: "studentId is required" });
+    return;
+  }
+  const display = await getStudentDisplay(schoolId, studentId);
+  if (!display) {
+    res.status(404).json({ error: "Student not found" });
+    return;
+  }
+  const wallet = await computeWallet(schoolId, studentId);
+  // NEVER echo the FLEID (path-param `studentId`) back in the body. The
+  // caller already holds the id it queried with; the response carries only
+  // the display-safe `localSisId`.
+  res.json({
+    localSisId: display.localSisId,
+    studentName: display.studentName,
+    ...wallet,
+  });
+});
+
+// ---- REDEEM ON BEHALF (staff) ----
+router.post("/school-store/:id/redeem", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requirePurchaseAccess(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const itemId = Number(req.params.id);
+  if (!Number.isInteger(itemId) || itemId < 1) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  const studentId = String(req.body?.studentId || "").trim();
+  if (!studentId) {
+    res.status(400).json({ error: "studentId is required" });
+    return;
+  }
+  const result = await redeemItem({
+    schoolId,
+    studentId,
+    itemId,
+    actor: { type: "staff", id: staff.id },
+  });
+  await sendRedeemResult(res, schoolId, result, 201);
+});
+
+// ---- LIST REDEMPTIONS (Core Team) ----
+router.get("/school-store/redemptions", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requireFulfillmentAccess(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const allowed = ["pending_approval", "pending", "fulfilled", "cancelled"];
+  const statusRaw =
+    typeof req.query.status === "string" ? req.query.status : undefined;
+  if (statusRaw && !allowed.includes(statusRaw)) {
+    res.status(400).json({ error: "Invalid status filter" });
+    return;
+  }
+  let itemId: number | undefined;
+  if (typeof req.query.itemId === "string" && req.query.itemId) {
+    const n = Number(req.query.itemId);
+    if (!Number.isInteger(n) || n < 1) {
+      res.status(400).json({ error: "Invalid itemId filter" });
+      return;
+    }
+    itemId = n;
+  }
+  const rows = await listRedemptions({ schoolId, status: statusRaw, itemId });
+  res.json(rows);
+});
+
+// ---- APPROVE (Core Team) ----
+router.post("/school-store/redemptions/:rid/approve", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requireFulfillmentAccess(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const rid = parseRedemptionId(req, res);
+  if (rid === null) return;
+  const result = await approveRedemption({
+    schoolId,
+    redemptionId: rid,
+    staffId: staff.id,
+  });
+  await sendRedeemResult(res, schoolId, result);
+});
+
+// ---- FULFILL (Core Team) ----
+router.post("/school-store/redemptions/:rid/fulfill", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requireFulfillmentAccess(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const rid = parseRedemptionId(req, res);
+  if (rid === null) return;
+  const deliverTeacherName =
+    typeof req.body?.deliverTeacherName === "string"
+      ? req.body.deliverTeacherName
+      : null;
+  const deliverPeriod =
+    typeof req.body?.deliverPeriod === "string" ? req.body.deliverPeriod : null;
+  const result = await fulfillRedemption({
+    schoolId,
+    redemptionId: rid,
+    staffId: staff.id,
+    deliverTeacherName,
+    deliverPeriod,
+  });
+  await sendRedeemResult(res, schoolId, result);
+});
+
+// ---- BULK APPROVE / FULFILL (Core Team) ----
+// Rapid-fire fulfillment from the Redemption Log: act on many rows in one
+// round-trip. Each row reuses the SAME per-row helper (approveRedemption /
+// fulfillRedemption) so all validation, the per-student lock, and the
+// stock/points accounting are identical to the single-row path. Rows that
+// can't make the requested transition (already changed, cancelled, etc.) are
+// reported as skipped rather than failing the whole batch. The response is
+// always 200 with a per-row breakdown so the client can show "N done, M
+// skipped".
+function parseRedemptionIds(
+  req: import("express").Request,
+  res: import("express").Response,
+): number[] | null {
+  const raw = (req.body as { ids?: unknown })?.ids;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    res.status(400).json({ error: "Provide a non-empty ids array" });
+    return null;
+  }
+  if (raw.length > 500) {
+    res.status(400).json({ error: "Too many ids in one batch (max 500)" });
+    return null;
+  }
+  const out: number[] = [];
+  for (const v of raw) {
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 1) {
+      res.status(400).json({ error: "Invalid redemption id in batch" });
+      return null;
+    }
+    out.push(n);
+  }
+  return Array.from(new Set(out));
+}
+
+type BulkRowResult =
+  | { id: number; ok: true }
+  | { id: number; ok: false; code: string; message: string };
+
+router.post("/school-store/redemptions/bulk-approve", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requireFulfillmentAccess(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const ids = parseRedemptionIds(req, res);
+  if (!ids) return;
+
+  const results: BulkRowResult[] = [];
+  let ok = 0;
+  for (const rid of ids) {
+    const result = await approveRedemption({
+      schoolId,
+      redemptionId: rid,
+      staffId: staff.id,
+    });
+    if (result.ok) {
+      ok++;
+      results.push({ id: rid, ok: true });
+    } else {
+      results.push({
+        id: rid,
+        ok: false,
+        code: result.code,
+        message: result.message,
+      });
+    }
+  }
+  res.json({ results, summary: { ok, failed: ids.length - ok } });
+});
+
+router.post("/school-store/redemptions/bulk-fulfill", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requireFulfillmentAccess(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const ids = parseRedemptionIds(req, res);
+  if (!ids) return;
+
+  const results: BulkRowResult[] = [];
+  let ok = 0;
+  for (const rid of ids) {
+    // Bulk fulfill from the log records no delivery class — that's the
+    // Distribution tab's job. Pass null delivery fields (the single-row
+    // helper already accepts them).
+    const result = await fulfillRedemption({
+      schoolId,
+      redemptionId: rid,
+      staffId: staff.id,
+      deliverTeacherName: null,
+      deliverPeriod: null,
+    });
+    if (result.ok) {
+      ok++;
+      results.push({ id: rid, ok: true });
+    } else {
+      results.push({
+        id: rid,
+        ok: false,
+        code: result.code,
+        message: result.message,
+      });
+    }
+  }
+  res.json({ results, summary: { ok, failed: ids.length - ok } });
+});
+
+// ---- CANCEL / REFUND (Core Team) ----
+router.post("/school-store/redemptions/:rid/cancel", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requireFulfillmentAccess(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const rid = parseRedemptionId(req, res);
+  if (rid === null) return;
+  const reason =
+    typeof req.body?.reason === "string" ? req.body.reason : null;
+  const result = await cancelRedemption({
+    schoolId,
+    redemptionId: rid,
+    staffId: staff.id,
+    reason,
+  });
+  await sendRedeemResult(res, schoolId, result);
+});
+
+// ---- PENDING COUNT (Core Team) ----
+// Drives the pulsing cart badge. Polled, so keep it cheap.
+router.get("/school-store/pending-count", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requireFulfillmentAccess(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const counts = await countPendingFulfillment(schoolId);
+  res.json(counts);
+});
+
+// ---- DISTRIBUTION BY CLASS (Core Team) ----
+// Pending redemptions mapped onto the teacher+period combos the redeeming
+// students are actually enrolled in, plus an `unscheduled` bucket.
+router.get("/school-store/distribution", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requireFulfillmentAccess(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const distribution = await buildFulfillmentDistribution(schoolId);
+  res.json(distribution);
+});
+
+// ---- PICK-SHEET PDF (Core Team) ----
+// The bagging list for one teacher/period combo. Streamed as a download
+// (never opened/printed in a tab — the preview iframe blob gotcha). Renders
+// localSisId only; the FLEID never appears.
+router.get("/school-store/pick-sheet.pdf", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requireFulfillmentAccess(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const teacherStaffId = Number(req.query.teacherStaffId);
+  const period = Number(req.query.period);
+  if (!Number.isInteger(teacherStaffId) || teacherStaffId < 1) {
+    res.status(400).json({ error: "Invalid teacherStaffId" });
+    return;
+  }
+  if (!Number.isInteger(period)) {
+    res.status(400).json({ error: "Invalid period" });
+    return;
+  }
+  const sheet = await loadPickSheet(schoolId, teacherStaffId, period);
+  if (!sheet) {
+    res
+      .status(404)
+      .json({ error: "No pending redemptions for that class right now" });
+    return;
+  }
+
+  const safeName = sheet.teacherName.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="pick-sheet-${safeName}-period-${sheet.period}.pdf"`,
+  );
+
+  const doc = new PDFDocument({ size: "LETTER", margin: 50 });
+  doc.pipe(res);
+
+  doc
+    .fontSize(20)
+    .font("Helvetica-Bold")
+    .text("School Store Pick Sheet", { align: "left" });
+  doc
+    .moveDown(0.3)
+    .fontSize(13)
+    .font("Helvetica")
+    .text(`${sheet.teacherName} — ${sheet.periodLabel}`);
+  doc
+    .moveDown(0.1)
+    .fontSize(10)
+    .fillColor("#64748b")
+    .text(
+      `Generated ${new Date().toLocaleString("en-US")} · ${sheet.lines.length} line item${sheet.lines.length === 1 ? "" : "s"}`,
+    );
+  doc.fillColor("#0f172a");
+  doc.moveDown(0.8);
+
+  // Column layout.
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const colStudent = left;
+  const colId = left + 200;
+  const colItem = left + 300;
+  const colQty = right - 40;
+
+  function drawHeader() {
+    doc.fontSize(10).font("Helvetica-Bold").fillColor("#334155");
+    const y = doc.y;
+    doc.text("Student", colStudent, y);
+    doc.text("SIS ID", colId, y);
+    doc.text("Item", colItem, y, { width: colQty - colItem - 8 });
+    doc.text("Qty", colQty, y);
+    doc.moveDown(0.4);
+    doc
+      .moveTo(left, doc.y)
+      .lineTo(right, doc.y)
+      .strokeColor("#cbd5e1")
+      .stroke();
+    doc.moveDown(0.3);
+    doc.fillColor("#0f172a").font("Helvetica");
+  }
+  drawHeader();
+
+  for (const line of sheet.lines) {
+    if (doc.y > doc.page.height - doc.page.margins.bottom - 40) {
+      doc.addPage();
+      drawHeader();
+    }
+    const y = doc.y;
+    doc.fontSize(11).font("Helvetica");
+    const gradeSuffix = line.grade !== null ? ` (Gr ${line.grade})` : "";
+    doc.text(`${line.studentName}${gradeSuffix}`, colStudent, y, {
+      width: colId - colStudent - 8,
+    });
+    doc.text(line.localSisId ?? "—", colId, y, {
+      width: colItem - colId - 8,
+    });
+    doc.text(line.itemName, colItem, y, {
+      width: colQty - colItem - 8,
+    });
+    doc.font("Helvetica-Bold").text(String(line.quantity), colQty, y);
+    doc.moveDown(0.6);
+  }
+
+  doc.end();
 });
 
 export default router;

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import QRCode from "qrcode";
 import { authFetch } from "../lib/authToken";
 import {
   HowToUseHelp,
@@ -22,7 +23,13 @@ import {
 // =============================================================================
 
 type Child = { name: string; grade: string };
-type Status = "new" | "contacted" | "scheduled" | "toured" | "closed";
+type Status =
+  | "new"
+  | "contacted"
+  | "scheduled"
+  | "toured"
+  | "deciding"
+  | "closed";
 type Outcome = "enrolled" | "deciding" | "chose_other";
 
 type Lead = {
@@ -45,6 +52,13 @@ type Lead = {
   createdAt: string;
   responseMs: number;
   overdue: boolean;
+  // Phase 2 lifecycle. overdueReason explains WHY a lead is flagged overdue;
+  // followUpDueAt is the deciding-stage business-day clock; closedAt/archived
+  // drive the auto-archive declutter.
+  overdueReason?: string | null;
+  followUpDueAt?: string | null;
+  closedAt?: string | null;
+  archived?: boolean;
   // Family's selected tour checkpoints, resolved to current labels.
   selectedCheckpoints?: string[];
 };
@@ -72,11 +86,39 @@ type LeadDetail = {
   survey: Survey | null;
 };
 
+type WalkStop = {
+  checkpointKey: string;
+  label: string;
+  location: string;
+  plannedMinutes: number;
+  order: number;
+  familyRequested: boolean;
+  schoolHighlight: boolean;
+  completedAt: string | null;
+  note: string;
+};
+
+type WalkDetail = {
+  walkUrl: string;
+  walkToken: string;
+  familyName: string;
+  walk: {
+    token: string;
+    status: "pending" | "in_progress" | "completed" | "abandoned";
+    startedAt: string | null;
+    endedAt: string | null;
+    guideStaffId: number | null;
+    guideName: string | null;
+  };
+  stops: WalkStop[];
+};
+
 const STATUS_ORDER: Status[] = [
   "new",
   "contacted",
   "scheduled",
   "toured",
+  "deciding",
   "closed",
 ];
 const STATUS_LABEL: Record<Status, string> = {
@@ -84,6 +126,7 @@ const STATUS_LABEL: Record<Status, string> = {
   contacted: "Contacted",
   scheduled: "Scheduled",
   toured: "Toured",
+  deciding: "Still deciding",
   closed: "Closed",
 };
 const STATUS_COLOR: Record<Status, string> = {
@@ -91,6 +134,7 @@ const STATUS_COLOR: Record<Status, string> = {
   contacted: "#d97706",
   scheduled: "#2563eb",
   toured: "#7c3aed",
+  deciding: "#db2777",
   closed: "#059669",
 };
 const OUTCOME_LABEL: Record<Outcome, string> = {
@@ -116,6 +160,43 @@ function fmtDate(iso: string | null): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+// Short, reason-aware label for the red overdue badge on a lead card. The
+// server returns overdueReason so the badge can say WHY the lead is flagged,
+// not just ">24h" (which only made sense for the first-contact case).
+function overdueBadgeLabel(reason?: string | null): string {
+  switch (reason) {
+    case "first_contact":
+      return "No first contact";
+    case "tour_not_logged":
+      return "Tour not logged";
+    case "follow_up":
+      return "Follow-up due";
+    default:
+      return "Overdue";
+  }
+}
+// Coerce a possibly-undefined/NaN numeric setting into an integer within
+// [min,max], falling back to fallback. Mirrors the server-side clampInt so the
+// inputs never show an out-of-range value the API would reject.
+function clampNum(v: unknown, min: number, max: number, fallback: number): number {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+// Human countdown to (or past) the deciding-stage follow-up due date.
+function followUpCountdownLabel(dueIso: string): string {
+  const due = new Date(dueIso).getTime();
+  if (Number.isNaN(due)) return "Follow up";
+  const diffMs = due - Date.now();
+  const dayMs = 86_400_000;
+  if (diffMs <= 0) {
+    const overdueDays = Math.floor(-diffMs / dayMs);
+    if (overdueDays >= 1) return `Follow-up ${overdueDays}d overdue`;
+    return "Follow-up due";
+  }
+  const days = Math.ceil(diffMs / dayMs);
+  return days <= 1 ? "Follow up by tomorrow" : `Follow up in ${days}d`;
 }
 // Format a stored ISO instant as a local wall-clock value for a
 // datetime-local input (YYYY-MM-DDTHH:mm). Using toISOString() here would
@@ -158,7 +239,9 @@ const inputStyle: React.CSSProperties = {
 };
 
 export default function TourAdminPage() {
-  const [tab, setTab] = useState<"pipeline" | "page" | "report">("pipeline");
+  const [tab, setTab] = useState<
+    "pipeline" | "page" | "report" | "feedback"
+  >("pipeline");
   return (
     <div style={{ padding: "0 4px" }}>
       <HowToUseHelp title="How to use School Tours">
@@ -197,6 +280,7 @@ export default function TourAdminPage() {
             ["pipeline", "📋 Lead Pipeline"],
             ["page", "✨ Brag Page"],
             ["report", "📊 Outcomes"],
+            ["feedback", "💬 Feedback"],
           ] as const
         ).map(([k, lbl]) => (
           <button
@@ -220,6 +304,7 @@ export default function TourAdminPage() {
       {tab === "pipeline" && <Pipeline />}
       {tab === "page" && <BragEditor />}
       {tab === "report" && <Report />}
+      {tab === "feedback" && <FeedbackTab />}
     </div>
   );
 }
@@ -262,6 +347,7 @@ export function TourLeadBanner({
     <button
       type="button"
       onClick={onOpen}
+      className="tour-lead-banner"
       style={{
         width: "100%",
         border: "none",
@@ -275,7 +361,6 @@ export function TourLeadBanner({
         display: "flex",
         alignItems: "center",
         gap: 12,
-        boxShadow: "0 4px 14px rgba(220,38,38,0.3)",
       }}
     >
       <span style={{ fontSize: 24 }}>🔔</span>
@@ -296,16 +381,21 @@ function Pipeline() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState<number | null>(null);
+  const [view, setView] = useState<"active" | "archived">("active");
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await authFetch("/api/tours/requests");
+      const res = await authFetch(
+        view === "archived"
+          ? "/api/tours/requests?view=archived"
+          : "/api/tours/requests",
+      );
       if (res.ok) setLeads((await res.json()) as Lead[]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [view]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -316,29 +406,84 @@ function Pipeline() {
       contacted: [],
       scheduled: [],
       toured: [],
+      deciding: [],
       closed: [],
     };
     for (const l of leads) m[l.status]?.push(l);
     return m;
   }, [leads]);
 
-  if (loading) return <div style={{ color: "#64748b" }}>Loading leads…</div>;
+  const viewTabs = (
+    <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+      {(
+        [
+          ["active", "Active pipeline"],
+          ["archived", "Archived"],
+        ] as const
+      ).map(([v, lbl]) => {
+        const active = view === v;
+        return (
+          <button
+            key={v}
+            type="button"
+            onClick={() => setView(v)}
+            style={{
+              padding: "6px 14px",
+              borderRadius: 999,
+              border: `1px solid ${active ? "var(--accent, #2563eb)" : "#334155"}`,
+              background: active ? "var(--accent, #2563eb)" : "transparent",
+              color: active ? "#fff" : "#cbd5e1",
+              fontWeight: 600,
+              fontSize: 13,
+              cursor: "pointer",
+            }}
+          >
+            {lbl}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  if (loading)
+    return (
+      <>
+        {viewTabs}
+        <div style={{ color: "#64748b" }}>Loading leads…</div>
+      </>
+    );
 
   if (leads.length === 0) {
     return (
-      <div style={{ ...cardBox, textAlign: "center", padding: 40 }}>
-        <div style={{ fontSize: 40 }}>🗒️</div>
-        <h3 style={{ margin: "12px 0 6px" }}>No tour requests yet</h3>
-        <p style={{ color: "#64748b", margin: 0 }}>
-          Publish your Brag Page and share the link — new leads land here
-          automatically.
-        </p>
-      </div>
+      <>
+        {viewTabs}
+        <div style={{ ...cardBox, textAlign: "center", padding: 40 }}>
+          <div style={{ fontSize: 40 }}>🗒️</div>
+          {view === "archived" ? (
+            <>
+              <h3 style={{ margin: "12px 0 6px" }}>Nothing archived yet</h3>
+              <p style={{ color: "#64748b", margin: 0 }}>
+                Closed tours move here automatically after the archive window
+                you set in Settings.
+              </p>
+            </>
+          ) : (
+            <>
+              <h3 style={{ margin: "12px 0 6px" }}>No tour requests yet</h3>
+              <p style={{ color: "#64748b", margin: 0 }}>
+                Publish your Brag Page and share the link — new leads land here
+                automatically.
+              </p>
+            </>
+          )}
+        </div>
+      </>
     );
   }
 
   return (
     <>
+      {viewTabs}
       <div
         style={{
           display: "grid",
@@ -411,7 +556,21 @@ function Pipeline() {
                           padding: "1px 6px",
                         }}
                       >
-                        ⏰ &gt;24h
+                        ⏰ {overdueBadgeLabel(l.overdueReason)}
+                      </span>
+                    )}
+                    {l.status === "deciding" && l.followUpDueAt && (
+                      <span
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: "#fff",
+                          background: l.overdue ? "#dc2626" : "#db2777",
+                          borderRadius: 6,
+                          padding: "1px 6px",
+                        }}
+                      >
+                        📞 {followUpCountdownLabel(l.followUpDueAt)}
                       </span>
                     )}
                     {l.assignedTo && (
@@ -442,6 +601,160 @@ function Pipeline() {
   );
 }
 
+// Live tour walk — shown inside the lead drawer. Before a walk runs it offers a
+// QR + link a guide can open on their phone (the printed roadmap carries the
+// same QR). Once captured it shows who guided, total length, per-stop
+// planned-vs-actual timings, and any staff notes flagged for the follow-up call.
+function WalkSection({ walk, qr }: { walk: WalkDetail; qr: string }) {
+  const started = !!walk.walk.startedAt;
+  const ended = !!walk.walk.endedAt;
+  const totalMs =
+    walk.walk.startedAt && walk.walk.endedAt
+      ? new Date(walk.walk.endedAt).getTime() -
+        new Date(walk.walk.startedAt).getTime()
+      : 0;
+  const totalMin = totalMs > 0 ? Math.round(totalMs / 60000) : 0;
+  const plannedMin = walk.stops.reduce((a, s) => a + (s.plannedMinutes || 0), 0);
+  const completed = walk.stops.filter((s) => !!s.completedAt);
+
+  // Per-stop actual = gap between consecutive completions in the order they
+  // were actually checked off (chronological, NOT planned order — guides tap
+  // out of sequence). The first completed stop is measured from the tour start.
+  const actualByKey = new Map<string, number>();
+  let prev = walk.walk.startedAt ? new Date(walk.walk.startedAt).getTime() : null;
+  for (const s of walk.stops
+    .filter((s) => !!s.completedAt)
+    .sort(
+      (a, b) =>
+        new Date(a.completedAt!).getTime() - new Date(b.completedAt!).getTime(),
+    )) {
+    const t = new Date(s.completedAt!).getTime();
+    if (prev != null) actualByKey.set(s.checkpointKey, Math.max(0, t - prev));
+    prev = t;
+  }
+
+  const notes = walk.stops.filter((s) => s.note.trim());
+
+  return (
+    <div style={{ ...cardBox, marginBottom: 16 }}>
+      <div style={{ fontWeight: 700, marginBottom: 8 }}>Live tour walk</div>
+
+      {!started && (
+        <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+          {qr && (
+            <img
+              src={qr}
+              alt="Scan to start the live tour"
+              width={104}
+              height={104}
+              style={{ borderRadius: 8, border: "1px solid #e2e8f0" }}
+            />
+          )}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, color: "#475569", marginBottom: 8 }}>
+              Scan with the guide’s phone (the printed roadmap has the same code)
+              to check off each stop as you walk — works offline.
+            </div>
+            <a
+              href={walk.walkUrl}
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                ...btn("#0ea5a4"),
+                display: "inline-block",
+                textDecoration: "none",
+              }}
+            >
+              Open live walk
+            </a>
+          </div>
+        </div>
+      )}
+
+      {started && (
+        <>
+          <div style={{ fontSize: 14, marginBottom: 6 }}>
+            <strong>Guide:</strong> {walk.walk.guideName ?? "—"}
+            {ended ? (
+              <>
+                {"  ·  "}
+                <strong>Length:</strong> {totalMin}m
+                {plannedMin > 0 && (
+                  <span style={{ color: "#94a3b8" }}>
+                    {" "}
+                    (planned ~{plannedMin}m)
+                  </span>
+                )}
+              </>
+            ) : (
+              <span style={{ color: "#d97706" }}> · in progress…</span>
+            )}
+          </div>
+          <div style={{ fontSize: 13, color: "#64748b", marginBottom: 8 }}>
+            {completed.length} of {walk.stops.length} stops checked off.
+          </div>
+
+          {completed.length > 0 && (
+            <div style={{ marginBottom: notes.length ? 10 : 0 }}>
+              {[...walk.stops]
+                .sort((a, b) => a.order - b.order)
+                .map((s) => {
+                  const actual = actualByKey.get(s.checkpointKey);
+                  return (
+                    <div
+                      key={s.checkpointKey}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 8,
+                        fontSize: 13,
+                        padding: "3px 0",
+                        color: s.completedAt ? "#1f2937" : "#cbd5e1",
+                      }}
+                    >
+                      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {s.completedAt ? "✓" : "○"} {s.label}
+                      </span>
+                      <span style={{ flexShrink: 0, color: "#64748b" }}>
+                        {s.completedAt && actual != null
+                          ? `${Math.max(1, Math.round(actual / 60000))}m`
+                          : "—"}
+                        {s.plannedMinutes > 0 && (
+                          <span style={{ color: "#cbd5e1" }}>
+                            {" / "}~{s.plannedMinutes}m
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })}
+            </div>
+          )}
+
+          {notes.length > 0 && (
+            <div
+              style={{
+                marginTop: 6,
+                paddingTop: 10,
+                borderTop: "1px solid #e2e8f0",
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#92400e", marginBottom: 4 }}>
+                📌 Follow-up notes from the walk
+              </div>
+              {notes.map((s) => (
+                <div key={s.checkpointKey} style={{ fontSize: 13, marginBottom: 4 }}>
+                  <strong>{s.label}:</strong> {s.note}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function LeadDrawer({
   id,
   onClose,
@@ -452,6 +765,8 @@ function LeadDrawer({
   onChanged: () => void;
 }) {
   const [detail, setDetail] = useState<LeadDetail | null>(null);
+  const [walk, setWalk] = useState<WalkDetail | null>(null);
+  const [walkQr, setWalkQr] = useState<string>("");
   const [staff, setStaff] = useState<{ id: number; name: string }[]>([]);
   const [noteText, setNoteText] = useState("");
   const [noteKind, setNoteKind] = useState<"note" | "contact">("note");
@@ -459,6 +774,7 @@ function LeadDrawer({
   const [outcomeReason, setOutcomeReason] = useState("");
   const [schedDraft, setSchedDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [packetBusy, setPacketBusy] = useState(false);
 
   const load = useCallback(async () => {
     const res = await authFetch(`/api/tours/requests/${id}`);
@@ -469,13 +785,34 @@ function LeadDrawer({
     }
   }, [id]);
 
+  const loadWalk = useCallback(async () => {
+    const res = await authFetch(`/api/tours/requests/${id}/walk`);
+    if (!res.ok) return;
+    const data = (await res.json()) as WalkDetail;
+    setWalk(data);
+    if (data.walkUrl) {
+      try {
+        setWalkQr(
+          await QRCode.toDataURL(data.walkUrl, {
+            margin: 1,
+            width: 200,
+            errorCorrectionLevel: "M",
+          }),
+        );
+      } catch {
+        /* QR is a convenience; the link still works without it */
+      }
+    }
+  }, [id]);
+
   useEffect(() => {
     void load();
+    void loadWalk();
     void (async () => {
       const res = await authFetch("/api/tours/assignable-staff");
       if (res.ok) setStaff((await res.json()) as { id: number; name: string }[]);
     })();
-  }, [load]);
+  }, [load, loadWalk]);
 
   const patch = async (body: Record<string, unknown>) => {
     setBusy(true);
@@ -522,7 +859,12 @@ function LeadDrawer({
   // and froze the whole app. A blob download triggered from THIS document is
   // the only path that works reliably in both the preview and production.
   const downloadPdf = async (
-    which: "brag-sheet" | "leave-behind" | "roadmap" | "note-catcher",
+    which:
+      | "brag-sheet"
+      | "leave-behind"
+      | "roadmap"
+      | "roadmap-short"
+      | "note-catcher",
   ) => {
     const res = await authFetch(`/api/tours/requests/${id}/${which}.pdf`);
     if (!res.ok) return;
@@ -535,13 +877,37 @@ function LeadDrawer({
         ? "brag-sheet.pdf"
         : which === "roadmap"
           ? "tour-roadmap.pdf"
-          : which === "note-catcher"
-            ? "tour-note-catcher.pdf"
-            : "share-your-feedback.pdf";
+          : which === "roadmap-short"
+            ? "tour-roadmap-1page.pdf"
+            : which === "note-catcher"
+              ? "tour-note-catcher.pdf"
+              : "share-your-feedback.pdf";
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
+  };
+
+  // Complete packet: the server merges all four PDFs into one document (tour
+  // order) so the guide gets a single print job. Same blob-download path as
+  // downloadPdf for the same iframe-auth reasons.
+  const downloadPacket = async () => {
+    setPacketBusy(true);
+    try {
+      const res = await authFetch(`/api/tours/requests/${id}/packet.pdf`);
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "tour-packet.pdf";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } finally {
+      setPacketBusy(false);
+    }
   };
 
   const lead = detail?.lead;
@@ -659,8 +1025,9 @@ function LeadDrawer({
                           key={i}
                           style={{
                             fontSize: 12,
-                            background: "rgba(37,99,235,0.18)",
-                            color: "#bfdbfe",
+                            background: "rgba(37,99,235,0.12)",
+                            color: "#1e40af",
+                            border: "1px solid rgba(37,99,235,0.25)",
                             borderRadius: 6,
                             padding: "3px 9px",
                           }}
@@ -708,6 +1075,22 @@ function LeadDrawer({
                   </button>
                 ))}
               </div>
+              {lead.status === "deciding" && lead.followUpDueAt && (
+                <div
+                  style={{
+                    fontSize: 13,
+                    marginTop: 8,
+                    fontWeight: 600,
+                    color: lead.overdue ? "#fca5a5" : "#f9a8d4",
+                  }}
+                >
+                  📞 {followUpCountdownLabel(lead.followUpDueAt)} ·{" "}
+                  <span style={{ fontWeight: 400, color: "#94a3b8" }}>
+                    due {fmtDate(lead.followUpDueAt)}. Logging a contact resets
+                    the clock.
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* assign + schedule */}
@@ -799,7 +1182,51 @@ function LeadDrawer({
               )}
             </div>
 
-            {/* PDFs — download the file, then open it to print */}
+            {/* Complete packet — every leave-behind merged into one print job,
+                in tour order. Individual buttons stay below for reprints. */}
+            <div style={{ marginBottom: 8 }}>
+              <button
+                type="button"
+                onClick={() => void downloadPacket()}
+                disabled={packetBusy}
+                style={{
+                  ...btn("#1d4ed8"),
+                  width: "100%",
+                  justifyContent: "center",
+                  fontSize: 15,
+                  padding: "11px 16px",
+                  opacity: packetBusy ? 0.6 : 1,
+                  cursor: packetBusy ? "wait" : "pointer",
+                }}
+              >
+                {packetBusy
+                  ? "Building packet…"
+                  : "🗂️ Print Complete Tour Packet (PDF)"}
+              </button>
+            </div>
+            <div
+              style={{
+                fontSize: 12,
+                color: "#94a3b8",
+                marginBottom: 10,
+              }}
+            >
+              One file, in tour order: brag sheet → roadmap → note catcher →
+              feedback page.
+            </div>
+
+            {/* PDFs — download the file, then open it to print. Kept as
+                individual pages so any one can be reprinted if lost or damaged. */}
+            <div
+              style={{
+                fontSize: 12,
+                fontWeight: 600,
+                color: "#94a3b8",
+                marginBottom: 6,
+              }}
+            >
+              Or print an individual page
+            </div>
             <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
               <button
                 type="button"
@@ -814,6 +1241,13 @@ function LeadDrawer({
                 style={btn("#0ea5a4")}
               >
                 ⬇️ Tour roadmap (PDF)
+              </button>
+              <button
+                type="button"
+                onClick={() => void downloadPdf("roadmap-short")}
+                style={btn("#0d9488")}
+              >
+                ⬇️ Roadmap — 1-page (PDF)
               </button>
               <button
                 type="button"
@@ -865,6 +1299,9 @@ function LeadDrawer({
                 )}
               </div>
             )}
+
+            {/* live tour walk — QR to start, results once captured */}
+            {walk && <WalkSection walk={walk} qr={walkQr} />}
 
             {/* log a contact / note */}
             <div style={{ ...cardBox, marginBottom: 16 }}>
@@ -968,6 +1405,17 @@ type PageData = {
   headerTextColor: string;
   contactEmail: string | null;
   contactPhone: string | null;
+  // School-level: 'all' sends assignment SMS to the new owner; 'urgent' mutes
+  // routine assignment texts (email still goes out).
+  tourSmsScope: "all" | "urgent";
+  // Phase 2 "never lose a lead" SLA settings.
+  tourFirstContactHours: number;
+  tourFollowUpBusinessDays: number;
+  tourArchiveDays: number;
+  tourEscalationEnabled: boolean;
+  // Phase 3 "close the loop with families" — automated family nurture cadence.
+  tourFamilyNurtureEnabled: boolean;
+  tourReminderLeadHours: number;
 };
 
 type TourFlyerItem = { key: string; label: string; kind: "image" | "pdf" };
@@ -978,6 +1426,9 @@ type TourCheckpointItem = {
   location: string;
   talkingPoints: string;
   minutes: number;
+  // When true, this stop is added to EVERY tour roadmap regardless of what the
+  // family selects (a school highlight). Families see it as "always included."
+  alwaysInclude: boolean;
 };
 
 function ListEditor({
@@ -1146,6 +1597,24 @@ function CheckpointEditor({
             value={c.talkingPoints}
             onChange={(e) => update(i, { talkingPoints: e.target.value })}
           />
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginTop: 8,
+              fontSize: 13,
+              color: "#cbd5e1",
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={c.alwaysInclude}
+              onChange={(e) => update(i, { alwaysInclude: e.target.checked })}
+            />
+            Always include on every tour (school highlight)
+          </label>
         </div>
       ))}
       <button
@@ -1153,7 +1622,14 @@ function CheckpointEditor({
         onClick={() =>
           onChange([
             ...items,
-            { key: "", label: "", location: "", talkingPoints: "", minutes: 0 },
+            {
+              key: "",
+              label: "",
+              location: "",
+              talkingPoints: "",
+              minutes: 0,
+              alwaysInclude: false,
+            },
           ])
         }
         style={{
@@ -1605,6 +2081,42 @@ function BragEditor() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveWarning, setSaveWarning] = useState<string | null>(null);
   const [publicUrl, setPublicUrl] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  // Copy the public brag-page URL with visible feedback. navigator.clipboard
+  // can be undefined or rejected inside the Replit preview iframe (it requires
+  // a secure, allowed context), so fall back to a hidden textarea + execCommand
+  // so the button always works and always confirms.
+  const copyPublicUrl = async () => {
+    let ok = false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(publicUrl);
+        ok = true;
+      }
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = publicUrl;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ok = document.execCommand("copy");
+        ta.remove();
+      } catch {
+        ok = false;
+      }
+    }
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
 
   useEffect(() => {
     void (async () => {
@@ -1615,9 +2127,26 @@ function BragEditor() {
         // can't break the uploader UI.
         json.flyers = Array.isArray(json.flyers) ? json.flyers : [];
         json.photos = Array.isArray(json.photos) ? json.photos : [];
-        json.checkpoints = Array.isArray(json.checkpoints)
-          ? json.checkpoints
-          : [];
+        json.checkpoints = (
+          Array.isArray(json.checkpoints) ? json.checkpoints : []
+        ).map((c) => ({ ...c, alwaysInclude: c.alwaysInclude === true }));
+        json.tourSmsScope = json.tourSmsScope === "urgent" ? "urgent" : "all";
+        json.tourFirstContactHours = clampNum(json.tourFirstContactHours, 1, 720, 24);
+        json.tourFollowUpBusinessDays = clampNum(
+          json.tourFollowUpBusinessDays,
+          1,
+          30,
+          3,
+        );
+        json.tourArchiveDays = clampNum(json.tourArchiveDays, 1, 365, 3);
+        json.tourEscalationEnabled = json.tourEscalationEnabled !== false;
+        json.tourFamilyNurtureEnabled = json.tourFamilyNurtureEnabled === true;
+        json.tourReminderLeadHours = clampNum(
+          json.tourReminderLeadHours,
+          1,
+          168,
+          24,
+        );
         json.textPlacement = json.textPlacement === "bottom" ? "bottom" : "top";
         json.headerTextColor = /^#[0-9a-fA-F]{6}$/.test(json.headerTextColor)
           ? json.headerTextColor
@@ -1792,10 +2321,14 @@ function BragEditor() {
           </a>
           <button
             type="button"
-            onClick={() => navigator.clipboard?.writeText(publicUrl)}
-            style={{ ...btn("#334155"), padding: "5px 10px" }}
+            onClick={() => void copyPublicUrl()}
+            style={{
+              ...btn(copied ? "#16a34a" : "#334155"),
+              padding: "5px 10px",
+              transition: "background 0.2s ease",
+            }}
           >
-            Copy
+            {copied ? "✓ Copied!" : "Copy"}
           </button>
         </div>
       </div>
@@ -1851,6 +2384,202 @@ function BragEditor() {
           items={data.checkpoints}
           onChange={(checkpoints) => set({ checkpoints })}
         />
+
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}>
+            Assignment text alerts
+          </div>
+          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8 }}>
+            When a tour lead is assigned, the new owner always gets an email.
+            Choose whether they also get a text message.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            {(
+              [
+                ["all", "Text on every assignment"],
+                ["urgent", "Email only (no routine texts)"],
+              ] as const
+            ).map(([value, lbl]) => {
+              const active = data.tourSmsScope === value;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => set({ tourSmsScope: value })}
+                  style={{
+                    padding: "8px 14px",
+                    borderRadius: 999,
+                    border: `1px solid ${active ? "var(--accent, #2563eb)" : "#334155"}`,
+                    background: active ? "var(--accent, #2563eb)" : "transparent",
+                    color: active ? "#fff" : "#cbd5e1",
+                    fontWeight: 600,
+                    fontSize: 13,
+                    cursor: "pointer",
+                  }}
+                >
+                  {lbl}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Phase 2 "never lose a lead" SLA settings. */}
+        <div
+          style={{
+            ...cardBox,
+            marginBottom: 18,
+            borderLeft: "3px solid #db2777",
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>
+            Follow-up &amp; escalation
+          </div>
+          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>
+            Set how long a lead can sit before it counts as overdue, how long the
+            “Still deciding” follow-up clock runs, and when closed tours archive
+            off the board.
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+              gap: 12,
+            }}
+          >
+            <label style={{ display: "block" }}>
+              <div
+                style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}
+              >
+                First-contact window (hours)
+              </div>
+              <input
+                type="number"
+                min={1}
+                max={720}
+                style={inputStyle}
+                value={data.tourFirstContactHours}
+                onChange={(e) =>
+                  set({
+                    tourFirstContactHours: clampNum(
+                      e.target.value,
+                      1,
+                      720,
+                      24,
+                    ),
+                  })
+                }
+              />
+            </label>
+            <label style={{ display: "block" }}>
+              <div
+                style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}
+              >
+                Follow-up window (business days)
+              </div>
+              <input
+                type="number"
+                min={1}
+                max={30}
+                style={inputStyle}
+                value={data.tourFollowUpBusinessDays}
+                onChange={(e) =>
+                  set({
+                    tourFollowUpBusinessDays: clampNum(
+                      e.target.value,
+                      1,
+                      30,
+                      3,
+                    ),
+                  })
+                }
+              />
+            </label>
+            <label style={{ display: "block" }}>
+              <div
+                style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}
+              >
+                Archive closed tours after (days)
+              </div>
+              <input
+                type="number"
+                min={1}
+                max={365}
+                style={inputStyle}
+                value={data.tourArchiveDays}
+                onChange={(e) =>
+                  set({
+                    tourArchiveDays: clampNum(e.target.value, 1, 365, 3),
+                  })
+                }
+              />
+            </label>
+          </div>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              marginTop: 14,
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={data.tourEscalationEnabled}
+              onChange={(e) =>
+                set({ tourEscalationEnabled: e.target.checked })
+              }
+            />
+            <span style={{ fontSize: 14 }}>
+              Email overdue leads to the owner (CC principal/coordinator)
+            </span>
+          </label>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              marginTop: 14,
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={data.tourFamilyNurtureEnabled}
+              onChange={(e) =>
+                set({ tourFamilyNurtureEnabled: e.target.checked })
+              }
+            />
+            <span style={{ fontSize: 14 }}>
+              Send families automatic nurture emails (tour reminder, post-tour
+              thank-you &amp; survey, "still deciding" check-in, enrollment
+              welcome)
+            </span>
+          </label>
+          {data.tourFamilyNurtureEnabled && (
+            <label style={{ display: "block", marginTop: 12 }}>
+              <div
+                style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}
+              >
+                Send the pre-tour reminder this many hours ahead
+              </div>
+              <input
+                type="number"
+                min={1}
+                max={168}
+                style={{ ...inputStyle, maxWidth: 160 }}
+                value={data.tourReminderLeadHours}
+                onChange={(e) =>
+                  set({
+                    tourReminderLeadHours: clampNum(e.target.value, 1, 168, 24),
+                  })
+                }
+              />
+            </label>
+          )}
+        </div>
+
         <PhotoUploader
           photos={data.photos}
           onChange={(photos) => set({ photos })}
@@ -1996,6 +2725,18 @@ function BragEditor() {
 // ---------------------------------------------------------------------------
 // Outcome report
 // ---------------------------------------------------------------------------
+type GuideRollup = {
+  guideId: number;
+  guideName: string | null;
+  tours: number;
+  enrolled: number;
+  conversionRate: number | null;
+  avgRating: number | null;
+  avgResponseMin: number | null;
+  walks: number;
+  avgMinutes: number | null;
+  avgPlannedMinutes: number | null;
+};
 type Summary = {
   total: number;
   byStatus: Record<string, number>;
@@ -2004,7 +2745,17 @@ type Summary = {
   enrolled: number;
   toured: number;
   conversionRate: number;
+  walksCompleted: number;
+  avgTourMinutes: number | null;
+  byGuide: GuideRollup[];
 };
+
+function formatResponse(min: number | null): string {
+  if (min == null) return "—";
+  if (min < 60) return `${Math.round(min)}m`;
+  if (min < 1440) return `${Math.round(min / 60)}h`;
+  return `${Math.round(min / 1440)}d`;
+}
 
 function Report() {
   const [s, setS] = useState<Summary | null>(null);
@@ -2037,6 +2788,121 @@ function Report() {
         {tile("Toured", s.toured, "#7c3aed")}
         {tile("Enrolled", s.enrolled, "#059669")}
         {tile("Conversion", `${s.conversionRate}%`, "#0ea5a4")}
+      </div>
+
+      <div style={{ ...cardBox, marginBottom: 16 }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+            gap: 12,
+            marginBottom: 12,
+          }}
+        >
+          {tile("Walks completed", s.walksCompleted, "#2563eb")}
+          {tile(
+            "Avg tour length",
+            s.avgTourMinutes != null ? `${s.avgTourMinutes} min` : "—",
+            "#7c3aed",
+          )}
+        </div>
+        {s.walksCompleted === 0 && (
+          <div style={{ color: "#94a3b8", fontSize: 13 }}>
+            Tour-length + pacing fill in once a guide finishes a live walk from
+            the roadmap QR.
+          </div>
+        )}
+      </div>
+
+      <div style={{ ...cardBox, marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, marginBottom: 4 }}>By tour guide</div>
+        <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 10 }}>
+          Read with the tour count in mind — a guide with only 1–2 tours is a
+          small sample, not a ranking.
+        </div>
+        {s.byGuide.length === 0 ? (
+          <div style={{ color: "#94a3b8" }}>No guide attributed yet.</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: 13,
+              }}
+            >
+              <thead>
+                <tr style={{ color: "#94a3b8", textAlign: "left" }}>
+                  <th style={{ padding: "4px 8px 4px 0" }}>Guide</th>
+                  <th style={{ padding: "4px 8px", textAlign: "right" }}>
+                    Tours
+                  </th>
+                  <th style={{ padding: "4px 8px", textAlign: "right" }}>
+                    Enrolled
+                  </th>
+                  <th style={{ padding: "4px 8px", textAlign: "right" }}>
+                    Conversion
+                  </th>
+                  <th style={{ padding: "4px 8px", textAlign: "right" }}>
+                    Avg rating
+                  </th>
+                  <th style={{ padding: "4px 8px", textAlign: "right" }}>
+                    Avg response
+                  </th>
+                  <th style={{ padding: "4px 8px", textAlign: "right" }}>
+                    Pacing (act/plan)
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {s.byGuide.map((g) => (
+                  <tr
+                    key={g.guideId}
+                    style={{ borderTop: "1px solid var(--border, #e2e8f0)" }}
+                  >
+                    <td style={{ padding: "6px 8px 6px 0", fontWeight: 600 }}>
+                      {g.guideName ?? "Unknown guide"}
+                    </td>
+                    <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                      {g.tours}
+                    </td>
+                    <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                      {g.enrolled}
+                    </td>
+                    <td
+                      style={{
+                        padding: "6px 8px",
+                        textAlign: "right",
+                        fontWeight: 700,
+                        color:
+                          g.conversionRate == null
+                            ? "#94a3b8"
+                            : g.conversionRate >= 50
+                              ? "#059669"
+                              : "inherit",
+                      }}
+                    >
+                      {g.conversionRate == null ? "—" : `${g.conversionRate}%`}
+                    </td>
+                    <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                      {g.avgRating == null ? "—" : `${g.avgRating}★`}
+                    </td>
+                    <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                      {formatResponse(g.avgResponseMin)}
+                    </td>
+                    <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                      {g.avgMinutes == null
+                        ? "—"
+                        : g.avgPlannedMinutes == null
+                          ? `${g.avgMinutes}m`
+                          : `${g.avgMinutes} / ${g.avgPlannedMinutes}m`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <div style={{ ...cardBox, marginBottom: 16 }}>
@@ -2076,6 +2942,221 @@ function Report() {
                 <strong>{n}</strong>
               </div>
             ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Feedback tab — every family's post-tour survey + themed "Top wonderings"
+// ---------------------------------------------------------------------------
+type FeedbackTheme = {
+  key: string;
+  label: string;
+  count: number;
+  examples: string[];
+};
+type FeedbackSurvey = {
+  requestId: number;
+  familyName: string;
+  guideName: string | null;
+  rating: number | null;
+  liked: string;
+  questions: string;
+  comments: string;
+  submittedAt: string;
+};
+type FeedbackData = {
+  avgRating: number | null;
+  surveyCount: number;
+  surveys: FeedbackSurvey[];
+  themes: FeedbackTheme[];
+};
+
+function FeedbackTab() {
+  const [d, setD] = useState<FeedbackData | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await authFetch("/api/tours/feedback");
+        if (res.ok) setD((await res.json()) as FeedbackData);
+        else setErr(`Could not load feedback (${res.status}).`);
+      } catch {
+        setErr("Could not load feedback.");
+      }
+    })();
+  }, []);
+
+  if (err) return <div style={{ color: "#dc2626" }}>{err}</div>;
+  if (!d) return <div style={{ color: "#94a3b8" }}>Loading feedback…</div>;
+
+  const fmtDate = (iso: string) => {
+    const dt = new Date(iso);
+    return isNaN(dt.getTime()) ? "" : dt.toLocaleDateString();
+  };
+
+  return (
+    <div>
+      <style>{`@media print {
+        .tours-feedback-noprint { display: none !important; }
+        .tours-feedback-card { break-inside: avoid; }
+      }`}</style>
+      <div
+        className="tours-feedback-noprint"
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 14,
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ fontSize: 13, color: "#94a3b8" }}>
+          {d.surveyCount === 0
+            ? "No post-tour surveys returned yet."
+            : `${d.surveyCount} survey${d.surveyCount === 1 ? "" : "s"} returned`}
+          {d.avgRating != null && ` · ${d.avgRating}★ average`}
+        </div>
+        <button
+          type="button"
+          onClick={() => window.print()}
+          style={{
+            padding: "8px 16px",
+            borderRadius: 9,
+            border: "1px solid var(--border, #e2e8f0)",
+            background: "var(--accent, #2563eb)",
+            color: "#fff",
+            fontWeight: 600,
+            cursor: "pointer",
+          }}
+        >
+          🖨️ Print
+        </button>
+      </div>
+
+      {d.themes.length > 0 && (
+        <div style={{ ...cardBox, marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>
+            Top wonderings
+          </div>
+          <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 12 }}>
+            What families keep asking — across survey questions, comments, and
+            guide walk notes. Prep answers for the ones at the top.
+          </div>
+          {d.themes.map((t) => (
+            <div
+              key={t.key}
+              className="tours-feedback-card"
+              style={{
+                padding: "8px 0",
+                borderTop: "1px solid var(--border, #e2e8f0)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <strong>{t.label}</strong>
+                <span
+                  style={{
+                    background: "var(--accent, #2563eb)",
+                    color: "#fff",
+                    borderRadius: 999,
+                    padding: "1px 10px",
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  {t.count}
+                </span>
+              </div>
+              {t.examples.length > 0 && (
+                <ul
+                  style={{
+                    margin: "6px 0 0",
+                    paddingLeft: 18,
+                    fontSize: 13,
+                    color: "#64748b",
+                  }}
+                >
+                  {t.examples.map((ex, i) => (
+                    <li key={i}>“{ex}”</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ ...cardBox }}>
+        <div style={{ fontWeight: 700, marginBottom: 12 }}>
+          Every family's survey
+        </div>
+        {d.surveys.length === 0 ? (
+          <div style={{ color: "#94a3b8" }}>
+            Surveys appear here once families complete the post-tour survey QR.
+          </div>
+        ) : (
+          d.surveys.map((sv) => (
+            <div
+              key={sv.requestId}
+              className="tours-feedback-card"
+              style={{
+                padding: "12px 0",
+                borderTop: "1px solid var(--border, #e2e8f0)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "baseline",
+                  gap: 8,
+                  flexWrap: "wrap",
+                }}
+              >
+                <strong>{sv.familyName}</strong>
+                <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                  {sv.guideName ? `Guide: ${sv.guideName} · ` : ""}
+                  {fmtDate(sv.submittedAt)}
+                </span>
+              </div>
+              {sv.rating != null && (
+                <div style={{ margin: "4px 0", color: "#f59e0b" }}>
+                  {"★".repeat(sv.rating)}
+                  <span style={{ color: "#cbd5e1" }}>
+                    {"★".repeat(Math.max(0, 5 - sv.rating))}
+                  </span>
+                </div>
+              )}
+              {sv.liked.trim() && (
+                <div style={{ fontSize: 13, marginTop: 4 }}>
+                  <span style={{ color: "#94a3b8" }}>Liked: </span>
+                  {sv.liked}
+                </div>
+              )}
+              {sv.questions.trim() && (
+                <div style={{ fontSize: 13, marginTop: 4 }}>
+                  <span style={{ color: "#94a3b8" }}>Still wondering: </span>
+                  {sv.questions}
+                </div>
+              )}
+              {sv.comments.trim() && (
+                <div style={{ fontSize: 13, marginTop: 4 }}>
+                  <span style={{ color: "#94a3b8" }}>Comments: </span>
+                  {sv.comments}
+                </div>
+              )}
+            </div>
+          ))
         )}
       </div>
     </div>

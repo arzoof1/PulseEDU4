@@ -46,6 +46,7 @@ import {
   studentRetentionsTable,
   housesTable,
   attendanceCheckinsTable,
+  safetyPlansTable,
 } from "@workspace/db";
 import { and, eq, inArray, isNull, gte, lte, sql, desc, or } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -54,11 +55,21 @@ import {
   placeOnChart,
   hasChart,
   bucketTarget,
+  bucketFor,
+  proficiencyGap,
+  placePmSet,
   SUB_LEVEL_LABEL,
   type Subject,
+  type PmPlacementSet,
 } from "../lib/fastCutScores.js";
+import { loadAttendanceMetrics } from "../lib/attendanceMetrics.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
-import { loadFastHistory, pickHistory } from "../lib/fastHistory.js";
+import {
+  loadFastHistory,
+  pickHistory,
+  type FastHistoryEntry,
+} from "../lib/fastHistory.js";
+import { decideLearningGain } from "../lib/learningGains.js";
 import {
   parseInsightsFilters,
   applyInsightsFilters,
@@ -68,6 +79,118 @@ import {
 } from "../lib/insightsFilters.js";
 
 const router: IRouter = Router();
+
+// ---------------------------------------------------------------------------
+// Drill-down parity helpers (shared by the Academics band + Trajectory
+// drill-in endpoints so both surfaces show the SAME Teacher-Roster context:
+// the ELL flag, the active safety-plan (SP) indicator, and the FAST
+// learning-gain green-check.)
+// ---------------------------------------------------------------------------
+
+// Active safety-plan summary surfaced on a drill-down row. Mirrors the
+// shape the Teacher Roster sends (routes/teacherRoster.ts) so the client
+// SP pill renders identically across surfaces.
+type DrilldownSafetyPlan = {
+  itemCount: number;
+  items: unknown[];
+  notes: string;
+  updatedAt: Date | null;
+  updatedByName: string | null;
+};
+
+// Load the ELL flag + active safety-plan summary for a (school-scoped) set
+// of students. Used to decorate the visible slice of each drill-down.
+async function loadDrilldownContext(
+  schoolId: number,
+  studentIds: string[],
+): Promise<{
+  ellByStudent: Map<string, boolean>;
+  safetyPlanByStudent: Map<string, DrilldownSafetyPlan>;
+}> {
+  const ellByStudent = new Map<string, boolean>();
+  const safetyPlanByStudent = new Map<string, DrilldownSafetyPlan>();
+  if (studentIds.length === 0) return { ellByStudent, safetyPlanByStudent };
+
+  const [ellRows, spRows] = await Promise.all([
+    db
+      .select({
+        studentId: studentsTable.studentId,
+        ell: studentsTable.ell,
+      })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          inArray(studentsTable.studentId, studentIds),
+        ),
+      ),
+    // Active safety plans (status='active') — same query the roster uses.
+    db
+      .select({
+        studentId: safetyPlansTable.studentId,
+        items: safetyPlansTable.items,
+        notes: safetyPlansTable.notes,
+        updatedAt: safetyPlansTable.updatedAt,
+        updatedByName: safetyPlansTable.updatedByName,
+      })
+      .from(safetyPlansTable)
+      .where(
+        and(
+          eq(safetyPlansTable.schoolId, schoolId),
+          eq(safetyPlansTable.status, "active"),
+          inArray(safetyPlansTable.studentId, studentIds),
+        ),
+      ),
+  ]);
+
+  for (const r of ellRows) ellByStudent.set(r.studentId, Boolean(r.ell));
+  for (const sp of spRows) {
+    const activeItems = (sp.items ?? []).filter(
+      (i: { active?: boolean }) => i && i.active,
+    );
+    safetyPlanByStudent.set(sp.studentId, {
+      itemCount: activeItems.length,
+      items: activeItems,
+      notes: sp.notes,
+      updatedAt: sp.updatedAt,
+      updatedByName: sp.updatedByName,
+    });
+  }
+  return { ellByStudent, safetyPlanByStudent };
+}
+
+// FAST learning-gain green-check for one drill-down row. Uses the SAME
+// strict PM3-to-PM3 rule as the Teacher Roster — prior-year evidence comes
+// from loadFastHistory historical PM3 (NEVER priorYearScore), placed on the
+// test-administration grade chart (grade-1), and compared against the
+// current PM3 placement already carried on the row's `levels`.
+function computeRowLearningGain(args: {
+  subject: Subject;
+  grade: number | null;
+  currentLevels: PmPlacementSet | undefined;
+  currentPm3: number | null;
+  history: FastHistoryEntry[];
+}): boolean | null {
+  const { subject, grade, currentLevels, currentPm3, history } = args;
+  if (grade == null) return null;
+  const top = history[0];
+  const priorGrade = grade - 1;
+  const canPlace =
+    !!top &&
+    priorGrade >= 1 &&
+    (subject === "ela" || subject === "math") &&
+    hasChart(subject, priorGrade);
+  const priorPlacement =
+    canPlace && top ? placeOnChart(top.pm3, subject, priorGrade) : null;
+  return decideLearningGain({
+    priorLevel: priorPlacement?.level ?? null,
+    currentLevel: currentLevels?.pm3?.level ?? null,
+    priorScore: top?.pm3 ?? null,
+    currentScore: currentPm3,
+    priorSubLevel: priorPlacement?.subLevel ?? null,
+    currentSubLevel: currentLevels?.pm3?.subLevel ?? null,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Auth + visibility helpers
@@ -101,17 +224,19 @@ function isCoreTeam(s: typeof staffTable.$inferSelect): boolean {
 }
 
 // Returns the set of student business IDs (text) this staff member is
-// allowed to view at this school. Core team gets everyone; everyone else
-// gets their roster ∪ trusted-adult assignments.
+// allowed to view at this school. Core team AND school counselors get
+// everyone; everyone else gets their roster ∪ trusted-adult assignments.
 //
-// `coreTeamShortcut` short-circuits the union for performance — the watch-
-// list and profile callers test isCoreTeam first and pass true here, in
-// which case we return the full school set with a single query.
-async function getVisibleStudentIds(
+// School counselors (guidance OR generic counselor) are granted school-wide
+// visibility here per the documented student-lookup contract — counselors are
+// expected to see any student's profile/schedule. This is intentionally
+// broader than the local `isCoreTeam` gate used by the insights dashboards,
+// which does NOT admit counselors.
+export async function getVisibleStudentIds(
   staff: typeof staffTable.$inferSelect,
   schoolId: number,
 ): Promise<{ ids: Set<string>; full: boolean }> {
-  if (isCoreTeam(staff)) {
+  if (isCoreTeam(staff) || staff.isCounselor || staff.isGuidanceCounselor) {
     // Full set marker — caller can skip the studentId filter entirely.
     return { ids: new Set(), full: true };
   }
@@ -2883,7 +3008,9 @@ router.get("/insights/academics/band", async (req, res) => {
   const fastRows = await db
     .select({
       studentId: studentFastScoresTable.studentId,
+      priorYearScore: studentFastScoresTable.priorYearScore,
       pm1: studentFastScoresTable.pm1,
+      pm2: studentFastScoresTable.pm2,
       pm3: studentFastScoresTable.pm3,
     })
     .from(studentFastScoresTable)
@@ -2904,8 +3031,28 @@ router.get("/insights/academics/band", async (req, res) => {
     studentId: string;
     studentName: string;
     grade: number | null;
+    priorYearScore: number | null;
     pm1: number | null;
+    pm2: number | null;
     pm3: number;
+    // Additive read-only metrics (shared source of truth). daysAbsent /
+    // attendancePct from the Eligibility Hub upload; ptsToNextLevel /
+    // ptsToProficient from the FAST cut-score charts.
+    daysAbsent?: number | null;
+    attendancePct?: number | null;
+    ptsToNextLevel?: number | null;
+    ptsToProficient?: number | null;
+    // Teacher-Roster parity context (additive). ELL flag, active
+    // safety-plan summary, and the FAST learning-gain green-check —
+    // surfaced so the drill-down shows the same whole-child context as
+    // the roster.
+    ell?: boolean;
+    safetyPlan?: DrilldownSafetyPlan | null;
+    learningGain?: boolean | null;
+    // Per-PM FAST placements (level + sub-level) for the roster-style
+    // level pills in the drill-down drawer. Same chart conventions as the
+    // roster so colors agree across surfaces.
+    levels?: PmPlacementSet;
   };
   const hits: Hit[] = [];
   for (const r of fastRows) {
@@ -2918,18 +3065,68 @@ router.get("/insights/academics/band", async (req, res) => {
       studentId: r.studentId,
       studentName: nameById.get(r.studentId) ?? "—",
       grade,
+      priorYearScore: r.priorYearScore ?? null,
       pm1: r.pm1 ?? null,
+      pm2: r.pm2 ?? null,
       pm3: r.pm3,
+      levels: placePmSet(subject, grade, {
+        priorYearScore: r.priorYearScore ?? null,
+        pm1: r.pm1 ?? null,
+        pm2: r.pm2 ?? null,
+        pm3: r.pm3,
+      }),
     });
   }
   hits.sort((a, b) => a.pm3 - b.pm3);
 
   const CAP = 200;
   const truncated = hits.length > CAP;
+  const visible = truncated ? hits.slice(0, CAP) : hits;
+
+  // Decorate the visible slice with the shared additive metrics. Attendance
+  // is batch-loaded once; FAST gaps reuse bucketFor/proficiencyGap so this
+  // surface agrees exactly with the Trajectory drawer and Teacher Roster.
+  const visibleIds = visible.map((h) => h.studentId);
+  const attMap = await loadAttendanceMetrics(schoolId, visibleIds);
+  // Teacher-Roster parity context for the visible slice: ELL flag, active
+  // safety plan, and FAST learning-gain. Loaded once for the trimmed set.
+  const { ellByStudent, safetyPlanByStudent } = await loadDrilldownContext(
+    schoolId,
+    visibleIds,
+  );
+  const historyMap = await loadFastHistory({
+    schoolId,
+    studentIds: visibleIds,
+    subjects: [subject],
+  });
+  for (const h of visible) {
+    const att = attMap.get(h.studentId);
+    h.daysAbsent = att?.daysAbsent ?? null;
+    h.attendancePct = att?.attendancePct ?? null;
+    h.ell = ellByStudent.get(h.studentId) ?? false;
+    h.safetyPlan = safetyPlanByStudent.get(h.studentId) ?? null;
+    h.learningGain = computeRowLearningGain({
+      subject,
+      grade: h.grade,
+      currentLevels: h.levels,
+      currentPm3: h.pm3,
+      history: pickHistory(historyMap, h.studentId, subject),
+    });
+    // grade is non-null for every pushed hit (the placement loop skips
+    // grade === null), but narrow for the type checker.
+    if (h.grade != null) {
+      h.ptsToNextLevel = bucketFor(h.pm3, subject, h.grade).gap;
+      h.ptsToProficient = proficiencyGap(h.pm3, subject, h.grade);
+    } else {
+      h.ptsToNextLevel = null;
+      h.ptsToProficient = null;
+    }
+  }
+
   res.json({
     subject,
     level,
-    students: truncated ? hits.slice(0, CAP) : hits,
+    students: visible,
     truncated,
     total: hits.length,
   });
@@ -3000,6 +3197,7 @@ interface TrajectoryStudentRec {
   localSisId: string | null;
   studentName: string;
   grade: number;
+  priorYearScore: number | null;
   pm1: number | null;
   pm2: number | null;
   pm3: number | null;
@@ -3007,6 +3205,9 @@ interface TrajectoryStudentRec {
   pm2Band: TrajectoryBand;
   pm3Band: TrajectoryBand;
   pm3SubLevel: string | null;
+  // Per-PM FAST placements (level + sub-level) for the roster-style level
+  // pills in the drill-down drawer. Same chart conventions as the roster.
+  levels: PmPlacementSet;
 }
 
 function classifyArchetype(rec: TrajectoryStudentRec): TrajectoryArchetype {
@@ -3220,6 +3421,7 @@ async function loadTrajectoryRecs(
   const fastRows = await db
     .select({
       studentId: studentFastScoresTable.studentId,
+      priorYearScore: studentFastScoresTable.priorYearScore,
       pm1: studentFastScoresTable.pm1,
       pm2: studentFastScoresTable.pm2,
       pm3: studentFastScoresTable.pm3,
@@ -3243,6 +3445,7 @@ async function loadTrajectoryRecs(
   // fr?.pm1 reports "Property pm1 does not exist on type {}".
   type TrajFastRow = {
     studentId: string;
+    priorYearScore: number | null;
     pm1: number | null;
     pm2: number | null;
     pm3: number | null;
@@ -3258,24 +3461,30 @@ async function loadTrajectoryRecs(
     const pm2 = fr?.pm2 ?? null;
     const pm3 = fr?.pm3 ?? null;
 
-    const pm1Placement =
-      pm1 != null ? placeOnChart(pm1, subject, grade) : null;
-    const pm2Placement =
-      pm2 != null ? placeOnChart(pm2, subject, grade) : null;
-    const pm3Placement = pm3 != null ? placePm3(pm3, subject, grade) : null;
+    // Single source of truth for per-PM placement — drives both the
+    // trajectory band classification and the drawer's level pills, so the
+    // two never disagree.
+    const levels = placePmSet(subject, grade, {
+      priorYearScore: fr?.priorYearScore ?? null,
+      pm1,
+      pm2,
+      pm3,
+    });
 
     recs.push({
       studentId: sr.studentId,
       localSisId: localSisById.get(sr.studentId) ?? null,
       studentName: nameById.get(sr.studentId) ?? "—",
       grade,
+      priorYearScore: fr?.priorYearScore ?? null,
       pm1,
       pm2,
       pm3,
-      pm1Band: levelToBand(pm1Placement),
-      pm2Band: levelToBand(pm2Placement),
-      pm3Band: levelToBand(pm3Placement),
-      pm3SubLevel: pm3Placement?.subLevel ?? null,
+      pm1Band: levelToBand(levels.pm1),
+      pm2Band: levelToBand(levels.pm2),
+      pm3Band: levelToBand(levels.pm3),
+      pm3SubLevel: levels.pm3?.subLevel ?? null,
+      levels,
     });
   }
   return recs;
@@ -3409,13 +3618,30 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
     localSisId: string | null;
     studentName: string;
     grade: number | null;
+    priorYearScore: number | null;
     pm1: number | null;
+    pm2: number | null;
     pm3: number | null;
     subject?: "ela" | "math";
     programPill?: "ESE" | "504" | null;
     mtssPill?: "Tier 2+" | "Tier 3" | null;
     bqEla?: boolean;
     bqMath?: boolean;
+    // Teacher-Roster parity context (additive) — ELL flag, active
+    // safety-plan summary, and the FAST learning-gain green-check.
+    ell?: boolean;
+    safetyPlan?: DrilldownSafetyPlan | null;
+    learningGain?: boolean | null;
+    // Additive read-only metrics (shared source of truth). daysAbsent /
+    // attendancePct from the Eligibility Hub upload; ptsToNextLevel /
+    // ptsToProficient from the FAST cut-score charts. All null when the
+    // underlying data is missing (rendered as "—").
+    daysAbsent?: number | null;
+    attendancePct?: number | null;
+    ptsToNextLevel?: number | null;
+    ptsToProficient?: number | null;
+    // Per-PM FAST placements for the roster-style level pills.
+    levels?: PmPlacementSet;
   };
   const hits: Hit[] = [];
   for (const { subject: subj, rec: r } of tagged) {
@@ -3429,9 +3655,12 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
           ? `${r.studentName} (${subj.toUpperCase()})`
           : r.studentName,
       grade: r.grade,
+      priorYearScore: r.priorYearScore,
       pm1: r.pm1,
+      pm2: r.pm2,
       pm3: r.pm3,
       subject: subj,
+      levels: r.levels,
     });
   }
   hits.sort((a, b) => a.studentName.localeCompare(b.studentName));
@@ -3445,9 +3674,14 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
   // to the trimmed studentId set.
   const visibleIds = Array.from(new Set(visible.map((h) => h.studentId)));
   if (visibleIds.length > 0) {
-    type FlagRow = { student_id: string; ese: boolean; is_504: boolean };
+    type FlagRow = {
+      student_id: string;
+      ese: boolean;
+      is_504: boolean;
+      ell: boolean;
+    };
     const flagRes = await db.execute<FlagRow>(sql`
-      SELECT student_id, ese, is_504
+      SELECT student_id, ese, is_504, ell
       FROM students
       WHERE school_id = ${schoolId} AND ${inArray(studentsTable.studentId, visibleIds)}
     `);
@@ -3482,13 +3716,55 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
       else if (r.subject === "math") bqMath.add(r.student_id);
     }
 
+    // Attendance metrics (shared helper) for the visible slice only.
+    const attendance = await loadAttendanceMetrics(schoolId, visibleIds);
+
+    // Teacher-Roster parity context: active safety plan + FAST history for
+    // the learning-gain green-check. ELL rides on the flag query above.
+    const { safetyPlanByStudent } = await loadDrilldownContext(
+      schoolId,
+      visibleIds,
+    );
+    const historyMap = await loadFastHistory({
+      schoolId,
+      studentIds: visibleIds,
+      subjects: ["ela", "math"],
+    });
+
     for (const h of visible) {
       const f = flagMap.get(h.studentId);
       h.programPill = f?.ese ? "ESE" : f?.is_504 ? "504" : null;
+      h.ell = Boolean(f?.ell);
       const t = tierMap.get(h.studentId);
       h.mtssPill = t === 3 ? "Tier 3" : t === 2 ? "Tier 2+" : null;
       h.bqEla = bqEla.has(h.studentId);
       h.bqMath = bqMath.has(h.studentId);
+      h.safetyPlan = safetyPlanByStudent.get(h.studentId) ?? null;
+      h.learningGain =
+        h.subject != null
+          ? computeRowLearningGain({
+              subject: h.subject,
+              grade: h.grade,
+              currentLevels: h.levels,
+              currentPm3: h.pm3,
+              history: pickHistory(historyMap, h.studentId, h.subject),
+            })
+          : null;
+
+      const att = attendance.get(h.studentId);
+      h.daysAbsent = att?.daysAbsent ?? null;
+      h.attendancePct = att?.attendancePct ?? null;
+
+      // FAST gaps — per row (each row is one student+subject). bucketFor
+      // gives the points to the next sub-level; proficiencyGap the points
+      // to Level 3. Both null when the score/chart is missing.
+      if (h.subject && h.grade != null && h.pm3 != null) {
+        h.ptsToNextLevel = bucketFor(h.pm3, h.subject, h.grade).gap;
+        h.ptsToProficient = proficiencyGap(h.pm3, h.subject, h.grade);
+      } else {
+        h.ptsToNextLevel = null;
+        h.ptsToProficient = null;
+      }
     }
   }
 
@@ -4964,6 +5240,13 @@ router.get("/insights/early-warning", async (req, res) => {
     };
     hasActivePlan: boolean;
     isUnsupportedHighRisk: boolean;
+    // Additive read-only leaderboard columns (decorated on the visible
+    // top-N slice only). daysAbsent/attendancePct from the Eligibility Hub
+    // upload; ptsToProficient = worst-subject FAST points-to-Level-3.
+    daysAbsent?: number | null;
+    attendancePct?: number | null;
+    ptsToProficient?: number | null;
+    ptsToProficientSubject?: "ela" | "math" | null;
   };
 
   const scored: Scored[] = [];
@@ -5039,6 +5322,65 @@ router.get("/insights/early-warning", async (req, res) => {
 
   const TOP_N = 25;
   const topRisk = scored.slice(0, TOP_N);
+
+  // --- Additive read-only leaderboard columns (visible slice only) --------
+  // Official days-absent (Eligibility Hub upload) + points-to-proficiency
+  // (FAST L3 gap, worst subject). Decorating only the rendered top-N keeps
+  // the cost to two small cohort-bounded queries. Has NO effect on the risk
+  // score, band counts, or any other surface.
+  const topIds = topRisk.map((r) => r.studentId);
+  if (topIds.length > 0) {
+    const attendance = await loadAttendanceMetrics(schoolId, topIds);
+    const sy = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+    const ewFastRows = await db
+      .select({
+        studentId: studentFastScoresTable.studentId,
+        subject: studentFastScoresTable.subject,
+        pm3: studentFastScoresTable.pm3,
+      })
+      .from(studentFastScoresTable)
+      .where(
+        and(
+          eq(studentFastScoresTable.schoolId, schoolId),
+          eq(studentFastScoresTable.schoolYear, sy),
+          inArray(studentFastScoresTable.subject, ["ela", "math"]),
+          inArray(studentFastScoresTable.studentId, topIds),
+        ),
+      );
+    type EwPm3Row = {
+      studentId: string;
+      subject: string;
+      pm3: number | null;
+    };
+    const pm3ByStudent = new Map<string, EwPm3Row[]>();
+    for (const r of ewFastRows as EwPm3Row[]) {
+      const arr = pm3ByStudent.get(r.studentId) ?? [];
+      arr.push(r);
+      pm3ByStudent.set(r.studentId, arr);
+    }
+    for (const r of topRisk) {
+      const att = attendance.get(r.studentId);
+      r.daysAbsent = att?.daysAbsent ?? null;
+      r.attendancePct = att?.attendancePct ?? null;
+      // Worst (furthest-from-L3) gap across the student's tested subjects —
+      // the most actionable single "how far from proficient" signal.
+      let worst: number | null = null;
+      let worstSubject: "ela" | "math" | null = null;
+      if (r.grade != null) {
+        for (const fr of pm3ByStudent.get(r.studentId) ?? []) {
+          if (fr.subject !== "ela" && fr.subject !== "math") continue;
+          const gap = proficiencyGap(fr.pm3, fr.subject, r.grade);
+          if (gap == null) continue;
+          if (worst == null || gap > worst) {
+            worst = gap;
+            worstSubject = fr.subject;
+          }
+        }
+      }
+      r.ptsToProficient = worst;
+      r.ptsToProficientSubject = worstSubject;
+    }
+  }
 
   const pct = (n: number) => (cohort > 0 ? n / cohort : 0);
   const highOrCritical = bandCounts.high + bandCounts.critical;

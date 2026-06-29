@@ -52,12 +52,20 @@ import {
   studentRetentionsTable,
   benchmarkDescriptionsTable,
   pulseBrainLabLessonsTable,
+  eligibilityActivitiesTable,
+  eligibilityActivityMembersTable,
+  eligibilityActivityCoachesTable,
+  eligibilityAbsencesTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, sql, and, inArray, isNull, asc, desc } from "drizzle-orm";
 import { logger } from "./lib/logger";
 import { fetchWeatherForLocation } from "./lib/weatherFetcher";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./lib/schoolYear.js";
+import {
+  FEATURE_KEYS,
+  reapplyLicensingToSchool,
+} from "./lib/featureLicensing.js";
 import {
   mondayOf,
   enumerateWeeks,
@@ -330,6 +338,104 @@ const HOUSE_DEFAULTS = [
 // (created before this column existed) that admins haven't customised.
 const HOUSE_ICON_POOL = ["Crown", "Shield", "Flame", "Star", "Bird", "Sparkles"];
 
+// -----------------------------------------------------------------------------
+// Communication Log + Call Initiative — family-contact logging, bad-number
+// flags routed to front office, and "call all families" campaigns. CREATE TABLE
+// IF NOT EXISTS at boot (drizzle-kit push can't apply non-interactively per the
+// project gotchas). Idempotent; safe to re-run every boot. Default
+// communication types are seeded lazily per-school on first GET, not here.
+// -----------------------------------------------------------------------------
+export async function ensureCommunicationSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS communication_types (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS communication_types_school_id_name_unique ON communication_types (school_id, name)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS communication_logs (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      who_contacted TEXT,
+      outcome TEXT NOT NULL,
+      tone TEXT NOT NULL DEFAULT 'neutral',
+      note TEXT,
+      staff_id INTEGER NOT NULL,
+      staff_name TEXT NOT NULL,
+      contacted_at TIMESTAMPTZ NOT NULL,
+      logged_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS communication_logs_school_student_idx ON communication_logs (school_id, student_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS communication_logs_school_contacted_idx ON communication_logs (school_id, contacted_at)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS bad_number_flags (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      contact_slot INTEGER NOT NULL,
+      contact_label TEXT,
+      bad_phone TEXT,
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      flagged_by_staff_id INTEGER NOT NULL,
+      flagged_by_name TEXT NOT NULL,
+      flagged_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      corrected_phone TEXT,
+      resolved_by_staff_id INTEGER,
+      resolved_by_name TEXT,
+      resolved_at TIMESTAMPTZ,
+      note TEXT
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS bad_number_flags_school_status_idx ON bad_number_flags (school_id, status)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS bad_number_flags_school_student_idx ON bad_number_flags (school_id, student_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS call_initiatives (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      start_date TEXT NOT NULL,
+      window_days INTEGER NOT NULL DEFAULT 14,
+      responsible_period INTEGER NOT NULL DEFAULT 1,
+      completion_rule TEXT NOT NULL DEFAULT 'balanced',
+      attempts_required INTEGER NOT NULL DEFAULT 2,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_by_staff_id INTEGER,
+      created_by_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS call_initiatives_school_active_idx ON call_initiatives (school_id, active)`,
+  );
+
+  // capManageContactInfo — front-office capability for the bad-number
+  // "Contact Info Fixes" queue. Additive boolean on staff; default FALSE.
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS cap_manage_contact_info BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+}
+
 export async function ensureHousesSchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS houses (
@@ -357,6 +463,14 @@ export async function ensureHousesSchema() {
   // existing table. IF NOT EXISTS keeps re-runs harmless.
   await db.execute(
     sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS house_id INTEGER`,
+  );
+  // Student portal (ClassLink district SSO) — link key + last-login stamp.
+  // Additive nullable columns; IF NOT EXISTS keeps re-runs harmless.
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS sso_external_id TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS last_portal_login_at TEXT`,
   );
   // staff.house_id — teachers/staff can belong to a house too (printed on
   // their kiosk activation card and any future "your house" surfaces).
@@ -1805,6 +1919,21 @@ export async function ensureSchoolSettingsFeatureFlagsSchema() {
       ),
     );
   }
+  // School Store fulfillment family-notification gate. BOTH halves default
+  // FALSE (opt-in) — emailing families must be deliberately enabled at the
+  // district level AND by the school admin, so these can't ride the
+  // DEFAULT TRUE loop above.
+  const falseDefaultCols = [
+    "feature_school_store_notify",
+    "super_feature_school_store_notify",
+  ];
+  for (const col of falseDefaultCols) {
+    await db.execute(
+      sql.raw(
+        `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS ${col} BOOLEAN NOT NULL DEFAULT FALSE`,
+      ),
+    );
+  }
   // Advisory tier-preset pointer (nullable). Stored as plain integer —
   // no FK so deleting a preset doesn't cascade to school_settings.
   await db.execute(
@@ -1938,12 +2067,44 @@ export async function ensureAdminHubSchema() {
     sql`ALTER TABLE iss_attendance_day ADD COLUMN IF NOT EXISTS marked_served BOOLEAN NOT NULL DEFAULT FALSE`,
   );
 
+  // Classroom-intervention effectiveness window (days). Additive; default 14.
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS intervention_effectiveness_days INTEGER NOT NULL DEFAULT 14`,
+  );
+
   // ISS daily seat capacity + soft/hard behavior on school_settings.
   await db.execute(
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS iss_daily_capacity INTEGER`,
   );
   await db.execute(
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS iss_capacity_behavior TEXT NOT NULL DEFAULT 'soft'`,
+  );
+
+  // School Tours — SMS notification scope ('all' | 'urgent'). Governs which
+  // tour SMS alerts are sent; email is always sent regardless.
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_sms_scope TEXT NOT NULL DEFAULT 'all'`,
+  );
+
+  // School Tours — Phase 2 "never lose a lead" SLA settings (additive).
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_first_contact_hours INTEGER NOT NULL DEFAULT 24`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_follow_up_business_days INTEGER NOT NULL DEFAULT 3`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_archive_days INTEGER NOT NULL DEFAULT 3`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_escalation_enabled BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
+  // School Tours — Phase 3 "close the loop with families" settings (additive).
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_family_nurture_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_reminder_lead_hours INTEGER NOT NULL DEFAULT 24`,
   );
 
   // OSS section + reason gates on school_heartbeat_settings + parent prefs.
@@ -3237,6 +3398,31 @@ export async function ensureBenchmarkReteachLogSchema(): Promise<void> {
   );
 }
 
+// Student Lookup snapshot — per-student parent-facing HeartBEAT note +
+// its audit columns. Additive ALTERs (same pattern as the reteach column
+// above), idempotent at boot.
+export async function ensureHeartbeatNoteSchema(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS heartbeat_note TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS heartbeat_note_updated_by INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS heartbeat_note_updated_at TEXT`,
+  );
+}
+
+// Classroom intervention entries — additive `behavior_reason` snapshot column
+// that ties a logged intervention to the behavior it addressed (drives the
+// "what has worked before for this student" effectiveness insight). Additive
+// + nullable so existing standalone intervention logs are untouched.
+export async function ensureInterventionEntriesSchema(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE intervention_entries ADD COLUMN IF NOT EXISTS behavior_reason TEXT`,
+  );
+}
+
 // School Tours — public brag page + lead pipeline. Idempotent CREATE TABLE
 // IF NOT EXISTS at boot (same pattern as the rest of the module schemas).
 export async function ensureToursSchema(): Promise<void> {
@@ -3331,6 +3517,11 @@ export async function ensureToursSchema(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS cap_tour_notify BOOLEAN NOT NULL DEFAULT FALSE`,
   );
+  // Lightweight Tour Guide role (assignable in Staff & Roles): assignable as a
+  // lead owner + can open the Tour Roadmap for leads assigned to them.
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS cap_tour_guide BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
 
   // Photo/flyer uploads + layout toggle (additive).
   await db.execute(
@@ -3354,6 +3545,89 @@ export async function ensureToursSchema(): Promise<void> {
   );
   await db.execute(
     sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS interest_selections JSONB NOT NULL DEFAULT '[]'::jsonb`,
+  );
+
+  // Phase 2 lead-rescue lifecycle columns on tour_requests (additive).
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS follow_up_due_at TIMESTAMPTZ`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS last_escalated_at TIMESTAMPTZ`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS last_escalated_reason TEXT`,
+  );
+
+  // Phase 3 "close the loop with families" — family-nurture idempotency stamps.
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS family_reminder_sent_at TIMESTAMPTZ`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS family_thank_you_sent_at TIMESTAMPTZ`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS family_deciding_nudge_sent_at TIMESTAMPTZ`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS family_welcome_sent_at TIMESTAMPTZ`,
+  );
+}
+
+// -----------------------------------------------------------------------------
+// SCHOOL TOURS — Phase 4 "Live Tour Capture": per-lead live walk session
+// (tour_walks) + one row per checkpoint tapped (tour_walk_steps). The guide
+// scans the roadmap QR, confirms who is guiding, and taps each stop as it
+// completes; taps are client-stamped + buffered offline then synced. Idempotent
+// CREATE TABLE IF NOT EXISTS at boot (same pattern as the rest of Tours).
+// -----------------------------------------------------------------------------
+export async function ensureTourWalksSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS tour_walks (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      tour_request_id INTEGER NOT NULL,
+      token TEXT NOT NULL,
+      guide_staff_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'pending',
+      started_at TIMESTAMPTZ,
+      ended_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS tour_walks_request_unique ON tour_walks (tour_request_id)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS tour_walks_token_unique ON tour_walks (token)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS tour_walks_school_idx ON tour_walks (school_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS tour_walk_steps (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      walk_id INTEGER NOT NULL,
+      tour_request_id INTEGER NOT NULL,
+      checkpoint_key TEXT NOT NULL,
+      checkpoint_label TEXT NOT NULL DEFAULT '',
+      planned_minutes INTEGER NOT NULL DEFAULT 0,
+      completed_at TIMESTAMPTZ NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS tour_walk_steps_walk_checkpoint_unique ON tour_walk_steps (walk_id, checkpoint_key)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS tour_walk_steps_walk_idx ON tour_walk_steps (walk_id)`,
   );
 }
 
@@ -3532,9 +3806,52 @@ export async function ensureStaffPasswordResetsSchema(): Promise<void> {
   );
 }
 
+// PBIS point-balance migration ledger + the import_job_id stamp on
+// pbis_entries (used by the "count as earned" migration path so its rows can
+// be rolled back by job). Additive + idempotent — direct SQL (drizzle-kit
+// push would block on interactive prompts), matching the ensure* boot pattern.
+export async function ensurePbisPointMigrationsSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pbis_point_migrations (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      points INTEGER NOT NULL,
+      source TEXT NOT NULL DEFAULT 'Imported balance',
+      import_job_id INTEGER,
+      created_by_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL,
+      voided_at TEXT
+    )
+  `);
+  // (school_id, student_id) is UNIQUE so the "store balance only" path can
+  // UPSERT one migration row per student (re-import = set balance, idempotent).
+  // Drop the earlier non-unique index if a prior boot created it.
+  await db.execute(
+    sql`DROP INDEX IF EXISTS pbis_point_migrations_school_student_idx`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS pbis_point_migrations_school_student_unique ON pbis_point_migrations (school_id, student_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pbis_point_migrations_import_job_idx ON pbis_point_migrations (import_job_id)`,
+  );
+  await db.execute(
+    sql`ALTER TABLE pbis_entries ADD COLUMN IF NOT EXISTS import_job_id INTEGER`,
+  );
+  // Lets a "count as earned" migration rollback delete exactly the milestone
+  // suppression rows it pre-seeded, keeping the import fully reversible.
+  await db.execute(
+    sql`ALTER TABLE pbis_milestone_emails ADD COLUMN IF NOT EXISTS import_job_id INTEGER`,
+  );
+}
+
 export async function seedFastScoresIfEmpty() {
   await ensureFastScoresSchema();
   await ensureBenchmarkReteachLogSchema();
+  await ensureHeartbeatNoteSchema();
+  await ensureInterventionEntriesSchema();
   await ensureSchoolSettingsFeatureFlagsSchema();
   await ensureAdminHubSchema();
   await ensureTierPresetsSchema();
@@ -3549,8 +3866,10 @@ export async function seedFastScoresIfEmpty() {
   await ensureCaseOutcomeCatalogSchema();
   await ensureAlgebraPlacementOverridesSchema();
   await ensureToursSchema();
+  await ensureTourWalksSchema();
   await ensureDisplayLiveControlSchema();
   await ensureTicketingSchema();
+  await ensurePbisPointMigrationsSchema();
   // FAST history visibility window (Phase 1 of Historical FAST work).
   // Default 3 years, hard-capped 2..5 by the route validator.
   await db.execute(
@@ -7056,6 +7375,59 @@ export async function ensurePickupSchema(): Promise<void> {
     ALTER TABLE school_settings
       ADD COLUMN IF NOT EXISTS pickup_walked_out_display_seconds INTEGER NOT NULL DEFAULT 300
   `);
+
+  // ---- Front-office manual override layer (additive) ---------------------
+  // RosterOne (via ClassLink) is the system of record; these columns let the
+  // office override individual rows. A row is sync-protected (bulk-assign must
+  // never rewrite/deactivate it) when source = 'manual' OR override_reason IS
+  // NOT NULL. expires_at NULL = permanent override; a temporary override stops
+  // working at the curb the moment it passes expiry.
+  await db.execute(sql`
+    ALTER TABLE student_pickup_authorizations
+      ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'sis'
+  `);
+  await db.execute(sql`
+    ALTER TABLE student_pickup_authorizations
+      ADD COLUMN IF NOT EXISTS override_reason TEXT
+  `);
+  await db.execute(sql`
+    ALTER TABLE student_pickup_authorizations
+      ADD COLUMN IF NOT EXISTS override_by INTEGER
+  `);
+  await db.execute(sql`
+    ALTER TABLE student_pickup_authorizations
+      ADD COLUMN IF NOT EXISTS override_at TIMESTAMPTZ
+  `);
+  await db.execute(sql`
+    ALTER TABLE student_pickup_authorizations
+      ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ
+  `);
+  // Find active overrides / expired temporaries quickly for reconciliation.
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_auth_override_active ON student_pickup_authorizations(school_id, active) WHERE override_reason IS NOT NULL OR source = 'manual'`);
+}
+
+// ---------------------------------------------------------------------------
+// ensurePickupOverrideAuditSchema — append-only history of front-office
+// overrides to car-tag / rider / dismissal data (see schema comment in
+// lib/db/src/schema/pickupOverrideAudit.ts). Idempotent (IF NOT EXISTS).
+// ---------------------------------------------------------------------------
+export async function ensurePickupOverrideAuditSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pickup_override_audit (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      authorization_id INTEGER,
+      actor_staff_id INTEGER NOT NULL,
+      actor_display_name TEXT NOT NULL,
+      action TEXT NOT NULL,
+      reason TEXT,
+      detail TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_override_audit_by_school_date ON pickup_override_audit(school_id, created_at)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_override_audit_by_student ON pickup_override_audit(student_id)`);
 }
 
 // ---------------------------------------------------------------------------
@@ -7508,31 +7880,15 @@ export async function ensureFeaturePlansSchema() {
   // (Column adds for schools.plan_id + school_settings.super_feature_ast
   // happen earlier via ensureFeaturePlansColumns, before seedTenancy.)
 
-  // Seed the default "enterprise" plan (everything on, no quotas).
-  // The keys here match FEATURE_KEYS in
-  // artifacts/api-server/src/lib/featureLicensing.ts — keep in sync.
-  const enterpriseFeatures = {
-    familyComm: true,
-    pbis: true,
-    schoolStore: true,
-    accommodations: true,
-    logIntervention: true,
-    requestPullout: true,
-    hallPasses: true,
-    tardyPass: true,
-    mtssPlans: true,
-    behaviorSpecialist: true,
-    issDashboard: true,
-    displays: true,
-    bellSchedule: true,
-    earlyWarning: true,
-    academics: true,
-    dataImports: true,
-    houses: true,
-    parentPortal: true,
-    ast: true,
-    compTime: true,
-  };
+  // Seed the default "enterprise" plan: EVERY feature on, no quotas.
+  // Derived from FEATURE_KEYS (the single source of truth) so the plan can
+  // never silently drift behind newly-added features again — historically
+  // this literal lagged behind FEATURE_KEYS (schoolStoreNotify / eligibility /
+  // compTime were missing), which forced schools to turn those on via
+  // per-school overrides instead of getting them from the plan.
+  const enterpriseFeatures: Record<string, true> = Object.fromEntries(
+    FEATURE_KEYS.map((f) => [f.key, true as const]),
+  );
   await db.execute(sql`
     INSERT INTO plans (key, label, description, features, quotas)
     VALUES (
@@ -7540,6 +7896,69 @@ export async function ensureFeaturePlansSchema() {
       'Enterprise',
       'All PulseEDU features. Default plan assigned to every school on rollout.',
       ${JSON.stringify(enterpriseFeatures)}::jsonb,
+      '{}'::jsonb
+    )
+    ON CONFLICT (key) DO NOTHING
+  `);
+  // Fold any newly-added features into an EXISTING enterprise plan row
+  // (ON CONFLICT DO NOTHING above never updates it). Idempotent: re-writing
+  // the same all-on JSONB every boot is a no-op once it has converged.
+  await db.execute(sql`
+    UPDATE plans
+       SET features = ${JSON.stringify(enterpriseFeatures)}::jsonb,
+           updated_at = NOW()
+     WHERE key = 'enterprise'
+       AND features <> ${JSON.stringify(enterpriseFeatures)}::jsonb
+  `);
+
+  // Seed curated tier plans: "Starter" and "Starter Plus". Unlike the
+  // enterprise plan above, these are STARTING POINTS an admin is expected to
+  // tailor in the Feature Licensing editor — so we only INSERT ... ON CONFLICT
+  // DO NOTHING (seed once) and deliberately do NOT fold/overwrite the features
+  // on later boots. Re-writing them every boot would clobber an admin's edits.
+  //
+  // Starter = day-to-day operations bundle. Bell Schedule is included because
+  // both Tardy Pass (lost-instruction minutes) and the period-aware Hall Pass
+  // queue depend on it; Data Imports is included so a school with no SIS feed
+  // can still load its roster (which Hall Passes / Tardies point at).
+  const starterFeatures: Record<string, true> = {
+    hallPasses: true,
+    tardyPass: true,
+    displays: true,
+    bellSchedule: true,
+    dataImports: true,
+  };
+  // Starter Plus = Starter plus the features that complete its soft
+  // dependencies: PBIS + Houses light up recognition and the signage
+  // house-standings tile; School Store is the PBIS rewards catalog (depends
+  // on PBIS, which is present); Family Communication is the parent-notification
+  // delivery channel; Parent Portal turns on the parent-facing surfaces.
+  const starterPlusFeatures: Record<string, true> = {
+    ...starterFeatures,
+    pbis: true,
+    houses: true,
+    schoolStore: true,
+    familyComm: true,
+    parentPortal: true,
+  };
+  await db.execute(sql`
+    INSERT INTO plans (key, label, description, features, quotas)
+    VALUES (
+      'starter',
+      'Starter',
+      'Core school-operations bundle: Hall Passes, Tardy Pass, Signage, Bell Schedule, and Data Imports.',
+      ${JSON.stringify(starterFeatures)}::jsonb,
+      '{}'::jsonb
+    )
+    ON CONFLICT (key) DO NOTHING
+  `);
+  await db.execute(sql`
+    INSERT INTO plans (key, label, description, features, quotas)
+    VALUES (
+      'starter_plus',
+      'Starter Plus',
+      'Everything in Starter plus PBIS, Houses, Family Communication, and the Parent Portal.',
+      ${JSON.stringify(starterPlusFeatures)}::jsonb,
       '{}'::jsonb
     )
     ON CONFLICT (key) DO NOTHING
@@ -7552,6 +7971,52 @@ export async function ensureFeaturePlansSchema() {
     SET plan_id = (SELECT id FROM plans WHERE key = 'enterprise')
     WHERE plan_id IS NULL
   `);
+
+  // One-shot: now that the enterprise plan carries EVERY feature, any
+  // per-school override that merely forces a plan-provided feature ON (no
+  // upsell, no expiry) is pure redundancy — it was only ever needed because
+  // the plan lagged. Drop those so the admin's "X overrides" count reflects
+  // real deviations again, then reapply licensing so the super_feature_*
+  // booleans are driven by the plan. Force-OFF and expiring/trial overrides
+  // are genuine deviations and are left untouched. Guarded by a marker so we
+  // never fight an admin who later re-adds a redundant override on purpose.
+  const ENTERPRISE_FOLD_MARKER = "enterprise_plan_fold_redundant_overrides_v1";
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS app_one_shot_markers (
+      name text PRIMARY KEY,
+      ran_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  const foldMarker = await db.execute<{ name: string }>(
+    sql`SELECT name FROM app_one_shot_markers WHERE name = ${ENTERPRISE_FOLD_MARKER}`,
+  );
+  if (foldMarker.rows.length === 0) {
+    // Match redundant overrides against the plan's OWN features JSONB
+    // (which we just set all-on) via the jsonb `->>` accessor — avoids
+    // passing a JS array into the sql template, which drizzle expands to a
+    // row tuple that can't be cast to text[].
+    const affected = await db.execute<{ school_id: number }>(sql`
+      DELETE FROM school_feature_overrides sfo
+       USING schools s, plans p
+       WHERE sfo.school_id = s.id
+         AND s.plan_id = p.id
+         AND p.key = 'enterprise'
+         AND sfo.enabled = TRUE
+         AND sfo.show_upsell = FALSE
+         AND sfo.expires_at IS NULL
+         AND COALESCE((p.features ->> sfo.feature_key)::boolean, FALSE) = TRUE
+      RETURNING sfo.school_id
+    `);
+    const schoolIds = Array.from(new Set(affected.rows.map((r) => r.school_id)));
+    for (const sid of schoolIds) {
+      // Re-derive super_feature_* from the (now all-on) plan, then overlay
+      // any surviving overrides. Per-school lock + transaction live inside.
+      await reapplyLicensingToSchool(sid);
+    }
+    await db.execute(
+      sql`INSERT INTO app_one_shot_markers (name) VALUES (${ENTERPRISE_FOLD_MARKER}) ON CONFLICT DO NOTHING`,
+    );
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -7568,6 +8033,92 @@ export async function ensureHallPassPriorityBypassColumn(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE hall_passes ADD COLUMN IF NOT EXISTS priority_bypass BOOLEAN NOT NULL DEFAULT FALSE`,
   );
+}
+
+// -----------------------------------------------------------------------------
+// Hall-pass allowlist overhaul (bulk, school-managed flow).
+//
+// (1) Restroom-area model on `locations`: restroom_area + gender let the boys +
+//     girls variants of one part of the building be assigned together.
+// (2) school_wide_default flags facilities (office/clinic/nurse) granted to
+//     EVERY teacher automatically — unioned on top of the per-teacher list.
+// (3) teacher_destination_allowlist gains a canonical, SIS-safe staff_id (the
+//     allowlist used to be keyed by display name, which orphaned on rename).
+//     We backfill staff_id from an UNAMBIGUOUS within-school name match and add
+//     a partial unique index so future writes upsert cleanly. Ambiguous
+//     duplicate names are left null (the email-based CSV importer disambiguates
+//     them); reads fall back to staff_name for those legacy rows.
+// All additive + idempotent — safe on every boot.
+// -----------------------------------------------------------------------------
+export async function ensureHallPassAllowlistSchema(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE locations ADD COLUMN IF NOT EXISTS restroom_area TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE locations ADD COLUMN IF NOT EXISTS gender TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE locations ADD COLUMN IF NOT EXISTS school_wide_default BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE teacher_destination_allowlist ADD COLUMN IF NOT EXISTS staff_id INTEGER`,
+  );
+  // Backfill staff_id only where the display name resolves to EXACTLY ONE
+  // active staff row in the same school. Ambiguous names stay null on purpose.
+  await db.execute(sql`
+    UPDATE teacher_destination_allowlist tda
+       SET staff_id = s.id
+      FROM staff s
+     WHERE s.school_id = tda.school_id
+       AND s.display_name = tda.staff_name
+       AND tda.staff_id IS NULL
+       AND (
+         SELECT count(*) FROM staff s2
+          WHERE s2.school_id = tda.school_id
+            AND s2.display_name = tda.staff_name
+       ) = 1
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS tda_school_staffid_dest_unique ON teacher_destination_allowlist (school_id, staff_id, destination_location_id) WHERE staff_id IS NOT NULL`,
+  );
+  // Bulk CSV round-trip rollback ledger. Each commit captures a per-teacher
+  // "before" snapshot (the destination location ids the teacher had) so a
+  // single click can restore the exact prior allowlist for every teacher the
+  // upload touched. prior_json shape: { [staffName]: { staffId, locationIds } }.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS teacher_allowlist_import_batches (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      created_by INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      applied_count INTEGER NOT NULL DEFAULT 0,
+      rolled_back_at TIMESTAMPTZ,
+      prior_json JSONB NOT NULL DEFAULT '{}'::jsonb
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS tda_import_batches_school_idx
+      ON teacher_allowlist_import_batches (school_id, created_at DESC)
+  `);
+  // Zone rules (Phase 3): map an inclusive room-NUMBER range to a restroom area
+  // name. Drives template pre-fill (suggested area for each teacher's room) and
+  // one-click auto-assign-all. Area name is a soft reference (resolved against
+  // locations.restroom_area at apply time), so no FK.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS teacher_allowlist_zone_rules (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      room_from INTEGER NOT NULL,
+      room_to INTEGER NOT NULL,
+      restroom_area TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS tda_zone_rules_school_idx
+      ON teacher_allowlist_zone_rules (school_id, sort_order)
+  `);
 }
 
 // -----------------------------------------------------------------------------
@@ -9100,5 +9651,421 @@ export async function ensureSchoolGradeSchema(): Promise<void> {
   `);
   await db.execute(
     sql`CREATE UNIQUE INDEX IF NOT EXISTS school_grade_surveys_school_year_survey_unique ON school_grade_surveys (school_id, school_year, survey)`,
+  );
+}
+
+// =============================================================================
+// Eligibility Hub schema (additive, idempotent). 7 tables + school_settings
+// threshold/semester columns + staff.is_athletic_director. Per project
+// convention we use CREATE TABLE / ALTER TABLE … IF NOT EXISTS at boot rather
+// than drizzle-kit push (which blocks on interactive rename prompts).
+// =============================================================================
+export async function ensureEligibilitySchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS eligibility_activities (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'athletics',
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_by_staff_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_activities_school_idx ON eligibility_activities (school_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS eligibility_activity_members (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      activity_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      jersey_number TEXT,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      added_by_staff_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_members_school_idx ON eligibility_activity_members (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_members_activity_idx ON eligibility_activity_members (activity_id)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS eligibility_members_activity_student_uq ON eligibility_activity_members (activity_id, student_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS eligibility_activity_coaches (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      activity_id INTEGER NOT NULL,
+      staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_coaches_school_idx ON eligibility_activity_coaches (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_coaches_activity_idx ON eligibility_activity_coaches (activity_id)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS eligibility_coaches_activity_staff_uq ON eligibility_activity_coaches (activity_id, staff_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS eligibility_absences (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      semester_label TEXT NOT NULL,
+      absence_total INTEGER NOT NULL DEFAULT 0,
+      days_tardy INTEGER NOT NULL DEFAULT 0,
+      last_upload_id INTEGER,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_absences_school_idx ON eligibility_absences (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS eligibility_absences_student_semester_uq ON eligibility_absences (school_id, student_id, semester_label)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS eligibility_parent_notes (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      semester_label TEXT NOT NULL,
+      reason TEXT,
+      note_date TEXT,
+      entered_by_staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_parent_notes_school_idx ON eligibility_parent_notes (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_parent_notes_student_semester_idx ON eligibility_parent_notes (school_id, student_id, semester_label)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS eligibility_uploads (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      semester_label TEXT NOT NULL,
+      uploaded_by_staff_id INTEGER NOT NULL,
+      filename TEXT,
+      row_count INTEGER NOT NULL DEFAULT 0,
+      matched_count INTEGER NOT NULL DEFAULT 0,
+      unmatched_count INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_uploads_school_idx ON eligibility_uploads (school_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS eligibility_notifications (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      semester_label TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      audience TEXT NOT NULL,
+      recipient TEXT,
+      status TEXT NOT NULL,
+      counted_absences INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_notifications_school_idx ON eligibility_notifications (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS eligibility_notifications_student_idx ON eligibility_notifications (school_id, student_id)`,
+  );
+
+  // school_settings threshold + semester columns.
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS eligibility_ineligibility_threshold INTEGER NOT NULL DEFAULT 10`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS eligibility_warning_window_days INTEGER NOT NULL DEFAULT 4`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS eligibility_tardy_to_absence_ratio INTEGER NOT NULL DEFAULT 0`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS eligibility_parent_note_cap INTEGER NOT NULL DEFAULT 5`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS eligibility_district_ad_notify BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS eligibility_semester_label TEXT NOT NULL DEFAULT ''`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS eligibility_semester_start TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS eligibility_semester_end TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS feature_eligibility BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS super_feature_eligibility BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
+
+  // staff Athletic Director role flag.
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS is_athletic_director BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+}
+
+// =============================================================================
+// Eligibility Hub demo seed (Parrott / school 1 only).
+//
+// Creates 5 activities with realistic roster sizes, jersey numbers for sports
+// (blank for band/chorus), and per-student absence/tardy totals sampled from
+// the district's fake attendance histogram (Attendance_25-26). ~25% of each
+// roster get 0 absences; the rest are drawn from the histogram. Students may
+// repeat across teams. Current semester = "Spring 2026" (includes today,
+// June 2026). Fully idempotent: skipped once any activity exists for school 1.
+// =============================================================================
+
+// Absence + tardy histograms from the district fake attendance file
+// (value -> count). Used to weight the random sample so the demo data mirrors
+// a real attendance distribution rather than a flat random spread.
+const ELIG_ABSENCE_HIST: Record<number, number> = {
+  0: 12, 1: 12, 2: 9, 3: 13, 4: 18, 5: 13, 6: 10, 7: 16, 8: 18, 9: 20, 10: 30,
+  11: 21, 12: 14, 13: 23, 14: 16, 15: 12, 16: 12, 17: 12, 18: 14, 19: 13,
+  20: 5, 21: 11, 22: 12, 23: 6, 24: 8, 25: 4, 26: 12, 27: 7, 28: 3, 29: 8,
+  30: 9, 31: 8, 32: 2, 33: 5, 34: 4, 35: 8, 36: 2, 38: 3, 39: 2, 40: 1, 41: 1,
+  42: 3, 43: 1, 45: 1, 46: 2, 47: 1, 48: 1, 49: 1, 50: 1, 52: 2, 53: 1, 55: 1,
+  56: 2, 57: 1, 60: 1, 62: 2, 63: 1, 65: 1, 85: 1, 91: 1,
+};
+const ELIG_TARDY_HIST: Record<number, number> = {
+  0: 151, 1: 80, 2: 45, 3: 36, 4: 20, 5: 14, 6: 13, 7: 6, 8: 7, 9: 9, 10: 13,
+  11: 3, 12: 5, 13: 7, 14: 5, 15: 2, 16: 5, 17: 3, 18: 4, 19: 3, 20: 2, 21: 1,
+  22: 1, 23: 1, 24: 2, 27: 3, 28: 3, 30: 1, 32: 1, 33: 1, 34: 1, 35: 1, 39: 2,
+  45: 1, 59: 1, 67: 1,
+};
+
+function buildCumulative(
+  hist: Record<number, number>,
+): { values: number[]; cum: number[]; total: number } {
+  const values = Object.keys(hist)
+    .map(Number)
+    .sort((a, b) => a - b);
+  const cum: number[] = [];
+  let total = 0;
+  for (const v of values) {
+    total += hist[v];
+    cum.push(total);
+  }
+  return { values, cum, total };
+}
+
+function sampleFromHist(c: {
+  values: number[];
+  cum: number[];
+  total: number;
+}): number {
+  const r = Math.random() * c.total;
+  for (let i = 0; i < c.cum.length; i++) {
+    if (r < c.cum[i]) return c.values[i];
+  }
+  return c.values[c.values.length - 1];
+}
+
+function shuffleInPlace<T>(arr: T[]): T[] {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+export async function seedEligibilityForSchool1(): Promise<void> {
+  const SCHOOL_ID = 1;
+
+  // Idempotent: skip once any activity exists for this school.
+  const [existing] = await db
+    .select({ id: eligibilityActivitiesTable.id })
+    .from(eligibilityActivitiesTable)
+    .where(eq(eligibilityActivitiesTable.schoolId, SCHOOL_ID))
+    .limit(1);
+  if (existing) return;
+
+  // Confirm school 1 exists + has students.
+  const students = await db
+    .select({ studentId: studentsTable.studentId })
+    .from(studentsTable)
+    .where(eq(studentsTable.schoolId, SCHOOL_ID));
+  if (students.length === 0) {
+    logger.info("[seed] eligibility: no students for school 1, skipping");
+    return;
+  }
+  const pool = students.map((s) => s.studentId);
+
+  const SEMESTER = "Spring 2026";
+
+  // Current-semester settings (window includes June 2026 = "today").
+  await db
+    .update(schoolSettingsTable)
+    .set({
+      eligibilitySemesterLabel: SEMESTER,
+      eligibilitySemesterStart: "2026-01-06",
+      eligibilitySemesterEnd: "2026-06-30",
+    })
+    .where(eq(schoolSettingsTable.schoolId, SCHOOL_ID));
+
+  const teams: {
+    name: string;
+    category: string;
+    size: number;
+    jerseys: boolean;
+  }[] = [
+    { name: "Football", category: "athletics", size: 51, jerseys: true },
+    { name: "Volleyball", category: "athletics", size: 16, jerseys: true },
+    { name: "Band", category: "activity", size: 38, jerseys: false },
+    { name: "Chorus", category: "activity", size: 23, jerseys: false },
+    {
+      name: "Boys Varsity Basketball",
+      category: "athletics",
+      size: 15,
+      jerseys: true,
+    },
+  ];
+
+  const absCum = buildCumulative(ELIG_ABSENCE_HIST);
+  const tardyCum = buildCumulative(ELIG_TARDY_HIST);
+
+  // Track which unique students end up rostered (for the absence seed) and
+  // their per-student 0-absence flag (~25% of each roster gets a clean slate).
+  const rostered = new Set<string>();
+  const zeroAbsence = new Set<string>();
+
+  for (const team of teams) {
+    const [activity] = await db
+      .insert(eligibilityActivitiesTable)
+      .values({
+        schoolId: SCHOOL_ID,
+        name: team.name,
+        category: team.category,
+      })
+      .returning();
+
+    // Sample `size` distinct students for this team (students may repeat
+    // across teams, but not within a team). If the pool is smaller than the
+    // requested size, cap at the pool.
+    const picks = shuffleInPlace([...pool]).slice(
+      0,
+      Math.min(team.size, pool.length),
+    );
+    // ~25% of this roster get 0 absences.
+    const zeroCount = Math.round(picks.length * 0.25);
+    const zeroPicks = new Set(picks.slice(0, zeroCount));
+
+    // Assign jersey numbers (unique within the team) for sports.
+    const usedJerseys = new Set<number>();
+    let jerseyCounter = 0;
+    for (const sid of picks) {
+      let jersey: string | null = null;
+      if (team.jerseys) {
+        let n = 0;
+        // Pull a random 0-99 jersey, fall back to a sequential counter.
+        for (let tries = 0; tries < 50; tries++) {
+          n = Math.floor(Math.random() * 100);
+          if (!usedJerseys.has(n)) break;
+        }
+        if (usedJerseys.has(n)) {
+          while (usedJerseys.has(jerseyCounter)) jerseyCounter++;
+          n = jerseyCounter;
+        }
+        usedJerseys.add(n);
+        jersey = String(n);
+      }
+      await db
+        .insert(eligibilityActivityMembersTable)
+        .values({
+          schoolId: SCHOOL_ID,
+          activityId: activity.id,
+          studentId: sid,
+          jerseyNumber: jersey,
+        })
+        .onConflictDoNothing();
+
+      rostered.add(sid);
+      if (zeroPicks.has(sid)) zeroAbsence.add(sid);
+    }
+
+    // Assign up to 2 coaches per team from active staff (round-robin).
+    const coaches = await db
+      .select({ id: staffTable.id })
+      .from(staffTable)
+      .where(and(eq(staffTable.schoolId, SCHOOL_ID), eq(staffTable.active, true)))
+      .limit(40);
+    if (coaches.length > 0) {
+      const c1 = coaches[activity.id % coaches.length];
+      await db
+        .insert(eligibilityActivityCoachesTable)
+        .values({ schoolId: SCHOOL_ID, activityId: activity.id, staffId: c1.id })
+        .onConflictDoNothing();
+    }
+  }
+
+  // Seed per-student absence/tardy totals for everyone rostered. A student on
+  // multiple teams gets ONE row (per student/semester). The 0-absence flag
+  // wins if the student was a zero-pick on any team.
+  for (const sid of rostered) {
+    const absenceTotal = zeroAbsence.has(sid) ? 0 : sampleFromHist(absCum);
+    const daysTardy = sampleFromHist(tardyCum);
+    await db
+      .insert(eligibilityAbsencesTable)
+      .values({
+        schoolId: SCHOOL_ID,
+        studentId: sid,
+        semesterLabel: SEMESTER,
+        absenceTotal,
+        daysTardy,
+      })
+      .onConflictDoUpdate({
+        target: [
+          eligibilityAbsencesTable.schoolId,
+          eligibilityAbsencesTable.studentId,
+          eligibilityAbsencesTable.semesterLabel,
+        ],
+        set: { absenceTotal, daysTardy },
+      });
+  }
+
+  // Flag one admin as Athletic Director so the AD-gated surfaces have an owner.
+  const [admin] = await db
+    .select({ id: staffTable.id })
+    .from(staffTable)
+    .where(and(eq(staffTable.schoolId, SCHOOL_ID), eq(staffTable.isAdmin, true)))
+    .limit(1);
+  if (admin) {
+    await db
+      .update(staffTable)
+      .set({ isAthleticDirector: true })
+      .where(eq(staffTable.id, admin.id));
+  }
+
+  logger.info(
+    { rostered: rostered.size, teams: teams.length },
+    "[seed] eligibility demo seeded for school 1",
   );
 }

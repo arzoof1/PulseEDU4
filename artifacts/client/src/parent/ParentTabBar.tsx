@@ -4,14 +4,21 @@
 // to the bottom with safe-area padding so it sits above the home indicator
 // on notched phones.
 import type { LucideIcon } from "lucide-react";
-import { Home, Star, BookOpen, Mail, MoreHorizontal } from "lucide-react";
+import { Home, Star, BookOpen, Gift, Mail, MoreHorizontal } from "lucide-react";
 
-export type ParentTab = "home" | "behavior" | "academics" | "messages" | "more";
+export type ParentTab =
+  | "home"
+  | "behavior"
+  | "academics"
+  | "rewards"
+  | "messages"
+  | "more";
 
-const TABS: Array<{ id: ParentTab; label: string; icon: LucideIcon }> = [
+const ALL_TABS: Array<{ id: ParentTab; label: string; icon: LucideIcon }> = [
   { id: "home", label: "Home", icon: Home },
   { id: "behavior", label: "Behavior", icon: Star },
   { id: "academics", label: "Academics", icon: BookOpen },
+  { id: "rewards", label: "Rewards", icon: Gift },
   { id: "messages", label: "Messages", icon: Mail },
   { id: "more", label: "More", icon: MoreHorizontal },
 ];
@@ -21,19 +28,28 @@ export default function ParentTabBar({
   onChange,
   unreadMessages = 0,
   newAcademics = 0,
+  showRewards = false,
 }: {
   active: ParentTab;
   onChange: (tab: ParentTab) => void;
   unreadMessages?: number;
   newAcademics?: number;
+  showRewards?: boolean;
 }) {
+  // The Rewards tab only appears when the school licenses the School Store.
+  // Tailwind needs the full class literal, so we branch on the two possible
+  // column counts rather than interpolating.
+  const TABS = showRewards
+    ? ALL_TABS
+    : ALL_TABS.filter((t) => t.id !== "rewards");
+  const gridCols = showRewards ? "grid-cols-6" : "grid-cols-5";
   return (
     <nav
       className="fixed bottom-0 inset-x-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       aria-label="Parent portal sections"
     >
-      <div className="max-w-2xl mx-auto grid grid-cols-5">
+      <div className={"max-w-2xl mx-auto grid " + gridCols}>
         {TABS.map((t) => {
           const isActive = t.id === active;
           const Icon = t.icon;

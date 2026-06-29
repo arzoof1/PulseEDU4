@@ -43,6 +43,12 @@ export type TourCheckpoint = {
   location: string;
   talkingPoints: string;
   minutes: number;
+  // When true this stop is on EVERY tour (a "school highlight") regardless of
+  // what the family ticked on the public form. It is not offered as a family
+  // checkbox; instead the public form lists it as "always included" and the
+  // staff Tour Roadmap merges it in with a "School highlight" badge. Optional /
+  // defaults to false so legacy rows (no field) behave as before.
+  alwaysInclude?: boolean;
 };
 
 // A machine-translated cache of the admin-authored brag-page content for one
@@ -139,6 +145,11 @@ export const TOUR_STATUSES = [
   "contacted",
   "scheduled",
   "toured",
+  // "Still deciding" — a LIVE holding stage (Phase 2) between a completed tour
+  // and a final close. A lead here has a `follow_up_due_at` clock; the
+  // background escalation job nudges the owner when it lapses. Distinct from
+  // the terminal `deciding` OUTCOME on legacy rows (kept for back-compat).
+  "deciding",
   "closed",
 ] as const;
 export type TourStatus = (typeof TOUR_STATUSES)[number];
@@ -176,6 +187,41 @@ export const tourRequestsTable = pgTable(
     // Set the first time a staff member logs a "contact" event — powers the
     // response-time clock + the >24h escalation flag.
     firstContactedAt: timestamp("first_contacted_at", { withTimezone: true }),
+    // Phase 2 lead-rescue lifecycle.
+    //   followUpDueAt — set when a lead is moved to "Still deciding"; the next
+    //     follow-up is due at this time. Drives the board countdown + the
+    //     deciding-overdue branch of the escalation job. Logging a contact on a
+    //     deciding lead pushes it forward and clears the escalation stamp.
+    //   closedAt — stamped when the lead moves to 'closed'; drives auto-archive.
+    //   lastEscalatedAt / lastEscalatedReason — idempotency for the background
+    //     escalation job: it re-nudges at most once per re-nudge window and
+    //     immediately when the reason changes (e.g. new→scheduled→deciding).
+    followUpDueAt: timestamp("follow_up_due_at", { withTimezone: true }),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    lastEscalatedAt: timestamp("last_escalated_at", { withTimezone: true }),
+    lastEscalatedReason: text("last_escalated_reason"),
+    // Phase 3 "close the loop with families" — idempotency stamps for the
+    // automated FAMILY-facing nurture cadence (separate from the staff
+    // escalation stamps above). Each is set only after a successful send so a
+    // transient email failure is retried on the next sweep.
+    //   familyReminderSentAt    — pre-tour reminder (day before tourScheduledAt)
+    //   familyThankYouSentAt    — post-tour thank-you + survey link (on "toured")
+    //   familyDecidingNudgeSentAt — gentle "still deciding" nudge; cleared
+    //     whenever the deciding follow-up clock is (re)armed so a fresh
+    //     deciding cycle can nudge again.
+    //   familyWelcomeSentAt     — enrollment welcome (on close w/ outcome enrolled)
+    familyReminderSentAt: timestamp("family_reminder_sent_at", {
+      withTimezone: true,
+    }),
+    familyThankYouSentAt: timestamp("family_thank_you_sent_at", {
+      withTimezone: true,
+    }),
+    familyDecidingNudgeSentAt: timestamp("family_deciding_nudge_sent_at", {
+      withTimezone: true,
+    }),
+    familyWelcomeSentAt: timestamp("family_welcome_sent_at", {
+      withTimezone: true,
+    }),
     // Opaque token for the post-tour survey link (printed as a QR on the
     // leave-behind). Unique across all schools so the public survey route
     // can resolve the school from the token alone.
@@ -206,6 +252,9 @@ export const TOUR_EVENT_TYPES = [
   "scheduled",
   "outcome",
   "survey_submitted",
+  // System event written by the background escalation job when it emails the
+  // owner about an overdue lead (first-contact / tour-not-logged / follow-up).
+  "escalation",
 ] as const;
 export type TourEventType = (typeof TOUR_EVENT_TYPES)[number];
 

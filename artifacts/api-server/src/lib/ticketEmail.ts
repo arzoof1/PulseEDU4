@@ -10,6 +10,7 @@ import { and, eq } from "drizzle-orm";
 import QRCode from "qrcode";
 import { getUncachableResendClient } from "./resendClient.js";
 import { formatFromHeader } from "./emailFrom.js";
+import { isParentNotifyEnabled } from "./parentNotify.js";
 import { renderTicketsPdf } from "./ticketPdf.js";
 import {
   TICKET_RESPONSIBILITY_HEADLINE,
@@ -57,6 +58,15 @@ export async function sendTicketEmailForGrant(
     .where(eq(ticketGrantsTable.id, grantId));
   if (!grant) {
     return { status: "skipped", emailTo: null, errorMsg: "Grant not found" };
+  }
+
+  // Parent Notifications panel — master switch for event-ticket emails.
+  if (!(await isParentNotifyEnabled(grant.schoolId, "notifyParentEventTickets"))) {
+    return {
+      status: "skipped",
+      emailTo: null,
+      errorMsg: "Parent ticket notifications disabled for this school",
+    };
   }
 
   const [ev] = await db

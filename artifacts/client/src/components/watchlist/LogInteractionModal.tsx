@@ -4,6 +4,7 @@ import { authFetch } from "../../lib/authToken";
 import { formatCaseNumber } from "../../lib/caseNumber";
 import { INTERACTION_KINDS, ROLE_META, WL_COLORS, type Role } from "./colors";
 import MentionTextarea from "./MentionTextarea";
+import StudentPicker from "../StudentPicker";
 
 interface StudentHit {
   studentId: string;
@@ -91,14 +92,8 @@ export default function LogInteractionModal({
       notes: "",
     })),
   );
-  const [search, setSearch] = useState("");
-  const [hits, setHits] = useState<StudentHit[]>([]);
-  const [searching, setSearching] = useState(false);
   // Witness author — the student giving the statement. Required.
   const [witness, setWitness] = useState<StudentHit | null>(null);
-  const [witnessSearch, setWitnessSearch] = useState("");
-  const [witnessHits, setWitnessHits] = useState<StudentHit[]>([]);
-  const [witnessSearching, setWitnessSearching] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [quickEntries, setQuickEntries] = useState<QuickEntry[]>([]);
@@ -140,65 +135,20 @@ export default function LogInteractionModal({
     setSelectedQuickEntryId(id);
   };
 
-  useEffect(() => {
-    if (search.trim().length < 2) {
-      setHits([]);
-      return;
-    }
-    let alive = true;
-    setSearching(true);
-    const t = setTimeout(async () => {
-      try {
-        const r = await authFetch(
-          `/api/student-finder/search?q=${encodeURIComponent(search.trim())}`,
-        );
-        if (!alive || !r.ok) return;
-        const d = (await r.json()) as {
-          students?: StudentHit[];
-          hits?: StudentHit[];
-          results?: StudentHit[];
-        };
-        setHits(d.students ?? d.hits ?? d.results ?? []);
-      } finally {
-        if (alive) setSearching(false);
-      }
-    }, 250);
-    return () => {
-      alive = false;
-      clearTimeout(t);
+  // Shared student search — same endpoint, minChars, and 250ms debounce
+  // as before, now driven by StudentPicker's async mode.
+  const searchStudents = async (q: string): Promise<StudentHit[]> => {
+    const r = await authFetch(
+      `/api/student-finder/search?q=${encodeURIComponent(q)}`,
+    );
+    if (!r.ok) throw new Error("Search failed");
+    const d = (await r.json()) as {
+      students?: StudentHit[];
+      hits?: StudentHit[];
+      results?: StudentHit[];
     };
-  }, [search]);
-
-  // Mirror of the participant search, scoped to picking the witness
-  // author. Kept separate so the two pickers don't share dropdown state.
-  useEffect(() => {
-    if (witnessSearch.trim().length < 2) {
-      setWitnessHits([]);
-      return;
-    }
-    let alive = true;
-    setWitnessSearching(true);
-    const t = setTimeout(async () => {
-      try {
-        const r = await authFetch(
-          `/api/student-finder/search?q=${encodeURIComponent(witnessSearch.trim())}`,
-        );
-        if (!alive || !r.ok) return;
-        const d = (await r.json()) as {
-          students?: StudentHit[];
-          hits?: StudentHit[];
-          results?: StudentHit[];
-        };
-        setWitnessHits(d.students ?? d.hits ?? d.results ?? []);
-      } finally {
-        if (alive) setWitnessSearching(false);
-      }
-    }, 250);
-    return () => {
-      alive = false;
-      clearTimeout(t);
-    };
-  }, [witnessSearch]);
+    return d.students ?? d.hits ?? d.results ?? [];
+  };
 
   const addParticipant = (h: StudentHit) => {
     if (participants.some((p) => p.studentId === h.studentId)) return;
@@ -213,8 +163,6 @@ export default function LogInteractionModal({
         notes: "",
       },
     ]);
-    setSearch("");
-    setHits([]);
   };
 
   const setRole = (sid: string, role: Role) =>
@@ -343,8 +291,6 @@ export default function LogInteractionModal({
                   type="button"
                   onClick={() => {
                     setWitness(null);
-                    setWitnessSearch("");
-                    setWitnessHits([]);
                   }}
                   className="text-[11px] font-semibold"
                   style={{ color: WL_COLORS.alert }}
@@ -353,50 +299,22 @@ export default function LogInteractionModal({
                 </button>
               </div>
             ) : (
-              <div className="relative">
-                <input
-                  value={witnessSearch}
-                  onChange={(e) => setWitnessSearch(e.target.value)}
-                  placeholder="Search students by name or ID…"
-                  className="w-full rounded-md border px-2 py-1.5 text-sm"
-                  style={{ borderColor: WL_COLORS.line, background: WL_COLORS.bg }}
-                />
-                {witnessHits.length > 0 && (
-                  <div
-                    className="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded-md border shadow-md"
-                    style={{ borderColor: WL_COLORS.line, background: WL_COLORS.panel }}
-                  >
-                    {witnessHits.map((h) => (
-                      <button
-                        key={h.studentId}
-                        type="button"
-                        onClick={() => {
-                          setWitness(h);
-                          setWitnessSearch("");
-                          setWitnessHits([]);
-                        }}
-                        className="block w-full px-3 py-1.5 text-left text-sm hover:bg-[--hov]"
-                        style={
-                          {
-                            ["--hov" as never]: WL_COLORS.bg,
-                            color: WL_COLORS.ink,
-                          } as React.CSSProperties
-                        }
-                      >
-                        {h.firstName} {h.lastName}{" "}
-                        <span className="text-[11px]" style={{ color: WL_COLORS.inkSoft }}>
-                          · Gr {h.grade ?? "?"} · {h.localSisId ?? "—"}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {witnessSearching && witnessSearch.length >= 2 && witnessHits.length === 0 && (
-                  <div className="mt-1 text-[11px]" style={{ color: WL_COLORS.inkSoft }}>
-                    Searching…
-                  </div>
-                )}
-              </div>
+              <StudentPicker
+                mode="async"
+                fetcher={searchStudents}
+                debounceMs={250}
+                minChars={2}
+                onSelect={(h) => setWitness(h)}
+                getKey={(h) => h.studentId}
+                getPrimary={(h) => `${h.firstName} ${h.lastName}`}
+                renderMeta={(h) =>
+                  `· Gr ${h.grade ?? "?"} · ${h.localSisId ?? "—"}`
+                }
+                placeholder="Search students by name or ID…"
+                clearable={false}
+                minWidth="100%"
+                style={{ display: "block" }}
+              />
             )}
           </div>
 
@@ -605,46 +523,20 @@ export default function LogInteractionModal({
                 (add as many as needed — search, click, repeat)
               </span>
             </div>
-            <div className="relative">
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search students by name or ID…"
-                className="w-full rounded-md border px-2 py-1.5 text-sm"
-                style={{ borderColor: WL_COLORS.line, background: WL_COLORS.bg }}
-              />
-              {hits.length > 0 && (
-                <div
-                  className="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded-md border shadow-md"
-                  style={{ borderColor: WL_COLORS.line, background: WL_COLORS.panel }}
-                >
-                  {hits.map((h) => (
-                    <button
-                      key={h.studentId}
-                      type="button"
-                      onClick={() => addParticipant(h)}
-                      className="block w-full px-3 py-1.5 text-left text-sm hover:bg-[--hov]"
-                      style={
-                        {
-                          ["--hov" as never]: WL_COLORS.bg,
-                          color: WL_COLORS.ink,
-                        } as React.CSSProperties
-                      }
-                    >
-                      {h.firstName} {h.lastName}{" "}
-                      <span className="text-[11px]" style={{ color: WL_COLORS.inkSoft }}>
-                        · Gr {h.grade ?? "?"} · {h.localSisId ?? "—"}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-              {searching && search.length >= 2 && hits.length === 0 && (
-                <div className="mt-1 text-[11px]" style={{ color: WL_COLORS.inkSoft }}>
-                  Searching…
-                </div>
-              )}
-            </div>
+            <StudentPicker
+              mode="async"
+              fetcher={searchStudents}
+              debounceMs={250}
+              minChars={2}
+              onSelect={(h) => addParticipant(h)}
+              getKey={(h) => h.studentId}
+              getPrimary={(h) => `${h.firstName} ${h.lastName}`}
+              renderMeta={(h) => `· Gr ${h.grade ?? "?"} · ${h.localSisId ?? "—"}`}
+              placeholder="Search students by name or ID…"
+              clearable={false}
+              minWidth="100%"
+              style={{ display: "block" }}
+            />
 
             {participants.length > 0 && (
               <div className="mt-2 space-y-2">

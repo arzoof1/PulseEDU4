@@ -37,6 +37,33 @@ type AuthRow = {
   active: boolean;
   contactSlot: number | null;
   parentDisplayName: string | null;
+  // Manual-override metadata. `source` is 'sis' | 'portal' | 'manual'; a row is
+  // office-owned (and protected from the RosterOne sync) when source==='manual'
+  // OR it carries an overrideReason. expiresAt non-null = temporary override.
+  source?: string | null;
+  overrideReason?: string | null;
+  overrideAt?: string | null;
+  expiresAt?: string | null;
+};
+
+// One active office override, from GET /pickup/overrides/reconciliation.
+type OverrideRow = {
+  id: number;
+  studentDbId: number;
+  localSisId: string | null;
+  studentName: string;
+  grade: number | null;
+  pickupNumber: string;
+  guardianLabel: string;
+  restricted: boolean;
+  source: string;
+  reason: string | null;
+  overrideByName: string | null;
+  overrideAt: string | null;
+  expiresAt: string | null;
+  temporary: boolean;
+  expired: boolean;
+  sisMayHaveContact: boolean;
 };
 
 // The /api/students search returns the full student row. We only read
@@ -86,6 +113,52 @@ const inputStyle: CSSProperties = {
   minWidth: 180,
 };
 
+// Override chips shown next to a guardian label / in the reconciliation tile.
+const officeBadge: CSSProperties = {
+  fontSize: 10,
+  fontWeight: 700,
+  textTransform: "uppercase",
+  letterSpacing: 0.4,
+  padding: "1px 6px",
+  borderRadius: 999,
+  background: "#eef2ff",
+  color: "#3730a3",
+  border: "1px solid #c7d2fe",
+  maxWidth: 220,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+const tempChip: CSSProperties = {
+  fontSize: 10,
+  fontWeight: 700,
+  padding: "1px 6px",
+  borderRadius: 999,
+  background: "#fef3c7",
+  color: "#92400e",
+  border: "1px solid #fde68a",
+};
+const expiredChip: CSSProperties = {
+  fontSize: 10,
+  fontWeight: 700,
+  padding: "1px 6px",
+  borderRadius: 999,
+  background: "#fee2e2",
+  color: "#991b1b",
+  border: "1px solid #fecaca",
+};
+const disagreeChip: CSSProperties = {
+  fontSize: 10,
+  fontWeight: 700,
+  textTransform: "uppercase",
+  letterSpacing: 0.4,
+  padding: "1px 6px",
+  borderRadius: 999,
+  background: "#fff7ed",
+  color: "#9a3412",
+  border: "1px solid #fed7aa",
+};
+
 const primaryBtn: CSSProperties = {
   padding: "8px 14px",
   borderRadius: 8,
@@ -116,6 +189,53 @@ const smallBtn: CSSProperties = {
   border: "1px solid var(--border, #d1d5db)",
   fontSize: 13,
   cursor: "pointer",
+};
+
+// Two-step danger confirmation overlay. We deliberately do NOT use
+// window.confirm here: the Replit preview iframe silently suppresses native
+// dialogs, so a confirm() would no-op and the destructive action would fire
+// with no warning at all. These inline modals always render.
+const modalOverlay: CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.5)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 1000,
+  padding: 16,
+};
+
+const modalCard: CSSProperties = {
+  background: "var(--surface, #fff)",
+  color: "var(--text, #111827)",
+  borderRadius: 12,
+  padding: 20,
+  maxWidth: 520,
+  width: "100%",
+  boxShadow: "0 20px 50px rgba(0,0,0,0.3)",
+  maxHeight: "90vh",
+  overflowY: "auto",
+};
+
+const dangerBtn: CSSProperties = {
+  padding: "8px 14px",
+  borderRadius: 8,
+  background: "#dc2626",
+  color: "#fff",
+  border: "none",
+  fontSize: 14,
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const ackRow: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  alignItems: "flex-start",
+  fontSize: 14,
+  margin: "12px 0",
+  color: "var(--text, #111827)",
 };
 
 const tableStyle: CSSProperties = {
@@ -161,12 +281,50 @@ export default function PickupTagsPanel() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkResult, setBulkResult] = useState<string | null>(null);
 
+  // Two-step gate for the school-wide assign (the high-blast-radius action):
+  // an "I understand" checkbox AND a typed-word confirmation must both pass
+  // before the destructive button enables.
+  const [confirmBulk, setConfirmBulk] = useState(false);
+  const [bulkAck, setBulkAck] = useState(false);
+  const [bulkType, setBulkType] = useState("");
+
+  // Two-step gate for the per-tag reprint/reissue (invalidates a family's
+  // distributed card): an "I understand" checkbox plus an explicit confirm.
+  const [confirmReissue, setConfirmReissue] = useState<AuthRow | null>(null);
+  const [reissueAck, setReissueAck] = useState(false);
+
   // Manual issue form (for the looked-up student) — covers the edge case
   // of a student with no SIS contact who still needs an extra number.
   const [issueGuardian, setIssueGuardian] = useState("");
   const [issueNumber, setIssueNumber] = useState("");
   const [issueRestricted, setIssueRestricted] = useState(false);
   const [issueBusy, setIssueBusy] = useState(false);
+  // Issue-form override fields. A hand-issued tag is always a manual override,
+  // so the reason is required by the server. Temporary = expiry set.
+  const [issueReason, setIssueReason] = useState("");
+  const [issueTemporary, setIssueTemporary] = useState(false);
+  const [issueExpiresAt, setIssueExpiresAt] = useState("");
+
+  // Reason modal for restrict / unrestrict / deactivate / set-expiry actions.
+  // Inline reason capture — the preview iframe blocks window.prompt, so we
+  // never use a native dialog.
+  const [reasonModal, setReasonModal] = useState<{
+    auth: AuthRow;
+    action: "restrict" | "unrestrict" | "deactivate";
+    patch: { restrictedFrom?: boolean; active?: boolean };
+    title: string;
+  } | null>(null);
+  const [reasonText, setReasonText] = useState("");
+
+  // Reconciliation tile (active office overrides + SIS-agreement hints).
+  const [overrides, setOverrides] = useState<OverrideRow[]>([]);
+  const [overridesCounts, setOverridesCounts] = useState<{
+    total: number;
+    restricted: number;
+    temporary: number;
+    sisDisagrees: number;
+  } | null>(null);
+  const [overridesBusy, setOverridesBusy] = useState(false);
 
   // Per-row in-flight guard (reissue / restrict / deactivate).
   const [rowBusyId, setRowBusyId] = useState<number | null>(null);
@@ -287,18 +445,15 @@ export default function PickupTagsPanel() {
   })();
 
   // School-wide assign — Path B (one number per emergency contact).
+  const openBulkConfirm = () => {
+    setBulkAck(false);
+    setBulkType("");
+    setBulkResult(null);
+    setConfirmBulk(true);
+  };
+
   const runBulkAssign = async () => {
-    const ok = window.confirm(
-      "Assign pickup codes to every student?\n\n" +
-        "Each student gets ONE base number; each authorized adult on file " +
-        "gets a letter suffix (1001A = Mom, 1001B = Dad). One adult's code " +
-        "releases all of that adult's kids. Students/adults already covered " +
-        "are skipped — it is safe to run after each roster import.\n\n" +
-        "Older letterless codes (e.g. 1026) are upgraded to add a letter " +
-        "(1026 → 1026A). That changes the code, so those tags must be " +
-        "reprinted.",
-    );
-    if (!ok) return;
+    setConfirmBulk(false);
     setBulkBusy(true);
     setBulkResult(null);
     setMsg(null);
@@ -481,13 +636,13 @@ export default function PickupTagsPanel() {
   // Reprint = reissue: deactivate the old number (curb keypad rejects it
   // immediately) and mint a fresh one, then download the new tag. This
   // is the "lost tag" flow — the family's old card stops working.
+  const openReissueConfirm = (a: AuthRow) => {
+    setReissueAck(false);
+    setConfirmReissue(a);
+  };
+
   const reissueAndPrint = async (a: AuthRow) => {
-    const ok = window.confirm(
-      `Reprint tag ${a.pickupNumber} for ${a.guardianLabel}?\n\n` +
-        "This invalidates the current number and issues a NEW one. The " +
-        "old card will no longer work at the curb.",
-    );
-    if (!ok) return;
+    setConfirmReissue(null);
     setRowBusyId(a.id);
     setMsg(null);
     try {
@@ -515,7 +670,12 @@ export default function PickupTagsPanel() {
 
   const patchAuth = async (
     a: AuthRow,
-    patch: { restrictedFrom?: boolean; active?: boolean },
+    patch: {
+      restrictedFrom?: boolean;
+      active?: boolean;
+      expiresAt?: string | null;
+    },
+    overrideReason: string,
   ) => {
     setRowBusyId(a.id);
     setMsg(null);
@@ -523,24 +683,93 @@ export default function PickupTagsPanel() {
       const res = await authFetch(`/api/pickup/authorizations/${a.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
+        body: JSON.stringify({ ...patch, overrideReason }),
       });
       if (!res.ok) {
         const b = (await res.json().catch(() => ({}))) as { error?: string };
         setMsg(b.error ?? `Update failed (${res.status})`);
-        return;
+        return false;
       }
       if (studentDbId !== null) await refresh(studentDbId);
+      void fetchOverrides();
+      return true;
     } finally {
       setRowBusyId(null);
     }
   };
+
+  // Open the inline reason modal for an action that needs a justification.
+  const openReasonModal = (
+    auth: AuthRow,
+    action: "restrict" | "unrestrict" | "deactivate",
+  ) => {
+    setReasonText("");
+    const patch =
+      action === "deactivate"
+        ? { active: false }
+        : { restrictedFrom: action === "restrict" };
+    const title =
+      action === "deactivate"
+        ? `Deactivate tag ${auth.pickupNumber}`
+        : action === "restrict"
+          ? `Restrict ${auth.guardianLabel}`
+          : `Unrestrict ${auth.guardianLabel}`;
+    setReasonModal({ auth, action, patch, title });
+  };
+
+  const submitReasonModal = async () => {
+    if (!reasonModal) return;
+    const reason = reasonText.trim();
+    if (reason.length < 5) {
+      setMsg("Enter a reason of at least 5 characters.");
+      return;
+    }
+    const ok = await patchAuth(reasonModal.auth, reasonModal.patch, reason);
+    if (ok) setReasonModal(null);
+  };
+
+  // Load the active office overrides + SIS-agreement hints for the tile.
+  const fetchOverrides = useCallback(async () => {
+    setOverridesBusy(true);
+    try {
+      const res = await authFetch(`/api/pickup/overrides/reconciliation`);
+      if (!res.ok) return;
+      const b = (await res.json().catch(() => ({}))) as {
+        overrides?: OverrideRow[];
+        counts?: {
+          total: number;
+          restricted: number;
+          temporary: number;
+          sisDisagrees: number;
+        };
+      };
+      setOverrides(b.overrides ?? []);
+      setOverridesCounts(b.counts ?? null);
+    } finally {
+      setOverridesBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchOverrides();
+  }, [fetchOverrides]);
 
   const issueForStudent = async () => {
     if (studentDbId === null) return;
     const label = issueGuardian.trim();
     if (!label) {
       setMsg("Enter a guardian label (e.g. Mom, Dad, Grandma).");
+      return;
+    }
+    const reason = issueReason.trim();
+    if (reason.length < 5) {
+      setMsg(
+        "A reason of at least 5 characters is required to hand-issue a pickup tag.",
+      );
+      return;
+    }
+    if (issueTemporary && !issueExpiresAt) {
+      setMsg("Pick an expiry date/time for a temporary tag, or turn off Temporary.");
       return;
     }
     setIssueBusy(true);
@@ -550,9 +779,14 @@ export default function PickupTagsPanel() {
         studentDbId,
         guardianLabel: label,
         restrictedFrom: issueRestricted,
+        overrideReason: reason,
       };
       const num = issueNumber.trim();
       if (num) body.pickupNumber = num;
+      if (issueTemporary && issueExpiresAt) {
+        // datetime-local is wall-clock; send a real instant (UTC ISO).
+        body.expiresAt = new Date(issueExpiresAt).toISOString();
+      }
       const res = await authFetch(`/api/pickup/authorizations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -566,7 +800,11 @@ export default function PickupTagsPanel() {
       setIssueGuardian("");
       setIssueNumber("");
       setIssueRestricted(false);
+      setIssueReason("");
+      setIssueTemporary(false);
+      setIssueExpiresAt("");
       await refresh(studentDbId);
+      void fetchOverrides();
     } finally {
       setIssueBusy(false);
     }
@@ -614,14 +852,329 @@ export default function PickupTagsPanel() {
 
   const viewOfficeStrip = () => viewPdf(`/api/pickup/office-strip.pdf`);
 
+  const bulkReady = bulkAck && bulkType.trim().toUpperCase() === "ASSIGN";
+
   return (
     <div style={wrap}>
+      {confirmBulk && (
+        <div style={modalOverlay} role="dialog" aria-modal="true">
+          <div style={modalCard}>
+            <div
+              style={{
+                fontWeight: 800,
+                fontSize: 18,
+                color: "#b91c1c",
+                marginBottom: 8,
+              }}
+            >
+              ⚠️ Assign pickup numbers school-wide
+            </div>
+            <p style={{ fontSize: 14, lineHeight: 1.5, marginTop: 0 }}>
+              This runs across the <strong>entire school</strong>. It fills in
+              any missing numbers and <strong>upgrades older letterless codes</strong>{" "}
+              (e.g. <code>1026</code> → <code>1026A</code>). Any tag whose number
+              changes <strong>must be reprinted and redistributed</strong> — the
+              old printed card will stop working at the curb.
+            </p>
+            <p style={{ fontSize: 14, lineHeight: 1.5 }}>
+              Students who already have lettered codes are left unchanged. This
+              is a front-office action — curb monitors do not have it.
+            </p>
+            <label style={ackRow}>
+              <input
+                type="checkbox"
+                checked={bulkAck}
+                onChange={(e) => setBulkAck(e.target.checked)}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                I understand this can change existing pickup numbers and require
+                reprinting tags that families already have.
+              </span>
+            </label>
+            <label style={labelStyle}>Type ASSIGN to confirm</label>
+            <input
+              value={bulkType}
+              onChange={(e) => setBulkType(e.target.value)}
+              placeholder="ASSIGN"
+              style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
+            />
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "flex-end",
+                marginTop: 16,
+              }}
+            >
+              <button
+                style={secondaryBtn}
+                onClick={() => setConfirmBulk(false)}
+              >
+                Cancel
+              </button>
+              <button
+                style={{
+                  ...dangerBtn,
+                  opacity: bulkReady ? 1 : 0.5,
+                  cursor: bulkReady ? "pointer" : "not-allowed",
+                }}
+                disabled={!bulkReady}
+                onClick={runBulkAssign}
+              >
+                Assign numbers
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmReissue && (
+        <div style={modalOverlay} role="dialog" aria-modal="true">
+          <div style={modalCard}>
+            <div
+              style={{
+                fontWeight: 800,
+                fontSize: 18,
+                color: "#b91c1c",
+                marginBottom: 8,
+              }}
+            >
+              ⚠️ Reprint tag {confirmReissue.pickupNumber}
+            </div>
+            <p style={{ fontSize: 14, lineHeight: 1.5, marginTop: 0 }}>
+              Reprinting issues a <strong>new number</strong> for{" "}
+              <strong>{confirmReissue.guardianLabel}</strong> and{" "}
+              <strong>immediately invalidates</strong> the current card
+              (<code>{confirmReissue.pickupNumber}</code>). The family's existing
+              printed card will stop working at the curb until they receive the
+              new one.
+            </p>
+            <label style={ackRow}>
+              <input
+                type="checkbox"
+                checked={reissueAck}
+                onChange={(e) => setReissueAck(e.target.checked)}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                I understand the current card will stop working and a new tag
+                must be given to the family.
+              </span>
+            </label>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "flex-end",
+                marginTop: 16,
+              }}
+            >
+              <button
+                style={secondaryBtn}
+                onClick={() => setConfirmReissue(null)}
+              >
+                Cancel
+              </button>
+              <button
+                style={{
+                  ...dangerBtn,
+                  opacity: reissueAck ? 1 : 0.5,
+                  cursor: reissueAck ? "pointer" : "not-allowed",
+                }}
+                disabled={!reissueAck}
+                onClick={() => void reissueAndPrint(confirmReissue)}
+              >
+                Reprint &amp; download
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {reasonModal && (
+        <div style={modalOverlay} role="dialog" aria-modal="true">
+          <div style={modalCard}>
+            <div
+              style={{
+                fontWeight: 800,
+                fontSize: 18,
+                marginBottom: 8,
+              }}
+            >
+              {reasonModal.title}
+            </div>
+            <p style={{ fontSize: 14, lineHeight: 1.5, marginTop: 0 }}>
+              This is an <strong>office override</strong> of the RosterOne
+              record. It stays in force until manually cleared. A reason is
+              required and recorded in the audit log.
+            </p>
+            <label style={labelStyle}>
+              Reason (required, min 5 characters)
+              <textarea
+                value={reasonText}
+                onChange={(e) => setReasonText(e.target.value)}
+                style={{
+                  ...inputStyle,
+                  minWidth: "100%",
+                  minHeight: 70,
+                  resize: "vertical",
+                }}
+                placeholder="e.g. Court order on file — Dad not authorized for pickup"
+                autoFocus
+              />
+            </label>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "flex-end",
+                marginTop: 16,
+              }}
+            >
+              <button style={secondaryBtn} onClick={() => setReasonModal(null)}>
+                Cancel
+              </button>
+              <button
+                style={{
+                  ...dangerBtn,
+                  opacity: reasonText.trim().length >= 5 ? 1 : 0.5,
+                  cursor:
+                    reasonText.trim().length >= 5 ? "pointer" : "not-allowed",
+                }}
+                disabled={
+                  reasonText.trim().length < 5 ||
+                  rowBusyId === reasonModal.auth.id
+                }
+                onClick={() => void submitReasonModal()}
+              >
+                {rowBusyId === reasonModal.auth.id ? "Saving…" : "Save override"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <h2 style={{ marginTop: 0 }}>Parent Pickup</h2>
       <p style={{ color: "var(--text-subtle, #6b7280)", marginTop: 0 }}>
         Assign pickup numbers, print tags (alphabetical, by teacher, or by
         student), and manage individual tags — all from this screen. PDFs
         open as downloads.
       </p>
+
+      {overridesCounts && overridesCounts.total > 0 && (
+        <div
+          style={{
+            ...card,
+            borderLeft: "4px solid #7c3aed",
+            background: "#faf5ff",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+              gap: 8,
+              marginBottom: 8,
+            }}
+          >
+            <div style={{ fontWeight: 700 }}>
+              Office overrides in force ({overridesCounts.total})
+            </div>
+            <button
+              style={smallBtn}
+              onClick={() => void fetchOverrides()}
+              disabled={overridesBusy}
+            >
+              {overridesBusy ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
+          <div
+            style={{
+              fontSize: 13,
+              color: "var(--text-subtle, #6b7280)",
+              marginBottom: 10,
+            }}
+          >
+            These pickup records were set manually by the front office and will
+            stay in force until cleared — RosterOne syncs will not overwrite
+            them. {overridesCounts.restricted} restricted ·{" "}
+            {overridesCounts.temporary} temporary
+            {overridesCounts.sisDisagrees > 0 && (
+              <>
+                {" "}
+                ·{" "}
+                <strong style={{ color: "#9a3412" }}>
+                  {overridesCounts.sisDisagrees} where RosterOne disagrees
+                </strong>
+              </>
+            )}
+            .
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={tableStyle}>
+              <thead>
+                <tr>
+                  <th style={th}>Student</th>
+                  <th style={th}>SIS ID</th>
+                  <th style={th}>#</th>
+                  <th style={th}>Guardian</th>
+                  <th style={th}>Reason</th>
+                  <th style={th}>By</th>
+                  <th style={th}>Expires</th>
+                </tr>
+              </thead>
+              <tbody>
+                {overrides.map((o) => (
+                  <tr key={o.id}>
+                    <td style={td}>
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 4,
+                          flexWrap: "wrap",
+                          alignItems: "center",
+                        }}
+                      >
+                        <span>{o.studentName}</span>
+                        {o.restricted && (
+                          <span style={expiredChip}>Restricted</span>
+                        )}
+                        {!o.sisMayHaveContact && (
+                          <span
+                            style={disagreeChip}
+                            title="RosterOne does not appear to list this contact — the office override is keeping a manual value RosterOne disagrees with. Review."
+                          >
+                            RosterOne disagrees
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td style={td}>{o.localSisId ?? "—"}</td>
+                    <td style={td}>{o.pickupNumber}</td>
+                    <td style={td}>{o.guardianLabel}</td>
+                    <td style={td}>{o.reason ?? "—"}</td>
+                    <td style={td}>{o.overrideByName ?? "—"}</td>
+                    <td style={td}>
+                      {o.expiresAt ? (
+                        <span style={o.expired ? expiredChip : tempChip}>
+                          {o.expired
+                            ? "Expired"
+                            : new Date(o.expiresAt).toLocaleString()}
+                        </span>
+                      ) : (
+                        "Permanent"
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <div
         style={{
@@ -645,7 +1198,7 @@ export default function PickupTagsPanel() {
           missing numbers are filled.
         </div>
         <button
-          onClick={runBulkAssign}
+          onClick={openBulkConfirm}
           style={primaryBtn}
           disabled={bulkBusy}
         >
@@ -1019,7 +1572,39 @@ export default function PickupTagsPanel() {
                   return (
                     <tr key={a.id}>
                       <td style={td}>{a.pickupNumber}</td>
-                      <td style={td}>{a.guardianLabel}</td>
+                      <td style={td}>
+                        <div
+                          style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}
+                        >
+                          <span>{a.guardianLabel}</span>
+                          {(a.source === "manual" || a.overrideReason) && (
+                            <span
+                              style={officeBadge}
+                              title={a.overrideReason ?? "Office override"}
+                            >
+                              Office{a.overrideReason ? ` — ${a.overrideReason}` : ""}
+                            </span>
+                          )}
+                          {a.expiresAt && (
+                            <span
+                              style={
+                                new Date(a.expiresAt).getTime() < Date.now()
+                                  ? expiredChip
+                                  : tempChip
+                              }
+                              title={`Temporary override${
+                                new Date(a.expiresAt).getTime() < Date.now()
+                                  ? " (expired)"
+                                  : ""
+                              } — ${new Date(a.expiresAt).toLocaleString()}`}
+                            >
+                              {new Date(a.expiresAt).getTime() < Date.now()
+                                ? "Expired"
+                                : `Until ${new Date(a.expiresAt).toLocaleDateString()}`}
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td style={td}>
                         {a.parentDisplayName ?? a.parentId ?? "—"}
                       </td>
@@ -1050,7 +1635,7 @@ export default function PickupTagsPanel() {
                           {a.active && (
                             <>
                               <button
-                                onClick={() => void reissueAndPrint(a)}
+                                onClick={() => openReissueConfirm(a)}
                                 style={smallBtn}
                                 disabled={busy}
                                 title="Invalidate this number and print a fresh one (lost-tag reprint)."
@@ -1059,23 +1644,22 @@ export default function PickupTagsPanel() {
                               </button>
                               <button
                                 onClick={() =>
-                                  void patchAuth(a, {
-                                    restrictedFrom: !a.restrictedFrom,
-                                  })
+                                  openReasonModal(
+                                    a,
+                                    a.restrictedFrom ? "unrestrict" : "restrict",
+                                  )
                                 }
                                 style={smallBtn}
                                 disabled={busy}
-                                title="Toggle whether this guardian is blocked from picking up."
+                                title="Toggle whether this guardian is blocked from picking up (reason required)."
                               >
                                 {a.restrictedFrom ? "Unrestrict" : "Restrict"}
                               </button>
                               <button
-                                onClick={() =>
-                                  void patchAuth(a, { active: false })
-                                }
+                                onClick={() => openReasonModal(a, "deactivate")}
                                 style={smallBtn}
                                 disabled={busy}
-                                title="Deactivate this number (the card stops working)."
+                                title="Deactivate this number / clear the override (reason required)."
                               >
                                 Deactivate
                               </button>
@@ -1149,10 +1733,50 @@ export default function PickupTagsPanel() {
                 />
                 Restricted (blocked from pickup)
               </label>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 13,
+                  paddingBottom: 8,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={issueTemporary}
+                  onChange={(e) => {
+                    setIssueTemporary(e.target.checked);
+                    if (!e.target.checked) setIssueExpiresAt("");
+                  }}
+                />
+                Temporary (expires)
+              </label>
+              {issueTemporary && (
+                <label style={labelStyle}>
+                  Expires
+                  <input
+                    type="datetime-local"
+                    value={issueExpiresAt}
+                    onChange={(e) => setIssueExpiresAt(e.target.value)}
+                    style={{ ...inputStyle, minWidth: 200 }}
+                  />
+                </label>
+              )}
+              <label style={{ ...labelStyle, minWidth: 280, flex: 1 }}>
+                Reason (required, min 5 characters)
+                <input
+                  value={issueReason}
+                  onChange={(e) => setIssueReason(e.target.value)}
+                  style={{ ...inputStyle, minWidth: "100%" }}
+                  placeholder="Why is the office hand-issuing this tag?"
+                />
+              </label>
               <button
                 onClick={() => void issueForStudent()}
                 style={primaryBtn}
                 disabled={issueBusy}
+                title="Hand-issued tags are office overrides — RosterOne will not clobber them."
               >
                 {issueBusy ? "Issuing…" : "Issue number"}
               </button>

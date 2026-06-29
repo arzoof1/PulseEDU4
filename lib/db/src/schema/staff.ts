@@ -101,6 +101,14 @@ export const staffTable = pgTable("staff", {
   // Currently identical to teacher view; broken out so reports and
   // future surfaces (incident logs, etc) can target it cleanly.
   isSro: boolean("is_sro").notNull().default(false),
+  // Athletic Director — owns the Eligibility Hub (athletics/clubs/activity
+  // participation eligibility). Can create activities, assign coaches, edit
+  // rosters + jersey numbers, run the daily attendance upload, log parent
+  // notes, change eligibility thresholds, and is on the warning/ineligible
+  // notification audience. ORed into canManageEligibility() in lib/coreTeam.ts.
+  isAthleticDirector: boolean("is_athletic_director")
+    .notNull()
+    .default(false),
   // Guardian / hall monitor / security aide. Same as teacher today.
   isGuardian: boolean("is_guardian").notNull().default(false),
 
@@ -113,6 +121,18 @@ export const staffTable = pgTable("staff", {
   // reports, the strategy catalog, plus the downstream gates that compose
   // isCoreTeam() (safety plans, pickup, tours, tickets, etc.).
   isCoreTeam: boolean("is_core_team").notNull().default(false),
+
+  // Confidential Secretary — the front-office role that historically held the
+  // AST-approval capability (canApproveAst) but had no dedicated role label.
+  // Now a first-class, admin-assignable role that is ORed into isCoreTeam() in
+  // lib/coreTeam.ts, so the holder is a FULL Core Team member everywhere (same
+  // power set as the explicit isCoreTeam flag). The Staff & Roles preset lights
+  // up the Core Team page bundle by default; admins can untick individual pages.
+  // Keeps canApproveAst as a separate capability — the two are granted
+  // independently.
+  isConfidentialSecretary: boolean("is_confidential_secretary")
+    .notNull()
+    .default(false),
 
   // ---- Per-page capability flags ----
   // Pages everyone uses by default — defaulted true so new staff land with
@@ -194,6 +214,24 @@ export const staffTable = pgTable("staff", {
   // rest of the admin surface. Admins / SuperUser get it implicitly via the
   // route gate (admin OR this flag). Documents are private to the creator.
   capManageEsign: boolean("cap_manage_esign").notNull().default(false),
+
+  // School Tours — lightweight "Tour Guide" role. A guide can be ASSIGNED
+  // leads and open the Tour Roadmap for leads assigned to them, without the
+  // rest of the tour-management surface (brag-page editor, full lead
+  // pipeline). canManageTours members already have full access; this flag is
+  // for front-office/volunteer guides who only need their own assigned tours.
+  capTourGuide: boolean("cap_tour_guide").notNull().default(false),
+
+  // Contact Info Fixes — grants access to the front-office "Contact Info
+  // Fixes" queue where bad-number flags raised from the Communication Log
+  // land. The holder can enter a corrected phone number (an audited
+  // override that wins until overwritten) or dismiss the flag. Assignable
+  // to any front-office clerk / registrar without the rest of the admin
+  // surface; admins / SuperUser get it implicitly via the route gate
+  // (admin OR this flag).
+  capManageContactInfo: boolean("cap_manage_contact_info")
+    .notNull()
+    .default(false),
 
   // Comp Time (FLSA compensatory time) per-staff capabilities. Mirrors
   // the AST gate above so the role-management UI can sit them side by

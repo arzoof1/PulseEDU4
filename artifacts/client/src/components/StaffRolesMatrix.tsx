@@ -90,8 +90,11 @@ const PAGES: { key: BoolKey; label: string; group: string }[] = [
   { group: "Admin", key: "capManageRoles", label: "Manage Roles" },
   { group: "Admin", key: "capManageDisplays", label: "Manage Displays" },
   { group: "Admin", key: "capManageDismissal", label: "Set Dismissal Mode" },
+  { group: "Admin", key: "capCarRiderMonitor", label: "Curb / Walker Monitor" },
   { group: "Admin", key: "capTourNotify", label: "Tour Alerts" },
+  { group: "Admin", key: "capTourGuide", label: "Tour Guide" },
   { group: "Admin", key: "capManageEsign", label: "e-Sign Documents" },
+  { group: "Admin", key: "capManageContactInfo", label: "Contact Info Fixes" },
 ];
 
 const TEACHER_BASELINE: BoolKey[] = [
@@ -219,6 +222,25 @@ const ROLE_PRESETS: {
       "capReports",
     ],
   },
+  // Confidential Secretary: the front-office role that historically held the
+  // AST-approval capability but had no role label. The flag is ORed into
+  // isCoreTeam() server-side (and the client mirror), so the holder is a FULL
+  // Core Team member everywhere. The bundle below mirrors the Core Team preset
+  // so the role lands with "full Core Team access" by default; the admin can
+  // untick individual pages afterward. AST approval (canApproveAst) stays a
+  // separate, independently-granted capability.
+  {
+    flag: "isConfidentialSecretary",
+    label: "Confidential Secretary",
+    capabilities: [
+      "capStudentActivity",
+      "capInterventionLog",
+      "capInterventionManage",
+      "capSupportNotes",
+      "capPulloutsVerify",
+      "capReports",
+    ],
+  },
   {
     flag: "isSocialWorker",
     label: "School Social Worker",
@@ -289,6 +311,16 @@ const ROLE_PRESETS: {
   {
     flag: "isGuardian",
     label: "Guardian",
+    capabilities: [...TEACHER_BASELINE],
+  },
+  // Athletic Director: manages the Eligibility Hub (activities, rosters,
+  // attendance uploads, at-risk reports, and the school-level eligibility
+  // settings) on top of the teacher baseline. The flag itself is what gates
+  // canManageEligibility() server-side; the page surfaces via the
+  // featureEligibility feature flag.
+  {
+    flag: "isAthleticDirector",
+    label: "Athletic Director",
     capabilities: [...TEACHER_BASELINE],
   },
 ];

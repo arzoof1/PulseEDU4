@@ -4,6 +4,7 @@ import Kiosk from "./Kiosk";
 import KioskViewer from "./KioskViewer";
 import KioskCodeMirror from "./KioskCodeMirror";
 import ParentApp from "./parent/ParentApp";
+import StudentApp from "./student/StudentApp";
 import SignageApp from "./signage/SignageApp";
 import PickupApp from "./pickup/PickupApp";
 import TourApp from "./tour/TourApp";
@@ -25,6 +26,10 @@ const isKioskViewer = path.includes("/kiosk-view");
 const isKioskCode = path.includes("/kiosk-code");
 const isKiosk = !isKioskViewer && !isKioskCode && path.includes("/kiosk");
 const isParent = path.includes("/parent");
+// Student HeartBEAT portal (/student). Anchored to the path SEGMENT
+// (exactly "/student" or "/student/...") so it never collides with staff
+// deep links that merely contain the substring (e.g. "/student-lookup").
+const isStudent = /\/student(?:\/|$)/.test(path);
 // Public, unauthenticated staff self-service password reset pages
 // (/forgot-password, /reset-password/<token>). Checked AFTER isParent
 // because the parent portal owns its own /parent/...-prefixed variants
@@ -58,6 +63,7 @@ createRoot(document.getElementById("root")!).render(
     : isKioskCode ? <KioskCodeMirror />
     : isKiosk ? <Kiosk />
     : isParent ? <ParentApp />
+    : isStudent ? <StudentApp />
     : isStaffReset ? <StaffResetApp />
     : isPickup ? <PickupApp />
     : isTour ? <TourApp />

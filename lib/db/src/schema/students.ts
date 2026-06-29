@@ -71,6 +71,29 @@ export const studentsTable = pgTable("students", {
   reteachLogsParentVisible: boolean("reteach_logs_parent_visible")
     .notNull()
     .default(false),
+  // ----- Heartbeat parent note (Student Lookup snapshot) -----------------
+  // A short, staff-authored, parent-facing message that surfaces on this
+  // student's weekly Friday HeartBEAT report (PDF + email). Single "current"
+  // note — overwritten each week, not historized. Edited from the read-only
+  // Student Snapshot page (the one editable field there). Nullable/empty =
+  // no note this week (the Heartbeat output skips the block entirely).
+  heartbeatNote: text("heartbeat_note"),
+  // Audit: which staff member last saved the note and when (ISO string,
+  // matching the text-timestamp convention used elsewhere on app-managed
+  // student columns). Nullable until a note is first written.
+  heartbeatNoteUpdatedBy: integer("heartbeat_note_updated_by"),
+  heartbeatNoteUpdatedAt: text("heartbeat_note_updated_at"),
+  // ----- Student portal (ClassLink district SSO) -------------------------
+  // Stable external identity returned by the district SSO provider
+  // (ClassLink OIDC `sub` / OneRoster sourcedId). Stamped on first SSO
+  // login to LINK this roster-sourced student row to their SSO identity, so
+  // subsequent logins resolve straight to the student. Nullable: most rows
+  // never sign in (only enrolled middle/high students with district
+  // credentials do). Match is school-scoped — not globally unique.
+  ssoExternalId: text("sso_external_id"),
+  // Last time this student signed into their personal HeartBEAT portal
+  // (ISO string, app-managed column convention). Nullable until first login.
+  lastPortalLoginAt: text("last_portal_login_at"),
 });
 
 export type StudentRow = typeof studentsTable.$inferSelect;

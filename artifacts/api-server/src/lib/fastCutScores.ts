@@ -512,3 +512,69 @@ export function bucketFor(
     nextStopLabel: SUB_LEVEL_LABEL[target.nextStop],
   };
 }
+
+// Points needed to reach PROFICIENCY (Level 3) on the student's
+// CURRENT-grade chart — i.e. the L3 minimum minus the score. Uses the
+// same current-grade chart convention as `bucketTarget`/`bucketFor` so
+// the number agrees with the roster's "points to next stop" math.
+//
+// Returns:
+//   - a positive integer  → points still needed to clear L3
+//   - 0                   → already at/above proficiency (no gap)
+//   - null                → no chart for this (subject, grade) or no
+//                           score to measure against
+//
+// Note: this is grade-anchored on the CURRENT grade (not the prior-grade
+// PM3 placement chart). For a PM3 score that's intentional — the gap a
+// coordinator cares about is "how far from on-grade-level proficient."
+export function proficiencyGap(
+  pmScore: number | null,
+  subject: Subject,
+  currentGrade: number,
+): number | null {
+  if (pmScore == null) return null;
+  const l3 = levelMin(subject, currentGrade, 3);
+  if (l3 == null) return null;
+  const gap = l3 - pmScore;
+  return gap > 0 ? gap : 0;
+}
+
+// Placement set for the four PM progression windows used by the Insights
+// drill-downs (Academic Trajectories + Academics band). Lets those
+// surfaces render roster-style FAST achievement-level pills (level color +
+// flip-to-scale-score) so they mirror the Teacher Roster exactly. The
+// per-window chart conventions match the existing trajectory/band
+// placement and the LG bucket strip:
+//   - prior-year PM3 + current-year PM3 → placePm3 (prior-grade chart)
+//   - PM1 / PM2                          → placeOnChart (current grade)
+// Each window is null when its score is missing or no chart exists for the
+// (subject, grade), so the UI renders a neutral "—" pill.
+export interface PmPlacementSet {
+  priorYearScore: Placement | null;
+  pm1: Placement | null;
+  pm2: Placement | null;
+  pm3: Placement | null;
+}
+export function placePmSet(
+  subject: Subject,
+  grade: number,
+  scores: {
+    priorYearScore: number | null;
+    pm1: number | null;
+    pm2: number | null;
+    pm3: number | null;
+  },
+): PmPlacementSet {
+  const current = (s: number | null): Placement | null =>
+    s != null && hasChart(subject, grade)
+      ? placeOnChart(s, subject, grade)
+      : null;
+  const prior = (s: number | null): Placement | null =>
+    s != null ? placePm3(s, subject, grade) : null;
+  return {
+    priorYearScore: prior(scores.priorYearScore),
+    pm1: current(scores.pm1),
+    pm2: current(scores.pm2),
+    pm3: prior(scores.pm3),
+  };
+}

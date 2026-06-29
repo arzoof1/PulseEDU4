@@ -20,6 +20,7 @@ import {
   streamObjectToResponse,
 } from "./storage.js";
 import { getUncachableResendClient } from "../lib/resendClient.js";
+import { isParentNotifyEnabled } from "../lib/parentNotify.js";
 
 const router: IRouter = Router();
 
@@ -314,7 +315,11 @@ router.post(
     // can always copy the link manually.
     let emailSent = false;
     let emailError: string | null = null;
-    if (recipientEmail) {
+    const esignNotifyOn = await isParentNotifyEnabled(
+      staff.schoolId,
+      "notifyParentEsign",
+    );
+    if (recipientEmail && esignNotifyOn) {
       try {
         const { client, fromEmail } = await getUncachableResendClient();
         const link = signUrlForToken(req, shareToken);

@@ -12,6 +12,10 @@ export interface RoadmapStop {
   location: string;
   talkingPoints: string;
   minutes: number;
+  // The family ticked this stop on the public form.
+  familyRequested?: boolean;
+  // The school marked this checkpoint "always include" on every tour.
+  schoolHighlight?: boolean;
 }
 
 export interface RoadmapInput {
@@ -32,6 +36,11 @@ export interface RoadmapInput {
   // The selected checkpoints, in the page's checkpoint order.
   stops: RoadmapStop[];
   accentColor: string;
+  // Phase 4 "Live Tour Capture": a pre-rendered QR PNG that deep-links the guide
+  // to the token-gated live-walk screen, plus the human-readable URL printed
+  // beneath it. When omitted the QR box is skipped (older callers stay valid).
+  walkQrPng?: Buffer | null;
+  walkUrl?: string | null;
   // District branding (set once by SuperUser). Only passed through when the
   // district's "printed documents" toggle is on.
   districtLogo?: Buffer | null;
@@ -137,6 +146,58 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
   row("Status", input.status);
   row("Requested", fmtDate(input.requestedAt));
 
+  // ---- Live Tour Capture QR ----------------------------------------------
+  // A guide scans this to open the offline-first live-walk screen — taps each
+  // stop as completed (timings + notes flow back to the lead drawer).
+  if (input.walkQrPng) {
+    doc.moveDown(0.6);
+    const qrSize = 92;
+    const boxTop = doc.y;
+    const boxHeight = qrSize + 24;
+    doc
+      .roundedRect(left, boxTop, width, boxHeight, 10)
+      .fillAndStroke("#f8fafc", "#e2e8f0");
+    try {
+      doc.image(input.walkQrPng, left + 12, boxTop + 12, {
+        fit: [qrSize, qrSize],
+      });
+    } catch {
+      /* bad QR bytes — skip the image, keep the caption */
+    }
+    const textX = left + 12 + qrSize + 16;
+    const textW = width - (12 + qrSize + 16) - 16;
+    doc
+      .fillColor(accent)
+      .font("Helvetica-Bold")
+      .fontSize(10)
+      .text("START THE DIGITAL TOUR", textX, boxTop + 16, {
+        width: textW,
+        characterSpacing: 1,
+      });
+    doc
+      .fillColor(INK)
+      .font("Helvetica")
+      .fontSize(10.5)
+      .text(
+        "Scan with your phone to check off each stop as you go. Works offline — taps sync when you're back on Wi-Fi.",
+        textX,
+        boxTop + 32,
+        { width: textW },
+      );
+    if (input.walkUrl) {
+      doc
+        .fillColor(MUTED)
+        .font("Helvetica")
+        .fontSize(8)
+        .text(input.walkUrl, textX, boxTop + boxHeight - 18, {
+          width: textW,
+          lineBreak: false,
+          ellipsis: true,
+        });
+    }
+    doc.y = boxTop + boxHeight;
+  }
+
   // ---- "Anything else?" note ---------------------------------------------
   if (input.notes.trim()) {
     doc.moveDown(0.5);
@@ -163,6 +224,15 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
 
   // ---- Checklist heading --------------------------------------------------
   const totalMinutes = input.stops.reduce((s, c) => s + (c.minutes || 0), 0);
+  const familyCount = input.stops.filter((s) => s.familyRequested).length;
+  const highlightCount = input.stops.filter(
+    (s) => s.schoolHighlight && !s.familyRequested,
+  ).length;
+  const countBits = [
+    `${familyCount} family-requested`,
+    highlightCount > 0 ? `${highlightCount} school highlight` : null,
+    totalMinutes > 0 ? `~${totalMinutes} min` : null,
+  ].filter(Boolean) as string[];
   doc.moveDown(0.9);
   doc
     .font("Helvetica-Bold")
@@ -173,11 +243,7 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
     .font("Helvetica")
     .fontSize(11)
     .fillColor(MUTED)
-    .text(
-      `    ${input.stops.length} selected${
-        totalMinutes > 0 ? ` · ~${totalMinutes} min` : ""
-      }`,
-    );
+    .text(`    ${countBits.join(" · ")}`);
   doc.moveDown(0.4);
   doc
     .moveTo(left, doc.y)
@@ -216,7 +282,13 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
           width: width - 34,
         })
       : 0;
-    const blockHeight = 26 + (stop.location ? 14 : 0) + tpHeight + 46;
+    const blockHeight =
+      26 +
+      12 + // origin badge
+      (stop.location ? 14 : 0) +
+      (stop.familyRequested ? 12 : 0) + // guide cue line
+      tpHeight +
+      46;
     ensureSpace(blockHeight);
 
     const topY = doc.y;
@@ -243,6 +315,20 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
         .fillColor(MUTED)
         .text(minutesLabel);
     }
+    // Origin badge: family pick (★), school highlight, or both.
+    const badge = stop.familyRequested
+      ? stop.schoolHighlight
+        ? "★ Family requested · School highlight"
+        : "★ Family requested"
+      : "School highlight";
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(8.5)
+      .fillColor(stop.familyRequested ? accent : MUTED)
+      .text(badge, left + 24, doc.y + 2, {
+        width: width - 24,
+        characterSpacing: 0.5,
+      });
     // Location
     if (stop.location) {
       doc
@@ -250,6 +336,16 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
         .fontSize(10)
         .fillColor(MUTED)
         .text(stop.location, left + 24, doc.y + 1, {
+          width: width - 24,
+        });
+    }
+    // Guide cue for family picks — reminds the guide why this stop matters.
+    if (stop.familyRequested) {
+      doc
+        .font("Helvetica-Oblique")
+        .fontSize(9)
+        .fillColor(accent)
+        .text("Be sure to spotlight this — the family asked to see it.", left + 24, doc.y + 1, {
           width: width - 24,
         });
     }

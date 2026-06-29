@@ -45,24 +45,52 @@ const page: React.CSSProperties = {
   fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
 };
 
-const headerBar: React.CSSProperties = {
+// Floating circular button (top-corner Close / Help) layered over the camera.
+const roundBtn: React.CSSProperties = {
+  position: "absolute",
+  top: "0.9rem",
+  left: "0.9rem",
+  width: "2.4rem",
+  height: "2.4rem",
+  borderRadius: "50%",
+  border: "none",
+  background: "rgba(17,24,39,0.6)",
+  backdropFilter: "blur(6px)",
+  WebkitBackdropFilter: "blur(6px)",
+  color: "#fff",
+  fontSize: "1.1rem",
+  fontWeight: 700,
+  cursor: "pointer",
+  zIndex: 18,
   display: "flex",
   alignItems: "center",
-  justifyContent: "space-between",
-  gap: "1rem",
-  padding: "0.6rem 1rem",
-  borderBottom: "1px solid #1f2937",
-  flexShrink: 0,
+  justifyContent: "center",
 };
 
-const ctrlBar: React.CSSProperties = {
+// Compact icon button used for the collapsible adjusters + transport controls.
+const iconBtnBase: React.CSSProperties = {
+  appearance: "none",
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(17,24,39,0.55)",
+  backdropFilter: "blur(6px)",
+  WebkitBackdropFilter: "blur(6px)",
+  color: "#fff",
+  borderRadius: "12px",
+  width: "3.1rem",
+  height: "3.1rem",
   display: "flex",
+  flexDirection: "column",
   alignItems: "center",
-  flexWrap: "wrap",
-  gap: "0.75rem 1.25rem",
-  padding: "0.75rem 1rem",
-  borderTop: "1px solid #1f2937",
+  justifyContent: "center",
+  gap: "2px",
+  cursor: "pointer",
   flexShrink: 0,
+  padding: 0,
+};
+
+const iconBtnActive: React.CSSProperties = {
+  background: "rgba(37,99,235,0.85)",
+  borderColor: "#2563eb",
 };
 
 const btn: React.CSSProperties = {
@@ -94,6 +122,8 @@ const checkLabel: React.CSSProperties = {
   color: "#cbd5e1",
   cursor: "pointer",
 };
+
+type AdjusterKey = "speed" | "font" | "spacing" | "width" | "lines" | "more";
 
 interface RecordingStudioProps {
   // When rendered in-app, the parent passes the teleprompter script and gets
@@ -143,6 +173,25 @@ export default function RecordingStudio({
   const recordingRef = useRef(false);
   const elapsedRef = useRef(0);
   const mountedRef = useRef(true);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const meterRafRef = useRef<number | null>(null);
+  const lastClipRef = useRef(0);
+
+  const [level, setLevel] = useState(0);
+  const [clipping, setClipping] = useState(false);
+
+  // Layout orientation drives where the floating controls sit (bottom strip in
+  // portrait, right rail in landscape). Separate from the *capture* orientation
+  // above — this is purely about chrome placement.
+  const [viewportPortrait, setViewportPortrait] = useState<boolean>(() =>
+    typeof window === "undefined"
+      ? true
+      : (window.matchMedia?.("(orientation: portrait)").matches ??
+        window.innerHeight > window.innerWidth),
+  );
+  // Which adjuster popover is open (only one at a time); null = none open.
+  const [openAdjuster, setOpenAdjuster] = useState<AdjusterKey | null>(null);
 
   useEffect(() => {
     document.title = "Recording Studio · PulseEDU";
@@ -162,29 +211,121 @@ export default function RecordingStudio({
     recordingRef.current = recording;
   }, [recording]);
 
-  // Acquire camera + mic once on mount.
-  useEffect(() => {
-    let cancelled = false;
-    async function init() {
+  // Whether the current viewport is portrait — drives the capture aspect so a
+  // phone/iPad records portrait when held vertically, landscape when sideways.
+  const isPortrait = useCallback(
+    () =>
+      window.matchMedia?.("(orientation: portrait)").matches ??
+      window.innerHeight > window.innerWidth,
+    [],
+  );
+
+  // The orientation the LIVE stream is currently captured in, so the rotation
+  // listener can skip re-acquiring when nothing actually changed.
+  const captureOrientationRef = useRef<"portrait" | "landscape" | null>(null);
+  // Guards against overlapping getUserMedia calls (rapid rotations).
+  const acquiringRef = useRef(false);
+
+  // Stop the mic-level meter (rAF loop + analyser + audio context).
+  const stopMeter = useCallback(() => {
+    if (meterRafRef.current != null) {
+      cancelAnimationFrame(meterRafRef.current);
+      meterRafRef.current = null;
+    }
+    analyserRef.current?.disconnect();
+    analyserRef.current = null;
+    if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
+      void audioCtxRef.current.close().catch(() => {});
+    }
+    audioCtxRef.current = null;
+  }, []);
+
+  // Tap the mic for a live level meter. The analyser is connected to the source
+  // ONLY (never to destination) so the user doesn't hear themselves. The rAF
+  // loop reads time-domain samples to compute RMS (meter fill) and peak (clip).
+  const startMeter = useCallback((s: MediaStream) => {
+    try {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const source = ctx.createMediaStreamSource(s);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.8;
+      source.connect(analyser);
+      audioCtxRef.current = ctx;
+      analyserRef.current = analyser;
+
+      const data = new Float32Array(analyser.fftSize);
+      const tick = () => {
+        const a = analyserRef.current;
+        if (!a || !mountedRef.current) return;
+        a.getFloatTimeDomainData(data);
+        let sumSquares = 0;
+        let peak = 0;
+        for (let i = 0; i < data.length; i++) {
+          const v = data[i];
+          sumSquares += v * v;
+          const abs = Math.abs(v);
+          if (abs > peak) peak = abs;
+        }
+        const rms = Math.sqrt(sumSquares / data.length);
+        // Scale RMS to a 0–1 meter range; ~0.5 RMS is already very hot.
+        const next = Math.min(1, rms * 2.2);
+        setLevel(next);
+        const now = Date.now();
+        if (peak >= 0.98) lastClipRef.current = now;
+        setClipping(now - lastClipRef.current < 1000);
+        meterRafRef.current = requestAnimationFrame(tick);
+      };
+      meterRafRef.current = requestAnimationFrame(tick);
+    } catch {
+      // Audio metering is best-effort; ignore failures.
+    }
+  }, []);
+
+  // Acquire (or re-acquire) the camera + mic for the given orientation. Captures
+  // in the device's current orientation — a phone/iPad held vertically records a
+  // portrait frame, not a cropped landscape one. Tears down any prior stream +
+  // meter first, then swaps the new stream in.
+  const acquireStream = useCallback(
+    async (portrait: boolean) => {
       if (!navigator.mediaDevices?.getUserMedia) {
         setMediaError(
           "This browser can't access the camera. Try the latest Chrome, Edge, or Safari.",
         );
         return;
       }
+      if (acquiringRef.current) return;
+      acquiringRef.current = true;
+      const longEdge = { ideal: 1280 };
+      const shortEdge = { ideal: 720 };
       try {
         const s = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
+          video: {
+            width: portrait ? shortEdge : longEdge,
+            height: portrait ? longEdge : shortEdge,
+            facingMode: "user",
+          },
           audio: true,
         });
-        if (cancelled) {
+        if (!mountedRef.current) {
           s.getTracks().forEach((t) => t.stop());
           return;
         }
+        // Swap the live stream: stop the old meter + tracks, then attach new.
+        stopMeter();
+        streamRef.current?.getTracks().forEach((t) => t.stop());
         streamRef.current = s;
+        captureOrientationRef.current = portrait ? "portrait" : "landscape";
         setStream(s);
+        setMediaError(null);
+        startMeter(s);
       } catch (err) {
-        if (cancelled) return;
+        if (!mountedRef.current) return;
         const name = (err as DOMException)?.name;
         setMediaError(
           name === "NotAllowedError" || name === "SecurityError"
@@ -193,14 +334,55 @@ export default function RecordingStudio({
               ? "No camera or microphone was found on this device."
               : "Couldn't start the camera. Please check your device and try again.",
         );
+      } finally {
+        acquiringRef.current = false;
       }
-    }
-    void init();
+    },
+    [startMeter, stopMeter],
+  );
+
+  // Acquire camera + mic on mount (in the current orientation).
+  useEffect(() => {
+    mountedRef.current = true;
+    void acquireStream(isPortrait());
     return () => {
-      cancelled = true;
       streamRef.current?.getTracks().forEach((t) => t.stop());
+      stopMeter();
     };
-  }, []);
+  }, [acquireStream, isPortrait, stopMeter]);
+
+  // Live re-acquisition: when the device rotates, re-open the camera in the new
+  // orientation so the frame follows the device. Skipped while recording (never
+  // swap the stream mid-take) or while reviewing a finished clip.
+  useEffect(() => {
+    const onOrientation = () => {
+      if (recordingRef.current || recordedUrlRef.current) return;
+      const want = isPortrait() ? "portrait" : "landscape";
+      if (captureOrientationRef.current === want) return;
+      void acquireStream(want === "portrait");
+    };
+    const mq = window.matchMedia?.("(orientation: portrait)");
+    mq?.addEventListener?.("change", onOrientation);
+    window.addEventListener("orientationchange", onOrientation);
+    return () => {
+      mq?.removeEventListener?.("change", onOrientation);
+      window.removeEventListener("orientationchange", onOrientation);
+    };
+  }, [acquireStream, isPortrait]);
+
+  // Track viewport orientation for control placement (bottom strip in portrait,
+  // right rail in landscape). Layout-only, cheap state update.
+  useEffect(() => {
+    const update = () => setViewportPortrait(isPortrait());
+    update();
+    const mq = window.matchMedia?.("(orientation: portrait)");
+    mq?.addEventListener?.("change", update);
+    window.addEventListener("resize", update);
+    return () => {
+      mq?.removeEventListener?.("change", update);
+      window.removeEventListener("resize", update);
+    };
+  }, [isPortrait]);
 
   // Attach the live stream to the preview element.
   useEffect(() => {
@@ -300,6 +482,16 @@ export default function RecordingStudio({
       }
       if (recordedUrlRef.current) URL.revokeObjectURL(recordedUrlRef.current);
       if (timerRef.current) clearInterval(timerRef.current);
+      if (meterRafRef.current != null) {
+        cancelAnimationFrame(meterRafRef.current);
+        meterRafRef.current = null;
+      }
+      analyserRef.current?.disconnect();
+      analyserRef.current = null;
+      if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
+        void audioCtxRef.current.close().catch(() => {});
+      }
+      audioCtxRef.current = null;
     };
   }, []);
 
@@ -489,293 +681,579 @@ export default function RecordingStudio({
   // tight band near the lens instead of travelling down the page. 56px ≈ the
   // container's top (1.5rem) + bottom (2rem) padding.
   const prompterHeight = Math.round(linesVisible * fontSize * lineHeight + 56);
+  const portrait = viewportPortrait;
+  const meterColor =
+    clipping || level >= 0.85
+      ? "#dc2626"
+      : level >= 0.65
+        ? "#facc15"
+        : "#16a34a";
+
+  // The six collapsible adjusters; each opens a single slider/toggle popover.
+  const adjusters: Array<[AdjusterKey, string, string]> = [
+    ["speed", "»", "Speed"],
+    ["font", "A", "Size"],
+    ["spacing", "≡", "Spacing"],
+    ["width", "↔", "Width"],
+    ["lines", "☰", "Lines"],
+    ["more", "⋯", "More"],
+  ];
+
+  const adjusterButtons = adjusters.map(([key, glyph, label]) => {
+    const active = openAdjuster === key;
+    return (
+      <button
+        key={key}
+        type="button"
+        aria-label={label}
+        onClick={() => setOpenAdjuster((cur) => (cur === key ? null : key))}
+        style={{ ...iconBtnBase, ...(active ? iconBtnActive : null) }}
+      >
+        <span style={{ fontSize: "1.15rem", lineHeight: 1 }}>{glyph}</span>
+        <span style={{ fontSize: "0.58rem", opacity: 0.9, fontWeight: 600 }}>
+          {label}
+        </span>
+      </button>
+    );
+  });
+
+  const timerChip = (
+    <div
+      style={{
+        fontVariantNumeric: "tabular-nums",
+        fontWeight: 800,
+        fontSize: "0.95rem",
+        color: timerColor,
+        background: "rgba(0,0,0,0.5)",
+        padding: "0.25rem 0.55rem",
+        borderRadius: "8px",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {fmt(elapsed)}
+    </div>
+  );
+
+  const recordButton = (
+    <button
+      type="button"
+      aria-label={recording ? "Stop recording" : "Start recording"}
+      onClick={recording ? stopRecording : startRecording}
+      disabled={!stream || editingScript}
+      style={{
+        width: "66px",
+        height: "66px",
+        borderRadius: "50%",
+        border: "4px solid rgba(255,255,255,0.9)",
+        background: !stream || editingScript ? "#7f1d1d" : "#dc2626",
+        cursor: !stream || editingScript ? "default" : "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+        padding: 0,
+        boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
+      }}
+    >
+      {recording ? (
+        <span style={{ width: "22px", height: "22px", borderRadius: "5px", background: "#fff" }} />
+      ) : null}
+    </button>
+  );
+
+  const playPauseButton = (
+    <button
+      type="button"
+      aria-label={scrolling ? "Pause script" : "Play script"}
+      onClick={() => setScrolling((s) => !s)}
+      disabled={!hasScript || editingScript}
+      style={{ ...iconBtnBase, opacity: !hasScript || editingScript ? 0.4 : 1 }}
+    >
+      <span style={{ fontSize: "1.15rem", lineHeight: 1 }}>{scrolling ? "⏸" : "▶"}</span>
+      <span style={{ fontSize: "0.58rem", opacity: 0.9, fontWeight: 600 }}>
+        {scrolling ? "Pause" : "Play"}
+      </span>
+    </button>
+  );
+
+  const restartButton = (
+    <button
+      type="button"
+      aria-label="Restart script"
+      onClick={() => {
+        setScrolling(false);
+        resetScroll();
+      }}
+      disabled={!hasScript || editingScript}
+      style={{ ...iconBtnBase, opacity: !hasScript || editingScript ? 0.4 : 1 }}
+    >
+      <span style={{ fontSize: "1.15rem", lineHeight: 1 }}>↻</span>
+      <span style={{ fontSize: "0.58rem", opacity: 0.9, fontWeight: 600 }}>Restart</span>
+    </button>
+  );
+
+  const flipButton = (
+    <button
+      type="button"
+      aria-label="Mirror camera"
+      onClick={() => setMirrorCam((v) => !v)}
+      style={{ ...iconBtnBase, ...(mirrorCam ? iconBtnActive : null) }}
+    >
+      <span style={{ fontSize: "1.15rem", lineHeight: 1 }}>⇄</span>
+      <span style={{ fontSize: "0.58rem", opacity: 0.9, fontWeight: 600 }}>Flip</span>
+    </button>
+  );
+
+  // Popover body for whichever adjuster is open.
+  const sliderField = (
+    label: string,
+    valueText: string,
+    min: number,
+    max: number,
+    step: number,
+    value: number,
+    onChange: (v: number) => void,
+  ) => (
+    <label
+      style={{
+        ...sliderLabel,
+        minWidth: portrait ? "68vw" : "240px",
+        maxWidth: "340px",
+        color: "#e5e7eb",
+      }}
+    >
+      <span style={{ fontSize: "0.82rem", fontWeight: 600 }}>
+        {label}: {valueText}
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+    </label>
+  );
+
+  let adjusterPanel: React.ReactNode = null;
+  if (openAdjuster === "speed")
+    adjusterPanel = sliderField("Speed", String(speed), 10, 200, 1, speed, setSpeed);
+  else if (openAdjuster === "font")
+    adjusterPanel = sliderField("Text size", `${fontSize}px`, 24, 80, 2, fontSize, setFontSize);
+  else if (openAdjuster === "spacing")
+    adjusterPanel = sliderField("Line spacing", lineHeight.toFixed(1), 1, 2.2, 0.1, lineHeight, setLineHeight);
+  else if (openAdjuster === "width")
+    adjusterPanel = sliderField("Reading width", `${promptWidth}%`, 25, 100, 5, promptWidth, setPromptWidth);
+  else if (openAdjuster === "lines")
+    adjusterPanel = sliderField("Visible lines", String(linesVisible), 1, 8, 1, linesVisible, setLinesVisible);
+  else if (openAdjuster === "more")
+    adjusterPanel = (
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "0.6rem",
+          minWidth: portrait ? "68vw" : "220px",
+          maxWidth: "340px",
+        }}
+      >
+        <label style={checkLabel}>
+          <input type="checkbox" checked={mirrorCam} onChange={(e) => setMirrorCam(e.target.checked)} />
+          Mirror camera
+        </label>
+        <label style={checkLabel}>
+          <input type="checkbox" checked={mirrorText} onChange={(e) => setMirrorText(e.target.checked)} />
+          Mirror text
+        </label>
+        <label style={checkLabel}>
+          <input type="checkbox" checked={condenseBlanks} onChange={(e) => setCondenseBlanks(e.target.checked)} />
+          Condense blank lines
+        </label>
+      </div>
+    );
 
   return (
     <div style={page}>
-      <div style={headerBar}>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 700 }}>
-          <span
-            style={{
-              width: "0.6rem",
-              height: "0.6rem",
-              borderRadius: "50%",
-              background: recording ? "#dc2626" : "#4b5563",
-            }}
-          />
-          Recording Studio
-        </div>
-        <div style={{ fontVariantNumeric: "tabular-nums", fontSize: "1.05rem", color: timerColor, fontWeight: 700 }}>
-          {fmt(elapsed)} <span style={{ color: "#6b7280", fontWeight: 500 }}>/ {fmt(MAX_SECONDS)}</span>
-        </div>
-        <div style={{ display: "flex", gap: "0.5rem" }}>
-          <button style={btn} onClick={() => setShowHelp(true)}>
-            ? Help
-          </button>
-          <button
-            style={btn}
-            onClick={() => setEditingScript((v) => !v)}
-            disabled={recording}
-          >
-            {editingScript ? "Done editing" : "Edit script"}
-          </button>
-          <button style={btn} onClick={() => (onClose ? onClose() : window.close())}>
-            Close
-          </button>
-        </div>
-      </div>
+      {/* Fullscreen camera */}
+      <video
+        ref={videoRef}
+        autoPlay
+        muted
+        playsInline
+        onClick={() => setOpenAdjuster(null)}
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          objectFit: "cover",
+          background: "#000",
+          transform: mirrorCam ? "scaleX(-1)" : "none",
+        }}
+      />
 
-      <div style={{ position: "relative", flex: 1, background: "#000", overflow: "hidden" }}>
-        <video
-          ref={videoRef}
-          autoPlay
-          muted
-          playsInline
+      {/* Close / Help */}
+      <button
+        type="button"
+        aria-label="Close studio"
+        onClick={() => (onClose ? onClose() : window.close())}
+        style={roundBtn}
+      >
+        ✕
+      </button>
+      <button
+        type="button"
+        aria-label="Help"
+        onClick={() => setShowHelp(true)}
+        style={{ ...roundBtn, left: "auto", right: "0.9rem" }}
+      >
+        ?
+      </button>
+
+      {/* Recording indicator */}
+      {recording && (
+        <div
           style={{
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-            transform: mirrorCam ? "scaleX(-1)" : "none",
+            position: "absolute",
+            top: "0.95rem",
+            left: "50%",
+            transform: "translateX(-50%)",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.4rem",
+            padding: "0.28rem 0.7rem",
+            borderRadius: "999px",
+            background: "rgba(220,38,38,0.92)",
+            color: "#fff",
+            fontSize: "0.78rem",
+            fontWeight: 800,
+            letterSpacing: "0.04em",
+            zIndex: 17,
           }}
-        />
+        >
+          <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#fff" }} />
+          REC
+        </div>
+      )}
 
-        {/* Teleprompter overlay */}
-        {!editingScript && !recordedUrl && (
+      {/* Teleprompter — large shadowed text directly over the video */}
+      {!editingScript && !recordedUrl && (
+        <div
+          ref={prompterRef}
+          style={{
+            position: "absolute",
+            top: portrait ? "3.3rem" : "1.4rem",
+            left: portrait ? 0 : "1.5rem",
+            right: portrait ? 0 : "auto",
+            width: portrait ? "auto" : `${promptWidth}%`,
+            maxWidth: portrait ? "100%" : "62%",
+            height: `${prompterHeight}px`,
+            maxHeight: portrait ? "50%" : "72%",
+            overflow: "hidden",
+            padding: portrait ? "0 1.1rem" : 0,
+            transform: mirrorText ? "scaleX(-1)" : "none",
+            pointerEvents: "none",
+            zIndex: 8,
+          }}
+        >
           <div
-            ref={prompterRef}
+            ref={prompterInnerRef}
+            style={{
+              fontSize: `${fontSize}px`,
+              lineHeight,
+              fontWeight: 700,
+              textAlign: "left",
+              whiteSpace: "pre-wrap",
+              color: "#fff",
+              textShadow: "0 2px 12px rgba(0,0,0,0.95), 0 0 3px rgba(0,0,0,0.85)",
+              maxWidth: "100%",
+              willChange: "transform",
+              backfaceVisibility: "hidden",
+              transform: "translateZ(0)",
+            }}
+          >
+            {hasScript ? displayScript : "No script yet — tap “Edit” to add one, or just record."}
+          </div>
+        </div>
+      )}
+
+      {/* Edit pill */}
+      {!editingScript && !recordedUrl && (
+        <button
+          type="button"
+          onClick={() => {
+            setScrolling(false);
+            setEditingScript(true);
+          }}
+          disabled={recording}
+          style={{
+            position: "absolute",
+            left: portrait ? "1.1rem" : "1.5rem",
+            bottom: portrait ? "10.5rem" : "4.2rem",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.3rem",
+            padding: "0.35rem 0.7rem",
+            borderRadius: "999px",
+            border: "1px solid rgba(255,255,255,0.25)",
+            background: "rgba(17,24,39,0.6)",
+            backdropFilter: "blur(6px)",
+            WebkitBackdropFilter: "blur(6px)",
+            color: "#fff",
+            fontSize: "0.8rem",
+            fontWeight: 600,
+            cursor: "pointer",
+            zIndex: 14,
+            opacity: recording ? 0.4 : 1,
+          }}
+        >
+          ✎ Edit
+        </button>
+      )}
+
+      {/* Mic level meter (vertical in portrait, horizontal in landscape) */}
+      {stream &&
+        !recordedUrl &&
+        !editingScript &&
+        (portrait ? (
+          <div
             style={{
               position: "absolute",
-              top: 0,
-              left: 0,
-              right: 0,
-              height: `${prompterHeight}px`,
-              maxHeight: "85%",
-              overflow: "hidden",
-              padding: "1.5rem 8% 2rem",
-              background: "linear-gradient(180deg, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0.55) 70%, rgba(0,0,0,0) 100%)",
-              transform: mirrorText ? "scaleX(-1)" : "none",
+              right: "0.7rem",
+              top: "26%",
+              height: "38%",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: "0.45rem",
+              zIndex: 9,
               pointerEvents: "none",
             }}
           >
             <div
-              ref={prompterInnerRef}
               style={{
-                fontSize: `${fontSize}px`,
-                lineHeight,
-                fontWeight: 600,
-                textAlign: "center",
-                whiteSpace: "pre-wrap",
-                color: "#f9fafb",
-                textShadow: "0 2px 8px rgba(0,0,0,0.8)",
-                maxWidth: `${promptWidth}%`,
-                marginLeft: "auto",
-                marginRight: "auto",
-                willChange: "transform",
-                backfaceVisibility: "hidden",
-                transform: "translateZ(0)",
-              }}
-            >
-              {hasScript ? displayScript : "No script yet — use “Edit script” to add one, or record freely."}
-            </div>
-          </div>
-        )}
-
-        {/* Script editor */}
-        {editingScript && (
-          <div style={{ position: "absolute", inset: 0, background: "rgba(11,15,20,0.92)", padding: "1.5rem", display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-            <h2 style={{ margin: 0, fontSize: "1.1rem" }}>Teleprompter script</h2>
-            <textarea
-              value={script}
-              onChange={(e) => setScript(e.target.value)}
-              placeholder="Paste or type what you want to read on camera…"
-              style={{
+                position: "relative",
                 flex: 1,
-                width: "100%",
-                boxSizing: "border-box",
-                background: "#0f1620",
-                color: "#e5e7eb",
-                border: "1px solid #334155",
-                borderRadius: "10px",
-                padding: "1rem",
-                fontSize: "1.05rem",
-                lineHeight: 1.5,
-                resize: "none",
-                fontFamily: "inherit",
+                width: "8px",
+                borderRadius: "4px",
+                background: "rgba(17,24,39,0.8)",
+                border: "1px solid rgba(148,163,184,0.25)",
+                overflow: "hidden",
               }}
-            />
-            <div>
-              <button style={{ ...btn, background: "#2563eb", borderColor: "#2563eb" }} onClick={() => setEditingScript(false)}>
-                Done
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Review overlay */}
-        {recordedUrl && (
-          <div style={{ position: "absolute", inset: 0, background: "rgba(11,15,20,0.94)", padding: "1.5rem", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "1rem" }}>
-            <h2 style={{ margin: 0, fontSize: "1.15rem" }}>Review your take</h2>
-            <video
-              src={recordedUrl}
-              controls
-              style={{ maxWidth: "min(100%, 900px)", maxHeight: "60vh", borderRadius: "10px", background: "#000" }}
-            />
-            {kept ? (
-              <p style={{ color: "#86efac", margin: 0, textAlign: "center" }}>
-                Take saved for this session. Sending it to families arrives in the next update.
-              </p>
-            ) : (
-              <p style={{ color: "#9ca3af", margin: 0, textAlign: "center" }}>
-                Happy with it? Keep this take, or record again.
-              </p>
-            )}
-            <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", justifyContent: "center" }}>
-              <button style={btn} onClick={editScriptFromReview}>
-                Edit script
-              </button>
-              <button style={btn} onClick={reRecord}>
-                Record again
-              </button>
-              <button
-                style={{ ...btn, background: "#16a34a", borderColor: "#16a34a" }}
-                onClick={keepTake}
-                disabled={kept}
-              >
-                {kept ? "Take kept" : "Use this take"}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Controls */}
-      {!recordedUrl && (
-        <div style={ctrlBar}>
-          {recording ? (
-            <button
-              style={{ ...btn, background: "#dc2626", borderColor: "#dc2626", minWidth: "120px" }}
-              onClick={stopRecording}
             >
-              ◼ Stop
-            </button>
-          ) : (
-            <button
-              style={{ ...btn, background: "#dc2626", borderColor: "#dc2626", minWidth: "120px" }}
-              onClick={startRecording}
-              disabled={!stream || editingScript}
-            >
-              ● Record
-            </button>
-          )}
-
-          <button
-            style={btn}
-            onClick={() => setScrolling((s) => !s)}
-            disabled={!hasScript || editingScript}
-          >
-            {scrolling ? "Pause script" : "Play script"}
-          </button>
-          <button
-            style={btn}
-            onClick={() => {
-              setScrolling(false);
-              resetScroll();
-            }}
-            disabled={!hasScript || editingScript}
-          >
-            Restart script
-          </button>
-          <button
-            style={btn}
-            onClick={() => {
-              setScrolling(false);
-              setEditingScript(true);
-            }}
-            disabled={recording}
-          >
-            ✎ Edit script
-          </button>
-
-          <label style={sliderLabel}>
-            <span>Speed: {speed}</span>
-            <input
-              type="range"
-              min={10}
-              max={200}
-              step={1}
-              value={speed}
-              onChange={(e) => setSpeed(Number(e.target.value))}
-            />
-          </label>
-          <label style={sliderLabel}>
-            <span>Text size: {fontSize}px</span>
-            <input
-              type="range"
-              min={24}
-              max={80}
-              step={2}
-              value={fontSize}
-              onChange={(e) => setFontSize(Number(e.target.value))}
-            />
-          </label>
-          <label style={sliderLabel}>
-            <span>Line spacing: {lineHeight.toFixed(1)}</span>
-            <input
-              type="range"
-              min={1}
-              max={2.2}
-              step={0.1}
-              value={lineHeight}
-              onChange={(e) => setLineHeight(Number(e.target.value))}
-            />
-          </label>
-          <label style={sliderLabel}>
-            <span>Reading width: {promptWidth}%</span>
-            <input
-              type="range"
-              min={25}
-              max={100}
-              step={5}
-              value={promptWidth}
-              onChange={(e) => setPromptWidth(Number(e.target.value))}
-            />
-          </label>
-          <label style={sliderLabel}>
-            <span>Visible lines: {linesVisible}</span>
-            <input
-              type="range"
-              min={1}
-              max={8}
-              step={1}
-              value={linesVisible}
-              onChange={(e) => setLinesVisible(Number(e.target.value))}
-            />
-          </label>
-
-          <label style={checkLabel}>
-            <input type="checkbox" checked={mirrorCam} onChange={(e) => setMirrorCam(e.target.checked)} />
-            Mirror camera
-          </label>
-          <label style={checkLabel}>
-            <input type="checkbox" checked={mirrorText} onChange={(e) => setMirrorText(e.target.checked)} />
-            Mirror text
-          </label>
-          <label style={checkLabel}>
-            <input type="checkbox" checked={condenseBlanks} onChange={(e) => setCondenseBlanks(e.target.checked)} />
-            Condense blank lines
-          </label>
-
-          <span
+              <div
+                style={{
+                  position: "absolute",
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  height: `${Math.round(level * 100)}%`,
+                  background: meterColor,
+                  transition: "height 90ms linear, background-color 120ms linear",
+                }}
+              />
+            </div>
+            <span aria-hidden style={{ fontSize: "1rem" }}>
+              🎙️
+            </span>
+          </div>
+        ) : (
+          <div
             style={{
-              marginLeft: "auto",
-              color: "#facc15",
-              fontSize: "0.8rem",
-              fontWeight: 600,
+              position: "absolute",
+              left: "1.4rem",
+              bottom: "1.3rem",
+              width: "min(42%, 300px)",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              zIndex: 9,
+              pointerEvents: "none",
             }}
           >
-            Space play/pause · ↑/↓ speed · R record/stop
-          </span>
+            <span aria-hidden style={{ fontSize: "1rem" }}>
+              🎙️
+            </span>
+            <div
+              style={{
+                position: "relative",
+                flex: 1,
+                height: "8px",
+                borderRadius: "4px",
+                background: "rgba(17,24,39,0.8)",
+                border: "1px solid rgba(148,163,184,0.25)",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  bottom: 0,
+                  left: 0,
+                  width: `${Math.round(level * 100)}%`,
+                  background: meterColor,
+                  transition: "width 90ms linear, background-color 120ms linear",
+                }}
+              />
+            </div>
+          </div>
+        ))}
+
+      {/* Script editor */}
+      {editingScript && (
+        <div style={{ position: "absolute", inset: 0, background: "rgba(11,15,20,0.94)", padding: "1.5rem", display: "flex", flexDirection: "column", gap: "0.75rem", zIndex: 30 }}>
+          <h2 style={{ margin: 0, fontSize: "1.1rem" }}>Teleprompter script</h2>
+          <textarea
+            value={script}
+            onChange={(e) => setScript(e.target.value)}
+            placeholder="Paste or type what you want to read on camera…"
+            style={{
+              flex: 1,
+              width: "100%",
+              boxSizing: "border-box",
+              background: "#0f1620",
+              color: "#e5e7eb",
+              border: "1px solid #334155",
+              borderRadius: "10px",
+              padding: "1rem",
+              fontSize: "1.05rem",
+              lineHeight: 1.5,
+              resize: "none",
+              fontFamily: "inherit",
+            }}
+          />
+          <div>
+            <button style={{ ...btn, background: "#2563eb", borderColor: "#2563eb" }} onClick={() => setEditingScript(false)}>
+              Done
+            </button>
+          </div>
         </div>
       )}
+
+      {/* Review overlay */}
+      {recordedUrl && (
+        <div style={{ position: "absolute", inset: 0, background: "rgba(11,15,20,0.94)", padding: "1.5rem", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "1rem", zIndex: 30 }}>
+          <h2 style={{ margin: 0, fontSize: "1.15rem" }}>Review your take</h2>
+          <video
+            src={recordedUrl}
+            controls
+            style={{ maxWidth: "min(100%, 900px)", maxHeight: "60vh", borderRadius: "10px", background: "#000" }}
+          />
+          {kept ? (
+            <p style={{ color: "#86efac", margin: 0, textAlign: "center" }}>
+              Take saved for this session. Sending it to families arrives in the next update.
+            </p>
+          ) : (
+            <p style={{ color: "#9ca3af", margin: 0, textAlign: "center" }}>
+              Happy with it? Keep this take, or record again.
+            </p>
+          )}
+          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", justifyContent: "center" }}>
+            <button style={btn} onClick={editScriptFromReview}>
+              Edit script
+            </button>
+            <button style={btn} onClick={reRecord}>
+              Record again
+            </button>
+            <button
+              style={{ ...btn, background: "#16a34a", borderColor: "#16a34a" }}
+              onClick={keepTake}
+              disabled={kept}
+            >
+              {kept ? "Take kept" : "Use this take"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Adjuster popover (one at a time) */}
+      {openAdjuster && !recordedUrl && !editingScript && (
+        <div
+          style={{
+            position: "absolute",
+            ...(portrait
+              ? { left: "50%", bottom: "11rem", transform: "translateX(-50%)" }
+              : { right: "7.2rem", top: "50%", transform: "translateY(-50%)" }),
+            background: "rgba(15,22,32,0.97)",
+            border: "1px solid #334155",
+            borderRadius: "14px",
+            padding: "0.95rem 1.1rem",
+            maxWidth: "92vw",
+            boxShadow: "0 18px 50px rgba(0,0,0,0.55)",
+            zIndex: 22,
+          }}
+        >
+          {adjusterPanel}
+        </div>
+      )}
+
+      {/* Control cluster — bottom strip (portrait) / right rail (landscape) */}
+      {!recordedUrl &&
+        !editingScript &&
+        (portrait ? (
+          <div
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 0,
+              padding: "0.7rem 0.7rem 1rem",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: "0.65rem",
+              zIndex: 16,
+              background: "linear-gradient(0deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0) 100%)",
+            }}
+          >
+            <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", justifyContent: "center" }}>
+              {adjusterButtons}
+            </div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexWrap: "wrap",
+                gap: "0.6rem",
+              }}
+            >
+              {timerChip}
+              {restartButton}
+              {playPauseButton}
+              {recordButton}
+              {flipButton}
+            </div>
+          </div>
+        ) : (
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              bottom: 0,
+              right: 0,
+              width: "6.4rem",
+              padding: "0.8rem 0.4rem",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: "0.55rem",
+              overflowY: "auto",
+              zIndex: 16,
+              background: "linear-gradient(90deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.5) 100%)",
+            }}
+          >
+            {timerChip}
+            {recordButton}
+            {flipButton}
+            {playPauseButton}
+            {restartButton}
+            <div style={{ width: "70%", height: "1px", background: "rgba(148,163,184,0.3)", margin: "0.15rem 0" }} />
+            {adjusterButtons}
+          </div>
+        ))}
 
       {showHelp && <HelpPanel onClose={() => setShowHelp(false)} />}
     </div>

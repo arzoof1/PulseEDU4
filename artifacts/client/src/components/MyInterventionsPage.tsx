@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import { fetchAllStudents } from "../lib/students";
+import StudentPicker from "./StudentPicker";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 export type InterventionHistoryRow = {
@@ -128,7 +129,6 @@ export default function MyInterventionsPage({
   const [preset, setPreset] = useState<Preset>("30d");
   const [customFrom, setCustomFrom] = useState<string>(daysAgoIso(29));
   const [customTo, setCustomTo] = useState<string>(todayIso());
-  const [studentQuery, setStudentQuery] = useState<string>("");
   const [studentId, setStudentId] = useState<string>("");
   const [tier, setTier] = useState<string>("all");
   const [students, setStudents] = useState<StudentLite[]>([]);
@@ -165,27 +165,6 @@ export default function MyInterventionsPage({
     return presetRange(preset);
   }, [preset, customFrom, customTo]);
 
-  // Resolve the typed studentQuery to a studentId if it matches one in
-  // the roster. Empty input → no filter.
-  useEffect(() => {
-    const q = studentQuery.trim();
-    if (!q) {
-      setStudentId("");
-      return;
-    }
-    // If the input matches a student exactly (by id or "Last, First"
-    // / "First Last"), pin to that id.
-    const match = students.find((s) => {
-      const last = `${s.lastName}, ${s.firstName}`.toLowerCase();
-      const first = `${s.firstName} ${s.lastName}`.toLowerCase();
-      return (
-        s.studentId.toLowerCase() === q.toLowerCase() ||
-        last === q.toLowerCase() ||
-        first === q.toLowerCase()
-      );
-    });
-    setStudentId(match ? match.studentId : "");
-  }, [studentQuery, students]);
 
   // Fetch on filter changes.
   useEffect(() => {
@@ -444,26 +423,22 @@ export default function MyInterventionsPage({
             <span style={{ fontSize: "0.78rem", color: "#64748b" }}>
               Student
             </span>
-            <input
-              type="text"
-              list="my-interventions-student-list"
+            <StudentPicker
+              mode="local"
+              items={students}
+              selectedKey={studentId}
+              onSelect={(s) => setStudentId(s.studentId)}
+              onClear={() => setStudentId("")}
+              getKey={(s) => s.studentId}
+              getPrimary={(s) => `${s.lastName}, ${s.firstName}`}
+              getSearchText={(s) =>
+                `${s.firstName} ${s.lastName} ${s.studentId}`
+              }
               placeholder="All students (type a name to filter)"
-              value={studentQuery}
-              onChange={(e) => setStudentQuery(e.target.value)}
+              maxResults={500}
+              minWidth="100%"
+              style={{ display: "block" }}
             />
-            <datalist id="my-interventions-student-list">
-              {students.slice(0, 500).map((s) => (
-                <option
-                  key={s.studentId}
-                  value={`${s.lastName}, ${s.firstName}`}
-                />
-              ))}
-            </datalist>
-            {studentQuery && !studentId && (
-              <span style={{ fontSize: "0.72rem", color: "#b45309" }}>
-                No exact match — showing all students.
-              </span>
-            )}
           </label>
 
           <label style={{ display: "grid", gap: 4 }}>

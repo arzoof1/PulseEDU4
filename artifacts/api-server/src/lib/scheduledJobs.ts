@@ -11,12 +11,17 @@ import { runInRouteOverdueSweep } from "../cron/inRouteOverdue.js";
 import { runPickupEndOfDayAutoClear } from "../cron/pickupEndOfDayAutoClear.js";
 import { runPulseDnaVideoPurge } from "../cron/pulseDnaVideoPurge.js";
 import { sendDailyDigestEmail } from "./dailyDigest.js";
+import { sendEligibilityWeeklyDigest } from "./eligibilityNotify.js";
 import { runDueLotteryDraws } from "./onTimeLottery.js";
 import { logger } from "./logger.js";
 import { runScheduledSisRosterSyncs } from "./sisRosterSync.js";
 import { startReminderScheduler } from "./scheduler.js";
 import { recoverStuckPulseDnaVideos } from "./videoTranscode.js";
 import { sendWeeklyHeartbeatEmails } from "./weeklyHeartbeatEmail.js";
+import {
+  runTourEscalations,
+  runTourFamilyNurture,
+} from "./tourReminders.js";
 
 const DAILY_DIGEST_LOCK_KEY = 47001;
 const WEEKLY_HEARTBEAT_LOCK_KEY = 47002;
@@ -197,6 +202,41 @@ export function startScheduledJobs(source: "api" | "worker"): void {
     logger.error({ err: schedErr }, "Failed to schedule weekly HeartBEAT email");
   }
 
+  const eligExpr = process.env.ELIGIBILITY_DIGEST_CRON ?? "0 7 * * 1";
+  const eligTz = process.env.ELIGIBILITY_DIGEST_TZ ?? "America/New_York";
+  try {
+    cron.schedule(
+      eligExpr,
+      () => {
+        sendEligibilityWeeklyDigest(new Date())
+          .then((results) => {
+            for (const r of results) {
+              if (r.status === "error") {
+                logger.warn(
+                  { schoolId: r.schoolId, errorMsg: safeCronErrorMsg(r.errorMsg) },
+                  "Eligibility digest error for school",
+                );
+              }
+            }
+            logger.info(
+              {
+                schools: results.length,
+                sent: results.filter((r) => r.status === "sent").length,
+              },
+              "Weekly eligibility digest fired",
+            );
+          })
+          .catch((cronErr: unknown) => {
+            logger.error({ err: cronErr }, "Weekly eligibility digest send failed");
+          });
+      },
+      { timezone: eligTz },
+    );
+    logger.info({ expr: eligExpr, tz: eligTz, source }, "Weekly eligibility digest scheduled");
+  } catch (schedErr) {
+    logger.error({ err: schedErr }, "Failed to schedule weekly eligibility digest");
+  }
+
   const lotteryExpr = process.env.ON_TIME_LOTTERY_CRON ?? "*/5 12-22 * * 1-5";
   const lotteryTz = process.env.ON_TIME_LOTTERY_TZ ?? "America/New_York";
   try {
@@ -318,6 +358,33 @@ export function startScheduledJobs(source: "api" | "worker"): void {
     logger.info({ expr: overdueExpr, source }, "In-route overdue sweep scheduled");
   } catch (schedErr) {
     logger.error({ err: schedErr }, "Failed to schedule in-route overdue sweep");
+  }
+
+  const tourEscExpr = process.env.TOUR_ESCALATION_CRON ?? "0 * * * *";
+  try {
+    cron.schedule(tourEscExpr, () => {
+      runTourEscalations(new Date())
+        .then((r) => {
+          if (r.sent > 0) {
+            logger.info(r, "Tour escalation sweep complete");
+          }
+        })
+        .catch((cronErr: unknown) => {
+          logger.error({ err: cronErr }, "Tour escalation sweep failed");
+        });
+      runTourFamilyNurture(new Date())
+        .then((r) => {
+          if (r.sent > 0) {
+            logger.info(r, "Tour family nurture sweep complete");
+          }
+        })
+        .catch((cronErr: unknown) => {
+          logger.error({ err: cronErr }, "Tour family nurture sweep failed");
+        });
+    });
+    logger.info({ expr: tourEscExpr, source }, "Tour escalation sweep scheduled");
+  } catch (schedErr) {
+    logger.error({ err: schedErr }, "Failed to schedule tour escalation sweep");
   }
 
   const pulseVideoPurgeExpr = process.env.PULSEDNA_PURGE_CRON ?? "30 3 * * *";

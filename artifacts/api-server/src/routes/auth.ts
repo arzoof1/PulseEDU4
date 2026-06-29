@@ -116,13 +116,16 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     isSocialWorker: row.isSocialWorker,
     isSchoolPsychologist: row.isSchoolPsychologist,
     isGuidanceCounselor: row.isGuidanceCounselor,
+    isAthleticDirector: row.isAthleticDirector,
     capStaffRoles: row.capStaffRoles,
     capManageRoles: row.capManageRoles,
     capManageDisplays: row.capManageDisplays,
     capCarRiderMonitor: row.capCarRiderMonitor,
     capManageDismissal: row.capManageDismissal,
     capTourNotify: row.capTourNotify,
+    capTourGuide: row.capTourGuide,
     capManageEsign: row.capManageEsign,
+    capManageContactInfo: row.capManageContactInfo,
     canApproveAst: row.canApproveAst,
     canApproveCompTime: row.canApproveCompTime,
     exemptStatus: row.exemptStatus,
@@ -131,7 +134,17 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     isSro: row.isSro,
     isGuardian: row.isGuardian,
     isCoreTeam: row.isCoreTeam,
+    isConfidentialSecretary: row.isConfidentialSecretary,
     defaultRoom: row.defaultRoom,
+    // Per-teacher opt-in: the Classroom Store is hidden by default and a
+    // teacher reveals it from a toggle. Stored in ui_prefs (no migration);
+    // surfaced here so the client can gate the nav item + hub view in one
+    // place off authUser without a second fetch.
+    classroomStoreEnabled: !!(
+      row.uiPrefs &&
+      typeof row.uiPrefs === "object" &&
+      (row.uiPrefs as Record<string, unknown>).classroomStoreEnabled === true
+    ),
   };
 }
 

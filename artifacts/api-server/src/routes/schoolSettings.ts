@@ -20,6 +20,7 @@ export const FEATURE_KEYS = [
   "FamilyComm",
   "Pbis",
   "SchoolStore",
+  "SchoolStoreNotify",
   "Accommodations",
   "LogIntervention",
   "RequestPullout",
@@ -36,6 +37,7 @@ export const FEATURE_KEYS = [
   "Houses",
   "ParentPortal",
   "AcademicEvidence",
+  "Eligibility",
 ] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 type SettingsRow = typeof schoolSettingsTable.$inferSelect;
@@ -114,6 +116,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     pbisInvisibleDaysTier3,
     pbisReasonImbalancePct,
     pbisColdPeriodMultiple,
+    interventionEffectivenessDays,
     pbisNegativeAffectsTotal,
     schoolWideExpectationAcronym,
     schoolWideExpectationLetters,
@@ -123,6 +126,12 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     staffDirectoryShowCellPhone,
     manualRosterUploadEnabled,
     strictHouseNameMatch,
+    notifyParentEligibility,
+    notifyParentPbisMilestone,
+    notifyParentTardy,
+    notifyParentEventTickets,
+    notifyParentEsign,
+    tourFamilyNurtureEnabled,
     pickupCutoffTime,
     pickupTeacherViewScope,
     pickupInCarStepEnabled,
@@ -141,6 +150,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     onTimeLotteryLabel,
     onTimeLotteryBonusPoints,
     onTimeLotteryRevealLeadMinutes,
+    schoolStoreInventoryMode,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -285,6 +295,14 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       20,
       "pbisColdPeriodMultiple",
     ),
+    // Classroom-intervention effectiveness window. 1..90 days.
+    intRange(
+      "interventionEffectivenessDays",
+      interventionEffectivenessDays,
+      1,
+      90,
+      "interventionEffectivenessDays",
+    ),
     // FAST history visibility (Phase 1 of Historical FAST work).
     // 2..5 — minimum 2 so the trajectory chip always has at least
     // a prior year to compare against; 5 cap matches the FAST launch
@@ -318,6 +336,38 @@ router.put("/school-settings", async (req, res): Promise<void> => {
   ]) {
     if (err) {
       res.status(400).json({ error: err });
+      return;
+    }
+  }
+
+  // The intervention effectiveness window is a school-wide PBIS policy. Only
+  // admins / PBIS coordinators / behavior specialists may change it — same gate
+  // as `pbisNegativeAffectsTotal`. `intRange` above already wrote the value into
+  // `updates`, so reject here (before the DB write) for unprivileged staff.
+  if (interventionEffectivenessDays !== undefined) {
+    const staffId = req.staffId;
+    let allowed = false;
+    if (staffId) {
+      const [s] = await db
+        .select()
+        .from(staffTable)
+        .where(eq(staffTable.id, staffId));
+      if (
+        s &&
+        s.active &&
+        (s.isSuperUser ||
+          s.isAdmin ||
+          s.isPbisCoordinator ||
+          s.isBehaviorSpecialist)
+      ) {
+        allowed = true;
+      }
+    }
+    if (!allowed) {
+      res.status(403).json({
+        error:
+          "Only admin, PBIS coordinator, or behavior specialist may change this",
+      });
       return;
     }
   }
@@ -357,6 +407,47 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.pbisNegativeAffectsTotal = pbisNegativeAffectsTotal;
+  }
+
+  // School Store inventory mode — `simple` (in-stock boolean) vs `quantity`
+  // (tracked on-hand counts). School-wide PBIS-store policy, so it shares the
+  // admin / PBIS coordinator / behavior specialist gate. Validated enum.
+  if (schoolStoreInventoryMode !== undefined) {
+    if (
+      schoolStoreInventoryMode !== "simple" &&
+      schoolStoreInventoryMode !== "quantity"
+    ) {
+      res.status(400).json({
+        error: "schoolStoreInventoryMode must be 'simple' or 'quantity'",
+      });
+      return;
+    }
+    const staffId = req.staffId;
+    let allowed = false;
+    if (staffId) {
+      const [s] = await db
+        .select()
+        .from(staffTable)
+        .where(eq(staffTable.id, staffId));
+      if (
+        s &&
+        s.active &&
+        (s.isSuperUser ||
+          s.isAdmin ||
+          s.isPbisCoordinator ||
+          s.isBehaviorSpecialist)
+      ) {
+        allowed = true;
+      }
+    }
+    if (!allowed) {
+      res.status(403).json({
+        error:
+          "Only admin, PBIS coordinator, or behavior specialist may change this",
+      });
+      return;
+    }
+    updates.schoolStoreInventoryMode = schoolStoreInventoryMode;
   }
 
   // -----------------------------------------------------------------
@@ -512,6 +603,51 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.staffDirectoryShowCellPhone = staffDirectoryShowCellPhone;
+  }
+  // -----------------------------------------------------------------
+  // Parent Notifications panel (Family Communication). ADMIN-ONLY master
+  // switches for each automated/recurring parent notification. These are a
+  // stricter gate than the rest of this PUT (settings-managers cannot flip
+  // them) because they decide what external email families receive.
+  // tourFamilyNurtureEnabled is REUSED here (also editable from Tours
+  // settings) so the panel drives it on the same save — both paths write
+  // the one column, so they stay in sync.
+  // -----------------------------------------------------------------
+  const parentNotifyFields: Array<[string, unknown]> = [
+    ["notifyParentEligibility", notifyParentEligibility],
+    ["notifyParentPbisMilestone", notifyParentPbisMilestone],
+    ["notifyParentTardy", notifyParentTardy],
+    ["notifyParentEventTickets", notifyParentEventTickets],
+    ["notifyParentEsign", notifyParentEsign],
+    ["tourFamilyNurtureEnabled", tourFamilyNurtureEnabled],
+  ];
+  if (parentNotifyFields.some(([, v]) => v !== undefined)) {
+    let notifyActor: typeof staffTable.$inferSelect | undefined;
+    if (req.staffId) {
+      const [s] = await db
+        .select()
+        .from(staffTable)
+        .where(eq(staffTable.id, req.staffId));
+      notifyActor = s;
+    }
+    const isAdminUser = Boolean(
+      notifyActor?.active &&
+        (notifyActor?.isAdmin || notifyActor?.isSuperUser),
+    );
+    if (!isAdminUser) {
+      res.status(403).json({
+        error: "Only an admin may change parent notification settings",
+      });
+      return;
+    }
+    for (const [key, val] of parentNotifyFields) {
+      if (val === undefined) continue;
+      if (typeof val !== "boolean") {
+        res.status(400).json({ error: `${key} must be a boolean` });
+        return;
+      }
+      (updates as Record<string, unknown>)[key] = val;
+    }
   }
   // -----------------------------------------------------------------
   // On-Time Attendance + Tardy Lottery toggles and the lottery label.

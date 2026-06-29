@@ -1,0 +1,2571 @@
+diff --git a/artifacts/api-server/src/index.ts b/artifacts/api-server/src/index.ts
+index ee8aa2fd..e73328ff 100644
+--- a/artifacts/api-server/src/index.ts
++++ b/artifacts/api-server/src/index.ts
+@@ -73,6 +73,10 @@ import { sendWeeklyHeartbeatEmails } from "./lib/weeklyHeartbeatEmail";
+ import { runDueLotteryDraws } from "./lib/onTimeLottery";
+ import { startReminderScheduler } from "./lib/scheduler";
+ import { runAstYearEndLapse } from "./cron/astLapse";
++import {
++  runTourEscalations,
++  runTourFamilyNurture,
++} from "./lib/tourReminders";
+ import { runFeatureLicensingOverrideSweep } from "./cron/featureLicensingOverrideSweep";
+ import { runPickupEndOfDayAutoClear } from "./cron/pickupEndOfDayAutoClear";
+ import { runInRouteOverdueSweep } from "./cron/inRouteOverdue";
+@@ -661,6 +665,46 @@ function startListening(): void {
+           );
+         }
+ 
++        // School Tours — Phase 2 "never lose a lead" escalation sweep. Hourly
++        // scan that emails the lead owner (CC principal/admins) when a lead
++        // crosses its stage SLA (first-contact / scheduled-not-toured /
++        // deciding-follow-up). Idempotent per reason + re-nudge window. Gated
++        // globally on EMAIL_REMINDERS_ENABLED and per-school on
++        // tourEscalationEnabled. Override schedule via TOUR_ESCALATION_CRON.
++        const tourEscExpr = process.env.TOUR_ESCALATION_CRON ?? "0 * * * *";
++        try {
++          cron.schedule(tourEscExpr, async () => {
++            try {
++              const r = await runTourEscalations(new Date());
++              if (r.sent > 0) {
++                logger.info(r, "Tour escalation sweep complete");
++              }
++            } catch (cronErr) {
++              logger.error({ err: cronErr }, "Tour escalation sweep failed");
++            }
++            // Phase 3 "close the loop with families" — family nurture cadence
++            // shares this hourly tick. Gated per-school on
++            // tourFamilyNurtureEnabled (defaults OFF); best-effort.
++            try {
++              const r = await runTourFamilyNurture(new Date());
++              if (r.sent > 0) {
++                logger.info(r, "Tour family nurture sweep complete");
++              }
++            } catch (cronErr) {
++              logger.error(
++                { err: cronErr },
++                "Tour family nurture sweep failed",
++              );
++            }
++          });
++          logger.info({ expr: tourEscExpr }, "Tour escalation sweep scheduled");
++        } catch (schedErr) {
++          logger.error(
++            { err: schedErr },
++            "Failed to schedule tour escalation sweep",
++          );
++        }
++
+         // Pickup queue end-of-day auto-clear. Inserts an `auto_cleared`
+         // event for every student who entered the queue today but
+         // didn't get a terminal release. Append-only — preserves the
+diff --git a/artifacts/api-server/src/lib/tourEmails.ts b/artifacts/api-server/src/lib/tourEmails.ts
+index 34ec2d8b..71c178b2 100644
+--- a/artifacts/api-server/src/lib/tourEmails.ts
++++ b/artifacts/api-server/src/lib/tourEmails.ts
+@@ -100,6 +100,159 @@ export async function sendNewLeadNotifyEmail(
+   }
+ }
+ 
++export interface LeadAssignedEmailArgs {
++  to: string;
++  cc: string[];
++  schoolName: string;
++  familyName: string;
++  phone: string;
++  childrenSummary: string;
++  assigneeName: string;
++  assignedByName: string;
++  pipelineUrl: string;
++}
++
++// Notify a staff member they've been made the owner of a tour lead. The
++// principal/admins are CC'd for oversight. Best-effort, gated on email being
++// enabled.
++export async function sendLeadAssignedEmail(
++  args: LeadAssignedEmailArgs,
++): Promise<boolean> {
++  if (!emailEnabled() || !args.to) return false;
++  try {
++    const { client, fromEmail } = await getUncachableResendClient();
++    const rows = [
++      ["Family", args.familyName],
++      ["Phone", args.phone],
++      ["Student(s)", args.childrenSummary],
++      ["Assigned by", args.assignedByName],
++    ]
++      .map(
++        ([k, v]) =>
++          `<tr><td style="padding:4px 10px 4px 0; color:#6b7280; font-size:13px; vertical-align:top;">${escapeHtml(
++            k,
++          )}</td><td style="padding:4px 0; font-size:14px;"><strong>${escapeHtml(
++            v,
++          )}</strong></td></tr>`,
++      )
++      .join("");
++    const body = `
++      <p style="margin:0 0 14px 0;">Hi ${escapeHtml(args.assigneeName)},</p>
++      <p style="margin:0 0 14px 0;">You've been assigned a tour at <strong>${escapeHtml(
++        args.schoolName,
++      )}</strong>. Please reach out to the family within one school day and print the Tour Roadmap before they arrive.</p>
++      <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;">${rows}</table>
++      <p style="margin:0 0 22px 0; text-align:center;">
++        <a href="${args.pipelineUrl}" style="display:inline-block; background:#0ea5a4; color:#ffffff; text-decoration:none; padding:12px 24px; border-radius:10px; font-weight:600; font-size:15px;">Open the lead</a>
++      </p>`;
++    const result = await client.emails.send({
++      from: fromEmail,
++      to: args.to,
++      cc: args.cc.length ? args.cc : undefined,
++      subject: `Tour assigned to you: ${args.familyName} — ${args.schoolName}`,
++      html: shell("You've been assigned a tour", body),
++      text: `Hi ${args.assigneeName},\n\nYou've been assigned a tour at ${args.schoolName}.\n\nFamily: ${args.familyName}\nPhone: ${args.phone}\nStudent(s): ${args.childrenSummary}\nAssigned by: ${args.assignedByName}\n\nOpen the lead: ${args.pipelineUrl}`,
++    });
++    if (result.error) throw new Error(result.error.message);
++    return true;
++  } catch (err) {
++    logger.warn({ err }, "tour lead-assigned email failed");
++    return false;
++  }
++}
++
++export type TourOverdueReason =
++  | "first_contact"
++  | "tour_not_logged"
++  | "follow_up";
++
++export interface LeadOverdueEmailArgs {
++  to: string[];
++  cc: string[];
++  schoolName: string;
++  familyName: string;
++  phone: string;
++  childrenSummary: string;
++  assigneeName: string | null;
++  reason: TourOverdueReason;
++  // Human-readable description of how long the lead has been waiting.
++  waitingSummary: string;
++  pipelineUrl: string;
++}
++
++const OVERDUE_COPY: Record<
++  TourOverdueReason,
++  { label: string; line: string; subject: string }
++> = {
++  first_contact: {
++    label: "First contact overdue",
++    line: "This new tour lead hasn't been contacted yet and is now past your first-contact window. Reach out today to keep the family warm.",
++    subject: "Tour lead needs first contact",
++  },
++  tour_not_logged: {
++    label: "Tour not logged",
++    line: "This lead's scheduled tour time has passed but no outcome has been recorded. Log how the tour went (or reschedule) so the lead doesn't stall.",
++    subject: "Tour outcome not logged",
++  },
++  follow_up: {
++    label: "Follow-up due",
++    line: "This family is still deciding and their follow-up is now due. A quick check-in keeps you top of mind while they choose.",
++    subject: "Still-deciding lead needs a follow-up",
++  },
++};
++
++// Escalation nudge to the lead's owner (or the notify group when unassigned),
++// CC'ing the coordinator/principal. Sent by the background escalation job when a
++// lead crosses its SLA threshold. Reason-specific copy. Best-effort, gated on
++// email being enabled.
++export async function sendLeadOverdueEscalationEmail(
++  args: LeadOverdueEmailArgs,
++): Promise<boolean> {
++  if (!emailEnabled() || args.to.length === 0) return false;
++  try {
++    const { client, fromEmail } = await getUncachableResendClient();
++    const copy = OVERDUE_COPY[args.reason];
++    const rows = [
++      ["Family", args.familyName],
++      ["Phone", args.phone],
++      ["Student(s)", args.childrenSummary],
++      ["Owner", args.assigneeName || "Unassigned"],
++      ["Waiting", args.waitingSummary],
++    ]
++      .map(
++        ([k, v]) =>
++          `<tr><td style="padding:4px 10px 4px 0; color:#6b7280; font-size:13px; vertical-align:top;">${escapeHtml(
++            k,
++          )}</td><td style="padding:4px 0; font-size:14px;"><strong>${escapeHtml(
++            v,
++          )}</strong></td></tr>`,
++      )
++      .join("");
++    const body = `
++      <p style="margin:0 0 10px 0;"><span style="display:inline-block; background:#fef2f2; color:#b91c1c; font-size:12px; font-weight:700; letter-spacing:0.4px; text-transform:uppercase; padding:4px 10px; border-radius:999px;">${escapeHtml(
++        copy.label,
++      )}</span></p>
++      <p style="margin:0 0 14px 0;">${escapeHtml(copy.line)}</p>
++      <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;">${rows}</table>
++      <p style="margin:0 0 22px 0; text-align:center;">
++        <a href="${args.pipelineUrl}" style="display:inline-block; background:#0ea5a4; color:#ffffff; text-decoration:none; padding:12px 24px; border-radius:10px; font-weight:600; font-size:15px;">Open the lead</a>
++      </p>`;
++    const result = await client.emails.send({
++      from: fromEmail,
++      to: args.to,
++      cc: args.cc.length ? args.cc : undefined,
++      subject: `${copy.subject}: ${args.familyName} — ${args.schoolName}`,
++      html: shell(copy.label, body),
++      text: `${copy.label} — ${args.schoolName}\n\n${copy.line}\n\nFamily: ${args.familyName}\nPhone: ${args.phone}\nStudent(s): ${args.childrenSummary}\nOwner: ${args.assigneeName || "Unassigned"}\nWaiting: ${args.waitingSummary}\n\nOpen the lead: ${args.pipelineUrl}`,
++    });
++    if (result.error) throw new Error(result.error.message);
++    return true;
++  } catch (err) {
++    logger.warn({ err }, "tour lead-overdue escalation email failed");
++    return false;
++  }
++}
++
+ export interface FamilyAckEmailArgs {
+   to: string;
+   schoolName: string;
+@@ -139,3 +292,170 @@ export async function sendFamilyAckEmail(
+     return false;
+   }
+ }
++
++// =============================================================================
++// Phase 3 "close the loop with families" — automated FAMILY nurture cadence.
++// Each message mirrors sendFamilyAckEmail: gated on EMAIL_REMINDERS_ENABLED,
++// best-effort (failures logged + swallowed, returns boolean), warm family tone.
++// The background sweep (tourReminders.ts) stamps the lead only after a `true`
++// return, so a transient failure is retried on the next hour.
++// =============================================================================
++
++interface FamilyNurtureBaseArgs {
++  to: string;
++  schoolName: string;
++  familyName: string;
++  // Display name for the From header + closing signature.
++  fromName: string;
++  signature: string;
++}
++
++function familyParagraphs(...paras: string[]): string {
++  return paras
++    .map(
++      (p, i) =>
++        `<p style="margin:0 0 ${
++          i === paras.length - 1 ? "0" : "14px"
++        } 0;">${p}</p>`,
++    )
++    .join("");
++}
++
++function signatureBlock(sig: string): string {
++  return `<p style="margin:18px 0 0 0; color:#6b7280; font-size:13px; white-space:pre-line;">${escapeHtml(
++    sig,
++  )}</p>`;
++}
++
++async function sendFamilyNurture(
++  args: FamilyNurtureBaseArgs,
++  subject: string,
++  title: string,
++  bodyHtml: string,
++  bodyText: string,
++  logTag: string,
++): Promise<boolean> {
++  if (!emailEnabled()) return false;
++  try {
++    const { client, fromEmail } = await getUncachableResendClient();
++    const sig = args.signature || `Warmly,\n${args.schoolName}`;
++    const html = shell(title, `${bodyHtml}${signatureBlock(sig)}`);
++    const result = await client.emails.send({
++      from: args.fromName ? `${args.fromName} <${fromEmail}>` : fromEmail,
++      to: args.to,
++      subject,
++      html,
++      text: `${bodyText}\n\n${sig}`,
++    });
++    if (result.error) throw new Error(result.error.message);
++    return true;
++  } catch (err) {
++    logger.warn({ err }, logTag);
++    return false;
++  }
++}
++
++export interface FamilyTourReminderArgs extends FamilyNurtureBaseArgs {
++  // Human-readable scheduled time, already formatted in the school's locale.
++  tourWhen: string;
++}
++
++// (1) Pre-tour reminder — goes out the day before the scheduled tour.
++export async function sendFamilyTourReminderEmail(
++  args: FamilyTourReminderArgs,
++): Promise<boolean> {
++  const html = familyParagraphs(
++    `Hi ${escapeHtml(args.familyName)},`,
++    `This is a friendly reminder that your tour of <strong>${escapeHtml(
++      args.schoolName,
++    )}</strong> is coming up on <strong>${escapeHtml(args.tourWhen)}</strong>.`,
++    `If anything has come up and you need to reschedule, just reply to this email and we'll find another time. Otherwise, we look forward to seeing you!`,
++  );
++  const text = `Hi ${args.familyName},\n\nThis is a friendly reminder that your tour of ${args.schoolName} is coming up on ${args.tourWhen}.\n\nIf you need to reschedule, just reply to this email. Otherwise, we look forward to seeing you!`;
++  return sendFamilyNurture(
++    args,
++    `Your tour is coming up — ${args.schoolName}`,
++    "See you soon!",
++    html,
++    text,
++    "tour family reminder email failed",
++  );
++}
++
++export interface FamilyThankYouArgs extends FamilyNurtureBaseArgs {
++  surveyUrl: string;
++}
++
++// (2) Post-tour thank-you + survey link.
++export async function sendFamilyPostTourThankYouEmail(
++  args: FamilyThankYouArgs,
++): Promise<boolean> {
++  const html = `${familyParagraphs(
++    `Hi ${escapeHtml(args.familyName)},`,
++    `Thank you for visiting <strong>${escapeHtml(
++      args.schoolName,
++    )}</strong> — it was a pleasure showing you around and getting to meet you.`,
++    `We'd love to hear what you thought. If you have a moment, please share your feedback:`,
++  )}
++      <p style="margin:18px 0;">
++        <a href="${escapeHtml(args.surveyUrl)}" style="display:inline-block; background:#0ea5a4; color:#ffffff; text-decoration:none; padding:11px 22px; border-radius:9px; font-weight:600; font-size:14px;">Share your feedback</a>
++      </p>
++      ${familyParagraphs(
++        `If you have any questions as you consider your decision, just reply to this email — we're here to help.`,
++      )}`;
++  const text = `Hi ${args.familyName},\n\nThank you for visiting ${args.schoolName} — it was a pleasure showing you around.\n\nWe'd love to hear what you thought. Please share your feedback here:\n${args.surveyUrl}\n\nIf you have any questions as you consider your decision, just reply to this email.`;
++  return sendFamilyNurture(
++    args,
++    `Thanks for touring ${args.schoolName}!`,
++    "Thanks for visiting!",
++    html,
++    text,
++    "tour family thank-you email failed",
++  );
++}
++
++// (3) Gentle "still deciding" nudge.
++export async function sendFamilyDecidingNudgeEmail(
++  args: FamilyNurtureBaseArgs,
++): Promise<boolean> {
++  const html = familyParagraphs(
++    `Hi ${escapeHtml(args.familyName)},`,
++    `We so enjoyed having you visit <strong>${escapeHtml(
++      args.schoolName,
++    )}</strong>, and we wanted to check in as you think things over.`,
++    `Choosing the right school is a big decision, and we're happy to answer any questions, arrange a second visit, or connect you with our team. Just reply to this email and we'll take it from there.`,
++    `We'd be delighted to welcome your family.`,
++  );
++  const text = `Hi ${args.familyName},\n\nWe so enjoyed having you visit ${args.schoolName}, and we wanted to check in as you think things over.\n\nChoosing the right school is a big decision, and we're happy to answer any questions, arrange a second visit, or connect you with our team. Just reply to this email.\n\nWe'd be delighted to welcome your family.`;
++  return sendFamilyNurture(
++    args,
++    `Checking in from ${args.schoolName}`,
++    "Still here for you",
++    html,
++    text,
++    "tour family deciding-nudge email failed",
++  );
++}
++
++// (4) Enrollment welcome.
++export async function sendFamilyEnrollmentWelcomeEmail(
++  args: FamilyNurtureBaseArgs,
++): Promise<boolean> {
++  const html = familyParagraphs(
++    `Hi ${escapeHtml(args.familyName)},`,
++    `Welcome to the <strong>${escapeHtml(
++      args.schoolName,
++    )}</strong> family — we are thrilled you've chosen us!`,
++    `Our team will be in touch shortly with next steps to get your student set up for a great start. In the meantime, if you have any questions, just reply to this email.`,
++    `We can't wait to get started together.`,
++  );
++  const text = `Hi ${args.familyName},\n\nWelcome to the ${args.schoolName} family — we are thrilled you've chosen us!\n\nOur team will be in touch shortly with next steps to get your student set up for a great start. If you have any questions, just reply to this email.\n\nWe can't wait to get started together.`;
++  return sendFamilyNurture(
++    args,
++    `Welcome to ${args.schoolName}!`,
++    "Welcome aboard!",
++    html,
++    text,
++    "tour family welcome email failed",
++  );
++}
+diff --git a/artifacts/api-server/src/lib/tourReminders.ts b/artifacts/api-server/src/lib/tourReminders.ts
+new file mode 100644
+index 00000000..394967be
+--- /dev/null
++++ b/artifacts/api-server/src/lib/tourReminders.ts
+@@ -0,0 +1,448 @@
++import { and, eq, inArray, isNull, or } from "drizzle-orm";
++import {
++  db,
++  tourRequestsTable,
++  tourRequestEventsTable,
++  schoolSettingsTable,
++  schoolsTable,
++  staffTable,
++  adminNotificationsTable,
++} from "@workspace/db";
++import { canManageTours } from "./coreTeam.js";
++import {
++  sendLeadOverdueEscalationEmail,
++  sendFamilyTourReminderEmail,
++  sendFamilyPostTourThankYouEmail,
++  sendFamilyDecidingNudgeEmail,
++  sendFamilyEnrollmentWelcomeEmail,
++  type TourOverdueReason,
++} from "./tourEmails.js";
++import { DEFAULT_SCHOOL_TZ } from "./schoolYear.js";
++import { logger } from "./logger.js";
++
++// -----------------------------------------------------------------------------
++// School Tours — Phase 2 "never lose a lead" background escalation job.
++//
++// Hourly sweep that finds leads that have crossed their stage SLA and emails the
++// owner (or the notify group when unassigned), CC'ing the principal/admins. It
++// is idempotent: a lead is nudged at most once per reason per re-nudge window
++// (RENUDGE_MS), and immediately again when the reason changes (e.g. the lead
++// moved new → scheduled and is now overdue for a different reason). Any staff
++// stage change or logged contact clears lastEscalatedReason, re-arming the job.
++//
++// Sending is gated globally on EMAIL_REMINDERS_ENABLED *and* per-school on
++// schoolSettings.tourEscalationEnabled. Best-effort: failures are logged, never
++// thrown, so one bad lead never sinks the sweep.
++// -----------------------------------------------------------------------------
++
++const RENUDGE_MS = 24 * 60 * 60 * 1000;
++const ACTIVE_STATUSES = ["new", "scheduled", "deciding"] as const;
++
++// Resolve the public app origin from env only — no request is available inside
++// a cron (prod domain in prod, dev host in dev). Mirrors publicAppOrigin() in
++// routes/tours.ts so cron-built links match request-built ones.
++function originFromEnv(): string {
++  const explicit = process.env.PUBLIC_APP_URL;
++  if (explicit && explicit.length > 0) return explicit.replace(/\/+$/, "");
++  const replitDomains = (process.env.REPLIT_DOMAINS ?? "").trim();
++  if (replitDomains) {
++    const first = replitDomains.split(",")[0]?.trim();
++    if (first) return `https://${first}`;
++  }
++  const replit = process.env.REPLIT_DEV_DOMAIN;
++  if (replit && replit.length > 0) return `https://${replit}`;
++  return "http://localhost:5000";
++}
++
++// Staff-app origin for the "Open the lead" button.
++function pipelineUrl(): string {
++  return `${originFromEnv()}/?settingsTile=school-tours`;
++}
++
++// Public survey link printed/emailed to families — mirrors surveyUrlFor() in
++// routes/tours.ts.
++function surveyUrlForToken(token: string): string {
++  return `${originFromEnv()}/tour/survey/${encodeURIComponent(token)}`;
++}
++
++function waitingSummary(since: Date, now: Date): string {
++  const ms = Math.max(0, now.getTime() - since.getTime());
++  const days = Math.floor(ms / (24 * 60 * 60 * 1000));
++  if (days >= 1) return `${days} day${days === 1 ? "" : "s"} overdue`;
++  const hours = Math.floor(ms / (60 * 60 * 1000));
++  return `${hours} hour${hours === 1 ? "" : "s"} overdue`;
++}
++
++// Decide whether a lead is overdue and why. Returns the reason + the timestamp
++// the lead has been waiting since, or null when not overdue.
++//
++// This is the SINGLE source of truth for overdue semantics. The hourly
++// escalation sweep, the pipeline list endpoint, and the lead-detail endpoint
++// all call it so they can never disagree on who is overdue or why. It only
++// needs the lifecycle-relevant fields, so it accepts a structural subset rather
++// than the full row.
++export function overdueFor(
++  lead: Pick<
++    typeof tourRequestsTable.$inferSelect,
++    "status" | "createdAt" | "tourScheduledAt" | "followUpDueAt"
++  >,
++  firstContactHours: number,
++  now: Date,
++): { reason: TourOverdueReason; since: Date } | null {
++  if (lead.status === "new") {
++    const since = lead.createdAt;
++    if (now.getTime() - since.getTime() > firstContactHours * 60 * 60 * 1000) {
++      return { reason: "first_contact", since };
++    }
++  } else if (lead.status === "scheduled") {
++    if (lead.tourScheduledAt && lead.tourScheduledAt.getTime() < now.getTime()) {
++      return { reason: "tour_not_logged", since: lead.tourScheduledAt };
++    }
++  } else if (lead.status === "deciding") {
++    if (lead.followUpDueAt && lead.followUpDueAt.getTime() < now.getTime()) {
++      return { reason: "follow_up", since: lead.followUpDueAt };
++    }
++  }
++  return null;
++}
++
++export interface TourEscalationResult {
++  skipped: boolean;
++  scanned: number;
++  sent: number;
++}
++
++export async function runTourEscalations(
++  now: Date = new Date(),
++): Promise<TourEscalationResult> {
++  if (process.env.EMAIL_REMINDERS_ENABLED !== "true") {
++    return { skipped: true, scanned: 0, sent: 0 };
++  }
++
++  // All active candidate leads across every school (kept small by status).
++  const leads = await db
++    .select()
++    .from(tourRequestsTable)
++    .where(inArray(tourRequestsTable.status, ACTIVE_STATUSES as never));
++  if (leads.length === 0) return { skipped: false, scanned: 0, sent: 0 };
++
++  const schoolIds = Array.from(new Set(leads.map((l) => l.schoolId)));
++
++  // Per-school SLA settings (default when no row exists).
++  const settingsRows = await db
++    .select({
++      schoolId: schoolSettingsTable.schoolId,
++      firstContactHours: schoolSettingsTable.tourFirstContactHours,
++      escalationEnabled: schoolSettingsTable.tourEscalationEnabled,
++    })
++    .from(schoolSettingsTable)
++    .where(inArray(schoolSettingsTable.schoolId, schoolIds));
++  const settingsMap = new Map(settingsRows.map((s) => [s.schoolId, s]));
++
++  // School names for subject lines.
++  const schoolRows = await db
++    .select({ id: schoolsTable.id, name: schoolsTable.name })
++    .from(schoolsTable)
++    .where(inArray(schoolsTable.id, schoolIds));
++  const schoolNameMap = new Map(schoolRows.map((s) => [s.id, s.name]));
++
++  // Active staff for the schools in play (recipients + CC).
++  const staff = await db
++    .select()
++    .from(staffTable)
++    .where(
++      and(
++        inArray(staffTable.schoolId, schoolIds),
++        eq(staffTable.active, true),
++      ),
++    );
++  const staffById = new Map(staff.map((s) => [s.id, s]));
++  const notifyBySchool = new Map<number, string[]>();
++  const adminsBySchool = new Map<number, { id: number; email: string }[]>();
++  for (const id of schoolIds) {
++    const forSchool = staff.filter((s) => s.schoolId === id);
++    notifyBySchool.set(
++      id,
++      forSchool
++        .filter((s) => canManageTours(s) && Boolean(s.email))
++        .map((s) => s.email as string),
++    );
++    adminsBySchool.set(
++      id,
++      forSchool
++        .filter((s) => s.isAdmin && Boolean(s.email))
++        .map((s) => ({ id: s.id, email: s.email as string })),
++    );
++  }
++
++  const url = pipelineUrl();
++  let sent = 0;
++
++  for (const lead of leads) {
++    const settings = settingsMap.get(lead.schoolId);
++    // Per-school master switch (defaults to enabled when no row exists).
++    if (settings && settings.escalationEnabled === false) continue;
++    const firstContactHours = settings?.firstContactHours ?? 24;
++
++    const overdue = overdueFor(lead, firstContactHours, now);
++    if (!overdue) continue;
++
++    // Idempotency: at most one nudge per reason per re-nudge window.
++    if (
++      lead.lastEscalatedReason === overdue.reason &&
++      lead.lastEscalatedAt &&
++      now.getTime() - lead.lastEscalatedAt.getTime() < RENUDGE_MS
++    ) {
++      continue;
++    }
++
++    // Recipients: the owner if assigned (else the notify group); CC the
++    // principal/admins (excluding the to-address to avoid a dup).
++    const owner = lead.assignedStaffId
++      ? staffById.get(lead.assignedStaffId)
++      : undefined;
++    const ownerEmail = owner?.email ?? null;
++    const to = ownerEmail
++      ? [ownerEmail]
++      : (notifyBySchool.get(lead.schoolId) ?? []);
++    if (to.length === 0) {
++      // No one to email yet — leave the lead un-stamped so it retries once a
++      // recipient exists.
++      continue;
++    }
++    const cc = (adminsBySchool.get(lead.schoolId) ?? [])
++      .filter((a) => a.id !== lead.assignedStaffId)
++      .map((a) => a.email)
++      .filter((e) => !to.includes(e));
++
++    const childrenSummary =
++      lead.children
++        .map((c) => `${c.name}${c.grade ? ` (Grade ${c.grade})` : ""}`)
++        .join(", ") || "—";
++
++    const ok = await sendLeadOverdueEscalationEmail({
++      to,
++      cc,
++      schoolName: schoolNameMap.get(lead.schoolId) ?? "your school",
++      familyName: lead.familyName,
++      phone: lead.phone,
++      childrenSummary,
++      assigneeName: owner?.displayName ?? null,
++      reason: overdue.reason,
++      waitingSummary: waitingSummary(overdue.since, now),
++      pipelineUrl: url,
++    });
++    if (!ok) continue;
++
++    // Stamp + record only after a successful send so a transient email failure
++    // is retried on the next sweep.
++    await db
++      .update(tourRequestsTable)
++      .set({
++        lastEscalatedAt: now,
++        lastEscalatedReason: overdue.reason,
++        updatedAt: now,
++      })
++      .where(
++        and(
++          eq(tourRequestsTable.id, lead.id),
++          eq(tourRequestsTable.schoolId, lead.schoolId),
++        ),
++      );
++    await db.insert(tourRequestEventsTable).values({
++      schoolId: lead.schoolId,
++      tourRequestId: lead.id,
++      staffId: null,
++      eventType: "escalation",
++      body: `Auto-escalation emailed (${overdue.reason}): ${waitingSummary(
++        overdue.since,
++        now,
++      )}.`,
++    });
++    await db.insert(adminNotificationsTable).values({
++      schoolId: lead.schoolId,
++      type: "tour_lead_overdue",
++      payload: {
++        tourRequestId: lead.id,
++        familyName: lead.familyName,
++        reason: overdue.reason,
++        assignedStaffId: lead.assignedStaffId ?? null,
++      },
++    });
++    sent += 1;
++  }
++
++  return { skipped: false, scanned: leads.length, sent };
++}
++
++// -----------------------------------------------------------------------------
++// School Tours — Phase 3 "close the loop with families" background nurture job.
++//
++// Hourly sweep (shares the escalation cron) that emails the FAMILY at the right
++// lifecycle moment:
++//   1. Pre-tour reminder      — status 'scheduled', within reminderLeadHours of
++//                               tourScheduledAt (and not past).
++//   2. Post-tour thank-you    — status 'toured' (with the survey link).
++//   3. "Still deciding" nudge — status 'deciding', follow-up clock lapsed.
++//   4. Enrollment welcome     — status 'closed' with outcome 'enrolled'.
++//
++// Idempotent: each step has its own *SentAt stamp set ONLY after a successful
++// send, so a transient email failure is retried next hour and a step never
++// double-sends. The deciding-nudge stamp is cleared whenever the follow-up
++// clock is re-armed (see routes/tours.ts), so a fresh deciding cycle nudges
++// again. Gated globally on EMAIL_REMINDERS_ENABLED and per-school on
++// schoolSettings.tourFamilyNurtureEnabled (defaults OFF). Best-effort: one bad
++// lead never sinks the sweep. Families without an email on file are skipped.
++// -----------------------------------------------------------------------------
++
++const FAMILY_STATUSES = ["scheduled", "toured", "deciding"] as const;
++
++export interface TourFamilyNurtureResult {
++  skipped: boolean;
++  scanned: number;
++  sent: number;
++}
++
++export async function runTourFamilyNurture(
++  now: Date = new Date(),
++): Promise<TourFamilyNurtureResult> {
++  if (process.env.EMAIL_REMINDERS_ENABLED !== "true") {
++    return { skipped: true, scanned: 0, sent: 0 };
++  }
++
++  // Candidates: the active-ish family-touch statuses, PLUS closed+enrolled leads
++  // that have not yet had a welcome (the isNull guard keeps the historical
++  // closed pile from being re-scanned forever).
++  const leads = await db
++    .select()
++    .from(tourRequestsTable)
++    .where(
++      or(
++        inArray(tourRequestsTable.status, FAMILY_STATUSES as never),
++        and(
++          eq(tourRequestsTable.status, "closed"),
++          eq(tourRequestsTable.outcome, "enrolled"),
++          isNull(tourRequestsTable.familyWelcomeSentAt),
++        ),
++      ),
++    );
++  if (leads.length === 0) return { skipped: false, scanned: 0, sent: 0 };
++
++  const schoolIds = Array.from(new Set(leads.map((l) => l.schoolId)));
++
++  const settingsRows = await db
++    .select({
++      schoolId: schoolSettingsTable.schoolId,
++      nurtureEnabled: schoolSettingsTable.tourFamilyNurtureEnabled,
++      reminderLeadHours: schoolSettingsTable.tourReminderLeadHours,
++    })
++    .from(schoolSettingsTable)
++    .where(inArray(schoolSettingsTable.schoolId, schoolIds));
++  const settingsMap = new Map(settingsRows.map((s) => [s.schoolId, s]));
++
++  const schoolRows = await db
++    .select({ id: schoolsTable.id, name: schoolsTable.name })
++    .from(schoolsTable)
++    .where(inArray(schoolsTable.id, schoolIds));
++  const schoolNameMap = new Map(schoolRows.map((s) => [s.id, s.name]));
++
++  let sent = 0;
++
++  for (const lead of leads) {
++    const settings = settingsMap.get(lead.schoolId);
++    // Per-school opt-in (defaults OFF when no row exists).
++    if (!settings || settings.nurtureEnabled !== true) continue;
++    // Family email is required for every nurture message.
++    const to = lead.email;
++    if (!to) continue;
++
++    const schoolName = schoolNameMap.get(lead.schoolId) ?? "our school";
++    const base = {
++      to,
++      schoolName,
++      familyName: lead.familyName,
++      fromName: schoolName,
++      signature: `Warmly,\nThe ${schoolName} Team`,
++    };
++
++    // Decide which (single) message applies to this lead this hour, send it,
++    // and record the matching stamp column. At most one send per lead per pass.
++    let ok = false;
++    let stamp: Partial<typeof tourRequestsTable.$inferInsert> | null = null;
++    let eventBody = "";
++
++    if (lead.status === "scheduled") {
++      const leadHours = settings.reminderLeadHours ?? 24;
++      const at = lead.tourScheduledAt;
++      const windowOpens = at
++        ? at.getTime() - leadHours * 60 * 60 * 1000
++        : null;
++      if (
++        at &&
++        !lead.familyReminderSentAt &&
++        windowOpens !== null &&
++        now.getTime() >= windowOpens &&
++        now.getTime() < at.getTime()
++      ) {
++        ok = await sendFamilyTourReminderEmail({
++          ...base,
++          tourWhen: at.toLocaleString("en-US", {
++            timeZone: DEFAULT_SCHOOL_TZ,
++            dateStyle: "full",
++            timeStyle: "short",
++          }),
++        });
++        stamp = { familyReminderSentAt: now };
++        eventBody = "Pre-tour reminder emailed to the family.";
++      }
++    } else if (lead.status === "toured") {
++      if (!lead.familyThankYouSentAt) {
++        ok = await sendFamilyPostTourThankYouEmail({
++          ...base,
++          surveyUrl: surveyUrlForToken(lead.surveyToken),
++        });
++        stamp = { familyThankYouSentAt: now };
++        eventBody = "Post-tour thank-you + survey emailed to the family.";
++      }
++    } else if (lead.status === "deciding") {
++      if (
++        !lead.familyDecidingNudgeSentAt &&
++        lead.followUpDueAt &&
++        lead.followUpDueAt.getTime() < now.getTime()
++      ) {
++        ok = await sendFamilyDecidingNudgeEmail(base);
++        stamp = { familyDecidingNudgeSentAt: now };
++        eventBody = "Gentle \u201cstill deciding\u201d nudge emailed to the family.";
++      }
++    } else if (lead.status === "closed" && lead.outcome === "enrolled") {
++      if (!lead.familyWelcomeSentAt) {
++        ok = await sendFamilyEnrollmentWelcomeEmail(base);
++        stamp = { familyWelcomeSentAt: now };
++        eventBody = "Enrollment welcome emailed to the family.";
++      }
++    }
++
++    if (!ok || !stamp) continue;
++
++    // Stamp + log only after a successful send.
++    await db
++      .update(tourRequestsTable)
++      .set({ ...stamp, updatedAt: now })
++      .where(
++        and(
++          eq(tourRequestsTable.id, lead.id),
++          eq(tourRequestsTable.schoolId, lead.schoolId),
++        ),
++      );
++    await db.insert(tourRequestEventsTable).values({
++      schoolId: lead.schoolId,
++      tourRequestId: lead.id,
++      staffId: null,
++      eventType: "escalation",
++      body: eventBody,
++    });
++    sent += 1;
++  }
++
++  return { skipped: false, scanned: leads.length, sent };
++}
+diff --git a/artifacts/api-server/src/lib/tourRoadmapPdf.ts b/artifacts/api-server/src/lib/tourRoadmapPdf.ts
+index 1e5e9889..58f36c32 100644
+--- a/artifacts/api-server/src/lib/tourRoadmapPdf.ts
++++ b/artifacts/api-server/src/lib/tourRoadmapPdf.ts
+@@ -12,6 +12,10 @@ export interface RoadmapStop {
+   location: string;
+   talkingPoints: string;
+   minutes: number;
++  // The family ticked this stop on the public form.
++  familyRequested?: boolean;
++  // The school marked this checkpoint "always include" on every tour.
++  schoolHighlight?: boolean;
+ }
+ 
+ export interface RoadmapInput {
+@@ -163,6 +167,15 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
+ 
+   // ---- Checklist heading --------------------------------------------------
+   const totalMinutes = input.stops.reduce((s, c) => s + (c.minutes || 0), 0);
++  const familyCount = input.stops.filter((s) => s.familyRequested).length;
++  const highlightCount = input.stops.filter(
++    (s) => s.schoolHighlight && !s.familyRequested,
++  ).length;
++  const countBits = [
++    `${familyCount} family-requested`,
++    highlightCount > 0 ? `${highlightCount} school highlight` : null,
++    totalMinutes > 0 ? `~${totalMinutes} min` : null,
++  ].filter(Boolean) as string[];
+   doc.moveDown(0.9);
+   doc
+     .font("Helvetica-Bold")
+@@ -173,11 +186,7 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
+     .font("Helvetica")
+     .fontSize(11)
+     .fillColor(MUTED)
+-    .text(
+-      `    ${input.stops.length} selected${
+-        totalMinutes > 0 ? ` · ~${totalMinutes} min` : ""
+-      }`,
+-    );
++    .text(`    ${countBits.join(" · ")}`);
+   doc.moveDown(0.4);
+   doc
+     .moveTo(left, doc.y)
+@@ -216,7 +225,13 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
+           width: width - 34,
+         })
+       : 0;
+-    const blockHeight = 26 + (stop.location ? 14 : 0) + tpHeight + 46;
++    const blockHeight =
++      26 +
++      12 + // origin badge
++      (stop.location ? 14 : 0) +
++      (stop.familyRequested ? 12 : 0) + // guide cue line
++      tpHeight +
++      46;
+     ensureSpace(blockHeight);
+ 
+     const topY = doc.y;
+@@ -243,6 +258,20 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
+         .fillColor(MUTED)
+         .text(minutesLabel);
+     }
++    // Origin badge: family pick (★), school highlight, or both.
++    const badge = stop.familyRequested
++      ? stop.schoolHighlight
++        ? "★ Family requested · School highlight"
++        : "★ Family requested"
++      : "School highlight";
++    doc
++      .font("Helvetica-Bold")
++      .fontSize(8.5)
++      .fillColor(stop.familyRequested ? accent : MUTED)
++      .text(badge, left + 24, doc.y + 2, {
++        width: width - 24,
++        characterSpacing: 0.5,
++      });
+     // Location
+     if (stop.location) {
+       doc
+@@ -253,6 +282,16 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
+           width: width - 24,
+         });
+     }
++    // Guide cue for family picks — reminds the guide why this stop matters.
++    if (stop.familyRequested) {
++      doc
++        .font("Helvetica-Oblique")
++        .fontSize(9)
++        .fillColor(accent)
++        .text("Be sure to spotlight this — the family asked to see it.", left + 24, doc.y + 1, {
++          width: width - 24,
++        });
++    }
+     // Talking points
+     if (stop.talkingPoints) {
+       doc
+diff --git a/artifacts/api-server/src/routes/tours.ts b/artifacts/api-server/src/routes/tours.ts
+index 3166517d..f32cc7cc 100644
+--- a/artifacts/api-server/src/routes/tours.ts
++++ b/artifacts/api-server/src/routes/tours.ts
+@@ -15,6 +15,7 @@ import {
+   tourRequestsTable,
+   tourRequestEventsTable,
+   tourSurveysTable,
++  adminNotificationsTable,
+   TOUR_STATUSES,
+   TOUR_OUTCOMES,
+   type TourChild,
+@@ -26,9 +27,9 @@ import {
+   type TourOutcome,
+ } from "@workspace/db";
+ import { and, eq, desc, asc, sql } from "drizzle-orm";
+-import { randomUUID } from "crypto";
++import { randomUUID, createHash } from "crypto";
+ import { requireSchool, getDistrictIdForSchool } from "../lib/scope.js";
+-import { canManageTours } from "../lib/coreTeam.js";
++import { canManageTours, canGuideTours } from "../lib/coreTeam.js";
+ import {
+   ObjectStorageService,
+   ObjectNotFoundError,
+@@ -37,8 +38,11 @@ import { bindObjectToSchool } from "./storage.js";
+ import {
+   sendNewLeadNotifyEmail,
+   sendFamilyAckEmail,
++  sendLeadAssignedEmail,
+ } from "../lib/tourEmails.js";
+ import { sendSmsBatch } from "../lib/sms.js";
++import { addBusinessDays } from "../lib/businessDays.js";
++import { overdueFor } from "../lib/tourReminders.js";
+ import {
+   translateTourContent,
+   isSupportedTargetLang,
+@@ -117,6 +121,17 @@ async function pipeStorageResponse(
+ // /storage/objects, which the public has no token for). Legacy external URLs
+ // are passed through via redirect. `allowed` constrains which content-types may
+ // render inline (see PUBLIC_*_TYPES).
++// Short content-version token derived from the object-storage key. Public
++// photo/flyer URLs are index-based (`/photo/0`, `/flyer/0`), so when a school
++// deletes an asset and uploads a replacement the new file lands at the SAME
++// index and the URL never changes — the browser then serves the previously
++// cached image (Cache-Control max-age) and the old "seed" picture appears to
++// persist. Appending `?v=<hash-of-key>` makes the URL change whenever the
++// underlying object changes (each upload mints a fresh key), busting the cache.
++function assetVersion(key: string): string {
++  return createHash("sha1").update(key).digest("hex").slice(0, 10);
++}
++
+ async function streamTourAsset(
+   key: string,
+   req: Request,
+@@ -228,6 +243,27 @@ function requireTourManager(req: Request, res: Response, next: NextFunction) {
+   next();
+ }
+ 
++// Allows full tour managers AND lightweight Tour Guides. Routes that use this
++// must additionally enforce own-lead scoping for guides via canAccessLead().
++function requireTourGuide(req: Request, res: Response, next: NextFunction) {
++  const staff = (req as Request & { staff?: StaffRow }).staff;
++  if (!staff || !canGuideTours(staff)) {
++    res.status(403).json({ error: "Not authorized for School Tours" });
++    return;
++  }
++  next();
++}
++
++// Full managers can touch any lead; a Tour Guide may only act on a lead they
++// own. Returns true when the staff member is allowed to view/print this lead.
++function canAccessLead(
++  staff: StaffRow,
++  lead: { assignedStaffId: number | null },
++): boolean {
++  if (canManageTours(staff)) return true;
++  return lead.assignedStaffId === staff.id;
++}
++
+ function sanitizeStrings(input: unknown, max: number): string[] {
+   if (!Array.isArray(input)) return [];
+   return input
+@@ -294,7 +330,8 @@ function sanitizeCheckpoints(input: unknown): TourCheckpoint[] {
+       Number.isFinite(minutesRaw) && minutesRaw > 0
+         ? Math.min(Math.round(minutesRaw), 240)
+         : 0;
+-    out.push({ key, label, location, talkingPoints, minutes });
++    const alwaysInclude = r.alwaysInclude === true;
++    out.push({ key, label, location, talkingPoints, minutes, alwaysInclude });
+     if (out.length >= 30) break;
+   }
+   return out;
+@@ -618,11 +655,16 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
+     subheadline: tr?.subheadline ?? page.subheadline,
+     intro: tr?.intro ?? page.intro,
+     sections: tr?.sections ?? page.sections,
+-    // Public form only needs key + label — location / talking points / minutes
+-    // are staff-facing and stay server-side.
++    // Public form only needs key + label + the always-include flag — location
++    // / talking points / minutes are staff-facing and stay server-side. The
++    // always-include flag lives only on the source row (translations cache
++    // key + label), so we look it up by key from the source checkpoints.
+     checkpoints: (tr?.checkpoints ?? page.checkpoints ?? []).map((c) => ({
+       key: c.key,
+       label: c.label,
++      alwaysInclude:
++        (page.checkpoints ?? []).find((s) => s.key === c.key)?.alwaysInclude ===
++        true,
+     })),
+     programs: tr?.programs ?? page.programs,
+     electives: tr?.electives ?? page.electives,
+@@ -631,13 +673,14 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
+     // unauthenticated families never touch the school-ACL object path. Keys
+     // are never exposed to the client.
+     photos: page.photos.map(
+-      (_, i) => `/api/tours/public/${schoolId}/photo/${i}`,
++      (key, i) =>
++        `/api/tours/public/${schoolId}/photo/${i}?v=${assetVersion(key)}`,
+     ),
+     textPlacement: page.textPlacement === "bottom" ? "bottom" : "top",
+     flyers: (page.flyers ?? []).map((f, i) => ({
+       label: f.label,
+       kind: f.kind,
+-      url: `/api/tours/public/${schoolId}/flyer/${i}`,
++      url: `/api/tours/public/${schoolId}/flyer/${i}?v=${assetVersion(f.key)}`,
+     })),
+     ctaText: tr?.ctaText ?? page.ctaText,
+     accentColor: page.accentColor,
+@@ -652,7 +695,7 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
+           tagline: branding.tagline,
+           hasLogo: !!branding.logoObjectKey,
+           logoUrl: branding.logoObjectKey
+-            ? `/api/tours/public/${schoolId}/district-logo`
++            ? `/api/tours/public/${schoolId}/district-logo?v=${assetVersion(branding.logoObjectKey)}`
+             : null,
+           placements: {
+             heroTop: branding.brandHeroTop,
+@@ -909,9 +952,32 @@ router.get("/tours/page", requireStaff, requireTourManager, async (req, res) =>
+   const schoolId = requireSchool(req, res);
+   if (!schoolId) return;
+   const page = await loadTourPage(schoolId);
++  const [settings] = await db
++    .select({
++      tourSmsScope: schoolSettingsTable.tourSmsScope,
++      tourFirstContactHours: schoolSettingsTable.tourFirstContactHours,
++      tourFollowUpBusinessDays: schoolSettingsTable.tourFollowUpBusinessDays,
++      tourArchiveDays: schoolSettingsTable.tourArchiveDays,
++      tourEscalationEnabled: schoolSettingsTable.tourEscalationEnabled,
++      tourFamilyNurtureEnabled: schoolSettingsTable.tourFamilyNurtureEnabled,
++      tourReminderLeadHours: schoolSettingsTable.tourReminderLeadHours,
++    })
++    .from(schoolSettingsTable)
++    .where(eq(schoolSettingsTable.schoolId, schoolId));
+   res.json({
+     schoolName: await schoolName(schoolId),
+     schoolId,
++    // School-level tour preference (lives on schoolSettings, surfaced here so
++    // the Tour Admin page can manage it alongside the brag page).
++    tourSmsScope: settings?.tourSmsScope ?? "all",
++    // Phase 2 "never lose a lead" SLA settings (also on schoolSettings).
++    tourFirstContactHours: settings?.tourFirstContactHours ?? 24,
++    tourFollowUpBusinessDays: settings?.tourFollowUpBusinessDays ?? 3,
++    tourArchiveDays: settings?.tourArchiveDays ?? 3,
++    tourEscalationEnabled: settings?.tourEscalationEnabled ?? true,
++    // Phase 3 "close the loop with families" family-nurture settings.
++    tourFamilyNurtureEnabled: settings?.tourFamilyNurtureEnabled ?? false,
++    tourReminderLeadHours: settings?.tourReminderLeadHours ?? 24,
+     published: page?.published ?? false,
+     headline: page?.headline ?? "Come See Our School",
+     subheadline: page?.subheadline ?? "",
+@@ -1035,6 +1101,59 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) =>
+       },
+     });
+ 
++  // Persist the school-level tour SMS scope (separate table). Only 'urgent'
++  // narrows alerts; anything else keeps the default 'all'.
++  if ("tourSmsScope" in body) {
++    const scope = body.tourSmsScope === "urgent" ? "urgent" : "all";
++    await db
++      .insert(schoolSettingsTable)
++      .values({ schoolId, tourSmsScope: scope })
++      .onConflictDoUpdate({
++        target: schoolSettingsTable.schoolId,
++        set: { tourSmsScope: scope },
++      });
++  }
++
++  // Persist the Phase 2 SLA settings (schoolSettings). Each is clamped to a
++  // sane range; only fields present in the body are touched.
++  const slaSet: Partial<typeof schoolSettingsTable.$inferInsert> = {};
++  const clampInt = (v: unknown, min: number, max: number, dflt: number) => {
++    const n = Math.round(Number(v));
++    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt;
++  };
++  if ("tourFirstContactHours" in body) {
++    slaSet.tourFirstContactHours = clampInt(body.tourFirstContactHours, 1, 720, 24);
++  }
++  if ("tourFollowUpBusinessDays" in body) {
++    slaSet.tourFollowUpBusinessDays = clampInt(
++      body.tourFollowUpBusinessDays,
++      1,
++      60,
++      3,
++    );
++  }
++  if ("tourArchiveDays" in body) {
++    slaSet.tourArchiveDays = clampInt(body.tourArchiveDays, 1, 365, 3);
++  }
++  if ("tourEscalationEnabled" in body) {
++    slaSet.tourEscalationEnabled = body.tourEscalationEnabled === true;
++  }
++  if ("tourFamilyNurtureEnabled" in body) {
++    slaSet.tourFamilyNurtureEnabled = body.tourFamilyNurtureEnabled === true;
++  }
++  if ("tourReminderLeadHours" in body) {
++    slaSet.tourReminderLeadHours = clampInt(body.tourReminderLeadHours, 1, 168, 24);
++  }
++  if (Object.keys(slaSet).length > 0) {
++    await db
++      .insert(schoolSettingsTable)
++      .values({ schoolId, ...slaSet })
++      .onConflictDoUpdate({
++        target: schoolSettingsTable.schoolId,
++        set: slaSet,
++      });
++  }
++
+   res.json({ ok: true, publicUrl: `${publicAppOrigin(req)}/tour/${schoolId}` });
+ });
+ 
+@@ -1101,41 +1220,66 @@ router.get(
+       for (const o of owners) ownerNames.set(o.id, o.name);
+     }
+ 
++    // Default view hides archived (long-closed) leads; ?view=archived shows
++    // only them. Archive cutoff + first-contact window come from school settings.
++    const view = req.query.view === "archived" ? "archived" : "active";
++    const [settings] = await db
++      .select({
++        firstContactHours: schoolSettingsTable.tourFirstContactHours,
++        archiveDays: schoolSettingsTable.tourArchiveDays,
++      })
++      .from(schoolSettingsTable)
++      .where(eq(schoolSettingsTable.schoolId, schoolId));
++    const archiveMs = (settings?.archiveDays ?? 3) * 24 * 60 * 60 * 1000;
++
+     const now = Date.now();
+-    const ESCALATE_MS = 24 * 60 * 60 * 1000;
++    const nowDate = new Date(now);
++    const mapped = rows.map((r) => {
++      // Response clock: ms from creation to first contact (or to now if still
++      // un-contacted).
++      const responseMs = r.firstContactedAt
++        ? r.firstContactedAt.getTime() - r.createdAt.getTime()
++        : now - r.createdAt.getTime();
++      // Stage-aware overdue (Phase 2) via the shared overdueFor() helper — the
++      // single source of truth used by the list, the detail drawer, and the
++      // hourly escalation sweep, so they can never disagree on who is overdue.
++      const od = overdueFor(r, settings?.firstContactHours ?? 24, nowDate);
++      const overdue = od != null;
++      const overdueReason = od?.reason ?? null;
++      const archived =
++        r.status === "closed" &&
++        r.closedAt != null &&
++        now - r.closedAt.getTime() > archiveMs;
++      return {
++        id: r.id,
++        familyName: r.familyName,
++        phone: r.phone,
++        email: r.email,
++        children: r.children,
++        interests: r.interests,
++        source: r.source,
++        preferredLanguage: r.preferredLanguage,
++        status: r.status,
++        outcome: r.outcome,
++        outcomeReason: r.outcomeReason,
++        assignedStaffId: r.assignedStaffId,
++        assignedTo: r.assignedStaffId
++          ? ownerNames.get(r.assignedStaffId) ?? null
++          : null,
++        tourScheduledAt: r.tourScheduledAt,
++        firstContactedAt: r.firstContactedAt,
++        followUpDueAt: r.followUpDueAt,
++        closedAt: r.closedAt,
++        surveySubmittedAt: r.surveySubmittedAt,
++        createdAt: r.createdAt,
++        responseMs,
++        overdue,
++        overdueReason,
++        archived,
++      };
++    });
+     res.json(
+-      rows.map((r) => {
+-        // Response clock: ms from creation to first contact (or to now if
+-        // still un-contacted). Overdue when a 'new' lead has sat >24h.
+-        const responseMs = r.firstContactedAt
+-          ? r.firstContactedAt.getTime() - r.createdAt.getTime()
+-          : now - r.createdAt.getTime();
+-        const overdue =
+-          r.status === "new" && now - r.createdAt.getTime() > ESCALATE_MS;
+-        return {
+-          id: r.id,
+-          familyName: r.familyName,
+-          phone: r.phone,
+-          email: r.email,
+-          children: r.children,
+-          interests: r.interests,
+-          source: r.source,
+-          preferredLanguage: r.preferredLanguage,
+-          status: r.status,
+-          outcome: r.outcome,
+-          outcomeReason: r.outcomeReason,
+-          assignedStaffId: r.assignedStaffId,
+-          assignedTo: r.assignedStaffId
+-            ? ownerNames.get(r.assignedStaffId) ?? null
+-            : null,
+-          tourScheduledAt: r.tourScheduledAt,
+-          firstContactedAt: r.firstContactedAt,
+-          surveySubmittedAt: r.surveySubmittedAt,
+-          createdAt: r.createdAt,
+-          responseMs,
+-          overdue,
+-        };
+-      }),
++      mapped.filter((m) => (view === "archived" ? m.archived : !m.archived)),
+     );
+   },
+ );
+@@ -1154,7 +1298,8 @@ router.get(
+       .where(and(eq(staffTable.schoolId, schoolId), eq(staffTable.active, true)));
+     res.json(
+       staff
+-        .filter((s) => canManageTours(s))
++        // Full tour managers AND lightweight Tour Guides can own a lead.
++        .filter((s) => canGuideTours(s))
+         .map((s) => ({ id: s.id, name: s.displayName }))
+         .sort((a, b) => a.name.localeCompare(b.name)),
+     );
+@@ -1165,10 +1310,11 @@ router.get(
+ router.get(
+   "/tours/requests/:id",
+   requireStaff,
+-  requireTourManager,
++  requireTourGuide,
+   async (req, res) => {
+     const schoolId = requireSchool(req, res);
+     if (!schoolId) return;
++    const staff = (req as Request & { staff: StaffRow }).staff;
+     const id = Number(req.params.id);
+     if (!Number.isInteger(id)) {
+       res.status(400).json({ error: "Invalid id" });
+@@ -1187,6 +1333,10 @@ router.get(
+       res.status(404).json({ error: "Lead not found" });
+       return;
+     }
++    if (!canAccessLead(staff, lead)) {
++      res.status(403).json({ error: "Not your assigned lead" });
++      return;
++    }
+ 
+     const events = await db
+       .select()
+@@ -1233,9 +1383,19 @@ router.get(
+     const responseMs = lead.firstContactedAt
+       ? lead.firstContactedAt.getTime() - lead.createdAt.getTime()
+       : Date.now() - lead.createdAt.getTime();
+-    const overdue =
+-      lead.status === "new" &&
+-      Date.now() - lead.createdAt.getTime() > 24 * 60 * 60 * 1000;
++    // Stage-aware overdue via the shared overdueFor() helper, so the drawer
++    // agrees with the pipeline list and the escalation sweep.
++    const [detailSettings] = await db
++      .select({ firstContactHours: schoolSettingsTable.tourFirstContactHours })
++      .from(schoolSettingsTable)
++      .where(eq(schoolSettingsTable.schoolId, schoolId));
++    const od = overdueFor(
++      lead,
++      detailSettings?.firstContactHours ?? 24,
++      new Date(),
++    );
++    const overdue = od != null;
++    const overdueReason = od?.reason ?? null;
+ 
+     // Resolve the family's checkpoint selections to their current labels, in
+     // the page's checkpoint order. Stops deleted since they were selected fall
+@@ -1254,6 +1414,7 @@ router.get(
+           : null,
+         responseMs,
+         overdue,
++        overdueReason,
+         selectedCheckpoints,
+         surveyUrl: surveyUrlFor(lead.surveyToken, req),
+       },
+@@ -1266,6 +1427,16 @@ router.get(
+   },
+ );
+ 
++// Resolve a fresh "Still deciding" follow-up due date from the school's
++// configured business-day window (defaults to 3 if the row is missing).
++async function followUpDueDate(schoolId: number): Promise<Date> {
++  const [s] = await db
++    .select({ days: schoolSettingsTable.tourFollowUpBusinessDays })
++    .from(schoolSettingsTable)
++    .where(eq(schoolSettingsTable.schoolId, schoolId));
++  return addBusinessDays(new Date(), s?.days ?? 3);
++}
++
+ // PATCH /tours/requests/:id — status / assignment / outcome / schedule.
+ router.patch(
+   "/tours/requests/:id",
+@@ -1297,6 +1468,14 @@ router.patch(
+     const body = (req.body ?? {}) as Record<string, unknown>;
+     const updates: Partial<typeof tourRequestsTable.$inferInsert> = {};
+     const events: { eventType: string; body: string }[] = [];
++    // Set when this PATCH (re)assigns the lead to a real staff member, so we
++    // can fire the assignee notification AFTER the transaction commits.
++    let assignmentNotify: {
++      assigneeStaffId: number;
++      assigneeName: string;
++      assigneeEmail: string | null;
++      assigneeCell: string | null;
++    } | null = null;
+ 
+     // Status change.
+     if (
+@@ -1314,6 +1493,27 @@ router.patch(
+       if (next !== "new" && !lead.firstContactedAt) {
+         updates.firstContactedAt = new Date();
+       }
++      // Phase 2 lifecycle stamps tied to the new stage.
++      if (next === "deciding") {
++        // Entering "Still deciding" starts the business-day follow-up clock.
++        updates.followUpDueAt = await followUpDueDate(schoolId);
++        // Phase 3: re-arm the family deciding-nudge for this fresh cycle.
++        updates.familyDecidingNudgeSentAt = null;
++      } else if (lead.status === "deciding") {
++        // Leaving "Still deciding" clears the follow-up clock.
++        updates.followUpDueAt = null;
++      }
++      if (next === "closed") {
++        updates.closedAt = new Date();
++        updates.followUpDueAt = null;
++      } else if (lead.status === "closed") {
++        // Re-opening a closed lead clears the archive clock.
++        updates.closedAt = null;
++      }
++      // Any staff-driven stage change re-arms the escalation job so the next
++      // applicable overdue condition fires a fresh nudge.
++      updates.lastEscalatedAt = null;
++      updates.lastEscalatedReason = null;
+     }
+ 
+     // Assignment.
+@@ -1330,7 +1530,11 @@ router.patch(
+         let assigneeName = "Unassigned";
+         if (nextId !== null) {
+           const [a] = await db
+-            .select({ name: staffTable.displayName })
++            .select({
++              name: staffTable.displayName,
++              email: staffTable.email,
++              cell: staffTable.cellPhone,
++            })
+             .from(staffTable)
+             .where(
+               and(eq(staffTable.id, nextId), eq(staffTable.schoolId, schoolId)),
+@@ -1340,6 +1544,12 @@ router.patch(
+             return;
+           }
+           assigneeName = a.name;
++          assignmentNotify = {
++            assigneeStaffId: nextId,
++            assigneeName: a.name,
++            assigneeEmail: a.email ?? null,
++            assigneeCell: a.cell ?? null,
++          };
+         }
+         events.push({
+           eventType: "assignment",
+@@ -1375,23 +1585,46 @@ router.patch(
+       }
+     }
+ 
+-    // Outcome (only meaningful with a status of toured/closed).
++    // Outcome. enrolled|chose_other are TERMINAL (close + start the archive
++    // clock). "deciding" is no longer a terminal outcome — it maps to the live
++    // "Still deciding" stage with a follow-up clock (back-compat for any client
++    // that still posts outcome:'deciding'; the Phase 2 UI drives it via status).
+     if ("outcome" in body) {
+       const raw = body.outcome;
++      const reason =
++        typeof body.outcomeReason === "string"
++          ? body.outcomeReason.slice(0, 1000)
++          : null;
+       if (raw === null) {
+         updates.outcome = null;
+         updates.outcomeReason = null;
++      } else if (raw === "deciding") {
++        // Live holding stage, not a close.
++        updates.outcome = null;
++        updates.outcomeReason = reason;
++        updates.followUpDueAt = await followUpDueDate(schoolId);
++        updates.closedAt = null;
++        updates.lastEscalatedAt = null;
++        updates.lastEscalatedReason = null;
++        // Phase 3: re-arm the family deciding-nudge for this fresh cycle.
++        updates.familyDecidingNudgeSentAt = null;
++        if (lead.status !== "deciding") {
++          updates.status = "deciding";
++          events.push({
++            eventType: "status_change",
++            body: `Status: ${lead.status} → deciding.`,
++          });
++        }
+       } else if (
+         typeof raw === "string" &&
+         (TOUR_OUTCOMES as readonly string[]).includes(raw)
+       ) {
+         updates.outcome = raw as TourOutcome;
+-        updates.outcomeReason =
+-          typeof body.outcomeReason === "string"
+-            ? body.outcomeReason.slice(0, 1000)
+-            : null;
+-        // Recording an outcome closes the lead.
++        updates.outcomeReason = reason;
++        // Recording a terminal outcome closes the lead + starts the archive clock.
+         updates.status = "closed";
++        updates.closedAt = new Date();
++        updates.followUpDueAt = null;
+         events.push({
+           eventType: "outcome",
+           body: `Outcome: ${raw}${
+@@ -1432,6 +1665,85 @@ router.patch(
+       }
+     });
+ 
++    // Assignment notification (fire-and-forget). When a lead gains a new
++    // owner, alert the assignee directly (email always; SMS gated by the
++    // school's tour SMS scope) and CC the principals/admins for oversight.
++    // Best-effort: failures are logged, never block the PATCH response.
++    if (assignmentNotify) {
++      const notify = assignmentNotify;
++      void (async () => {
++        try {
++          const name = await schoolName(schoolId);
++          // Principals/admins to CC (excluding the assignee themselves).
++          const admins = await db
++            .select({
++              email: staffTable.email,
++              isAdmin: staffTable.isAdmin,
++              id: staffTable.id,
++            })
++            .from(staffTable)
++            .where(
++              and(
++                eq(staffTable.schoolId, schoolId),
++                eq(staffTable.active, true),
++                eq(staffTable.isAdmin, true),
++              ),
++            );
++          const ccEmails = admins
++            .filter((a) => a.id !== notify.assigneeStaffId)
++            .map((a) => a.email)
++            .filter((e): e is string => Boolean(e));
++
++          const childrenSummary =
++            lead.children
++              .map((c) => `${c.name}${c.grade ? ` (Grade ${c.grade})` : ""}`)
++              .join(", ") || "—";
++
++          if (notify.assigneeEmail) {
++            await sendLeadAssignedEmail({
++              to: notify.assigneeEmail,
++              cc: ccEmails,
++              schoolName: name,
++              familyName: lead.familyName,
++              phone: lead.phone,
++              childrenSummary,
++              assigneeName: notify.assigneeName,
++              assignedByName: staff.displayName,
++              pipelineUrl: pipelineUrlFor(req),
++            });
++          }
++
++          // SMS only when the school's scope allows standard alerts.
++          const [settings] = await db
++            .select({ scope: schoolSettingsTable.tourSmsScope })
++            .from(schoolSettingsTable)
++            .where(eq(schoolSettingsTable.schoolId, schoolId));
++          const smsAllowed = (settings?.scope ?? "all") === "all";
++          if (smsAllowed && notify.assigneeCell) {
++            await sendSmsBatch(
++              [notify.assigneeCell],
++              `You've been assigned a tour at ${name}: ${lead.familyName} (${lead.phone}). Open PulseEDU to follow up.`,
++            );
++          }
++
++          // In-app record for admin oversight.
++          await db.insert(adminNotificationsTable).values({
++            schoolId,
++            type: "tour_lead_assigned",
++            payload: {
++              leadId: id,
++              familyName: lead.familyName,
++              assigneeStaffId: notify.assigneeStaffId,
++              assigneeName: notify.assigneeName,
++              assignedByStaffId: staff.id,
++            },
++          });
++        } catch (err) {
++          req.log.warn({ err }, "tour assignment notification failed");
++        }
++      })();
++    }
++
+     res.json({ ok: true });
+   },
+ );
+@@ -1486,11 +1798,26 @@ router.post(
+       body: text.slice(0, 4000),
+     });
+ 
+-    // Logging a contact stamps the response clock the first time.
++    // Logging a contact stamps the response clock the first time, and — when
++    // the lead is "Still deciding" — pushes the follow-up clock forward and
++    // re-arms the escalation job (the owner just did the follow-up).
++    const contactUpdates: Partial<typeof tourRequestsTable.$inferInsert> = {};
+     if (kind === "contact" && !lead.firstContactedAt) {
++      contactUpdates.firstContactedAt = new Date();
++    }
++    if (kind === "contact" && lead.status === "deciding") {
++      contactUpdates.followUpDueAt = await followUpDueDate(schoolId);
++      contactUpdates.lastEscalatedAt = null;
++      contactUpdates.lastEscalatedReason = null;
++      // Phase 3: logging a contact pushes the follow-up clock forward, so
++      // re-arm the family deciding-nudge for the next cycle.
++      contactUpdates.familyDecidingNudgeSentAt = null;
++    }
++    if (Object.keys(contactUpdates).length > 0) {
++      contactUpdates.updatedAt = new Date();
+       await db
+         .update(tourRequestsTable)
+-        .set({ firstContactedAt: new Date(), updatedAt: new Date() })
++        .set(contactUpdates)
+         .where(
+           and(
+             eq(tourRequestsTable.id, id),
+@@ -1625,10 +1952,11 @@ router.get(
+ router.get(
+   "/tours/requests/:id/roadmap.pdf",
+   requireStaff,
+-  requireTourManager,
++  requireTourGuide,
+   async (req, res) => {
+     const schoolId = requireSchool(req, res);
+     if (!schoolId) return;
++    const staff = (req as Request & { staff: StaffRow }).staff;
+     const id = Number(req.params.id);
+     if (!Number.isInteger(id)) {
+       res.status(400).json({ error: "Invalid id" });
+@@ -1639,6 +1967,10 @@ router.get(
+       res.status(404).json({ error: "Lead not found" });
+       return;
+     }
++    if (!canAccessLead(staff, lead)) {
++      res.status(403).json({ error: "Not your assigned lead" });
++      return;
++    }
+     let assignedTo: string | null = null;
+     if (lead.assignedStaffId) {
+       const [a] = await db
+@@ -1653,15 +1985,20 @@ router.get(
+       assignedTo = a?.name ?? null;
+     }
+     const page = await loadTourPage(schoolId);
+-    // Resolve the family's selected keys to full checkpoints, in page order.
++    // Build the roadmap from the union of (a) the stops the family ticked and
++    // (b) the school's "always include" highlights — in page order. Each stop
++    // carries flags so the PDF can badge it: family pick (★), school highlight,
++    // or both. This is the "Option A" walkable route the guide follows.
+     const selectedSet = new Set(lead.interestSelections ?? []);
+     const stops = (page?.checkpoints ?? [])
+-      .filter((c) => selectedSet.has(c.key))
++      .filter((c) => selectedSet.has(c.key) || c.alwaysInclude === true)
+       .map((c) => ({
+         label: c.label,
+         location: c.location,
+         talkingPoints: c.talkingPoints,
+         minutes: c.minutes,
++        familyRequested: selectedSet.has(c.key),
++        schoolHighlight: c.alwaysInclude === true,
+       }));
+     const docBranding = await loadDistrictDocumentBranding(schoolId);
+     const pdf = await buildTourRoadmapPdf({
+@@ -1697,10 +2034,11 @@ router.get(
+ router.get(
+   "/tours/requests/:id/note-catcher.pdf",
+   requireStaff,
+-  requireTourManager,
++  requireTourGuide,
+   async (req, res) => {
+     const schoolId = requireSchool(req, res);
+     if (!schoolId) return;
++    const staff = (req as Request & { staff: StaffRow }).staff;
+     const id = Number(req.params.id);
+     if (!Number.isInteger(id)) {
+       res.status(400).json({ error: "Invalid id" });
+@@ -1711,10 +2049,16 @@ router.get(
+       res.status(404).json({ error: "Lead not found" });
+       return;
+     }
++    if (!canAccessLead(staff, lead)) {
++      res.status(403).json({ error: "Not your assigned lead" });
++      return;
++    }
+     const page = await loadTourPage(schoolId);
++    // Include the family's picks AND the school's always-include highlights so
++    // the family's take-along sheet matches the actual tour route.
+     const selectedSet = new Set(lead.interestSelections ?? []);
+     const stops = (page?.checkpoints ?? [])
+-      .filter((c) => selectedSet.has(c.key))
++      .filter((c) => selectedSet.has(c.key) || c.alwaysInclude === true)
+       .map((c) => ({ label: c.label }));
+     const docBranding = await loadDistrictDocumentBranding(schoolId);
+     const pdf = await buildTourNoteCatcherPdf({
+diff --git a/artifacts/api-server/src/seed.ts b/artifacts/api-server/src/seed.ts
+index 2a2b4034..cf7bcff1 100644
+--- a/artifacts/api-server/src/seed.ts
++++ b/artifacts/api-server/src/seed.ts
+@@ -1945,6 +1945,33 @@ export async function ensureAdminHubSchema() {
+     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS iss_capacity_behavior TEXT NOT NULL DEFAULT 'soft'`,
+   );
+ 
++  // School Tours — SMS notification scope ('all' | 'urgent'). Governs which
++  // tour SMS alerts are sent; email is always sent regardless.
++  await db.execute(
++    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_sms_scope TEXT NOT NULL DEFAULT 'all'`,
++  );
++
++  // School Tours — Phase 2 "never lose a lead" SLA settings (additive).
++  await db.execute(
++    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_first_contact_hours INTEGER NOT NULL DEFAULT 24`,
++  );
++  await db.execute(
++    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_follow_up_business_days INTEGER NOT NULL DEFAULT 3`,
++  );
++  await db.execute(
++    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_archive_days INTEGER NOT NULL DEFAULT 3`,
++  );
++  await db.execute(
++    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_escalation_enabled BOOLEAN NOT NULL DEFAULT TRUE`,
++  );
++  // School Tours — Phase 3 "close the loop with families" settings (additive).
++  await db.execute(
++    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_family_nurture_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
++  );
++  await db.execute(
++    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_reminder_lead_hours INTEGER NOT NULL DEFAULT 24`,
++  );
++
+   // OSS section + reason gates on school_heartbeat_settings + parent prefs.
+   await db.execute(
+     sql`ALTER TABLE school_heartbeat_settings ADD COLUMN IF NOT EXISTS show_oss BOOLEAN NOT NULL DEFAULT FALSE`,
+@@ -3330,6 +3357,11 @@ export async function ensureToursSchema(): Promise<void> {
+   await db.execute(
+     sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS cap_tour_notify BOOLEAN NOT NULL DEFAULT FALSE`,
+   );
++  // Lightweight Tour Guide role (assignable in Staff & Roles): assignable as a
++  // lead owner + can open the Tour Roadmap for leads assigned to them.
++  await db.execute(
++    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS cap_tour_guide BOOLEAN NOT NULL DEFAULT FALSE`,
++  );
+ 
+   // Photo/flyer uploads + layout toggle (additive).
+   await db.execute(
+@@ -3354,6 +3386,34 @@ export async function ensureToursSchema(): Promise<void> {
+   await db.execute(
+     sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS interest_selections JSONB NOT NULL DEFAULT '[]'::jsonb`,
+   );
++
++  // Phase 2 lead-rescue lifecycle columns on tour_requests (additive).
++  await db.execute(
++    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS follow_up_due_at TIMESTAMPTZ`,
++  );
++  await db.execute(
++    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ`,
++  );
++  await db.execute(
++    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS last_escalated_at TIMESTAMPTZ`,
++  );
++  await db.execute(
++    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS last_escalated_reason TEXT`,
++  );
++
++  // Phase 3 "close the loop with families" — family-nurture idempotency stamps.
++  await db.execute(
++    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS family_reminder_sent_at TIMESTAMPTZ`,
++  );
++  await db.execute(
++    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS family_thank_you_sent_at TIMESTAMPTZ`,
++  );
++  await db.execute(
++    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS family_deciding_nudge_sent_at TIMESTAMPTZ`,
++  );
++  await db.execute(
++    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS family_welcome_sent_at TIMESTAMPTZ`,
++  );
+ }
+ 
+ // -----------------------------------------------------------------------------
+diff --git a/artifacts/client/src/components/TourAdminPage.tsx b/artifacts/client/src/components/TourAdminPage.tsx
+index 98801cba..b0f986bc 100644
+--- a/artifacts/client/src/components/TourAdminPage.tsx
++++ b/artifacts/client/src/components/TourAdminPage.tsx
+@@ -22,7 +22,13 @@ import {
+ // =============================================================================
+ 
+ type Child = { name: string; grade: string };
+-type Status = "new" | "contacted" | "scheduled" | "toured" | "closed";
++type Status =
++  | "new"
++  | "contacted"
++  | "scheduled"
++  | "toured"
++  | "deciding"
++  | "closed";
+ type Outcome = "enrolled" | "deciding" | "chose_other";
+ 
+ type Lead = {
+@@ -45,6 +51,13 @@ type Lead = {
+   createdAt: string;
+   responseMs: number;
+   overdue: boolean;
++  // Phase 2 lifecycle. overdueReason explains WHY a lead is flagged overdue;
++  // followUpDueAt is the deciding-stage business-day clock; closedAt/archived
++  // drive the auto-archive declutter.
++  overdueReason?: string | null;
++  followUpDueAt?: string | null;
++  closedAt?: string | null;
++  archived?: boolean;
+   // Family's selected tour checkpoints, resolved to current labels.
+   selectedCheckpoints?: string[];
+ };
+@@ -77,6 +90,7 @@ const STATUS_ORDER: Status[] = [
+   "contacted",
+   "scheduled",
+   "toured",
++  "deciding",
+   "closed",
+ ];
+ const STATUS_LABEL: Record<Status, string> = {
+@@ -84,6 +98,7 @@ const STATUS_LABEL: Record<Status, string> = {
+   contacted: "Contacted",
+   scheduled: "Scheduled",
+   toured: "Toured",
++  deciding: "Still deciding",
+   closed: "Closed",
+ };
+ const STATUS_COLOR: Record<Status, string> = {
+@@ -91,6 +106,7 @@ const STATUS_COLOR: Record<Status, string> = {
+   contacted: "#d97706",
+   scheduled: "#2563eb",
+   toured: "#7c3aed",
++  deciding: "#db2777",
+   closed: "#059669",
+ };
+ const OUTCOME_LABEL: Record<Outcome, string> = {
+@@ -117,6 +133,43 @@ function fmtDate(iso: string | null): string {
+     minute: "2-digit",
+   });
+ }
++// Short, reason-aware label for the red overdue badge on a lead card. The
++// server returns overdueReason so the badge can say WHY the lead is flagged,
++// not just ">24h" (which only made sense for the first-contact case).
++function overdueBadgeLabel(reason?: string | null): string {
++  switch (reason) {
++    case "first_contact":
++      return "No first contact";
++    case "tour_not_logged":
++      return "Tour not logged";
++    case "follow_up":
++      return "Follow-up due";
++    default:
++      return "Overdue";
++  }
++}
++// Coerce a possibly-undefined/NaN numeric setting into an integer within
++// [min,max], falling back to fallback. Mirrors the server-side clampInt so the
++// inputs never show an out-of-range value the API would reject.
++function clampNum(v: unknown, min: number, max: number, fallback: number): number {
++  const n = Math.round(Number(v));
++  if (!Number.isFinite(n)) return fallback;
++  return Math.min(max, Math.max(min, n));
++}
++// Human countdown to (or past) the deciding-stage follow-up due date.
++function followUpCountdownLabel(dueIso: string): string {
++  const due = new Date(dueIso).getTime();
++  if (Number.isNaN(due)) return "Follow up";
++  const diffMs = due - Date.now();
++  const dayMs = 86_400_000;
++  if (diffMs <= 0) {
++    const overdueDays = Math.floor(-diffMs / dayMs);
++    if (overdueDays >= 1) return `Follow-up ${overdueDays}d overdue`;
++    return "Follow-up due";
++  }
++  const days = Math.ceil(diffMs / dayMs);
++  return days <= 1 ? "Follow up by tomorrow" : `Follow up in ${days}d`;
++}
+ // Format a stored ISO instant as a local wall-clock value for a
+ // datetime-local input (YYYY-MM-DDTHH:mm). Using toISOString() here would
+ // show the UTC time instead of the school's local time.
+@@ -296,16 +349,21 @@ function Pipeline() {
+   const [leads, setLeads] = useState<Lead[]>([]);
+   const [loading, setLoading] = useState(true);
+   const [openId, setOpenId] = useState<number | null>(null);
++  const [view, setView] = useState<"active" | "archived">("active");
+ 
+   const load = useCallback(async () => {
+     setLoading(true);
+     try {
+-      const res = await authFetch("/api/tours/requests");
++      const res = await authFetch(
++        view === "archived"
++          ? "/api/tours/requests?view=archived"
++          : "/api/tours/requests",
++      );
+       if (res.ok) setLeads((await res.json()) as Lead[]);
+     } finally {
+       setLoading(false);
+     }
+-  }, []);
++  }, [view]);
+   useEffect(() => {
+     void load();
+   }, [load]);
+@@ -316,29 +374,84 @@ function Pipeline() {
+       contacted: [],
+       scheduled: [],
+       toured: [],
++      deciding: [],
+       closed: [],
+     };
+     for (const l of leads) m[l.status]?.push(l);
+     return m;
+   }, [leads]);
+ 
+-  if (loading) return <div style={{ color: "#64748b" }}>Loading leads…</div>;
++  const viewTabs = (
++    <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
++      {(
++        [
++          ["active", "Active pipeline"],
++          ["archived", "Archived"],
++        ] as const
++      ).map(([v, lbl]) => {
++        const active = view === v;
++        return (
++          <button
++            key={v}
++            type="button"
++            onClick={() => setView(v)}
++            style={{
++              padding: "6px 14px",
++              borderRadius: 999,
++              border: `1px solid ${active ? "var(--accent, #2563eb)" : "#334155"}`,
++              background: active ? "var(--accent, #2563eb)" : "transparent",
++              color: active ? "#fff" : "#cbd5e1",
++              fontWeight: 600,
++              fontSize: 13,
++              cursor: "pointer",
++            }}
++          >
++            {lbl}
++          </button>
++        );
++      })}
++    </div>
++  );
++
++  if (loading)
++    return (
++      <>
++        {viewTabs}
++        <div style={{ color: "#64748b" }}>Loading leads…</div>
++      </>
++    );
+ 
+   if (leads.length === 0) {
+     return (
+-      <div style={{ ...cardBox, textAlign: "center", padding: 40 }}>
+-        <div style={{ fontSize: 40 }}>🗒️</div>
+-        <h3 style={{ margin: "12px 0 6px" }}>No tour requests yet</h3>
+-        <p style={{ color: "#64748b", margin: 0 }}>
+-          Publish your Brag Page and share the link — new leads land here
+-          automatically.
+-        </p>
+-      </div>
++      <>
++        {viewTabs}
++        <div style={{ ...cardBox, textAlign: "center", padding: 40 }}>
++          <div style={{ fontSize: 40 }}>🗒️</div>
++          {view === "archived" ? (
++            <>
++              <h3 style={{ margin: "12px 0 6px" }}>Nothing archived yet</h3>
++              <p style={{ color: "#64748b", margin: 0 }}>
++                Closed tours move here automatically after the archive window
++                you set in Settings.
++              </p>
++            </>
++          ) : (
++            <>
++              <h3 style={{ margin: "12px 0 6px" }}>No tour requests yet</h3>
++              <p style={{ color: "#64748b", margin: 0 }}>
++                Publish your Brag Page and share the link — new leads land here
++                automatically.
++              </p>
++            </>
++          )}
++        </div>
++      </>
+     );
+   }
+ 
+   return (
+     <>
++      {viewTabs}
+       <div
+         style={{
+           display: "grid",
+@@ -411,7 +524,21 @@ function Pipeline() {
+                           padding: "1px 6px",
+                         }}
+                       >
+-                        ⏰ &gt;24h
++                        ⏰ {overdueBadgeLabel(l.overdueReason)}
++                      </span>
++                    )}
++                    {l.status === "deciding" && l.followUpDueAt && (
++                      <span
++                        style={{
++                          fontSize: 11,
++                          fontWeight: 700,
++                          color: "#fff",
++                          background: l.overdue ? "#dc2626" : "#db2777",
++                          borderRadius: 6,
++                          padding: "1px 6px",
++                        }}
++                      >
++                        📞 {followUpCountdownLabel(l.followUpDueAt)}
+                       </span>
+                     )}
+                     {l.assignedTo && (
+@@ -708,6 +835,22 @@ function LeadDrawer({
+                   </button>
+                 ))}
+               </div>
++              {lead.status === "deciding" && lead.followUpDueAt && (
++                <div
++                  style={{
++                    fontSize: 13,
++                    marginTop: 8,
++                    fontWeight: 600,
++                    color: lead.overdue ? "#fca5a5" : "#f9a8d4",
++                  }}
++                >
++                  📞 {followUpCountdownLabel(lead.followUpDueAt)} ·{" "}
++                  <span style={{ fontWeight: 400, color: "#94a3b8" }}>
++                    due {fmtDate(lead.followUpDueAt)}. Logging a contact resets
++                    the clock.
++                  </span>
++                </div>
++              )}
+             </div>
+ 
+             {/* assign + schedule */}
+@@ -968,6 +1111,17 @@ type PageData = {
+   headerTextColor: string;
+   contactEmail: string | null;
+   contactPhone: string | null;
++  // School-level: 'all' sends assignment SMS to the new owner; 'urgent' mutes
++  // routine assignment texts (email still goes out).
++  tourSmsScope: "all" | "urgent";
++  // Phase 2 "never lose a lead" SLA settings.
++  tourFirstContactHours: number;
++  tourFollowUpBusinessDays: number;
++  tourArchiveDays: number;
++  tourEscalationEnabled: boolean;
++  // Phase 3 "close the loop with families" — automated family nurture cadence.
++  tourFamilyNurtureEnabled: boolean;
++  tourReminderLeadHours: number;
+ };
+ 
+ type TourFlyerItem = { key: string; label: string; kind: "image" | "pdf" };
+@@ -978,6 +1132,9 @@ type TourCheckpointItem = {
+   location: string;
+   talkingPoints: string;
+   minutes: number;
++  // When true, this stop is added to EVERY tour roadmap regardless of what the
++  // family selects (a school highlight). Families see it as "always included."
++  alwaysInclude: boolean;
+ };
+ 
+ function ListEditor({
+@@ -1146,6 +1303,24 @@ function CheckpointEditor({
+             value={c.talkingPoints}
+             onChange={(e) => update(i, { talkingPoints: e.target.value })}
+           />
++          <label
++            style={{
++              display: "flex",
++              alignItems: "center",
++              gap: 8,
++              marginTop: 8,
++              fontSize: 13,
++              color: "#cbd5e1",
++              cursor: "pointer",
++            }}
++          >
++            <input
++              type="checkbox"
++              checked={c.alwaysInclude}
++              onChange={(e) => update(i, { alwaysInclude: e.target.checked })}
++            />
++            Always include on every tour (school highlight)
++          </label>
+         </div>
+       ))}
+       <button
+@@ -1153,7 +1328,14 @@ function CheckpointEditor({
+         onClick={() =>
+           onChange([
+             ...items,
+-            { key: "", label: "", location: "", talkingPoints: "", minutes: 0 },
++            {
++              key: "",
++              label: "",
++              location: "",
++              talkingPoints: "",
++              minutes: 0,
++              alwaysInclude: false,
++            },
+           ])
+         }
+         style={{
+@@ -1609,9 +1791,26 @@ function BragEditor() {
+         // can't break the uploader UI.
+         json.flyers = Array.isArray(json.flyers) ? json.flyers : [];
+         json.photos = Array.isArray(json.photos) ? json.photos : [];
+-        json.checkpoints = Array.isArray(json.checkpoints)
+-          ? json.checkpoints
+-          : [];
++        json.checkpoints = (
++          Array.isArray(json.checkpoints) ? json.checkpoints : []
++        ).map((c) => ({ ...c, alwaysInclude: c.alwaysInclude === true }));
++        json.tourSmsScope = json.tourSmsScope === "urgent" ? "urgent" : "all";
++        json.tourFirstContactHours = clampNum(json.tourFirstContactHours, 1, 720, 24);
++        json.tourFollowUpBusinessDays = clampNum(
++          json.tourFollowUpBusinessDays,
++          1,
++          30,
++          3,
++        );
++        json.tourArchiveDays = clampNum(json.tourArchiveDays, 1, 365, 3);
++        json.tourEscalationEnabled = json.tourEscalationEnabled !== false;
++        json.tourFamilyNurtureEnabled = json.tourFamilyNurtureEnabled === true;
++        json.tourReminderLeadHours = clampNum(
++          json.tourReminderLeadHours,
++          1,
++          168,
++          24,
++        );
+         json.textPlacement = json.textPlacement === "bottom" ? "bottom" : "top";
+         json.headerTextColor = /^#[0-9a-fA-F]{6}$/.test(json.headerTextColor)
+           ? json.headerTextColor
+@@ -1797,6 +1996,202 @@ function BragEditor() {
+           items={data.checkpoints}
+           onChange={(checkpoints) => set({ checkpoints })}
+         />
++
++        <div style={{ marginBottom: 18 }}>
++          <div style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}>
++            Assignment text alerts
++          </div>
++          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8 }}>
++            When a tour lead is assigned, the new owner always gets an email.
++            Choose whether they also get a text message.
++          </div>
++          <div style={{ display: "flex", gap: 8 }}>
++            {(
++              [
++                ["all", "Text on every assignment"],
++                ["urgent", "Email only (no routine texts)"],
++              ] as const
++            ).map(([value, lbl]) => {
++              const active = data.tourSmsScope === value;
++              return (
++                <button
++                  key={value}
++                  type="button"
++                  onClick={() => set({ tourSmsScope: value })}
++                  style={{
++                    padding: "8px 14px",
++                    borderRadius: 999,
++                    border: `1px solid ${active ? "var(--accent, #2563eb)" : "#334155"}`,
++                    background: active ? "var(--accent, #2563eb)" : "transparent",
++                    color: active ? "#fff" : "#cbd5e1",
++                    fontWeight: 600,
++                    fontSize: 13,
++                    cursor: "pointer",
++                  }}
++                >
++                  {lbl}
++                </button>
++              );
++            })}
++          </div>
++        </div>
++
++        {/* Phase 2 "never lose a lead" SLA settings. */}
++        <div
++          style={{
++            ...cardBox,
++            marginBottom: 18,
++            borderLeft: "3px solid #db2777",
++          }}
++        >
++          <div style={{ fontWeight: 700, marginBottom: 4 }}>
++            Follow-up &amp; escalation
++          </div>
++          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>
++            Set how long a lead can sit before it counts as overdue, how long the
++            “Still deciding” follow-up clock runs, and when closed tours archive
++            off the board.
++          </div>
++          <div
++            style={{
++              display: "grid",
++              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
++              gap: 12,
++            }}
++          >
++            <label style={{ display: "block" }}>
++              <div
++                style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}
++              >
++                First-contact window (hours)
++              </div>
++              <input
++                type="number"
++                min={1}
++                max={720}
++                style={inputStyle}
++                value={data.tourFirstContactHours}
++                onChange={(e) =>
++                  set({
++                    tourFirstContactHours: clampNum(
++                      e.target.value,
++                      1,
++                      720,
++                      24,
++                    ),
++                  })
++                }
++              />
++            </label>
++            <label style={{ display: "block" }}>
++              <div
++                style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}
++              >
++                Follow-up window (business days)
++              </div>
++              <input
++                type="number"
++                min={1}
++                max={30}
++                style={inputStyle}
++                value={data.tourFollowUpBusinessDays}
++                onChange={(e) =>
++                  set({
++                    tourFollowUpBusinessDays: clampNum(
++                      e.target.value,
++                      1,
++                      30,
++                      3,
++                    ),
++                  })
++                }
++              />
++            </label>
++            <label style={{ display: "block" }}>
++              <div
++                style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}
++              >
++                Archive closed tours after (days)
++              </div>
++              <input
++                type="number"
++                min={1}
++                max={365}
++                style={inputStyle}
++                value={data.tourArchiveDays}
++                onChange={(e) =>
++                  set({
++                    tourArchiveDays: clampNum(e.target.value, 1, 365, 3),
++                  })
++                }
++              />
++            </label>
++          </div>
++          <label
++            style={{
++              display: "flex",
++              alignItems: "center",
++              gap: 10,
++              marginTop: 14,
++              cursor: "pointer",
++            }}
++          >
++            <input
++              type="checkbox"
++              checked={data.tourEscalationEnabled}
++              onChange={(e) =>
++                set({ tourEscalationEnabled: e.target.checked })
++              }
++            />
++            <span style={{ fontSize: 14 }}>
++              Email overdue leads to the owner (CC principal/coordinator)
++            </span>
++          </label>
++          <label
++            style={{
++              display: "flex",
++              alignItems: "center",
++              gap: 10,
++              marginTop: 14,
++              cursor: "pointer",
++            }}
++          >
++            <input
++              type="checkbox"
++              checked={data.tourFamilyNurtureEnabled}
++              onChange={(e) =>
++                set({ tourFamilyNurtureEnabled: e.target.checked })
++              }
++            />
++            <span style={{ fontSize: 14 }}>
++              Send families automatic nurture emails (tour reminder, post-tour
++              thank-you &amp; survey, "still deciding" check-in, enrollment
++              welcome)
++            </span>
++          </label>
++          {data.tourFamilyNurtureEnabled && (
++            <label style={{ display: "block", marginTop: 12 }}>
++              <div
++                style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}
++              >
++                Send the pre-tour reminder this many hours ahead
++              </div>
++              <input
++                type="number"
++                min={1}
++                max={168}
++                style={{ ...inputStyle, maxWidth: 160 }}
++                value={data.tourReminderLeadHours}
++                onChange={(e) =>
++                  set({
++                    tourReminderLeadHours: clampNum(e.target.value, 1, 168, 24),
++                  })
++                }
++              />
++            </label>
++          )}
++        </div>
++
+         <PhotoUploader
+           photos={data.photos}
+           onChange={(photos) => set({ photos })}
+diff --git a/artifacts/client/src/tour/TourApp.tsx b/artifacts/client/src/tour/TourApp.tsx
+index f6d0087a..7b074664 100644
+--- a/artifacts/client/src/tour/TourApp.tsx
++++ b/artifacts/client/src/tour/TourApp.tsx
+@@ -31,6 +31,8 @@ const T = {
+     addStudent: "+ Add another student",
+     checkpointsHeading: "What would you like to see on your tour?",
+     checkpointsHint: "Pick any that interest you — we'll build your tour around them.",
++    alwaysIncludedHeading: "Always included on every tour",
++    alwaysIncludedHint: "We'll make sure you see these highlights.",
+     interests: "Anything else? (optional)",
+     interestsPh:
+       "Programs, electives, sports, after-school care, anything on your mind…",
+@@ -76,6 +78,8 @@ const T = {
+     checkpointsHeading: "¿Qué le gustaría ver en su recorrido?",
+     checkpointsHint:
+       "Elija las que le interesen — organizaremos su recorrido en torno a ellas.",
++    alwaysIncludedHeading: "Siempre incluido en cada recorrido",
++    alwaysIncludedHint: "Nos aseguraremos de que vea estos lugares destacados.",
+     interests: "¿Algo más? (opcional)",
+     interestsPh:
+       "Programas, materias optativas, deportes, cuidado después de clases…",
+@@ -117,7 +121,7 @@ type TourPage = {
+   subheadline: string;
+   intro: string;
+   sections: { title: string; body: string }[];
+-  checkpoints: { key: string; label: string }[];
++  checkpoints: { key: string; label: string; alwaysInclude?: boolean }[];
+   programs: string[];
+   electives: string[];
+   proudOf: string[];
+@@ -891,7 +895,7 @@ function RequestForm({
+   accent: string;
+   source: string;
+   schoolName: string;
+-  checkpoints: { key: string; label: string }[];
++  checkpoints: { key: string; label: string; alwaysInclude?: boolean }[];
+   onClose: () => void;
+ }) {
+   const t = T[lang];
+@@ -903,6 +907,10 @@ function RequestForm({
+   ]);
+   const [interests, setInterests] = useState("");
+   const [selected, setSelected] = useState<string[]>([]);
++  // Split checkpoints: the school's "always include" stops are shown as a
++  // read-only highlight list; the rest are the family's selectable picks.
++  const selectableCheckpoints = checkpoints.filter((c) => !c.alwaysInclude);
++  const alwaysIncludedCheckpoints = checkpoints.filter((c) => c.alwaysInclude);
+   const [busy, setBusy] = useState(false);
+   const [err, setErr] = useState("");
+   const [done, setDone] = useState(false);
+@@ -1126,7 +1134,7 @@ function RequestForm({
+                 {t.addStudent}
+               </button>
+ 
+-              {checkpoints.length > 0 && (
++              {selectableCheckpoints.length > 0 && (
+                 <div style={{ marginBottom: 16 }}>
+                   <label style={label}>{t.checkpointsHeading}</label>
+                   <div
+@@ -1139,7 +1147,7 @@ function RequestForm({
+                     {t.checkpointsHint}
+                   </div>
+                   <div style={{ display: "grid", gap: 8 }}>
+-                    {checkpoints.map((c) => {
++                    {selectableCheckpoints.map((c) => {
+                       const on = selected.includes(c.key);
+                       return (
+                         <label
+@@ -1176,6 +1184,42 @@ function RequestForm({
+                 </div>
+               )}
+ 
++              {alwaysIncludedCheckpoints.length > 0 && (
++                <div style={{ marginBottom: 16 }}>
++                  <label style={label}>{t.alwaysIncludedHeading}</label>
++                  <div
++                    style={{
++                      fontSize: 13,
++                      color: "#64748b",
++                      marginBottom: 8,
++                    }}
++                  >
++                    {t.alwaysIncludedHint}
++                  </div>
++                  <div style={{ display: "grid", gap: 8 }}>
++                    {alwaysIncludedCheckpoints.map((c) => (
++                      <div
++                        key={c.key}
++                        style={{
++                          display: "flex",
++                          alignItems: "center",
++                          gap: 10,
++                          padding: "10px 12px",
++                          borderRadius: 10,
++                          border: `1px solid ${accent}`,
++                          background: `${accent}14`,
++                          fontSize: 15,
++                          color: "#0f172a",
++                        }}
++                      >
++                        <span style={{ color: accent, fontWeight: 700 }}>★</span>
++                        <span>{c.label}</span>
++                      </div>
++                    ))}
++                  </div>
++                </div>
++              )}
++
+               <div style={{ marginBottom: 16 }}>
+                 <label style={label}>{t.interests}</label>
+                 <textarea
+diff --git a/lib/db/src/schema/schoolSettings.ts b/lib/db/src/schema/schoolSettings.ts
+index 4558beb2..93bf02d1 100644
+--- a/lib/db/src/schema/schoolSettings.ts
++++ b/lib/db/src/schema/schoolSettings.ts
+@@ -62,6 +62,46 @@ export const schoolSettingsTable = pgTable(
+   pbisColdPeriodMultiple: integer("pbis_cold_period_multiple")
+     .notNull()
+     .default(5),
++  // School Tours — SMS notification scope. 'all' sends a text for every tour
++  // alert (new lead, lead assigned, …); 'urgent' limits texts to time-
++  // sensitive alerts only (the alert helper passes a tier and standard alerts
++  // are suppressed). Email is always sent regardless. Defaults to 'all' so
++  // existing behavior is unchanged.
++  tourSmsScope: text("tour_sms_scope")
++    .$type<"all" | "urgent">()
++    .notNull()
++    .default("all"),
++  // School Tours — Phase 2 "never lose a lead" SLA settings. The background
++  // escalation job + the pipeline overdue flags read these.
++  //   tourFirstContactHours — a 'new' lead uncontacted longer than this is
++  //     overdue (legacy hard-coded 24h is now the default).
++  //   tourFollowUpBusinessDays — when a lead is moved to "Still deciding", its
++  //     follow-up becomes due this many business days later.
++  //   tourArchiveDays — closed leads older than this drop off the default
++  //     pipeline board (still queryable via ?view=archived).
++  //   tourEscalationEnabled — master switch for the automated overdue emails.
++  //     Sending is ALSO gated globally on EMAIL_REMINDERS_ENABLED.
++  tourFirstContactHours: integer("tour_first_contact_hours")
++    .notNull()
++    .default(24),
++  tourFollowUpBusinessDays: integer("tour_follow_up_business_days")
++    .notNull()
++    .default(3),
++  tourArchiveDays: integer("tour_archive_days").notNull().default(3),
++  tourEscalationEnabled: boolean("tour_escalation_enabled")
++    .notNull()
++    .default(true),
++  // School Tours — Phase 3 "close the loop with families" master switch for the
++  // automated FAMILY nurture cadence (pre-tour reminder, post-tour thank-you +
++  // survey, gentle "still deciding" nudge, enrollment welcome). Defaults OFF so
++  // no school starts emailing families automatically without opting in.
++  tourFamilyNurtureEnabled: boolean("tour_family_nurture_enabled")
++    .notNull()
++    .default(false),
++  // How many hours before the scheduled tour the pre-tour reminder goes out.
++  tourReminderLeadHours: integer("tour_reminder_lead_hours")
++    .notNull()
++    .default(24),
+   // When true, awarding a negative behavior subtracts its point value from
+   // the student's running total. When false (default), the entry is logged
+   // on the student's record as a red entry but does not affect the total.
+diff --git a/lib/db/src/schema/tours.ts b/lib/db/src/schema/tours.ts
+index 2dacebe2..f1924694 100644
+--- a/lib/db/src/schema/tours.ts
++++ b/lib/db/src/schema/tours.ts
+@@ -43,6 +43,12 @@ export type TourCheckpoint = {
+   location: string;
+   talkingPoints: string;
+   minutes: number;
++  // When true this stop is on EVERY tour (a "school highlight") regardless of
++  // what the family ticked on the public form. It is not offered as a family
++  // checkbox; instead the public form lists it as "always included" and the
++  // staff Tour Roadmap merges it in with a "School highlight" badge. Optional /
++  // defaults to false so legacy rows (no field) behave as before.
++  alwaysInclude?: boolean;
+ };
+ 
+ // A machine-translated cache of the admin-authored brag-page content for one
+@@ -139,6 +145,11 @@ export const TOUR_STATUSES = [
+   "contacted",
+   "scheduled",
+   "toured",
++  // "Still deciding" — a LIVE holding stage (Phase 2) between a completed tour
++  // and a final close. A lead here has a `follow_up_due_at` clock; the
++  // background escalation job nudges the owner when it lapses. Distinct from
++  // the terminal `deciding` OUTCOME on legacy rows (kept for back-compat).
++  "deciding",
+   "closed",
+ ] as const;
+ export type TourStatus = (typeof TOUR_STATUSES)[number];
+@@ -176,6 +187,41 @@ export const tourRequestsTable = pgTable(
+     // Set the first time a staff member logs a "contact" event — powers the
+     // response-time clock + the >24h escalation flag.
+     firstContactedAt: timestamp("first_contacted_at", { withTimezone: true }),
++    // Phase 2 lead-rescue lifecycle.
++    //   followUpDueAt — set when a lead is moved to "Still deciding"; the next
++    //     follow-up is due at this time. Drives the board countdown + the
++    //     deciding-overdue branch of the escalation job. Logging a contact on a
++    //     deciding lead pushes it forward and clears the escalation stamp.
++    //   closedAt — stamped when the lead moves to 'closed'; drives auto-archive.
++    //   lastEscalatedAt / lastEscalatedReason — idempotency for the background
++    //     escalation job: it re-nudges at most once per re-nudge window and
++    //     immediately when the reason changes (e.g. new→scheduled→deciding).
++    followUpDueAt: timestamp("follow_up_due_at", { withTimezone: true }),
++    closedAt: timestamp("closed_at", { withTimezone: true }),
++    lastEscalatedAt: timestamp("last_escalated_at", { withTimezone: true }),
++    lastEscalatedReason: text("last_escalated_reason"),
++    // Phase 3 "close the loop with families" — idempotency stamps for the
++    // automated FAMILY-facing nurture cadence (separate from the staff
++    // escalation stamps above). Each is set only after a successful send so a
++    // transient email failure is retried on the next sweep.
++    //   familyReminderSentAt    — pre-tour reminder (day before tourScheduledAt)
++    //   familyThankYouSentAt    — post-tour thank-you + survey link (on "toured")
++    //   familyDecidingNudgeSentAt — gentle "still deciding" nudge; cleared
++    //     whenever the deciding follow-up clock is (re)armed so a fresh
++    //     deciding cycle can nudge again.
++    //   familyWelcomeSentAt     — enrollment welcome (on close w/ outcome enrolled)
++    familyReminderSentAt: timestamp("family_reminder_sent_at", {
++      withTimezone: true,
++    }),
++    familyThankYouSentAt: timestamp("family_thank_you_sent_at", {
++      withTimezone: true,
++    }),
++    familyDecidingNudgeSentAt: timestamp("family_deciding_nudge_sent_at", {
++      withTimezone: true,
++    }),
++    familyWelcomeSentAt: timestamp("family_welcome_sent_at", {
++      withTimezone: true,
++    }),
+     // Opaque token for the post-tour survey link (printed as a QR on the
+     // leave-behind). Unique across all schools so the public survey route
+     // can resolve the school from the token alone.
+@@ -206,6 +252,9 @@ export const TOUR_EVENT_TYPES = [
+   "scheduled",
+   "outcome",
+   "survey_submitted",
++  // System event written by the background escalation job when it emails the
++  // owner about an overdue lead (first-contact / tour-not-logged / follow-up).
++  "escalation",
+ ] as const;
+ export type TourEventType = (typeof TOUR_EVENT_TYPES)[number];
+ 

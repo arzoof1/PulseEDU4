@@ -19,15 +19,13 @@ import {
 } from "./components/HowToUseHelp";
 import AdminHubPage from "./components/AdminHubPage";
 import FamilyMessagesHub from "./components/FamilyMessagesHub";
+import ParentNotificationsPanel from "./components/ParentNotificationsPanel";
 import PulseDnaStudio from "./components/PulseDnaStudio";
 import HelpAssistant from "./components/HelpAssistant";
 import { TileHome, type Tile as TileHomeTile } from "./pages/TileHome";
 import StaffAstPage from "./components/ast/StaffAstPage";
-import AdminAstQueuePage from "./components/ast/AdminAstQueuePage";
-import AstInsightsPage from "./components/ast/AstInsightsPage";
 import StaffCompPage from "./components/comp/StaffCompPage";
-import AdminCompQueuePage from "./components/comp/AdminCompQueuePage";
-import CompInsightsPage from "./components/comp/CompInsightsPage";
+import StaffTimeHub from "./components/StaffTimeHub";
 import TimeTrackingPanel from "./components/comp/TimeTrackingPanel";
 import WatchlistHub from "./components/WatchlistHub";
 import CaseOutcomesPage from "./components/CaseOutcomesPage";
@@ -39,12 +37,23 @@ import IssSettingsPage from "./components/IssSettingsPage";
 import PickupSettingsPage from "./components/PickupSettingsPage";
 import TourAdminPage, { TourLeadBanner } from "./components/TourAdminPage";
 import TicketingAdminPage from "./components/TicketingAdminPage";
+import EligibilityHub, {
+  EligibilitySettingsPanel,
+} from "./components/EligibilityHub";
 import SchoolGradeCalculatorPage from "./components/SchoolGradeCalculatorPage";
 import EsignManagerPage from "./components/EsignManagerPage";
 import PickupTagsPanel from "./components/PickupTagsPanel";
+import ContactFixesPage from "./components/ContactFixesPage";
+import ContactRatePage from "./components/ContactRatePage";
+import {
+  CallInitiativeBanner,
+  CallInitiativeWorklistModal,
+  CallInitiativeAdminPanel,
+} from "./components/CallInitiativePanel";
 import FastCoveragePage from "./components/FastCoveragePage";
 import CameraRegistryPage from "./components/CameraRegistryPage";
 import CreatePassModal from "./components/CreatePassModal";
+import StudentPicker from "./components/StudentPicker";
 import { CompanionQueuePanel } from "./components/CompanionQueuePanel";
 import { KioskBanner } from "./components/KioskBanner";
 import { KioskCardsPanel } from "./components/KioskCardsPanel";
@@ -57,6 +66,8 @@ import CheckInOutModal from "./components/CheckInOutModal";
 import LogInterventionLauncher from "./components/LogInterventionLauncher";
 import InterventionsBell from "./components/InterventionsBell";
 import AstNotificationBell from "./components/AstNotificationBell";
+import StoreFulfillmentBell from "./components/StoreFulfillmentBell";
+import SchoolStoreFulfillmentView from "./components/SchoolStoreFulfillmentView";
 import AstSidebarBadge from "./components/AstSidebarBadge";
 import FeatureLicensingAdminPage from "./components/featureLicensing/FeatureLicensingAdminPage";
 import SuperUserHomeRollups from "./components/districtOverview/SuperUserHomeRollups";
@@ -102,6 +113,10 @@ import HousesPanel, { HouseLogosPanel } from "./components/HousesPanel";
 import PbisPointsHub, {
   SchoolWidePbisAdminView,
   SchoolStoreView,
+  ClassroomStoreView,
+  ManageListsView,
+  PbisWalletsPage,
+  PbisUsagePage,
 } from "./components/PbisPointsHub";
 import PulseBrainLabHub from "./components/pulseBrainLab/PulseBrainLabHub";
 import PartneringWithParentsHub from "./components/academicEvidence/PartneringWithParentsHub";
@@ -135,6 +150,7 @@ import SebSelDashboard from "./components/SebSelDashboard";
 import EquityDashboard from "./components/EquityDashboard";
 import EarlyWarningDashboard from "./components/EarlyWarningDashboard";
 import StudentProfile from "./components/StudentProfile";
+import StudentLookupPage from "./components/StudentLookupPage";
 import SafetyPlansAdminPage from "./components/SafetyPlansAdminPage";
 import TrustedAdultsAdmin from "./components/TrustedAdultsAdmin";
 import SettingsHub, {
@@ -361,7 +377,6 @@ function RequestPulloutSection({
   reasonOptions: PulloutReasonLite[];
   isAdmin?: boolean;
 }) {
-  const [studentSearch, setStudentSearch] = useState("");
   const [studentId, setStudentId] = useState<string>("");
   const [reasonChoice, setReasonChoice] = useState<string>("");
   const [reasonOther, setReasonOther] = useState<string>("");
@@ -457,21 +472,6 @@ function RequestPulloutSection({
   const [submitting, setSubmitting] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const sortedStudents = useMemo(() => {
-    const q = studentSearch.trim().toLowerCase();
-    const list = q
-      ? students.filter(
-          (s) =>
-            s.firstName.toLowerCase().includes(q) ||
-            s.lastName.toLowerCase().includes(q) ||
-            s.studentId.toLowerCase().includes(q) ||
-            (s.localSisId?.toLowerCase().includes(q) ?? false),
-        )
-      : students;
-    // Admins/SuperUsers see all matches; non-admins keep the original 50-cap
-    // safety limit so the dropdown can't render a huge list.
-    return isAdmin ? list : list.slice(0, 50);
-  }, [students, studentSearch, isAdmin]);
 
   const selectedStudent = useMemo(
     () => students.find((s) => s.studentId === studentId) ?? null,
@@ -559,7 +559,6 @@ function RequestPulloutSection({
           text: `Pullout request #${data.id} submitted. An administrator will verify it shortly.${dispatchTail}`,
         });
         setStudentId("");
-        setStudentSearch("");
         setReasonChoice("");
         setReasonOther("");
         setSelectedInterventionIds(new Set());
@@ -611,37 +610,25 @@ function RequestPulloutSection({
       <form onSubmit={submit} style={{ display: "grid", gap: "0.75rem" }}>
         <label style={{ display: "grid", gap: 4 }}>
           <span>Student</span>
-          <input
-            type="text"
-            list="request-pullout-student-options"
-            placeholder="Type name or ID…"
-            value={studentSearch}
-            onChange={(e) => {
-              const v = e.target.value;
-              setStudentSearch(v);
-              const typed = v.trim();
-              const match = sortedStudents.find(
-                (s) =>
-                  // Must mirror the <option> value rendered below — it
-                  // uses localSisId, so matching on studentId here never
-                  // fired and the form's studentId stayed empty (submit
-                  // button permanently disabled).
-                  `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})` ===
-                    v ||
-                  s.studentId === typed ||
-                  (s.localSisId != null && s.localSisId === typed),
-              );
-              setStudentId(match ? match.studentId : "");
-            }}
+          <StudentPicker
+            mode="local"
+            items={students}
+            selectedKey={studentId}
+            onSelect={(s) => setStudentId(s.studentId)}
+            onClear={() => setStudentId("")}
+            getKey={(s) => s.studentId}
+            getPrimary={(s) => `${s.firstName} ${s.lastName}`}
+            getInputLabel={(s) =>
+              `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`
+            }
+            getSearchText={(s) =>
+              `${s.firstName} ${s.lastName} ${s.studentId} ${s.localSisId ?? ""}`
+            }
+            renderMeta={(s) => `· ${s.localSisId ?? "—"} · Gr ${s.grade}`}
+            maxResults={isAdmin ? Infinity : 50}
+            minWidth="100%"
+            style={{ display: "block" }}
           />
-          <datalist id="request-pullout-student-options">
-            {sortedStudents.map((s) => (
-              <option
-                key={s.id}
-                value={`${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`}
-              />
-            ))}
-          </datalist>
         </label>
         {selectedStudent && preflight && (
           <div
@@ -729,31 +716,64 @@ function RequestPulloutSection({
           ) : (
             <div
               style={{
-                display: "grid",
-                gridTemplateColumns:
-                  "repeat(auto-fill, minmax(180px, 1fr))",
-                gap: "0.25rem 0.75rem",
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "0.5rem",
               }}
             >
-              {activeInterventions.map((t) => (
-                <label
-                  key={t.id}
-                  style={{
-                    display: "flex",
-                    gap: 6,
-                    alignItems: "center",
-                    fontSize: "0.9rem",
-                    cursor: "pointer",
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedInterventionIds.has(t.id)}
-                    onChange={() => toggleIntervention(t.id)}
-                  />
-                  <span>{t.name}</span>
-                </label>
-              ))}
+              {activeInterventions.map((t) => {
+                const on = selectedInterventionIds.has(t.id);
+                return (
+                  <label
+                    key={t.id}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "0.35rem 0.7rem",
+                      borderRadius: 999,
+                      border: `1px solid ${on ? "var(--accent, #2563eb)" : "#cbd5e1"}`,
+                      background: on ? "var(--accent, #2563eb)" : "#fff",
+                      color: on ? "#fff" : "#334155",
+                      fontSize: "0.85rem",
+                      fontWeight: on ? 600 : 500,
+                      lineHeight: 1.2,
+                      cursor: "pointer",
+                      userSelect: "none",
+                      transition:
+                        "background 120ms ease, border-color 120ms ease, color 120ms ease",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={() => toggleIntervention(t.id)}
+                      style={{
+                        position: "absolute",
+                        width: 1,
+                        height: 1,
+                        padding: 0,
+                        margin: -1,
+                        overflow: "hidden",
+                        clip: "rect(0 0 0 0)",
+                        whiteSpace: "nowrap",
+                        border: 0,
+                      }}
+                    />
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        fontSize: "0.85rem",
+                        lineHeight: 1,
+                        opacity: on ? 1 : 0.55,
+                      }}
+                    >
+                      {on ? "✓" : "+"}
+                    </span>
+                    <span>{t.name}</span>
+                  </label>
+                );
+              })}
             </div>
           )}
           {otherSelected && (
@@ -926,7 +946,6 @@ function VerifyPulloutsSection({
   // the student name is pre-populated from the teacher's submission;
   // this form is the manual escape hatch for the call-in case.
   const [calledInOpen, setCalledInOpen] = useState(false);
-  const [calledInStudentSearch, setCalledInStudentSearch] = useState("");
   const [calledInStudentId, setCalledInStudentId] = useState("");
   const [calledInTeacherName, setCalledInTeacherName] = useState("");
   const [calledInPeriod, setCalledInPeriod] = useState("");
@@ -1077,7 +1096,6 @@ function VerifyPulloutsSection({
           ok: true,
           text: `Called-in pullout #${data.id} added for ${studentName(calledInStudentId)} — ready to verify below.`,
         });
-        setCalledInStudentSearch("");
         setCalledInStudentId("");
         setCalledInTeacherName("");
         setCalledInPeriod("");
@@ -1310,37 +1328,25 @@ function VerifyPulloutsSection({
               <span style={{ fontSize: 12, color: "#475569" }}>
                 Student
               </span>
-              <input
-                type="text"
-                list="called-in-pullout-students"
-                placeholder="Type name or ID…"
-                value={calledInStudentSearch}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setCalledInStudentSearch(v);
-                  const match = sortedStudentsForCalledIn.find(
-                    (s) =>
-                      `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})` ===
-                        v ||
-                      s.studentId === v.trim() ||
-                      (s.localSisId ?? "") === v.trim(),
-                  );
-                  setCalledInStudentId(match ? match.studentId : "");
-                }}
-                style={{
-                  padding: "0.4rem 0.6rem",
-                  border: "1px solid #cbd5e1",
-                  borderRadius: 6,
-                }}
+              <StudentPicker
+                mode="local"
+                items={sortedStudentsForCalledIn}
+                selectedKey={calledInStudentId}
+                onSelect={(s) => setCalledInStudentId(s.studentId)}
+                onClear={() => setCalledInStudentId("")}
+                getKey={(s) => s.studentId}
+                getPrimary={(s) => `${s.firstName} ${s.lastName}`}
+                getInputLabel={(s) =>
+                  `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`
+                }
+                getSearchText={(s) =>
+                  `${s.firstName} ${s.lastName} ${s.studentId} ${s.localSisId ?? ""}`
+                }
+                renderMeta={(s) => `· ${s.localSisId ?? "—"} · Gr ${s.grade}`}
+                maxResults={Infinity}
+                minWidth="100%"
+                style={{ display: "block" }}
               />
-              <datalist id="called-in-pullout-students">
-                {sortedStudentsForCalledIn.map((s) => (
-                  <option
-                    key={s.id}
-                    value={`${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`}
-                  />
-                ))}
-              </datalist>
             </label>
             <div
               style={{
@@ -1818,7 +1824,6 @@ function IssDashboardSection({ students }: { students: Student[] }) {
   const [confirmRosterDeleteId, setConfirmRosterDeleteId] = useState<
     number | null
   >(null);
-  const [addStudentSearch, setAddStudentSearch] = useState("");
   const [addStudentId, setAddStudentId] = useState("");
   const [addPeriod, setAddPeriod] = useState("");
   const [addNotes, setAddNotes] = useState("");
@@ -1915,18 +1920,6 @@ function IssDashboardSection({ students }: { students: Student[] }) {
     return m;
   }, [students]);
 
-  const sortedStudents = useMemo(() => {
-    const q = addStudentSearch.trim().toLowerCase();
-    const list = q
-      ? students.filter(
-          (s) =>
-            s.firstName.toLowerCase().includes(q) ||
-            s.lastName.toLowerCase().includes(q) ||
-            s.studentId.toLowerCase().includes(q),
-        )
-      : students;
-    return list.slice(0, 50);
-  }, [students, addStudentSearch]);
 
   const sortedRoster = useMemo(() => {
     return [...roster].sort((a, b) => {
@@ -1963,7 +1956,6 @@ function IssDashboardSection({ students }: { students: Student[] }) {
         setMsg({ ok: false, text: data?.error || "Could not add to roster." });
       } else {
         setAddStudentId("");
-        setAddStudentSearch("");
         setAddPeriod("");
         setAddNotes("");
         await refreshRoster();
@@ -2497,32 +2489,27 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                 <span style={{ fontSize: "0.8rem", color: "#64748b" }}>
                   Student
                 </span>
-                <input
-                  type="text"
-                  list="iss-roster-add-student-options"
-                  placeholder="Type name or ID…"
-                  value={addStudentSearch}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setAddStudentSearch(v);
-                    const m = sortedStudents.find(
-                      (s) =>
-                        `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})` ===
-                          v ||
-                        s.studentId === v.trim() ||
-                        (s.localSisId ?? "") === v.trim(),
-                    );
-                    setAddStudentId(m ? m.studentId : "");
-                  }}
+                <StudentPicker
+                  mode="local"
+                  items={students}
+                  selectedKey={addStudentId}
+                  onSelect={(s) => setAddStudentId(s.studentId)}
+                  onClear={() => setAddStudentId("")}
+                  getKey={(s) => s.studentId}
+                  getPrimary={(s) => `${s.firstName} ${s.lastName}`}
+                  getInputLabel={(s) =>
+                    `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`
+                  }
+                  getSearchText={(s) =>
+                    `${s.firstName} ${s.lastName} ${s.studentId} ${s.localSisId ?? ""}`
+                  }
+                  renderMeta={(s) =>
+                    `· ${s.localSisId ?? "—"} · Gr ${s.grade}`
+                  }
+                  maxResults={50}
+                  minWidth="100%"
+                  style={{ display: "block" }}
                 />
-                <datalist id="iss-roster-add-student-options">
-                  {sortedStudents.map((s) => (
-                    <option
-                      key={s.id}
-                      value={`${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`}
-                    />
-                  ))}
-                </datalist>
               </label>
               <label style={{ display: "grid", gap: 2 }}>
                 <span style={{ fontSize: "0.8rem", color: "#64748b" }}>
@@ -3710,6 +3697,8 @@ function PolarityStudentPicker({
   );
 }
 
+// Thin wrapper preserving the original Family-Communication API while
+// delegating all behavior to the shared StudentPicker (the reference look).
 function StudentCombobox({
   students,
   value,
@@ -3725,183 +3714,26 @@ function StudentCombobox({
   minWidth?: number;
   isAdmin?: boolean;
 }) {
-  const selected = students.find((s) => s.studentId === value);
-  const labelOf = (s: Student) =>
-    `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`;
-  const [query, setQuery] = useState(selected ? labelOf(selected) : "");
-  const [open, setOpen] = useState(false);
-  const [highlight, setHighlight] = useState(0);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    setQuery(selected ? labelOf(selected) : "");
-  }, [value, students]);
-
-  useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, []);
-
-  const matches = (() => {
-    const q = query.trim().toLowerCase();
-    const base = q
-      ? students.filter((s) => {
-          return (
-            s.firstName.toLowerCase().includes(q) ||
-            s.lastName.toLowerCase().includes(q) ||
-            s.studentId.toLowerCase().includes(q) ||
-            labelOf(s).toLowerCase().includes(q)
-          );
-        })
-      : students;
-    return isAdmin ? base : base.slice(0, 50);
-  })();
-
-  const commit = (s: Student) => {
-    onChange(s.studentId);
-    setQuery(labelOf(s));
-    setOpen(false);
-  };
-
   return (
-    <div
-      ref={wrapRef}
-      style={{ position: "relative", display: "inline-block", minWidth }}
-    >
-      <input
-        type="text"
-        value={query}
-        placeholder={placeholder}
-        onFocus={() => {
-          setOpen(true);
-          setHighlight(0);
-        }}
-        onChange={(e) => {
-          setQuery(e.target.value);
-          setOpen(true);
-          setHighlight(0);
-          if (e.target.value.trim() === "") onChange("");
-        }}
-        onKeyDown={(e) => {
-          if (!open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
-            setOpen(true);
-            return;
-          }
-          if (e.key === "ArrowDown") {
-            e.preventDefault();
-            setHighlight((h) => Math.min(h + 1, matches.length - 1));
-          } else if (e.key === "ArrowUp") {
-            e.preventDefault();
-            setHighlight((h) => Math.max(h - 1, 0));
-          } else if (e.key === "Enter") {
-            if (open && matches[highlight]) {
-              e.preventDefault();
-              commit(matches[highlight]);
-            }
-          } else if (e.key === "Escape") {
-            setOpen(false);
-          }
-        }}
-        style={{ width: "100%", padding: "0.4rem 0.55rem" }}
-      />
-      {value && (
-        <button
-          type="button"
-          onClick={() => {
-            onChange("");
-            setQuery("");
-            setOpen(false);
-          }}
-          aria-label="Clear"
-          style={{
-            position: "absolute",
-            right: 6,
-            top: "50%",
-            transform: "translateY(-50%)",
-            background: "transparent",
-            border: "none",
-            color: "#64748b",
-            cursor: "pointer",
-            fontSize: "1.1rem",
-            lineHeight: 1,
-            padding: "0 0.25rem",
-          }}
-        >
-          ×
-        </button>
-      )}
-      {open && matches.length > 0 && (
-        <ul
-          role="listbox"
-          style={{
-            position: "absolute",
-            zIndex: 50,
-            top: "calc(100% + 2px)",
-            left: 0,
-            right: 0,
-            margin: 0,
-            padding: "0.25rem 0",
-            listStyle: "none",
-            background: "#fff",
-            border: "1px solid #cbd5e1",
-            borderRadius: 6,
-            boxShadow: "0 6px 18px rgba(15,23,42,0.12)",
-            maxHeight: 280,
-            overflowY: "auto",
-          }}
-        >
-          {matches.map((s, i) => (
-            <li
-              key={s.studentId}
-              role="option"
-              aria-selected={i === highlight}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                commit(s);
-              }}
-              onMouseEnter={() => setHighlight(i)}
-              style={{
-                padding: "0.4rem 0.6rem",
-                cursor: "pointer",
-                background: i === highlight ? "#e0f2fe" : "transparent",
-                fontSize: "0.92rem",
-              }}
-            >
-              <strong>
-                {s.firstName} {s.lastName}
-              </strong>{" "}
-              <span style={{ color: "#64748b" }}>
-                · {s.localSisId ?? "—"} · Gr {s.grade}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {open && matches.length === 0 && query.trim() !== "" && (
-        <div
-          style={{
-            position: "absolute",
-            zIndex: 50,
-            top: "calc(100% + 2px)",
-            left: 0,
-            right: 0,
-            background: "#fff",
-            border: "1px solid #cbd5e1",
-            borderRadius: 6,
-            padding: "0.5rem 0.6rem",
-            color: "#64748b",
-            fontSize: "0.9rem",
-          }}
-        >
-          No matches.
-        </div>
-      )}
-    </div>
+    <StudentPicker
+      mode="local"
+      items={students}
+      selectedKey={value}
+      onSelect={(s) => onChange(s.studentId)}
+      onClear={() => onChange("")}
+      getKey={(s) => s.studentId}
+      getPrimary={(s) => `${s.firstName} ${s.lastName}`}
+      getInputLabel={(s) =>
+        `${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`
+      }
+      getSearchText={(s) =>
+        `${s.firstName} ${s.lastName} ${s.studentId} ${s.localSisId ?? ""}`
+      }
+      renderMeta={(s) => `· ${s.localSisId ?? "—"} · Gr ${s.grade}`}
+      placeholder={placeholder}
+      minWidth={minWidth}
+      maxResults={isAdmin ? Infinity : 50}
+    />
   );
 }
 
@@ -3962,6 +3794,16 @@ const INSIGHTS_TILES: InsightsTile[] = [
     phase: "Today",
     group: "actions",
     targetSection: "classComposer",
+  },
+  {
+    id: "contactRate",
+    icon: "☎️",
+    title: "Contact Rate",
+    subtitle:
+      "How many families have been contacted — last N days and YTD, positive vs. concern tone, plus a not-contacted worklist by responsible teacher. CSV + PDF, and email teachers with incomplete calls.",
+    phase: "Today",
+    group: "actions",
+    targetSection: "contactRate",
   },
   {
     id: "academics",
@@ -4124,51 +3966,63 @@ const INSIGHTS_TILES: InsightsTile[] = [
 // nav items render. Keep this in sync with the sidebar JSX below.
 const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
   administration: ["superUserHome", "featureLicensing", "districtAdmin"],
-  insights: ["insights", "insightsWatchlist", "myWatchList", "studentProfile", "classComposer"],
+  insights: ["insights", "insightsWatchlist", "myWatchList", "studentProfile", "classComposer", "contactRate"],
   recognition: [
     "pbis",
+    // Phase 4a: House Rankings restored to its permanent Recognition home
+    // (it previously lived ONLY in Quick Access and had no force-expand
+    // owner). pbis was already owned here from before the QA promotion.
+    "houseRankings",
     "schoolStore",
     "schoolStoreManage",
+    "schoolStoreFulfillment",
+    "classroomStore",
     "pbisHub",
     "pbisRecent",
     "pbisReports",
     "pbisReasons",
     "pbisMilestoneEmails",
     "pbisLists",
+    "pbisWallets",
+    "pbisUsage",
   ],
   behaviorSupport: [
     "logIntervention",
     "mtssPlans",
     "interventionReports",
+    // Phase 3 (heal MTSS split): the MTSS Coordinator hub + its Templates
+    // sub-page moved here from the Insights group so the whole MTSS
+    // workflow force-expands the same (Student Support, id=behaviorSupport)
+    // group where the coordinator's sidebar row now lives.
+    "mtssCoordinator",
+    "mtssTemplates",
     "requestPullout",
     "behaviorSpecialist",
-    "interventions",
     "trustedAdultInterventions",
     "verifyPullouts",
     "issDashboard",
     "behaviorReview",
   ],
   specialPrograms: ["accommodations", "ese"],
-  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess"],
+  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess", "callCampaign", "parentNotifications"],
   people: ["teacherRoster", "staffRoles"],
   // hallPassMgmt is reached via the Hall Passes admin tools; it has no
   // dedicated nav item so we anchor it to School Admin so the sidebar
   // gives the user *some* group context when they're on that page.
   schoolAdmin: ["bellSchedule", "activeKiosks", "kioskCards", "settings", "hallPassMgmt"],
 };
-// Insights launches mtssCoordinator/mtssTemplates as sub-pages (via tile
-// launchers in InsightsHub); they have no direct sidebar item, so they
-// belong to the Insights group for force-expand purposes. mtssPlans and
-// interventionReports were promoted to direct sidebar items inside the
-// Academic and Behavior Supports group, so their ownership now lives
-// there (see behaviorSupport above) — not here.
+// Phase 3 (heal MTSS split): mtssCoordinator + its mtssTemplates sub-page
+// moved to the behaviorSupport group (above) — the coordinator hub now has a
+// direct sidebar row there alongside mtssPlans + interventionReports, so the
+// whole MTSS workflow force-expands one group. The InsightsHub still launches
+// them as parallel-discovery tiles (same convention as mtssPlans), but
+// force-expand ownership follows the sidebar row. academicsTrajectory stays
+// here — it's an Insights dashboard, not part of the plan workflow.
 NAV_GROUP_OWNERSHIP.insights = [
   "insights",
   "insightsWatchlist",
   "myWatchList",
   "studentProfile",
-  "mtssCoordinator",
-  "mtssTemplates",
   "academicsTrajectory",
 ];
 // Trusted Adults admin lives in the School Admin nav group alongside
@@ -4182,6 +4036,12 @@ NAV_GROUP_OWNERSHIP.schoolAdmin = [
   "hallPassMgmt",
   "trustedAdultsAdmin",
   "displays",
+  // Behavior-lists editor ("Interventions") moved here from the
+  // Student Support group (id=behaviorSupport) so all per-school config
+  // lives in one Admin & Settings home. activeSection key unchanged.
+  "interventions",
+  // Consolidated AST + Comp Time admin home (was four separate items).
+  "staffTime",
 ];
 
 function groupContainsActive(groupId: string, activeSection: string): boolean {
@@ -4272,6 +4132,146 @@ function NavGroup({
         </span>
       </button>
       {open && children}
+    </>
+  );
+}
+
+// Phase 4b — Quick Access is a per-user PINNABLE favorites strip (max 5),
+// persisted in localStorage so it survives reload and is scoped per user
+// (two staff sharing an iPad don't inherit each other's favorites). Every
+// pinnable destination has a permanent home OUTSIDE this strip — either a
+// themed accordion (pbis/houseRankings/requestPullout/accommodations, Phase
+// 4a) or the always-on Tile Home launcher (hallPasses/teacherRoster/
+// studentLookup/partneringWithParents). Each item's pin gate matches its
+// Tile Home tile gate, so unpinning never makes a destination unreachable.
+// First-time users are seeded a familiar
+// default set. The smart/special Quick Access items (AST, Comp Time,
+// Verify Pullout, Pickup, Spotlight) are NOT pinnable — they stay rendered
+// unconditionally by the parent after this favorites block.
+function QuickAccessFavorites<
+  S extends { key: string; label: string; icon: React.ReactNode },
+>({
+  userId,
+  items,
+  renderItem,
+}: {
+  userId: string;
+  items: Array<S & { canShow: boolean }>;
+  renderItem: (s: S) => React.ReactNode;
+}) {
+  const storageKey = `pulseedu.quickaccess.${userId}.v1`;
+  const MAX_PINS = 5;
+  // Seeded defaults for a first-time user (no stored value). Filtered to
+  // what the user can actually see and capped at MAX_PINS below.
+  const DEFAULT_PINS = [
+    "hallPasses",
+    "teacherRoster",
+    "studentLookup",
+    "requestPullout",
+    "pbis",
+  ];
+  const available = items.filter((it) => it.canShow);
+  const availableKeys = new Set(available.map((it) => it.key));
+  const [pins, setPins] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw === null) {
+        return DEFAULT_PINS.filter((k) => availableKeys.has(k)).slice(
+          0,
+          MAX_PINS,
+        );
+      }
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((k): k is string => typeof k === "string");
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  });
+  const [editing, setEditing] = useState(false);
+  // Persist on every change. Pins for a temporarily-off feature are kept
+  // in storage (we filter at render) so the pin returns if the feature
+  // comes back — only the user's explicit unpin removes it.
+  useEffect(() => {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(pins));
+    } catch {
+      /* ignore quota / private-mode failures */
+    }
+  }, [storageKey, pins]);
+  // Render pinned items in the canonical master order (not pin-click
+  // order) for a stable layout, filtered to what's currently visible and
+  // hard-capped at MAX_PINS.
+  const visiblePinCount = pins.filter((k) => availableKeys.has(k)).length;
+  const pinnedToRender = available
+    .filter((it) => pins.includes(it.key))
+    .slice(0, MAX_PINS);
+  const togglePin = (key: string) => {
+    setPins((prev) => {
+      if (prev.includes(key)) return prev.filter((k) => k !== key);
+      if (prev.filter((k) => availableKeys.has(k)).length >= MAX_PINS) {
+        return prev;
+      }
+      return [...prev, key];
+    });
+  };
+  return (
+    <>
+      <div className="section-label quick-access-label">
+        <span>Quick Access</span>
+        {available.length > 0 && (
+          <button
+            type="button"
+            className="quick-access-edit-btn"
+            onClick={() => setEditing((v) => !v)}
+            aria-expanded={editing}
+            title="Choose which shortcuts appear in Quick Access"
+          >
+            {editing ? "Done" : "Customize"}
+          </button>
+        )}
+      </div>
+      {pinnedToRender.map((it) => renderItem(it))}
+      {!editing && pinnedToRender.length === 0 && available.length > 0 && (
+        <button
+          type="button"
+          className="nav-item quick-access-empty"
+          onClick={() => setEditing(true)}
+        >
+          <span className="nav-icon">➕</span>
+          Pin your favorites
+        </button>
+      )}
+      {editing && (
+        <div className="quick-access-editor">
+          <div className="quick-access-editor-hint">
+            Pick up to {MAX_PINS} shortcuts
+          </div>
+          {available.map((it) => {
+            const checked = pins.includes(it.key);
+            const atCap = !checked && visiblePinCount >= MAX_PINS;
+            return (
+              <label
+                key={it.key}
+                className={
+                  "quick-access-option" + (atCap ? " is-disabled" : "")
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={atCap}
+                  onChange={() => togglePin(it.key)}
+                />
+                <span className="nav-icon">{it.icon}</span>
+                <span>{it.label}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
     </>
   );
 }
@@ -4803,6 +4803,697 @@ function InsightsBackBar({ onBack }: { onBack: () => void }) {
   );
 }
 
+// ----- Classroom Intervention per-student report (Core Team) -----
+// Picks a student, then renders the admin report from
+// GET /api/interventions/student-report/:studentId — every negative behavior
+// (across all teachers), every intervention logged (by teacher) with its
+// derived outcome, and a per-intervention "what's worked" effectiveness summary.
+type CIReportSearchRow = {
+  studentId: string;
+  localSisId?: string | null;
+  firstName: string;
+  lastName: string;
+  grade?: string | null;
+};
+type CIReport = {
+  windowDays: number;
+  student: {
+    studentId: string;
+    firstName: string;
+    lastName: string;
+    localSisId?: string | null;
+  };
+  behaviors: Array<{
+    reason: string;
+    staffName: string;
+    note?: string | null;
+    createdAt: string;
+  }>;
+  interventions: Array<{
+    interventionType: string;
+    behaviorReason?: string | null;
+    note?: string | null;
+    staffName: string;
+    createdAt: string;
+    outcome: "worked" | "recurred" | "pending" | "na";
+  }>;
+  summary: Record<
+    string,
+    { used: number; worked: number; recurred: number; pending: number }
+  >;
+};
+
+function OutcomePill({
+  outcome,
+}: {
+  outcome: "worked" | "recurred" | "pending" | "na";
+}) {
+  const map = {
+    worked: { label: "Worked", bg: "#d1fae5", fg: "#047857" },
+    recurred: { label: "Recurred", bg: "#fef3c7", fg: "#92400e" },
+    pending: { label: "Pending", bg: "#e5e7eb", fg: "#374151" },
+    na: { label: "—", bg: "transparent", fg: "#9ca3af" },
+  } as const;
+  const m = map[outcome];
+  return (
+    <span
+      style={{
+        fontSize: 11,
+        fontWeight: 600,
+        color: m.fg,
+        background: m.bg,
+        borderRadius: 999,
+        padding: outcome === "na" ? 0 : "1px 8px",
+      }}
+    >
+      {m.label}
+    </span>
+  );
+}
+
+// Segmented control to switch the Intervention Reports page between the MTSS
+// plan-fidelity view (Tier 2/3 trends) and the per-student Classroom report.
+function InterventionReportTabs({
+  value,
+  onChange,
+}: {
+  value: "mtss" | "classroom";
+  onChange: (v: "mtss" | "classroom") => void;
+}) {
+  const tab = (active: boolean): React.CSSProperties => ({
+    padding: "6px 14px",
+    borderRadius: 8,
+    border: active ? "1px solid #2563eb" : "1px solid #cbd5e1",
+    background: active ? "#2563eb" : "white",
+    color: active ? "white" : "#334155",
+    fontWeight: 600,
+    cursor: "pointer",
+    fontSize: "0.85rem",
+  });
+  return (
+    <div
+      className="mtss-reports-no-print"
+      style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
+    >
+      <button
+        type="button"
+        style={tab(value === "mtss")}
+        onClick={() => onChange("mtss")}
+      >
+        MTSS Plan Fidelity
+      </button>
+      <button
+        type="button"
+        style={tab(value === "classroom")}
+        onClick={() => onChange("classroom")}
+      >
+        Classroom (per-student)
+      </button>
+    </div>
+  );
+}
+
+// Trigger a client-side file download from a Blob. We download (never
+// window.open) because the session cookie is blocked inside the Replit preview
+// iframe and a blob URL opened in a new tab renders blank.
+function downloadBlobFile(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+// CSV-escape a single cell. Neutralizes CSV/Excel formula injection (cells
+// starting with = + - @ tab or CR can execute as formulas), then quotes when
+// the value contains a comma, quote, or newline.
+function toCsvCell(v: string | number | null | undefined): string {
+  let s = v == null ? "" : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function ClassroomInterventionReport() {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<CIReportSearchRow[]>([]);
+  const [picked, setPicked] = useState<CIReportSearchRow | null>(null);
+  const [report, setReport] = useState<CIReport | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [teacherFilter, setTeacherFilter] = useState("");
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [includeNotes, setIncludeNotes] = useState(false);
+
+  // Debounced student search.
+  useEffect(() => {
+    if (picked) return;
+    const term = q.trim();
+    if (!term) {
+      setResults([]);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      authFetch(`/api/student-lookup/search?q=${encodeURIComponent(term)}`)
+        .then((r) => (r.ok ? r.json() : { students: [] }))
+        .then((j: { students?: CIReportSearchRow[] }) => {
+          if (!cancelled) setResults(j.students ?? []);
+        })
+        .catch(() => {});
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [q, picked]);
+
+  // Load the report when a student is picked.
+  useEffect(() => {
+    if (!picked) {
+      setReport(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setTeacherFilter("");
+    authFetch(
+      `/api/interventions/student-report/${encodeURIComponent(
+        picked.studentId,
+      )}`,
+    )
+      .then(async (r) => {
+        if (!r.ok) throw new Error("Could not load the report.");
+        return r.json();
+      })
+      .then((j: CIReport) => {
+        if (!cancelled) setReport(j);
+      })
+      .catch((e) => {
+        if (!cancelled)
+          setError(e instanceof Error ? e.message : "Something went wrong.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [picked]);
+
+  const fmtDate = (iso: string) => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime())
+      ? iso
+      : d.toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+  };
+
+  // Distinct teachers on this student's records (behaviors + interventions),
+  // sorted by name — drives the teacher filter dropdown.
+  const teacherOptions = useMemo(() => {
+    if (!report) return [];
+    const set = new Set<string>();
+    for (const b of report.behaviors) if (b.staffName) set.add(b.staffName);
+    for (const iv of report.interventions)
+      if (iv.staffName) set.add(iv.staffName);
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [report]);
+
+  // Always sort by teacher name (then most-recent first) so "All teachers"
+  // clusters each teacher's rows together for side-by-side evaluation.
+  const sortByTeacherThenDate = <
+    T extends { staffName: string; createdAt: string },
+  >(
+    rows: T[],
+  ) =>
+    [...rows].sort(
+      (a, b) =>
+        a.staffName.localeCompare(b.staffName) ||
+        b.createdAt.localeCompare(a.createdAt),
+    );
+
+  const filteredBehaviors = useMemo(() => {
+    if (!report) return [];
+    const rows = teacherFilter
+      ? report.behaviors.filter((b) => b.staffName === teacherFilter)
+      : report.behaviors;
+    return sortByTeacherThenDate(rows);
+  }, [report, teacherFilter]);
+
+  const filteredInterventions = useMemo(() => {
+    if (!report) return [];
+    const rows = teacherFilter
+      ? report.interventions.filter((iv) => iv.staffName === teacherFilter)
+      : report.interventions;
+    return sortByTeacherThenDate(rows);
+  }, [report, teacherFilter]);
+
+  // Recompute the "what's worked" summary for the currently filtered set.
+  const filteredSummary = useMemo(() => {
+    const out: Record<
+      string,
+      { used: number; worked: number; recurred: number; pending: number }
+    > = {};
+    for (const iv of filteredInterventions) {
+      const slot = (out[iv.interventionType] ??= {
+        used: 0,
+        worked: 0,
+        recurred: 0,
+        pending: 0,
+      });
+      slot.used += 1;
+      if (iv.outcome !== "na") slot[iv.outcome] += 1;
+    }
+    return out;
+  }, [filteredInterventions]);
+
+  const teacherSlug = teacherFilter
+    ? "-" + teacherFilter.replace(/[^A-Za-z0-9]+/g, "_")
+    : "";
+  const baseName = picked
+    ? `intervention-report-${picked.lastName}_${picked.firstName}${teacherSlug}`
+    : "intervention-report";
+
+  function downloadCsv() {
+    if (!report) return;
+    const rows: (string | number | null | undefined)[][] = [
+      ["Record", "Date", "Teacher", "Item", "For behavior", "Outcome", "Note"],
+    ];
+    for (const iv of filteredInterventions) {
+      rows.push([
+        "Intervention",
+        fmtDate(iv.createdAt),
+        iv.staffName,
+        iv.interventionType,
+        iv.behaviorReason ?? "",
+        iv.outcome === "na" ? "" : iv.outcome,
+        iv.note ?? "",
+      ]);
+    }
+    for (const b of filteredBehaviors) {
+      rows.push([
+        "Behavior",
+        fmtDate(b.createdAt),
+        b.staffName,
+        b.reason,
+        "",
+        "",
+        b.note ?? "",
+      ]);
+    }
+    const csv = rows.map((r) => r.map(toCsvCell).join(",")).join("\r\n");
+    downloadBlobFile(
+      new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }),
+      `${baseName}.csv`,
+    );
+  }
+
+  async function downloadPdf() {
+    if (!picked) return;
+    setPdfBusy(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (teacherFilter) params.set("teacher", teacherFilter);
+      if (includeNotes) params.set("notes", "1");
+      const qs = params.toString() ? `?${params.toString()}` : "";
+      const r = await authFetch(
+        `/api/interventions/student-report/${encodeURIComponent(
+          picked.studentId,
+        )}/pdf${qs}`,
+      );
+      if (!r.ok) throw new Error("Could not generate the PDF.");
+      const blob = await r.blob();
+      downloadBlobFile(blob, `${baseName}.pdf`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not generate the PDF.");
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        marginTop: "1.5rem",
+        borderTop: "1px solid #e5e7eb",
+        paddingTop: "1.25rem",
+      }}
+    >
+      <h3 style={{ margin: "0 0 0.25rem" }}>Per-student report</h3>
+      <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
+        See every behavior a student has had (across all teachers), every
+        intervention that's been tried, and what's actually worked.
+      </p>
+
+      {!picked && (
+        <div style={{ maxWidth: "32rem", position: "relative" }}>
+          <input
+            type="text"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search student by name or ID…"
+            style={{ width: "100%" }}
+          />
+          {results.length > 0 && (
+            <div
+              style={{
+                border: "1px solid #d1d5db",
+                borderRadius: 8,
+                marginTop: 4,
+                maxHeight: 240,
+                overflowY: "auto",
+                background: "white",
+              }}
+            >
+              {results.map((s) => (
+                <button
+                  key={s.studentId}
+                  type="button"
+                  onClick={() => {
+                    setPicked(s);
+                    setResults([]);
+                    setQ("");
+                  }}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "8px 10px",
+                    border: "none",
+                    borderBottom: "1px solid #f3f4f6",
+                    background: "white",
+                    cursor: "pointer",
+                    fontSize: 14,
+                  }}
+                >
+                  {s.lastName}, {s.firstName}
+                  {s.localSisId ? (
+                    <span
+                      style={{
+                        color: "#6b7280",
+                        fontFamily: "ui-monospace, monospace",
+                        fontSize: 12,
+                      }}
+                    >
+                      {" "}
+                      · ID {s.localSisId}
+                    </span>
+                  ) : null}
+                  {s.grade ? (
+                    <span style={{ color: "#6b7280", fontSize: 12 }}>
+                      {" "}
+                      · Gr {s.grade}
+                    </span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {picked && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            marginBottom: "1rem",
+          }}
+        >
+          <strong>
+            {picked.lastName}, {picked.firstName}
+          </strong>
+          {picked.localSisId ? (
+            <span
+              style={{
+                color: "#6b7280",
+                fontFamily: "ui-monospace, monospace",
+                fontSize: 12,
+              }}
+            >
+              ID {picked.localSisId}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              setPicked(null);
+              setReport(null);
+            }}
+            style={{ marginLeft: "auto" }}
+          >
+            Change student
+          </button>
+        </div>
+      )}
+
+      {loading && <div style={{ color: "#6b7280" }}>Loading report…</div>}
+      {error && <div style={{ color: "crimson" }}>{error}</div>}
+
+      {report && !loading && (
+        <div style={{ display: "grid", gap: "1.5rem" }}>
+          {/* Toolbar: teacher filter + exports */}
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 14,
+              }}
+            >
+              Teacher:
+              <select
+                value={teacherFilter}
+                onChange={(e) => setTeacherFilter(e.target.value)}
+                style={{ padding: "4px 28px 4px 8px" }}
+              >
+                <option value="">All teachers</option>
+                {teacherOptions.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 14,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={includeNotes}
+                onChange={(e) => setIncludeNotes(e.target.checked)}
+              />
+              Include notes in PDF
+            </label>
+            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+              <button type="button" onClick={downloadCsv}>
+                Download CSV
+              </button>
+              <button type="button" onClick={downloadPdf} disabled={pdfBusy}>
+                {pdfBusy ? "Preparing…" : "Print PDF"}
+              </button>
+            </div>
+          </div>
+          {/* What's worked summary */}
+          <div>
+            <h4 style={{ margin: "0 0 0.5rem" }}>
+              What's worked{" "}
+              <span
+                style={{
+                  fontWeight: 400,
+                  fontSize: 12,
+                  color: "#6b7280",
+                }}
+              >
+                (recurrence window: {report.windowDays} days)
+              </span>
+            </h4>
+            {Object.keys(filteredSummary).length === 0 ? (
+              <div style={{ color: "var(--muted, #666)" }}>
+                No interventions logged yet.
+              </div>
+            ) : (
+              <table
+                className="pulse-table"
+                style={{
+                  width: "100%",
+                  borderCollapse: "collapse",
+                  maxWidth: "40rem",
+                }}
+              >
+                <thead>
+                  <tr
+                    style={{
+                      borderBottom: "1px solid #ccc",
+                      textAlign: "left",
+                    }}
+                  >
+                    <th style={{ padding: "0.4rem" }}>Intervention</th>
+                    <th style={{ padding: "0.4rem" }}>Times tried</th>
+                    <th style={{ padding: "0.4rem" }}>Worked</th>
+                    <th style={{ padding: "0.4rem" }}>Recurred</th>
+                    <th style={{ padding: "0.4rem" }}>Pending</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(filteredSummary)
+                    .sort((a, b) => b[1].worked - a[1].worked)
+                    .map(([name, s]) => (
+                      <tr
+                        key={name}
+                        style={{ borderBottom: "1px solid #eee" }}
+                      >
+                        <td style={{ padding: "0.4rem" }}>{name}</td>
+                        <td style={{ padding: "0.4rem" }}>{s.used}</td>
+                        <td
+                          style={{
+                            padding: "0.4rem",
+                            color: "#047857",
+                            fontWeight: 600,
+                          }}
+                        >
+                          {s.worked}
+                        </td>
+                        <td style={{ padding: "0.4rem", color: "#92400e" }}>
+                          {s.recurred}
+                        </td>
+                        <td style={{ padding: "0.4rem", color: "#6b7280" }}>
+                          {s.pending}
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {/* Interventions by teacher */}
+          <div>
+            <h4 style={{ margin: "0 0 0.5rem" }}>Interventions logged</h4>
+            {filteredInterventions.length === 0 ? (
+              <div style={{ color: "var(--muted, #666)" }}>None yet.</div>
+            ) : (
+              <table
+                className="pulse-table"
+                style={{ width: "100%", borderCollapse: "collapse" }}
+              >
+                <thead>
+                  <tr
+                    style={{
+                      borderBottom: "1px solid #ccc",
+                      textAlign: "left",
+                    }}
+                  >
+                    <th style={{ padding: "0.4rem" }}>Date</th>
+                    <th style={{ padding: "0.4rem" }}>Intervention</th>
+                    <th style={{ padding: "0.4rem" }}>For behavior</th>
+                    <th style={{ padding: "0.4rem" }}>Teacher</th>
+                    <th style={{ padding: "0.4rem" }}>Outcome</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredInterventions.map((iv, i) => (
+                    <tr key={i} style={{ borderBottom: "1px solid #eee" }}>
+                      <td style={{ padding: "0.4rem", whiteSpace: "nowrap" }}>
+                        {fmtDate(iv.createdAt)}
+                      </td>
+                      <td style={{ padding: "0.4rem" }}>
+                        {iv.interventionType}
+                        {iv.note ? (
+                          <div
+                            style={{ fontSize: 12, color: "#6b7280" }}
+                          >
+                            {iv.note}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td style={{ padding: "0.4rem", color: "#6b7280" }}>
+                        {iv.behaviorReason ?? "—"}
+                      </td>
+                      <td style={{ padding: "0.4rem" }}>{iv.staffName}</td>
+                      <td style={{ padding: "0.4rem" }}>
+                        <OutcomePill outcome={iv.outcome} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {/* Behaviors across teachers */}
+          <div>
+            <h4 style={{ margin: "0 0 0.5rem" }}>Behaviors</h4>
+            {filteredBehaviors.length === 0 ? (
+              <div style={{ color: "var(--muted, #666)" }}>None yet.</div>
+            ) : (
+              <table
+                className="pulse-table"
+                style={{ width: "100%", borderCollapse: "collapse" }}
+              >
+                <thead>
+                  <tr
+                    style={{
+                      borderBottom: "1px solid #ccc",
+                      textAlign: "left",
+                    }}
+                  >
+                    <th style={{ padding: "0.4rem" }}>Date</th>
+                    <th style={{ padding: "0.4rem" }}>Behavior</th>
+                    <th style={{ padding: "0.4rem" }}>Logged by</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredBehaviors.map((b, i) => (
+                    <tr key={i} style={{ borderBottom: "1px solid #eee" }}>
+                      <td style={{ padding: "0.4rem", whiteSpace: "nowrap" }}>
+                        {fmtDate(b.createdAt)}
+                      </td>
+                      <td style={{ padding: "0.4rem" }}>
+                        {b.reason}
+                        {b.note ? (
+                          <div
+                            style={{ fontSize: 12, color: "#6b7280" }}
+                          >
+                            {b.note}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td style={{ padding: "0.4rem" }}>{b.staffName}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   // Apply per-school branding (header gradient, logo) to the document root
   // so any component reading var(--brand-header-bg) retints automatically.
@@ -4839,6 +5530,11 @@ function App() {
   const [mtssReportsPlanTitle, setMtssReportsPlanTitle] = useState<
     string | null
   >(null);
+  // Intervention Reports has two views: MTSS plan fidelity (Tier 2/3) and the
+  // per-student Classroom report. Core Team toggles between them with a tab.
+  const [interventionReportTab, setInterventionReportTab] = useState<
+    "mtss" | "classroom"
+  >("mtss");
   const [interventionLauncherInitial, setInterventionLauncherInitial] =
     useState<{
       studentId: string | null;
@@ -4852,6 +5548,34 @@ function App() {
   const [teacherAllowlistMap, setTeacherAllowlistMap] = useState<
     Record<string, string[]>
   >({});
+  // Re-fetch the whole allowlist map from the server. Used after a bulk CSV
+  // commit/rollback rewrites many teachers at once.
+  const reloadTeacherAllowlist = () => {
+    authFetch("/api/teacher-allowlist")
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data: { staffName: string; destinationName: string }[]) => {
+        const map: Record<string, string[]> = {};
+        for (const row of Array.isArray(data) ? data : []) {
+          if (!map[row.staffName]) map[row.staffName] = [];
+          map[row.staffName].push(row.destinationName);
+        }
+        for (const k of Object.keys(map)) {
+          map[k].sort((a, b) => a.localeCompare(b));
+        }
+        setTeacherAllowlistMap(map);
+      })
+      .catch((err) =>
+        console.error("Failed to reload teacher allowlist:", err),
+      );
+  };
+  // Restroom-area groups + school-wide facility defaults for the allowlist
+  // grid and the Create-Pass "near" grouping.
+  const [restroomAreas, setRestroomAreas] = useState<
+    { area: string; memberNames: string[] }[]
+  >([]);
+  const [schoolWideDefaultNames, setSchoolWideDefaultNames] = useState<
+    string[]
+  >([]);
   const [editingPassId, setEditingPassId] = useState<number | null>(null);
   const [editEndedAt, setEditEndedAt] = useState<string>("");
   const [editCreatedAt, setEditCreatedAt] = useState<string>("");
@@ -4875,17 +5599,25 @@ function App() {
     isSocialWorker?: boolean;
     isSchoolPsychologist?: boolean;
     isGuidanceCounselor?: boolean;
+    isAthleticDirector?: boolean;
     isNonExemptRole?: boolean;
     isFrontOffice?: boolean;
     isSro?: boolean;
     isGuardian?: boolean;
     isCoreTeam?: boolean;
+    isConfidentialSecretary?: boolean;
+    // Per-teacher opt-in for the Classroom Store. Default false (hidden);
+    // a teacher flips it on from the PBIS Points hub toggle, which reveals
+    // the Recognition sidebar item + the Classroom Store view. Persisted in
+    // staff.ui_prefs server-side and surfaced via /api/auth/me.
+    classroomStoreEnabled?: boolean;
     capStaffRoles?: boolean;
     capManageRoles?: boolean;
     capManageDisplays?: boolean;
     capManageDismissal?: boolean;
     capTourNotify?: boolean;
     capManageEsign?: boolean;
+    capManageContactInfo?: boolean;
     canApproveAst?: boolean;
     canApproveCompTime?: boolean;
     exemptStatus?: string | null;
@@ -4900,6 +5632,7 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [staffUsers, setStaffUsers] = useState<string[]>([]);
   const [settingsTile, setSettingsTile] = useState<SettingsTileId | null>(null);
+  const [callWorklistOpen, setCallWorklistOpen] = useState(false);
   // True after the user clicked "Open" on a row in the Onboarding
   // Checklist. Drives the floating "← Back to Onboarding" banner that
   // overlays every page until the admin returns to the checklist (or
@@ -5041,9 +5774,12 @@ function App() {
     | "pbisHub"
     | "schoolStore"
     | "schoolStoreManage"
+    | "schoolStoreFulfillment"
+    | "classroomStore"
     | "accommodations"
     | "ese"
     | "pbisLists"
+    | "manageLists"
     | "interventions"
     | "trustedAdultInterventions"
     | "logIntervention"
@@ -5060,6 +5796,7 @@ function App() {
     | "mtssPlans"
     | "safetyPlans"
     | "teacherRoster"
+    | "studentLookup"
     | "settings"
     | "staffRoles"
     | "bellSchedule"
@@ -5102,16 +5839,20 @@ function App() {
     | "earlyWarningDashboard"
     | "interventionReportsLegacy"
     | "ast"
-    | "astAdmin"
-    | "astInsights"
     | "comp"
-    | "compAdmin"
-    | "compInsights"
+    | "staffTime"
     | "pickupTags"
+    | "contactFixes"
     | "classComposer"
+    | "contactRate"
     | "familyMessages"
     | "pulseDnaStudio"
+    | "parentNotifications"
+    | "eligibility"
     | "tileHome"
+    | "pbisWallets"
+    | "pbisUsage"
+    | "callCampaign"
   >("hallPasses");
   // Tile Home is a full-screen launcher that takes over the viewport.
   // When the user enters it from the top-right header button we stash
@@ -5664,6 +6405,10 @@ function App() {
   const [newIntervName, setNewIntervName] = useState("");
   const [newIntervCategory, setNewIntervCategory] = useState("Classroom");
   const [newIntervRequiresNote, setNewIntervRequiresNote] = useState(false);
+  const [editingIntervId, setEditingIntervId] = useState<number | null>(null);
+  const [editIntervName, setEditIntervName] = useState("");
+  const [editIntervCategory, setEditIntervCategory] = useState("");
+  const [editIntervRequiresNote, setEditIntervRequiresNote] = useState(false);
 
   // Pullout Reasons master list (managed by admin or behavior specialist)
   type PulloutReason = {
@@ -6741,6 +7486,30 @@ function App() {
         console.error("Failed to load teacher allowlist:", err),
       );
 
+    authFetch("/api/teacher-allowlist/meta")
+      .then((res) => (res.ok ? res.json() : null))
+      .then(
+        (
+          data: {
+            restroomAreas?: { area: string; memberNames: string[] }[];
+            schoolWideDefaults?: string[];
+          } | null,
+        ) => {
+          if (!data) return;
+          setRestroomAreas(
+            Array.isArray(data.restroomAreas) ? data.restroomAreas : [],
+          );
+          setSchoolWideDefaultNames(
+            Array.isArray(data.schoolWideDefaults)
+              ? data.schoolWideDefaults
+              : [],
+          );
+        },
+      )
+      .catch((err) =>
+        console.error("Failed to load teacher allowlist meta:", err),
+      );
+
     loadRestroomAccess();
 
     authFetch("/api/staff-defaults")
@@ -7665,6 +8434,59 @@ function App() {
       }
       setNewIntervName("");
       setNewIntervRequiresNote(false);
+      loadInterventionTypes();
+    } catch (e) {
+      setIntervListMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const startEditIntervention = (i: {
+    id: number;
+    name: string;
+    category: string;
+    requiresNote: boolean;
+  }) => {
+    setIntervListMsg("");
+    setEditingIntervId(i.id);
+    setEditIntervName(i.name);
+    setEditIntervCategory(i.category);
+    setEditIntervRequiresNote(i.requiresNote);
+  };
+
+  const cancelEditIntervention = () => {
+    setEditingIntervId(null);
+    setEditIntervName("");
+    setEditIntervCategory("");
+    setEditIntervRequiresNote(false);
+  };
+
+  const saveInterventionEdit = async (id: number) => {
+    const name = editIntervName.trim();
+    if (!name) {
+      setIntervListMsg("Name is required.");
+      return;
+    }
+    setIntervListMsg("");
+    try {
+      const res = await authFetch(`/api/intervention-types/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          category: editIntervCategory.trim() || "Classroom",
+          requiresNote: editIntervRequiresNote,
+        }),
+      });
+      if (res.status === 401) {
+        throw new Error(
+          "Your session expired. Please refresh the page (or open it in a new tab) and sign in again.",
+        );
+      }
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `HTTP ${res.status}`);
+      }
+      cancelEditIntervention();
       loadInterventionTypes();
     } catch (e) {
       setIntervListMsg(e instanceof Error ? e.message : String(e));
@@ -8822,7 +9644,8 @@ function App() {
     authUser?.isBehaviorSpecialist === true ||
     authUser?.isMtssCoordinator === true ||
     authUser?.isSchoolPsychologist === true ||
-    authUser?.isCoreTeam === true;
+    authUser?.isCoreTeam === true ||
+    authUser?.isConfidentialSecretary === true;
   // Pickup-tag management gate — mirrors canManagePickup() in
   // lib/coreTeam.ts. Admin / Core Team (BS, MTSS, school psych,
   // district admin, super) / counselor (school OR guidance) /
@@ -8871,6 +9694,28 @@ function App() {
     authUser?.isGuidanceCounselor === true ||
     authUser?.capManageDismissal === true ||
     authUser?.canApproveAst === true;
+  // Eligibility Hub gate — mirrors canManageEligibility() in
+  // lib/coreTeam.ts (Core Team OR Athletic Director OR front-office via
+  // capManageDismissal). Gated purely on this capability (like Event
+  // Tickets, no feature flag) to avoid the dual-gate blank-page trap.
+  const canManageEligibility =
+    isAdmin ||
+    authUser?.isDistrictAdmin === true ||
+    authUser?.isSuperUser === true ||
+    authUser?.isBehaviorSpecialist === true ||
+    authUser?.isMtssCoordinator === true ||
+    authUser?.isSchoolPsychologist === true ||
+    authUser?.isCoreTeam === true ||
+    authUser?.isConfidentialSecretary === true ||
+    authUser?.isAthleticDirector === true ||
+    authUser?.capManageDismissal === true;
+  // Contact Info Fixes gate — front-office staff (capManageContactInfo) plus
+  // admin tier. Mirrors canManageContactInfo() server-side.
+  const canManageContactInfo =
+    isAdmin ||
+    authUser?.isSuperUser === true ||
+    authUser?.isDistrictAdmin === true ||
+    authUser?.capManageContactInfo === true;
   // Document e-Sign gate — mirrors canManageEsign() in lib/coreTeam.ts
   // (admin/SuperUser OR the assignable capManageEsign flag). Documents are
   // private to the creator; drives the Settings tile.
@@ -8967,6 +9812,12 @@ function App() {
     isBehaviorSpec ||
     authUser?.isMtssCoordinator === true ||
     authUser?.isDean === true;
+  // Narrower gate for the combined "Manage Lists" view, which also exposes the
+  // negative-behavior list (/pbis-reasons admits only admin / BS / MTSS — no
+  // dean). Excluding dean keeps every visible sub-tab fully writable so the
+  // negative-behaviors tab never 403s.
+  const canManageAllPbisLists =
+    isAdmin || isBehaviorSpec || authUser?.isMtssCoordinator === true;
   const isIssTeacher = authUser?.isIssTeacher === true || isAdmin;
   const isDean = authUser?.isDean === true || isAdmin;
   const isMtss = authUser?.isMtssCoordinator === true || isAdmin;
@@ -9028,6 +9879,15 @@ function App() {
     isBehaviorSpec ||
     isMtss ||
     isPbisCoord;
+  // School Store fulfillment crew — mirrors canManageStoreFulfillment() in
+  // lib/storeRedemptions.ts (isCoreTeam OR PBIS coordinator). Drives the
+  // fulfillment dashboard nav item and the pulsing cart badge in the header.
+  const canFulfillStore = isCoreTeamMember || isPbisCoord;
+  // Who may purchase School Store rewards on behalf of a student — the
+  // catalog crew (canEditSchoolStore) PLUS the fulfillment crew / Core Team
+  // (canFulfillStore). Mirrors the server's requirePurchaseAccess gate
+  // (hasStoreWriteAccess || canManageStoreFulfillment) in routes/schoolStore.ts.
+  const canPurchaseSchoolStore = canEditSchoolStore || canFulfillStore;
   const isSuperUser = authUser?.isSuperUser === true;
   // District Admin tier (Phase 1D). Mirrors the server-side
   // `canActAsDistrict` predicate in artifacts/api-server/src/lib/scope.ts —
@@ -9130,6 +9990,32 @@ function App() {
     };
   }, [canVerifyPullouts, pendingPulloutsTick]);
 
+  // Open Contact Info Fixes count for the front-office nav badge. Polls so the
+  // office sees newly flagged bad numbers without a manual refresh.
+  const [contactFixesCount, setContactFixesCount] = useState<number>(0);
+  useEffect(() => {
+    if (!canManageContactInfo) {
+      setContactFixesCount(0);
+      return;
+    }
+    let cancelled = false;
+    const fetchCount = () => {
+      authFetch("/api/communications/contact-fixes/count")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j: { count?: number } | null) => {
+          if (cancelled || !j) return;
+          setContactFixesCount(j.count ?? 0);
+        })
+        .catch(() => {});
+    };
+    fetchCount();
+    const interval = setInterval(fetchCount, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [canManageContactInfo]);
+
   // Active pullout count for the ISS Dashboard badge (verified/enroute/arrived).
   const [activePulloutCount, setActivePulloutCount] = useState<number>(0);
   useEffect(() => {
@@ -9177,6 +10063,34 @@ function App() {
       cancelled = true;
     };
   }, [canReviewPullouts, unreviewedPulloutsTick]);
+
+  // Per-teacher Classroom Store opt-in. Hidden by default; the teacher
+  // enables it from the toggle in the PBIS Points hub. Gates the sidebar
+  // nav item, the Tile Home tile, and the page render below.
+  const classroomStoreEnabled = Boolean(authUser?.classroomStoreEnabled);
+  // PUT the new value, then mirror it into authUser so the sidebar/tile/view
+  // react immediately without a /api/auth/me round-trip. Throws on failure so
+  // the toggle can surface an error and revert.
+  const setClassroomStoreEnabled = async (next: boolean): Promise<void> => {
+    const res = await authFetch("/api/me/ui-prefs/classroom-store-enabled", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: next }),
+    });
+    if (!res.ok) {
+      throw new Error("Failed to update Classroom Store preference");
+    }
+    setAuthUser((u) => (u ? { ...u, classroomStoreEnabled: next } : u));
+  };
+
+  // If the Classroom Store gets disabled while it is the active view (e.g.
+  // toggled off, or a stale deep link), bounce to a safe default so the main
+  // pane never goes blank. Mirrors the other reset guards below.
+  useEffect(() => {
+    if (!classroomStoreEnabled && activeSection === "classroomStore") {
+      setActiveSection("hallPasses");
+    }
+  }, [classroomStoreEnabled, activeSection]);
 
   useEffect(() => {
     if (!canManageSettings && activeSection === "settings") {
@@ -9255,6 +10169,9 @@ function App() {
     if (!canManageMtssPlans && activeSection === "mtssPlans") {
       setActiveSection("hallPasses");
     }
+    if (!canManageEligibility && activeSection === "eligibility") {
+      setActiveSection("hallPasses");
+    }
   }, [
     isAdmin,
     isEseCoord,
@@ -9264,6 +10181,7 @@ function App() {
     canManageBehaviorLists,
     canEditSchoolStore,
     canManageMtssPlans,
+    canManageEligibility,
     activeSection,
     // Phase 1E + Phase 2 bounce-backs added in this same effect body
     // need their gating predicates in the dep array, otherwise the
@@ -9382,11 +10300,14 @@ function App() {
     // sidebar above the accordions) — kept out of this list to avoid
     // any chance of duplication if the legacy `baseNavSections` filter
     // ever gets re-consumed.
-    { key: "pbis", label: "PBIS Points", icon: IconStar },
+    { key: "pbis", label: "Classroom Interventions", icon: IconStar },
     // Read-only school-wide rewards catalog. Visible to every signed-in
     // staffer so teachers can browse what students can redeem. The
     // editable version lives inside the PBIS / BS / MTSS hubs.
     { key: "schoolStore", label: "School Store", icon: IconStar },
+    // Per-teacher Classroom Store. Each staffer manages their own catalog;
+    // private to the logged-in teacher (server enforces ownership).
+    { key: "classroomStore", label: "Classroom Store", icon: IconStar },
     { key: "accommodations", label: "Accommodations", icon: IconClipboard },
     { key: "logIntervention", label: "Log Intervention", icon: IconClipboard },
     { key: "myInterventions", label: "My Interventions", icon: IconClipboard },
@@ -9469,10 +10390,7 @@ function App() {
   const adminNavSections: NavSection[] = [
     { key: "staffRoles", label: "Staff & Roles", icon: IconUser },
     { key: "settings", label: "Settings", icon: IconSettings },
-    { key: "astAdmin", label: "AST Approvals", icon: IconClock },
-    { key: "astInsights", label: "AST Insights", icon: IconClipboard },
-    { key: "compAdmin", label: "Comp Time Approvals", icon: IconClock },
-    { key: "compInsights", label: "Comp Time Insights", icon: IconClipboard },
+    { key: "staffTime", label: "Staff Time", icon: IconClock },
   ];
   // Anyone with the canApproveAst flag — admin tier OR an explicit per-staff
   // grant (e.g. confidential secretary) — can see the admin AST queue.
@@ -9503,6 +10421,59 @@ function App() {
     Boolean(authUser?.isAdmin) ||
     Boolean(authUser?.isSuperUser) ||
     Boolean(authUser?.isDistrictAdmin);
+
+  // Pending AST approvals count for the "AST Approvals" sidebar badge.
+  // Polls so an approver notices new requests without opening the page.
+  // The route returns { count } and { count: 0 } for non-approvers.
+  const [astPendingCount, setAstPendingCount] = useState<number>(0);
+  useEffect(() => {
+    if (!canApproveAst) {
+      setAstPendingCount(0);
+      return;
+    }
+    let cancelled = false;
+    const fetchCount = () => {
+      authFetch("/api/ast/admin-pending-count")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j: { count?: number } | null) => {
+          if (cancelled || !j) return;
+          setAstPendingCount(j.count ?? 0);
+        })
+        .catch(() => {});
+    };
+    fetchCount();
+    const interval = setInterval(fetchCount, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [canApproveAst]);
+
+  // Pending Comp Time approvals count for the "Comp Time Approvals" badge.
+  const [compPendingCount, setCompPendingCount] = useState<number>(0);
+  useEffect(() => {
+    if (!canApproveCompTime) {
+      setCompPendingCount(0);
+      return;
+    }
+    let cancelled = false;
+    const fetchCount = () => {
+      authFetch("/api/comp/admin-pending-count")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j: { count?: number } | null) => {
+          if (cancelled || !j) return;
+          setCompPendingCount(j.count ?? 0);
+        })
+        .catch(() => {});
+    };
+    fetchCount();
+    const interval = setInterval(fetchCount, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [canApproveCompTime]);
+
   const bellScheduleNavSections: NavSection[] = [
     { key: "bellSchedule", label: "Bell Schedule", icon: IconClock },
   ];
@@ -9551,6 +10522,14 @@ function App() {
     }
     if (key === "activeKiosks" && activeKiosks.length > 0) {
       return <span style={badgeStyle}>{activeKiosks.length}</span>;
+    }
+    if (key === "contactFixes" && contactFixesCount > 0) {
+      return <span style={badgeStyle}>{contactFixesCount}</span>;
+    }
+    if (key === "staffTime" && astPendingCount + compPendingCount > 0) {
+      return (
+        <span style={badgeStyle}>{astPendingCount + compPendingCount}</span>
+      );
     }
     return null;
   };
@@ -9714,6 +10693,13 @@ function App() {
       emoji: "👥",
       group: "quick",
     });
+    add(!isNonExemptOnly, {
+      key: "studentLookup",
+      label: "Student Profile",
+      description: "Search a student for a read-only one-stop snapshot.",
+      emoji: "🔎",
+      group: "quick",
+    });
     add(effectiveFeatures.AcademicEvidence && !isNonExemptOnly, {
       key: "partneringWithParents",
       label: "Partnering with Parents",
@@ -9723,7 +10709,7 @@ function App() {
     });
     add(effectiveFeatures.Pbis && !isNonExemptOnly, {
       key: "pbis",
-      label: "PBIS Points",
+      label: "Classroom Interventions",
       description: "Award positive behavior points to students.",
       emoji: "⭐",
       group: "quick",
@@ -9790,6 +10776,17 @@ function App() {
       key: "schoolStore",
       label: "School Store",
       description: "Browse the school-wide PBIS reward catalog.",
+      emoji: "🎁",
+      group: "recognition",
+    });
+    // Per-teacher Classroom Store. Optional and private to the logged-in
+    // teacher — any signed-in staffer can build their own reward list
+    // (server enforces ownership). Hidden for non-exempt-only staff, same
+    // as School Store.
+    add(!isNonExemptOnly && classroomStoreEnabled, {
+      key: "classroomStore",
+      label: "Classroom Store",
+      description: "Build your own list of rewards students can redeem.",
       emoji: "🎁",
       group: "recognition",
     });
@@ -9913,6 +10910,20 @@ function App() {
       label: "Pickup Tags",
       description: "Print car-rider and walker dismissal tags.",
       emoji: "🎫",
+      group: "admin",
+    });
+    add(canManageContactInfo, {
+      key: "contactFixes",
+      label: "Contact Info Fixes",
+      description: "Correct family phone lines flagged as bad.",
+      emoji: "📇",
+      group: "admin",
+    });
+    add(canManageEligibility, {
+      key: "eligibility",
+      label: "Eligibility Hub",
+      description: "Attendance eligibility for athletics, clubs, and activities.",
+      emoji: "🏅",
       group: "admin",
     });
 
@@ -10163,7 +11174,15 @@ function App() {
         <AstNotificationBell
           refreshKey={interventionRefreshKey}
           canApproveAst={canApproveAst}
-          onOpenAdmin={() => setActiveSection("astAdmin")}
+          onOpenAdmin={() => setActiveSection("staffTime")}
+        />
+        {/* School Store cart — pulses amber for the fulfillment crew when
+            there are orders awaiting approval or prep. Clicks into the
+            fulfillment dashboard. */}
+        <StoreFulfillmentBell
+          refreshKey={interventionRefreshKey}
+          canFulfillStore={canFulfillStore && effectiveFeatures.SchoolStore}
+          onOpen={() => setActiveSection("schoolStoreFulfillment")}
         />
         {/* Student Finder — "where is this kid right now?" lookup
             available to every signed-in staff member (hall monitors,
@@ -10456,10 +11475,33 @@ function App() {
         // only renders if at least one item inside is visible to the
         // current user — no empty headers. activeSection keys are
         // unchanged, this is a cosmetic regrouping only.
+        // Recognition's only rows are the standalone School Store
+        // (effectiveFeatures.SchoolStore && !canAccessPbisHub) and the
+        // PBIS Hub (canAccessPbisHub), so the group is non-empty exactly
+        // when (SchoolStore feature on) OR (hub access). The old
+        // effectiveFeatures.Pbis term is stale — PBIS Points moved to
+        // Quick Access — and could render an empty group header, so it's
+        // dropped here to keep the gate in lockstep with the children.
+        // Phase 4a: PBIS Points + House Rankings restored to their permanent
+        // Recognition home, so this flag must again admit plain PBIS users
+        // (effectiveFeatures.Pbis) — a superset of the items' own gate — or
+        // those items would have no reachable group home once Quick Access
+        // becomes pinnable in 4b. (Phase 2 had tightened this to
+        // SchoolStore||Hub when PBIS Points lived only in Quick Access.)
         const showRecognition =
           effectiveFeatures.Pbis ||
           effectiveFeatures.SchoolStore ||
           canAccessPbisHub;
+        // Phase 5 — role-aware nav: this flag must be the EXACT disjunction of
+        // every item gate rendered inside the Student Support group below, so
+        // the group appears precisely for roles that have at least one item in
+        // it (never an empty header, and never suppressing an item a role is
+        // authorized for). Previously it omitted canEditSafetyPlanClient
+        // (Guidance Counselor / School Psychologist could reach Safety Plans
+        // only if another term happened to be true) and isDistrictAdmin (the
+        // Log ODR / Investigations items admit District Admin). Adding the
+        // missing terms only ever REVEALS an already-authorized item — it
+        // removes no access. Keep in lockstep with the item gates below.
         const showBehaviorSupport =
           effectiveFeatures.LogIntervention ||
           effectiveFeatures.RequestPullout ||
@@ -10468,10 +11510,34 @@ function App() {
           canViewIssDashboard ||
           canReviewPullouts ||
           canManageMtssPlans ||
+          canEditSafetyPlanClient ||
+          canAccessMtssHub ||
+          isDistrictAdmin ||
+          isDean ||
           (canManageBehaviorLists && !isBehaviorSpec);
         const showSpecialPrograms =
           effectiveFeatures.Accommodations || isEseCoord;
-        const showSchoolAdmin = canManageBellSchedules || isAdmin;
+        // Phase 5 — role-aware nav: like showBehaviorSupport, this must be the
+        // EXACT disjunction of every item gate rendered inside the Admin &
+        // Settings group below. The old flag (bell schedules || admin ||
+        // behavior-lists) suppressed the group for roles that hold ONLY a
+        // narrower admin capability — e.g. a teacher granted capStaffRoles
+        // (canManageStaffRoles) or cap_manage_displays (canManageDisplays), a
+        // District Admin (canManageSettings / canApproveAst), an AST approver
+        // (canApproveAst), or an Eligibility manager (canManageEligibility) —
+        // even though those items were gated visible inside. Adding the missing
+        // terms only REVEALS items the role is already authorized for; it
+        // removes no access. Keep in lockstep with the item gates below.
+        const showSchoolAdmin =
+          isAdmin ||
+          canManageStaffRoles ||
+          canManageBellSchedules ||
+          canManageDisplays ||
+          canAccessMtssHub ||
+          canManageSettings ||
+          canApproveAst ||
+          canManageEligibility ||
+          (canManageBehaviorLists && !isBehaviorSpec);
         // Phase 2 polish — per-user namespace for the NavGroup accordion
         // localStorage so two staff sharing the same browser don't inherit
         // each other's collapse preferences. "anon" keeps unauthenticated
@@ -10479,60 +11545,85 @@ function App() {
         const sidebarUserId = String(authUser?.id ?? "anon");
         // People (Teacher Roster) is always rendered below the divider, so
         // the EKG always has content beneath it — render unconditionally.
+        //
+        // Phase 4b — the pinnable Quick Access master list. Each item keeps
+        // its EXACT prior gate; `canShow` additionally folds in the two
+        // renderNavItem internal exclusions (non-exempt allowlist +
+        // front-office pullout) so the Edit Favorites panel only ever
+        // offers items that would actually render. NO-ORPHAN INVARIANT: each
+        // pinnable item's canShow MUST imply its Tile Home tile is visible
+        // (the always-on header launcher is the permanent home), so unpinning
+        // never removes the only entry point. The per-item gates below match
+        // the Tile Home `add(...)` gates exactly (hallPasses included).
+        const quickAccessBase: Array<NavSection & { canShow: boolean }> = [
+          {
+            key: "hallPasses",
+            label: "Hall Passes",
+            icon: IconDoor,
+            // Parity with the Tile Home launcher gate (add(HallPasses !== false))
+            // so every pinnable item that CAN be pinned also has a visible
+            // permanent Tile Home tile — unpinning can never orphan it.
+            canShow: effectiveFeatures.HallPasses !== false,
+          },
+          { key: "teacherRoster", label: "Teacher Roster", icon: IconUser, canShow: true },
+          {
+            key: "studentLookup",
+            label: "Student Profile",
+            icon: IconUser,
+            canShow: !isNonExemptOnly,
+          },
+          {
+            key: "partneringWithParents",
+            label: "Partnering with Parents",
+            icon: IconUser,
+            canShow: effectiveFeatures.AcademicEvidence && !isNonExemptOnly,
+          },
+          {
+            key: "requestPullout",
+            label: "Request Pullout",
+            icon: IconClipboard,
+            canShow: effectiveFeatures.RequestPullout,
+          },
+          { key: "pbis", label: "PBIS Points", icon: IconStar, canShow: effectiveFeatures.Pbis },
+          {
+            key: "houseRankings",
+            label: "House Rankings",
+            icon: IconStar,
+            canShow: effectiveFeatures.Pbis,
+          },
+          {
+            key: "accommodations",
+            label: "Accommodations",
+            icon: IconClipboard,
+            canShow: effectiveFeatures.Accommodations,
+          },
+        ];
+        const quickAccessPinnable = quickAccessBase.map((it) => ({
+          ...it,
+          canShow:
+            it.canShow &&
+            !(isNonExemptOnly && !NON_EXEMPT_ALLOWED_KEYS.has(it.key)) &&
+            !(isFrontOfficeOnly && it.key === "requestPullout"),
+        }));
         return (
           <aside className="sidebar">
             {/* Locked top — Hall Pass + Tardy Pass anchor the sidebar.
                 Request Pullout and PBIS Points were promoted here per
                 user request — they're high-frequency teacher actions
                 so we surface them above the themed accordions. */}
-            <div className="section-label">Quick Access</div>
-            {renderNavItem({
-              key: "hallPasses",
-              label: "Hall Passes",
-              icon: IconDoor,
-            })}
-            {/* Teacher Roster promoted to Quick Access — every teacher's
-                daily landing for their students. Always visible (no
-                feature flag); cross-teacher access still gated server-side. */}
-            {renderNavItem({
-              key: "teacherRoster",
-              label: "Teacher Roster",
-              icon: IconUser,
-            })}
-            {/* Partnering with Parents — academic work-sample sharing,
-                available to any active teaching staff (cross-teacher reach
-                gated server-side). */}
-            {effectiveFeatures.AcademicEvidence &&
-              !isNonExemptOnly &&
-              partneringWithParentsNavSections.map(renderNavItem)}
-            {effectiveFeatures.RequestPullout &&
-              renderNavItem({
-                key: "requestPullout",
-                label: "Request Pullout",
-                icon: IconClipboard,
-              })}
-            {effectiveFeatures.Pbis &&
-              renderNavItem({
-                key: "pbis",
-                label: "PBIS Points",
-                icon: IconStar,
-              })}
-            {/* House Rankings — opens the same big "House Standings"
-                screen used on digital signage TVs in the main content
-                pane. Sidebar stays visible so teachers can flip back to
-                another tool quickly. */}
-            {effectiveFeatures.Pbis &&
-              renderNavItem({
-                key: "houseRankings",
-                label: "House Rankings",
-                icon: IconStar,
-              })}
-            {effectiveFeatures.Accommodations &&
-              renderNavItem({
-                key: "accommodations",
-                label: "Accommodations",
-                icon: IconClipboard,
-              })}
+            {/* Quick Access is now a per-user pinnable favorites strip
+                (Phase 4b). Every pinnable destination has a permanent home
+                outside this strip — a themed accordion (Phase 4a) or the
+                always-on Tile Home launcher — and each pin gate matches its
+                Tile Home tile gate, so unpinning never orphans an item.
+                The smart/special items below (AST, Comp Time, Verify
+                Pullout, Pickup, Spotlight) are NOT pinnable and follow. */}
+            <QuickAccessFavorites
+              key={`${sidebarUserId}-quickaccess`}
+              userId={sidebarUserId}
+              items={quickAccessPinnable}
+              renderItem={renderNavItem}
+            />
             {/* AST (Alternate Schedule Time) — visible to every staff
                 member. The actual approval queue lives under School
                 Admin and is gated by canApproveAst. Feature-gated:
@@ -10729,12 +11820,79 @@ function App() {
                 userId={sidebarUserId}
                 containsActive={groupContainsActive("recognition", activeSection)}
               >
-                {/* PBIS Points was promoted to Quick Access — kept out
-                    of Recognition to avoid duplication. */}
+                {/* Phase 4a: PBIS Points + House Rankings restored to their
+                    permanent Recognition home so the grouped nav is the
+                    complete map. Same gate as the Quick Access copies
+                    (effectiveFeatures.Pbis). Until Quick Access becomes
+                    pinnable favorites in 4b these intentionally also appear
+                    in the static Quick Access list (interim duplication);
+                    recognition force-expand ownership covers both keys. */}
+                {effectiveFeatures.Pbis &&
+                  renderNavItem({
+                    key: "pbis",
+                    label: "PBIS Points",
+                    icon: IconStar,
+                  })}
+                {effectiveFeatures.Pbis &&
+                  renderNavItem({
+                    key: "houseRankings",
+                    label: "House Rankings",
+                    icon: IconStar,
+                  })}
+                {/* Points Bank — the wallets ledger (Earned / Spent / Bank
+                    balance, CSV·PDF·Print). Promoted to its own Recognition
+                    row so it is reachable in one click; it used to be buried
+                    behind PBIS Points -> Positive -> Reports tab. Same nav
+                    gate as PBIS Points; the page + server scope results by
+                    role. */}
+                {effectiveFeatures.Pbis &&
+                  renderNavItem({
+                    key: "pbisWallets",
+                    label: "Points Bank",
+                    icon: IconStar,
+                  })}
+                {/* My PBIS Usage — anonymized, school-wide point-awarding
+                    benchmark. Visible to ALL staff (no privilege gate): the
+                    page shows the signed-in teacher their OWN numbers boldly
+                    and compares to peer averages with no names. Same nav gate
+                    as PBIS Points. */}
+                {effectiveFeatures.Pbis &&
+                  renderNavItem({
+                    key: "pbisUsage",
+                    label: "My PBIS Usage",
+                    icon: IconStar,
+                  })}
+                {/* Both reward catalogs now live here in Recognition (they
+                    used to be tabs inside the PBIS Points hub). School Store
+                    is the read-only school-wide catalog, shown to every
+                    non-exempt staffer; the editable version still opens from
+                    the BS / MTSS hub manage tiles. */}
                 {effectiveFeatures.SchoolStore &&
+                  !isNonExemptOnly &&
                   renderNavItem({
                     key: "schoolStore",
                     label: "School Store",
+                    icon: IconStar,
+                  })}
+                {/* Fulfillment dashboard — Core Team / PBIS coordinator only
+                    (mirrors canManageStoreFulfillment server-side). Where the
+                    crew approves, preps by class, and prints pick-sheets. */}
+                {effectiveFeatures.SchoolStore &&
+                  canFulfillStore &&
+                  renderNavItem({
+                    key: "schoolStoreFulfillment",
+                    label: "Store Fulfillment",
+                    icon: IconStar,
+                  })}
+                {/* Classroom Store — per-teacher, private to the logged-in
+                    staffer (server enforces ownership). Optional: any teacher
+                    can build their own reward list. Hidden for non-exempt-only
+                    staff, same as School Store. */}
+                {!isNonExemptOnly &&
+                  classroomStoreEnabled &&
+                  renderNavItem({
+                    key: "classroomStore",
+                    label: "Classroom Store",
                     icon: IconStar,
                   })}
                 {canAccessPbisHub && pbisHubNavSections.map(renderNavItem)}
@@ -10744,7 +11902,7 @@ function App() {
               <NavGroup
                 key={`${sidebarUserId}-behaviorSupport`}
                 id="behaviorSupport"
-                label="Academic and Behavior Supports"
+                label="Student Support"
                 userId={sidebarUserId}
                 containsActive={groupContainsActive(
                   "behaviorSupport",
@@ -10785,8 +11943,32 @@ function App() {
                     label: "Intervention Reports",
                     icon: IconClipboard,
                   })}
-                {/* Request Pullout was promoted to Quick Access — kept
-                    out of Behavior Support to avoid duplication. */}
+                {/* Phase 3 (heal MTSS split): the MTSS Coordinator hub used
+                    to be reachable ONLY as an Insights Hub tile, while the
+                    plans/reports it drives lived here — one workflow, two
+                    groups. Give the coordinator hub a direct sidebar row
+                    alongside MTSS Plans + Intervention Reports so all MTSS
+                    tiering is in one place. Gate is canAccessMtssHub (exactly
+                    the mtssCoordinator page-render gate), which is a SUBSET of
+                    canManageMtssPlans, so this group is already visible to
+                    everyone who sees this row. The Insights Hub tile stays as
+                    a parallel discovery path (same convention as mtssPlans);
+                    force-expand ownership now lives on behaviorSupport. */}
+                {canAccessMtssHub &&
+                  mtssCoordNavSections.map(renderNavItem)}
+                {/* Phase 4a: Request Pullout restored to its permanent
+                    Student Support home so the grouped nav is the complete
+                    map. Same gate as the Quick Access copy
+                    (effectiveFeatures.RequestPullout); renderNavItem still
+                    applies the front-office exclusion. behaviorSupport
+                    already owns the key. Also still appears in the static
+                    Quick Access list until 4b (interim duplication). */}
+                {effectiveFeatures.RequestPullout &&
+                  renderNavItem({
+                    key: "requestPullout",
+                    label: "Request Pullout",
+                    icon: IconClipboard,
+                  })}
                 {isBehaviorSpec &&
                   behaviorSpecNavSections.map(renderNavItem)}
                 {isBehaviorSpec &&
@@ -10813,8 +11995,8 @@ function App() {
                     label: "Investigations",
                     icon: IconClipboard,
                   })}
-                {canManageBehaviorLists && !isBehaviorSpec &&
-                  interventionsNavSections.map(renderNavItem)}
+                {/* "Interventions" (behavior-lists editor) moved to the
+                    Admin & Settings group — see below. */}
                 {/* Hidden here when there's pending work because Verify
                     Pullout gets promoted to Quick Access in that case
                     (avoiding a duplicate nav item). Still visible here
@@ -10858,8 +12040,18 @@ function App() {
                   activeSection,
                 )}
               >
-                {/* Accommodations was promoted to Quick Access — kept
-                    out of Special Programs to avoid duplication. */}
+                {/* Phase 4a: Accommodations restored to its permanent
+                    Special Programs home so the grouped nav is the complete
+                    map. Same gate as the Quick Access copy
+                    (effectiveFeatures.Accommodations); specialPrograms
+                    already owns the key. Also still appears in the static
+                    Quick Access list until 4b (interim duplication). */}
+                {effectiveFeatures.Accommodations &&
+                  renderNavItem({
+                    key: "accommodations",
+                    label: "Accommodations",
+                    icon: IconClipboard,
+                  })}
                 {isEseCoord && eseNavSections.map(renderNavItem)}
               </NavGroup>
             )}
@@ -10891,6 +12083,18 @@ function App() {
                     label: "PulseDNA Studio",
                     icon: IconUser,
                   })}
+                {/* Call Campaign — Core Team launches a "call all families"
+                    outreach campaign (each student owned by their
+                    responsible-period teacher). Moved here from the top of
+                    PBIS Points; it logs to the Communication Log and is a
+                    family-comms tool. Same gate as Family Messages. */}
+                {effectiveFeatures.FamilyComm &&
+                  isCoreTeamMember &&
+                  renderNavItem({
+                    key: "callCampaign",
+                    label: "Call Campaign",
+                    icon: IconUser,
+                  })}
                 {canManageSettings && (
                   <FeatureGate
                     feature="parentPortal"
@@ -10912,6 +12116,12 @@ function App() {
                     })}
                   </FeatureGate>
                 )}
+                {canManageSettings &&
+                  renderNavItem({
+                    key: "parentNotifications",
+                    label: "Parent Notifications",
+                    icon: IconUser,
+                  })}
               </NavGroup>
             )}
             {/* People accordion removed — Teacher Roster lives in
@@ -10921,7 +12131,7 @@ function App() {
               <NavGroup
                 key={`${sidebarUserId}-schoolAdmin`}
                 id="schoolAdmin"
-                label="School Admin"
+                label="Admin & Settings"
                 userId={sidebarUserId}
                 containsActive={groupContainsActive(
                   "schoolAdmin",
@@ -10955,8 +12165,19 @@ function App() {
                     icon: IconClipboard,
                   })}
                 {isAdmin && renderNavItem(adminNavSections[1])}
-                {canApproveAst && renderNavItem(adminNavSections[2])}
-                {canApproveAst && renderNavItem(adminNavSections[3])}
+                {(canApproveAst || canApproveCompTime) &&
+                  renderNavItem(adminNavSections[2])}
+                {canManageEligibility &&
+                  renderNavItem({
+                    key: "eligibility",
+                    label: "Eligibility Hub",
+                    icon: IconClipboard,
+                  })}
+                {/* Behavior-lists editor — same gate as before the move
+                    (MTSS coordinators + Deans; admins/behavior-specs are
+                    excluded by !isBehaviorSpec, unchanged). */}
+                {canManageBehaviorLists && !isBehaviorSpec &&
+                  interventionsNavSections.map(renderNavItem)}
               </NavGroup>
             )}
           </aside>
@@ -10978,6 +12199,18 @@ function App() {
           setSettingsTile("school-tours");
         }}
       />
+
+      {/* Call Initiative — per-teacher "call all families" nudge. Visible to
+          every staff member who may own a worklist; opens the worklist modal. */}
+      <CallInitiativeBanner
+        visible={Boolean(authUser)}
+        onOpen={() => setCallWorklistOpen(true)}
+      />
+      {callWorklistOpen && (
+        <CallInitiativeWorklistModal
+          onClose={() => setCallWorklistOpen(false)}
+        />
+      )}
 
       {activeSection === "spotlight" && (
         <SpotlightPanel
@@ -11266,7 +12499,12 @@ function App() {
         staffUsers={staffUsers}
         staffDefaults={staffDefaults}
         canChangeTeacher={isCoreTeamMember}
-        nearDestinations={teacherAllowlistMap[currentStaffUser] ?? []}
+        nearDestinations={[
+          ...new Set([
+            ...(teacherAllowlistMap[currentStaffUser] ?? []),
+            ...schoolWideDefaultNames,
+          ]),
+        ]}
         bypassContactAck={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
         restroomAccessEnabled={restroomAccessEnabled}
         restroomNames={restroomNames}
@@ -16348,7 +17586,27 @@ function App() {
         </section>
       </>)}
 
-      {activeSection === "pbis" && <PbisPointsHub />}
+      {activeSection === "pbis" && (
+        <>
+          <PbisPointsHub
+            classroomStoreEnabled={classroomStoreEnabled}
+            onSetClassroomStoreEnabled={setClassroomStoreEnabled}
+          />
+        </>
+      )}
+      {activeSection === "pbisWallets" && effectiveFeatures.Pbis && (
+        <PbisWalletsPage />
+      )}
+      {activeSection === "pbisUsage" && effectiveFeatures.Pbis && (
+        <PbisUsagePage />
+      )}
+      {/* Call Campaign — Core Team launches/ends a "call all families"
+          outreach campaign. Relocated here from the top of the PBIS Points
+          page: it is a family-communication tool, not a points surface. The
+          teacher-facing nudge banner + call worklist stay app-wide. */}
+      {activeSection === "callCampaign" &&
+        effectiveFeatures.FamilyComm &&
+        isCoreTeamMember && <CallInitiativeAdminPanel />}
       {activeSection === "pulseBrainLab" && isBehaviorSpec && <PulseBrainLabHub />}
       {activeSection === "partneringWithParents" &&
         !isNonExemptOnly &&
@@ -16401,12 +17659,24 @@ function App() {
         </>
       )}
 
-      {/* Read-only School Store catalog — sidebar entry visible to every
-          signed-in staffer. Always renders with canEdit=false so even
-          admins/BS/MTSS/PBIS coords browsing here don't get edit
-          controls. The editable surface lives in the PBIS / BS / MTSS
-          hubs. */}
-      {activeSection === "schoolStore" && <SchoolStoreView canEdit={false} />}
+      {/* School Store catalog — sidebar entry visible to every signed-in
+          staffer. Eligible managers (admin / BS / MTSS / PBIS coord, via
+          canEditSchoolStore — same gate as the hub tile) get the add/edit
+          controls right here, since the store now lives in the sidebar;
+          everyone else sees the read-only catalog. */}
+      {activeSection === "schoolStore" && (
+        <SchoolStoreView
+          canEdit={canEditSchoolStore}
+          canPurchase={canPurchaseSchoolStore}
+        />
+      )}
+
+      {/* Per-teacher Classroom Store — moved out of the PBIS Hub tab bar into
+          the Recognition sidebar group. Private to the logged-in teacher;
+          ownership is enforced server-side. */}
+      {activeSection === "classroomStore" && classroomStoreEnabled && (
+        <ClassroomStoreView />
+      )}
 
       {/* Editable School Store — opened from the BS hub or MTSS hub
           tile. canEditSchoolStore mirrors the server's requireWriteAccess
@@ -16414,7 +17684,19 @@ function App() {
           read-only rather than crash, but the UI only links to this
           section from a tile that's already gated. */}
       {activeSection === "schoolStoreManage" && (
-        <SchoolStoreView canEdit={canEditSchoolStore} />
+        <SchoolStoreView
+          canEdit={canEditSchoolStore}
+          canPurchase={canPurchaseSchoolStore}
+        />
+      )}
+
+      {/* Core Team / PBIS-coordinator fulfillment dashboard. Server gates
+          every endpoint via canManageStoreFulfillment; the nav item + this
+          render are gated on canFulfillStore to match. */}
+      {activeSection === "schoolStoreFulfillment" && canFulfillStore && (
+        <SchoolStoreFulfillmentView
+          isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
+        />
       )}
 
       {(activeSection === "pbisRecent" || activeSection === "pbisReports") && (<>
@@ -17591,33 +18873,21 @@ function App() {
         </FeatureGate>
       )}
 
-      {activeSection === "astAdmin" && canApproveAst && (
-        <FeatureGate feature="ast" label="AST">
-          <AdminAstQueuePage />
-        </FeatureGate>
-      )}
-      {activeSection === "astInsights" && canApproveAst && (
-        <FeatureGate feature="ast" label="AST">
-          <AstInsightsPage />
-        </FeatureGate>
-      )}
-
       {activeSection === "comp" && canSeeCompTimeStaff && (
         <FeatureGate feature="compTime" label="Comp Time">
           <StaffCompPage />
         </FeatureGate>
       )}
 
-      {activeSection === "compAdmin" && canApproveCompTime && (
-        <FeatureGate feature="compTime" label="Comp Time">
-          <AdminCompQueuePage />
-        </FeatureGate>
-      )}
-      {activeSection === "compInsights" && canApproveCompTime && (
-        <FeatureGate feature="compTime" label="Comp Time">
-          <CompInsightsPage />
-        </FeatureGate>
-      )}
+      {activeSection === "staffTime" &&
+        (canApproveAst || canApproveCompTime) && (
+          <StaffTimeHub
+            canApproveAst={canApproveAst}
+            canApproveCompTime={canApproveCompTime}
+            astPending={astPendingCount}
+            compPending={compPendingCount}
+          />
+        )}
 
       {activeSection === "featureLicensing" && isSuperUser && (
         <FeatureLicensingAdminPage />
@@ -17776,6 +19046,7 @@ function App() {
           | "issDashboard"
           | "issReporting"
           | "behaviorReview"
+          | "manageLists"
           | "interventions"
           | "trustedAdultInterventions"
           | "hallPassMgmt"
@@ -17826,11 +19097,11 @@ function App() {
             badge: unreviewedPulloutCount,
           },
           {
-            key: "interventions",
-            label: "Edit Log Intervention",
-            desc: "Edit the list of interventions offered to students.",
-            color: "#7c3aed",
-            show: canManageBehaviorLists,
+            key: "manageLists",
+            label: "Manage Lists",
+            desc: "Negative behaviors, interventions, and pullout reasons — all in one place.",
+            color: "#475569",
+            show: canManageAllPbisLists,
           },
           {
             key: "trustedAdultInterventions",
@@ -18596,6 +19867,36 @@ function App() {
              Safety Plans page or from Student Profile. The hover popover
              still works because SafetyPlanPill renders without onOpen. */
         />
+        </PrivacyGate>
+      )}
+
+      {activeSection === "studentLookup" && (
+        // Student Lookup — search-first one-stop snapshot. Same PrivacyGate
+        // as the roster: the snapshot surfaces FAST scores, IEP/504/ELL
+        // flags, and safety-plan indicators that must never land on a
+        // student-facing display. Visibility scoping (own roster vs school-
+        // wide) is enforced server-side on every endpoint it calls.
+        <PrivacyGate sessionKey="studentLookup">
+          <StudentLookupPage
+            onBack={() => setActiveSection("hallPasses")}
+            // Dismissal-mode editor gate — mirrors canManageDismissal() in
+            // lib/coreTeam.ts: admin / Core Team (BS, MTSS, school psych,
+            // district, super, assignable isCoreTeam) / counselor (school OR
+            // guidance) / front-office secretary (capManageDismissal).
+            canManageDismissal={Boolean(
+              authUser?.isAdmin ||
+                authUser?.isSuperUser ||
+                authUser?.isDistrictAdmin ||
+                authUser?.isBehaviorSpecialist ||
+                authUser?.isMtssCoordinator ||
+                authUser?.isSchoolPsychologist ||
+                authUser?.isCoreTeam ||
+                authUser?.isConfidentialSecretary ||
+                authUser?.isCounselor ||
+                authUser?.isGuidanceCounselor ||
+                authUser?.capManageDismissal,
+            )}
+          />
         </PrivacyGate>
       )}
 
@@ -20329,6 +21630,28 @@ function App() {
         </section>
       )}
 
+      {activeSection === "manageLists" && canManageAllPbisLists && (
+        <section className="card">
+          <div className="section-header-bar-teal" />
+          <div className="section-header-band-hub">
+            <button
+              type="button"
+              className="back-button-purple"
+              style={{ marginBottom: 0 }}
+              onClick={() => setActiveSection("behaviorSpecialist")}
+            >
+              ← Back
+            </button>
+          </div>
+          <h2 style={{ marginBottom: "0.25rem" }}>Manage Lists</h2>
+          <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
+            Edit the negative behaviors, interventions, and pullout reasons your
+            school uses. Changes apply everywhere these lists appear.
+          </p>
+          <ManageListsView />
+        </section>
+      )}
+
       {activeSection === "interventions" && canManageBehaviorLists && (
         <section className="card">
           <div className="section-header-bar-teal" />
@@ -20438,41 +21761,100 @@ function App() {
                       ? a.name.localeCompare(b.name)
                       : a.category.localeCompare(b.category),
                   )
-                  .map((i) => (
-                    <tr key={i.id} style={{ borderBottom: "1px solid #eee" }}>
-                      <td style={{ padding: "0.4rem" }}>{i.category}</td>
-                      <td style={{ padding: "0.4rem" }}>{i.name}</td>
-                      <td style={{ padding: "0.4rem" }}>
-                        {i.requiresNote ? "Yes" : "No"}
-                      </td>
-                      <td style={{ padding: "0.4rem" }}>
-                        {i.active ? "Yes" : "No"}
-                      </td>
-                      <td style={{ padding: "0.4rem" }}>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            toggleInterventionActive(i.id, !i.active)
-                          }
-                        >
-                          {i.active ? "Deactivate" : "Activate"}
-                        </button>{" "}
-                        <button
-                          type="button"
-                          onClick={() => deleteInterventionType(i.id, i.name)}
-                          style={{
-                            color: "crimson",
-                            borderColor: "crimson",
-                          }}
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  .map((i) =>
+                    editingIntervId === i.id ? (
+                      <tr key={i.id} style={{ borderBottom: "1px solid #eee" }}>
+                        <td style={{ padding: "0.4rem" }}>
+                          <input
+                            type="text"
+                            value={editIntervCategory}
+                            onChange={(e) =>
+                              setEditIntervCategory(e.target.value)
+                            }
+                            placeholder="Classroom"
+                            style={{ width: "100%" }}
+                          />
+                        </td>
+                        <td style={{ padding: "0.4rem" }}>
+                          <input
+                            type="text"
+                            value={editIntervName}
+                            onChange={(e) => setEditIntervName(e.target.value)}
+                            placeholder="Intervention name"
+                            style={{ width: "100%" }}
+                          />
+                        </td>
+                        <td style={{ padding: "0.4rem" }}>
+                          <input
+                            type="checkbox"
+                            checked={editIntervRequiresNote}
+                            onChange={(e) =>
+                              setEditIntervRequiresNote(e.target.checked)
+                            }
+                          />
+                        </td>
+                        <td style={{ padding: "0.4rem" }}>
+                          {i.active ? "Yes" : "No"}
+                        </td>
+                        <td style={{ padding: "0.4rem" }}>
+                          <button
+                            type="button"
+                            onClick={() => saveInterventionEdit(i.id)}
+                          >
+                            Save
+                          </button>{" "}
+                          <button
+                            type="button"
+                            onClick={cancelEditIntervention}
+                          >
+                            Cancel
+                          </button>
+                        </td>
+                      </tr>
+                    ) : (
+                      <tr key={i.id} style={{ borderBottom: "1px solid #eee" }}>
+                        <td style={{ padding: "0.4rem" }}>{i.category}</td>
+                        <td style={{ padding: "0.4rem" }}>{i.name}</td>
+                        <td style={{ padding: "0.4rem" }}>
+                          {i.requiresNote ? "Yes" : "No"}
+                        </td>
+                        <td style={{ padding: "0.4rem" }}>
+                          {i.active ? "Yes" : "No"}
+                        </td>
+                        <td style={{ padding: "0.4rem" }}>
+                          <button
+                            type="button"
+                            onClick={() => startEditIntervention(i)}
+                          >
+                            Edit
+                          </button>{" "}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              toggleInterventionActive(i.id, !i.active)
+                            }
+                          >
+                            {i.active ? "Deactivate" : "Activate"}
+                          </button>{" "}
+                          <button
+                            type="button"
+                            onClick={() => deleteInterventionType(i.id, i.name)}
+                            style={{
+                              color: "crimson",
+                              borderColor: "crimson",
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ),
+                  )}
               </tbody>
             </table>
           )}
+
+          {isCoreTeamMember && <ClassroomInterventionReport />}
         </section>
       )}
 
@@ -21018,14 +22400,6 @@ function App() {
 
       {activeSection === "adminHub" && (
         <AdminHubPage
-          onOpenCompQueue={
-            canApproveCompTime
-              ? () => setActiveSection("compAdmin")
-              : undefined
-          }
-          onOpenAstQueue={
-            canApproveAst ? () => setActiveSection("astAdmin") : undefined
-          }
           onOpenClassComposer={
             canAccessMtssHub
               ? () => setActiveSection("classComposer")
@@ -21117,6 +22491,18 @@ function App() {
 
       {activeSection === "pickupTags" && canManagePickupTags && (
         <PickupTagsPanel />
+      )}
+
+      {activeSection === "contactFixes" && canManageContactInfo && (
+        <ContactFixesPage />
+      )}
+
+      {activeSection === "eligibility" && canManageEligibility && (
+        <EligibilityHub />
+      )}
+
+      {activeSection === "settings" && canManageEligibility && settingsTile === "eligibility" && (
+        <EligibilitySettingsPanel />
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "iss-settings" && (
@@ -21452,6 +22838,19 @@ function App() {
                 title: "Document e-Sign",
                 subtitle:
                   "Upload a PDF or image · share a signing link · collect the signed copy.",
+                group: "admin-tenancy",
+              });
+            }
+            // Eligibility — school-wide attendance rules for athletics/clubs:
+            // ineligibility threshold, warning window, tardy ratio, parent-note
+            // cap, semester window. District-default, set by admin/AD/SuperUser.
+            if (canManageEligibility) {
+              tiles.push({
+                id: "eligibility",
+                icon: "🏅",
+                title: "Eligibility Settings",
+                subtitle:
+                  "Attendance eligibility rules · threshold, warning window, tardy ratio, semester.",
                 group: "admin-tenancy",
               });
             }
@@ -21811,6 +23210,7 @@ function App() {
               return canViewAlgebraPlacementClient;
             if (t.id === "reteachActivity")
               return canViewReteachActivityClient;
+            if (t.id === "contactRate") return isCoreTeamMember;
             return true;
           })}
           onNavigate={(target) => setActiveSection(target as typeof activeSection)}
@@ -21821,6 +23221,10 @@ function App() {
         <IntensiveGroupComposerPage
           onBack={() => setActiveSection("insights")}
         />
+      )}
+
+      {activeSection === "contactRate" && isCoreTeamMember && (
+        <ContactRatePage onBack={() => setActiveSection("insights")} />
       )}
 
       {activeSection === "familyMessages" &&
@@ -21834,6 +23238,10 @@ function App() {
       {activeSection === "pulseDnaStudio" &&
         effectiveFeatures.FamilyComm &&
         isCoreTeamMember && <PulseDnaStudio />}
+
+      {activeSection === "parentNotifications" && canManageSettings && (
+        <ParentNotificationsPanel />
+      )}
 
       {activeSection === "insightsWatchlist" && (
         <InsightsWatchlist
@@ -22016,18 +23424,25 @@ function App() {
             Boolean(authUser?.isCounselor) ||
             Boolean(authUser?.isSocialWorker)
           }
-          // Mirrors server canManageDismissal: admin tier OR the
-          // cap_manage_dismissal capability (granted to non-admin
-          // front-office staff who run dismissal). Surfaces the inline
-          // dismissal-mode picker on the Student Profile header.
-          canManageDismissal={
-            Boolean(
-              authUser?.isAdmin ||
-                authUser?.isSuperUser ||
-                authUser?.isDistrictAdmin ||
-                authUser?.capManageDismissal,
-            )
-          }
+          // Mirrors server canManageDismissal() in lib/coreTeam.ts: admin /
+          // Core Team (BS, MTSS, school psych, district, super, assignable
+          // isCoreTeam) / counselor (school OR guidance) / front-office
+          // secretary (capManageDismissal). Surfaces the inline dismissal-mode
+          // picker on the Student Profile header (same gate as the Student
+          // Lookup entry path).
+          canManageDismissal={Boolean(
+            authUser?.isAdmin ||
+              authUser?.isSuperUser ||
+              authUser?.isDistrictAdmin ||
+              authUser?.isBehaviorSpecialist ||
+              authUser?.isMtssCoordinator ||
+              authUser?.isSchoolPsychologist ||
+              authUser?.isCoreTeam ||
+              authUser?.isConfidentialSecretary ||
+              authUser?.isCounselor ||
+              authUser?.isGuidanceCounselor ||
+              authUser?.capManageDismissal,
+          )}
           isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
           // Change-house affordance: mirrors the server-side
           // PATCH /students/:id/house gate (isCoreTeam). Wider than
@@ -22103,9 +23518,51 @@ function App() {
               setActiveSection("mtssPlans");
             }}
           />
+        ) : interventionReportTab === "classroom" && isCoreTeamMember ? (
+          <section className="card">
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                marginBottom: 12,
+                flexWrap: "wrap",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setActiveSection("mtssCoordinator")}
+                style={{
+                  padding: "6px 12px",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 6,
+                  background: "white",
+                  cursor: "pointer",
+                }}
+              >
+                ← Back
+              </button>
+              <h1 style={{ margin: 0, fontSize: "1.4rem" }}>
+                Intervention Reports
+              </h1>
+              <InterventionReportTabs
+                value={interventionReportTab}
+                onChange={setInterventionReportTab}
+              />
+            </div>
+            <ClassroomInterventionReport />
+          </section>
         ) : (
           <MtssReportsPage
             onBack={() => setActiveSection("mtssCoordinator")}
+            headerExtra={
+              isCoreTeamMember ? (
+                <InterventionReportTabs
+                  value={interventionReportTab}
+                  onChange={setInterventionReportTab}
+                />
+              ) : undefined
+            }
           />
         )
       )}
@@ -23206,7 +24663,10 @@ function App() {
           })()}
           allowlistMap={teacherAllowlistMap}
           onChange={setTeacherAllowlistMap}
+          onReload={reloadTeacherAllowlist}
           onEditLocations={() => setSettingsTile("locations")}
+          restroomAreas={restroomAreas}
+          schoolWideDefaults={schoolWideDefaultNames}
         />
         )}
         {settingsTile === "locations" && (

@@ -129,6 +129,7 @@ router.post("/hall-passes", async (req, res) => {
         isMtssCoordinator: staffTable.isMtssCoordinator,
         isSchoolPsychologist: staffTable.isSchoolPsychologist,
         isCoreTeam: staffTable.isCoreTeam,
+        isConfidentialSecretary: staffTable.isConfidentialSecretary,
       })
       .from(staffTable)
       .where(

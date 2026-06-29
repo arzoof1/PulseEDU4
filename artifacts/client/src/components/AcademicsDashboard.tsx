@@ -39,7 +39,10 @@ import InsightsPicker, {
   extractTopLists,
   topListsToCsv,
 } from "./InsightsPicker";
-import BandStudentsDrawer from "./BandStudentsDrawer";
+import BandStudentsDrawer, {
+  INSIGHTS_PM_COLUMNS,
+  INSIGHTS_METRIC_COLUMNS,
+} from "./BandStudentsDrawer";
 
 interface Grower {
   studentId: string;
@@ -98,8 +101,22 @@ interface BandStudent {
   studentId: string;
   studentName: string;
   grade: number | null;
+  priorYearScore: number | null;
   pm1: number | null;
+  pm2: number | null;
   pm3: number;
+  daysAbsent?: number | null;
+  attendancePct?: number | null;
+  ptsToNextLevel?: number | null;
+  ptsToProficient?: number | null;
+  // Per-PM FAST placements for the roster-style level pills (rides along
+  // straight into BandStudentsDrawer's matching `levels` field).
+  levels?: {
+    priorYearScore: { level: 1 | 2 | 3 | 4 | 5; subLevel: string } | null;
+    pm1: { level: 1 | 2 | 3 | 4 | 5; subLevel: string } | null;
+    pm2: { level: 1 | 2 | 3 | 4 | 5; subLevel: string } | null;
+    pm3: { level: 1 | 2 | 3 | 4 | 5; subLevel: string } | null;
+  } | null;
 }
 
 interface BandResponse {
@@ -365,10 +382,15 @@ export default function AcademicsDashboard({ onOpenProfile }: Props) {
         title={`${drillSubject === "ela" ? "ELA" : "Math"} — ${LEVEL_LABEL[drillLevel]}`}
         subtitle={
           drillData
-            ? `${drillData.total} student${drillData.total === 1 ? "" : "s"} placed at this level on PM3${drillData.truncated ? ` (showing first ${drillData.students.length})` : ""}`
+            ? `${drillData.total} student${drillData.total === 1 ? "" : "s"} placed at this level on PM3${drillData.truncated ? ` (showing first ${drillData.students.length})` : ""} · Att % is an estimate`
             : undefined
         }
         students={drillData?.students ?? []}
+        scoreColumns={[
+          ...INSIGHTS_PM_COLUMNS,
+          ...INSIGHTS_METRIC_COLUMNS,
+        ]}
+        showScoreToggle
         truncated={drillData?.truncated}
         total={drillData?.total}
         loading={drillLoading}

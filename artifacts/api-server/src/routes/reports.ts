@@ -23,9 +23,27 @@ import {
   studentsTable,
   hallPassesTable,
   pbisEntriesTable,
+  housesTable,
 } from "@workspace/db";
 import { and, eq, isNull, inArray, sql, desc } from "drizzle-orm";
+import PDFDocument from "pdfkit";
 import { requireSchool } from "../lib/scope.js";
+import { computeWalletsForSchool } from "../lib/storeRedemptions.js";
+
+// Neutralize CSV formula injection: a cell starting with = + - @ (or a control
+// char) can execute in Excel/Sheets. Prefix with an apostrophe and always quote.
+function csvCell(value: unknown): string {
+  let s = value == null ? "" : String(value);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+// Parse a positive-integer query param, or null when absent/invalid.
+function intParam(v: unknown): number | null {
+  if (typeof v !== "string" || !v.trim()) return null;
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
 
 const router: IRouter = Router();
 
@@ -748,6 +766,728 @@ router.get("/reports/pbis", requireStaff, async (req, res) => {
       points: r.points,
       staffName: r.staffName,
     })),
+  });
+});
+
+// ---------------------------------------------------------------------------
+// My PBIS Usage — anonymized, school-wide point-AWARDING benchmark.
+//   GET /api/reports/pbis-usage?from=YYYY-MM-DD&to=YYYY-MM-DD
+//
+// Purpose: let EVERY staffer see how much they use the positive-recognition
+// system relative to their peers, WITHOUT exposing any other teacher's name.
+// The caller's own numbers come back in `me`; everyone else is rolled up into
+// anonymized school / department / period aggregates.
+//
+// Privacy: comparison buckets (school avg, each department, each period) are
+// suppressed (value = null, suppressed = true) whenever fewer than
+// MIN_COMPARE_TEACHERS distinct awarding teachers contributed, so a small
+// department or single-teacher period can't be used to back into one person's
+// numbers. Top behaviors are reason-level (not teacher-identifying) and are
+// never suppressed.
+//
+// Counts only NON-VOIDED POSITIVE awards (polarity <> 'negative'), matching the
+// /insights/behavior "positives" definition.
+const MIN_COMPARE_TEACHERS = 3;
+router.get("/reports/pbis-usage", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+
+  // Window — default to the trailing 30 days (matches the insights default).
+  const toRaw = req.query.to ? String(req.query.to) : todayIsoDate();
+  let fromRaw: string;
+  if (req.query.from) {
+    fromRaw = String(req.query.from);
+  } else {
+    const base = parseStrictIsoDate(toRaw);
+    if (!base) {
+      res
+        .status(400)
+        .json({ error: "to must be a valid YYYY-MM-DD calendar date" });
+      return;
+    }
+    base.setUTCDate(base.getUTCDate() - 29);
+    fromRaw = base.toISOString().slice(0, 10);
+  }
+  if (!parseStrictIsoDate(fromRaw) || !parseStrictIsoDate(toRaw)) {
+    res
+      .status(400)
+      .json({ error: "from and to must be valid YYYY-MM-DD calendar dates" });
+    return;
+  }
+  if (toRaw < fromRaw) {
+    res.status(400).json({ error: "to must be on or after from" });
+    return;
+  }
+  const fromDate = parseStrictIsoDate(fromRaw)!;
+  const toDate = parseStrictIsoDate(toRaw)!;
+  const spanDays =
+    Math.round((toDate.getTime() - fromDate.getTime()) / 86400000) + 1;
+  if (spanDays > MAX_RANGE_DAYS) {
+    res
+      .status(400)
+      .json({ error: `Date range may not exceed ${MAX_RANGE_DAYS} days` });
+    return;
+  }
+
+  // ---- All non-voided positive awards in the window (school-wide) ---------
+  const entries = await db
+    .select({
+      studentId: pbisEntriesTable.studentId,
+      reason: pbisEntriesTable.reason,
+      points: pbisEntriesTable.points,
+      staffId: pbisEntriesTable.staffId,
+    })
+    .from(pbisEntriesTable)
+    .where(
+      and(
+        eq(pbisEntriesTable.schoolId, schoolId),
+        sql`substring(${pbisEntriesTable.createdAt}, 1, 10) >= ${fromRaw}`,
+        sql`substring(${pbisEntriesTable.createdAt}, 1, 10) <= ${toRaw}`,
+        sql`${pbisEntriesTable.voidedAt} IS NULL`,
+        sql`${pbisEntriesTable.polarity} <> 'negative'`,
+      ),
+    );
+
+  // ---- Staff -> department map (active staff at this school) --------------
+  const staffRows = await db
+    .select({ id: staffTable.id, department: staffTable.department })
+    .from(staffTable)
+    .where(eq(staffTable.schoolId, schoolId));
+  const deptByStaff = new Map<number, string>();
+  for (const s of staffRows) {
+    deptByStaff.set(s.id, (s.department ?? "").trim() || "Unassigned");
+  }
+
+  // ---- (teacher, student) -> class period, for the by-period breakdown ----
+  // An award has no period of its own, so we attribute it to the period of the
+  // section where the awarding teacher rosters that student. Awards with no
+  // matching section (e.g. admins, cross-class recognitions) fall into the
+  // "Unmatched" bucket.
+  const rosterRows = await db
+    .select({
+      studentId: sectionRosterTable.studentId,
+      teacherStaffId: classSectionsTable.teacherStaffId,
+      period: classSectionsTable.period,
+    })
+    .from(sectionRosterTable)
+    .innerJoin(
+      classSectionsTable,
+      eq(classSectionsTable.id, sectionRosterTable.sectionId),
+    )
+    .where(
+      and(
+        eq(sectionRosterTable.schoolId, schoolId),
+        eq(classSectionsTable.isPlanning, false),
+      ),
+    );
+  const periodByTeacherStudent = new Map<string, number>();
+  for (const r of rosterRows) {
+    if (r.teacherStaffId == null) continue;
+    const key = `${r.teacherStaffId}|${r.studentId}`;
+    if (!periodByTeacherStudent.has(key)) {
+      periodByTeacherStudent.set(key, r.period);
+    }
+  }
+
+  // ---- Per-teacher aggregation -------------------------------------------
+  type TeacherAgg = { points: number; count: number; students: Set<string> };
+  const byTeacher = new Map<number, TeacherAgg>();
+  // Reason (behavior) rollup — school-wide, anonymized.
+  const byReason = new Map<string, { count: number; points: number }>();
+  // Period rollup — period -> points + distinct contributing teachers.
+  const periodAgg = new Map<
+    number,
+    { points: number; count: number; teachers: Set<number> }
+  >();
+  // "Unmatched" period bucket keyed separately (no real period number).
+  let unmatchedPeriodPoints = 0;
+  let unmatchedPeriodCount = 0;
+  const unmatchedPeriodTeachers = new Set<number>();
+
+  let schoolPoints = 0;
+  let schoolRecognitions = 0;
+
+  for (const e of entries) {
+    const pts = e.points ?? 0;
+
+    // Top behaviors are a school-wide, non-teacher-identifying view, so they
+    // count every positive award (including rare unattributed bulk awards).
+    const br = byReason.get(e.reason) ?? { count: 0, points: 0 };
+    br.count += 1;
+    br.points += pts;
+    byReason.set(e.reason, br);
+
+    // Peer-comparison totals must reflect the SAME population as the
+    // per-teacher denominator (`awardingTeachers`), so unattributed awards
+    // (staffId == null) are excluded from school totals as well. Otherwise
+    // the school average and the me-vs-peers math drift.
+    if (e.staffId == null) continue;
+    schoolPoints += pts;
+    schoolRecognitions += 1;
+    const ta = byTeacher.get(e.staffId) ?? {
+      points: 0,
+      count: 0,
+      students: new Set<string>(),
+    };
+    ta.points += pts;
+    ta.count += 1;
+    ta.students.add(e.studentId);
+    byTeacher.set(e.staffId, ta);
+
+    const period = periodByTeacherStudent.get(`${e.staffId}|${e.studentId}`);
+    if (period == null) {
+      unmatchedPeriodPoints += pts;
+      unmatchedPeriodCount += 1;
+      unmatchedPeriodTeachers.add(e.staffId);
+    } else {
+      const pa = periodAgg.get(period) ?? {
+        points: 0,
+        count: 0,
+        teachers: new Set<number>(),
+      };
+      pa.points += pts;
+      pa.count += 1;
+      pa.teachers.add(e.staffId);
+      periodAgg.set(period, pa);
+    }
+  }
+
+  const awardingTeachers = byTeacher.size;
+  const round1 = (n: number) => Math.round(n * 10) / 10;
+
+  // ---- School-wide averages (suppressed under the threshold) -------------
+  // When suppressed we must withhold EVERY derivable figure (totals + the
+  // teacher count), not just the averages: with only 1–2 awarding teachers a
+  // viewer could otherwise compute a peer's exact output as
+  // `totalPoints - myPoints`. Below the threshold the whole school scope
+  // collapses to nulls.
+  const schoolSuppressed = awardingTeachers < MIN_COMPARE_TEACHERS;
+  const school = {
+    awardingTeachers: schoolSuppressed ? null : awardingTeachers,
+    totalPoints: schoolSuppressed ? null : schoolPoints,
+    totalRecognitions: schoolSuppressed ? null : schoolRecognitions,
+    avgPointsPerTeacher: schoolSuppressed
+      ? null
+      : round1(schoolPoints / awardingTeachers),
+    avgRecognitionsPerTeacher: schoolSuppressed
+      ? null
+      : round1(schoolRecognitions / awardingTeachers),
+    suppressed: schoolSuppressed,
+  };
+
+  // ---- The caller's own numbers (always shown, never suppressed) ----------
+  const mine = byTeacher.get(staff.id);
+  const me = {
+    department: (staff.department ?? "").trim() || "Unassigned",
+    points: mine?.points ?? 0,
+    recognitions: mine?.count ?? 0,
+    studentsRecognized: mine?.students.size ?? 0,
+  };
+
+  // ---- By department ------------------------------------------------------
+  const deptAgg = new Map<
+    string,
+    { points: number; recognitions: number; teachers: number }
+  >();
+  for (const [staffId, agg] of byTeacher.entries()) {
+    const dept = deptByStaff.get(staffId) ?? "Unassigned";
+    const d = deptAgg.get(dept) ?? { points: 0, recognitions: 0, teachers: 0 };
+    d.points += agg.points;
+    d.recognitions += agg.count;
+    d.teachers += 1;
+    deptAgg.set(dept, d);
+  }
+  const byDepartment = Array.from(deptAgg.entries())
+    .map(([department, d]) => {
+      const suppressed = d.teachers < MIN_COMPARE_TEACHERS;
+      return {
+        department,
+        // Withhold the contributor count for suppressed buckets too — it is a
+        // derivation input, so exposing it would weaken the threshold guard.
+        teacherCount: suppressed ? null : d.teachers,
+        avgPointsPerTeacher: suppressed ? null : round1(d.points / d.teachers),
+        avgRecognitionsPerTeacher: suppressed
+          ? null
+          : round1(d.recognitions / d.teachers),
+        suppressed,
+        isMine: department === me.department,
+      };
+    })
+    .sort((a, b) => {
+      // Mine first, then by avg (suppressed last), then name.
+      if (a.isMine !== b.isMine) return a.isMine ? -1 : 1;
+      const av = a.avgPointsPerTeacher ?? -1;
+      const bv = b.avgPointsPerTeacher ?? -1;
+      if (av !== bv) return bv - av;
+      return a.department.localeCompare(b.department);
+    });
+
+  // ---- By period ----------------------------------------------------------
+  const byPeriod = Array.from(periodAgg.entries())
+    .map(([period, p]) => {
+      const teacherCount = p.teachers.size;
+      const suppressed = teacherCount < MIN_COMPARE_TEACHERS;
+      return {
+        period: String(period),
+        teacherCount: suppressed ? null : teacherCount,
+        totalPoints: suppressed ? null : p.points,
+        avgPointsPerTeacher: suppressed
+          ? null
+          : round1(p.points / teacherCount),
+        suppressed,
+      };
+    })
+    .sort((a, b) => Number(a.period) - Number(b.period));
+  if (unmatchedPeriodCount > 0) {
+    const teacherCount = unmatchedPeriodTeachers.size;
+    const suppressed = teacherCount < MIN_COMPARE_TEACHERS;
+    byPeriod.push({
+      period: "Unmatched",
+      teacherCount: suppressed ? null : teacherCount,
+      totalPoints: suppressed ? null : unmatchedPeriodPoints,
+      avgPointsPerTeacher: suppressed
+        ? null
+        : round1(unmatchedPeriodPoints / teacherCount),
+      suppressed,
+    });
+  }
+
+  // ---- Top behaviors (reasons) — school-wide, not teacher-identifying -----
+  const topBehaviors = Array.from(byReason.entries())
+    .map(([reason, v]) => ({ reason, count: v.count, points: v.points }))
+    .sort((a, b) => b.points - a.points || b.count - a.count)
+    .slice(0, 10);
+
+  res.json({
+    window: { from: fromRaw, to: toRaw, days: spanDays },
+    threshold: MIN_COMPARE_TEACHERS,
+    me,
+    school,
+    byDepartment,
+    byPeriod,
+    topBehaviors,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PBIS Points balance report (roster of lifetime EARNED + current BANK balance)
+//   GET /api/reports/pbis-wallets?houseId=&sectionId=&teacherStaffId=&format=
+// Shows, per student, lifetime points earned alongside their spendable bank
+// balance (available = earned - held). Filterable by house, class section, or
+// teacher. Exports as JSON (default), CSV (?format=csv), or PDF (?format=pdf).
+//
+// Auth scope:
+//   - admin / ESE / PBIS coordinator: school-wide; all filters honored.
+//   - other staff: forced to their OWN roster (students in sections they
+//     teach); house/teacher filters ignored, sectionId must be one of theirs.
+//
+// FLEID boundary: the canonical students.student_id is NEVER rendered — only
+// students.local_sis_id (shown as "—" when absent).
+// Filter options for the PBIS Wallets report. Self-contained so the report UI
+// does not depend on the PBIS Hub's section/teacher props (which are loaded
+// under a narrower admin scope that excludes PBIS coordinators). Mirrors the
+// report's own privilege gate so options match what the report will honor:
+//   - privileged (admin/ESE/PBIS coordinator): all school sections + teachers.
+//   - other staff: only the sections they teach.
+router.get("/reports/pbis-wallets/options", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+
+  const isPrivileged =
+    staff.isSuperUser ||
+    staff.isAdmin ||
+    staff.isEseCoordinator ||
+    staff.isPbisCoordinator;
+
+  const sectionRows = await db
+    .select({
+      id: classSectionsTable.id,
+      period: classSectionsTable.period,
+      courseName: classSectionsTable.courseName,
+      teacherStaffId: classSectionsTable.teacherStaffId,
+    })
+    .from(classSectionsTable)
+    .where(
+      isPrivileged
+        ? and(
+            eq(classSectionsTable.schoolId, schoolId),
+            eq(classSectionsTable.isPlanning, false),
+          )
+        : and(
+            eq(classSectionsTable.schoolId, schoolId),
+            eq(classSectionsTable.isPlanning, false),
+            eq(classSectionsTable.teacherStaffId, staff.id),
+          ),
+    );
+
+  const teacherIds = Array.from(
+    new Set(sectionRows.map((s) => s.teacherStaffId)),
+  );
+  const teacherRows = teacherIds.length
+    ? await db
+        .select({ id: staffTable.id, displayName: staffTable.displayName })
+        .from(staffTable)
+        .where(
+          and(
+            eq(staffTable.schoolId, schoolId),
+            inArray(staffTable.id, teacherIds),
+          ),
+        )
+    : [];
+  const teacherNameById = new Map(
+    teacherRows.map((t) => [t.id, t.displayName]),
+  );
+
+  res.json({
+    privileged: isPrivileged,
+    teachers: teacherRows
+      .map((t) => ({ id: t.id, name: t.displayName }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    sections: sectionRows
+      .map((s) => ({
+        id: s.id,
+        period: s.period,
+        courseName: s.courseName,
+        teacherStaffId: s.teacherStaffId,
+        teacherName: teacherNameById.get(s.teacherStaffId) ?? "",
+      }))
+      .sort((a, b) => (a.period ?? 0) - (b.period ?? 0)),
+  });
+});
+
+router.get("/reports/pbis-wallets", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+
+  const isPrivileged =
+    staff.isSuperUser ||
+    staff.isAdmin ||
+    staff.isEseCoordinator ||
+    staff.isPbisCoordinator;
+
+  const houseIdFilter = intParam(req.query.houseId);
+  const sectionIdFilter = intParam(req.query.sectionId);
+  const teacherStaffIdFilter = intParam(req.query.teacherStaffId);
+  const format =
+    typeof req.query.format === "string"
+      ? req.query.format.toLowerCase()
+      : "json";
+
+  // Resolve the set of section IDs whose roster defines the eligible students.
+  // null = no class/teacher restriction (school-wide, privileged only).
+  let restrictSectionIds: number[] | null = null;
+
+  if (!isPrivileged) {
+    // Non-privileged staff are pinned to the sections they teach. They may
+    // narrow to a single one of their own sections, but never see another
+    // teacher's roster, another house, or the whole school.
+    const ownSections = await db
+      .select({ id: classSectionsTable.id })
+      .from(classSectionsTable)
+      .where(
+        and(
+          eq(classSectionsTable.schoolId, schoolId),
+          eq(classSectionsTable.teacherStaffId, staff.id),
+        ),
+      );
+    const ownIds = ownSections.map((s) => s.id);
+    if (sectionIdFilter !== null) {
+      if (!ownIds.includes(sectionIdFilter)) {
+        res
+          .status(403)
+          .json({ error: "You may only report on your own classes." });
+        return;
+      }
+      restrictSectionIds = [sectionIdFilter];
+    } else {
+      restrictSectionIds = ownIds;
+    }
+  } else {
+    // Privileged: class and/or teacher filters both narrow via sections.
+    if (sectionIdFilter !== null) {
+      restrictSectionIds = [sectionIdFilter];
+    } else if (teacherStaffIdFilter !== null) {
+      const tSections = await db
+        .select({ id: classSectionsTable.id })
+        .from(classSectionsTable)
+        .where(
+          and(
+            eq(classSectionsTable.schoolId, schoolId),
+            eq(classSectionsTable.teacherStaffId, teacherStaffIdFilter),
+          ),
+        );
+      restrictSectionIds = tSections.map((s) => s.id);
+    }
+  }
+
+  // Turn the section restriction into a concrete studentId allow-list. An
+  // empty restriction means "no eligible students" — return an empty report
+  // rather than silently widening to the whole school.
+  let rosterStudentIds: Set<string> | null = null;
+  if (restrictSectionIds !== null) {
+    if (restrictSectionIds.length === 0) {
+      rosterStudentIds = new Set();
+    } else {
+      const rosterRows = await db
+        .select({ studentId: sectionRosterTable.studentId })
+        .from(sectionRosterTable)
+        .where(
+          and(
+            eq(sectionRosterTable.schoolId, schoolId),
+            inArray(sectionRosterTable.sectionId, restrictSectionIds),
+          ),
+        );
+      rosterStudentIds = new Set(rosterRows.map((r) => r.studentId));
+    }
+  }
+
+  // House filter is privileged-only (non-privileged never reach here with one).
+  const effectiveHouseId = isPrivileged ? houseIdFilter : null;
+
+  // Load the candidate students (school-scoped, optional house filter).
+  const studentConds = [eq(studentsTable.schoolId, schoolId)];
+  if (effectiveHouseId !== null) {
+    studentConds.push(eq(studentsTable.houseId, effectiveHouseId));
+  }
+  const studentRows = await db
+    .select({
+      studentId: studentsTable.studentId,
+      localSisId: studentsTable.localSisId,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      grade: studentsTable.grade,
+      houseId: studentsTable.houseId,
+    })
+    .from(studentsTable)
+    .where(and(...studentConds));
+
+  // House names for labeling.
+  const houseRows = await db
+    .select({ id: housesTable.id, name: housesTable.name })
+    .from(housesTable)
+    .where(eq(housesTable.schoolId, schoolId));
+  const houseNameById = new Map(houseRows.map((h) => [h.id, h.name]));
+
+  // Batch wallet read (agrees with computeWallet for every student).
+  const wallets = await computeWalletsForSchool(schoolId);
+
+  const rows = studentRows
+    .filter((s) => rosterStudentIds === null || rosterStudentIds.has(s.studentId))
+    .map((s) => {
+      const w = wallets.get(s.studentId) ?? {
+        earned: 0,
+        spent: 0,
+        available: 0,
+      };
+      return {
+        localSisId: s.localSisId ?? null,
+        studentName:
+          `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || "—",
+        grade: s.grade,
+        houseName: s.houseId != null ? (houseNameById.get(s.houseId) ?? null) : null,
+        earned: w.earned,
+        spent: w.spent,
+        available: w.available,
+      };
+    })
+    .sort(
+      (a, b) =>
+        b.available - a.available || a.studentName.localeCompare(b.studentName),
+    );
+
+  const houseLabel =
+    effectiveHouseId !== null
+      ? (houseNameById.get(effectiveHouseId) ?? `House #${effectiveHouseId}`)
+      : null;
+  const teacherLabel =
+    isPrivileged && teacherStaffIdFilter !== null
+      ? (
+          await db
+            .select({ name: staffTable.displayName })
+            .from(staffTable)
+            .where(
+              and(
+                eq(staffTable.id, teacherStaffIdFilter),
+                eq(staffTable.schoolId, schoolId),
+              ),
+            )
+        )[0]?.name ?? `Staff #${teacherStaffIdFilter}`
+      : null;
+
+  const scopeBits: string[] = [];
+  if (houseLabel) scopeBits.push(`House: ${houseLabel}`);
+  if (teacherLabel) scopeBits.push(`Teacher: ${teacherLabel}`);
+  if (sectionIdFilter !== null) scopeBits.push(`Class section #${sectionIdFilter}`);
+  if (!isPrivileged) scopeBits.push("Your classes");
+  const scopeText = scopeBits.length ? scopeBits.join(" · ") : "School-wide";
+
+  // ---- CSV ----
+  if (format === "csv") {
+    const header = [
+      "Student",
+      "SIS ID",
+      "Grade",
+      "House",
+      "Earned (lifetime)",
+      "Spent (held)",
+      "Bank (available)",
+    ]
+      .map(csvCell)
+      .join(",");
+    const body = rows
+      .map((r) =>
+        [
+          r.studentName,
+          r.localSisId ?? "—",
+          r.grade ?? "",
+          r.houseName ?? "—",
+          r.earned,
+          r.spent,
+          r.available,
+        ]
+          .map(csvCell)
+          .join(","),
+      )
+      .join("\r\n");
+    const stamp = todayIsoDate();
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="pbis-points-report-${stamp}.csv"`,
+    );
+    res.send(`${header}\r\n${body}\r\n`);
+    return;
+  }
+
+  // ---- PDF ----
+  if (format === "pdf") {
+    const stamp = todayIsoDate();
+    const doc = new PDFDocument({ size: "LETTER", margin: 40 });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="pbis-points-report-${stamp}.pdf"`,
+    );
+    doc.pipe(res);
+
+    doc.fontSize(16).fillColor("#0f172a").text("PBIS Points Report");
+    doc
+      .fontSize(10)
+      .fillColor("#475569")
+      .text(`${scopeText}  ·  ${stamp}  ·  ${rows.length} students`);
+    doc.moveDown(0.6);
+
+    // Column layout (content x: 40..572 on LETTER with 40pt margins).
+    const cols = {
+      name: 40,
+      sis: 182,
+      grade: 255,
+      house: 290,
+      earned: 402,
+      spent: 456,
+      bank: 506,
+    };
+    const rightEdges = { earned: 454, spent: 502, bank: 570 };
+    const bottomY = doc.page.height - 50;
+
+    const drawHeader = () => {
+      const y = doc.y;
+      doc.fontSize(9).fillColor("#0f172a");
+      doc.text("Student", cols.name, y, { width: 138 });
+      doc.text("SIS ID", cols.sis, y, { width: 70 });
+      doc.text("Gr", cols.grade, y, { width: 30 });
+      doc.text("House", cols.house, y, { width: 108 });
+      doc.text("Earned", cols.earned, y, {
+        width: rightEdges.earned - cols.earned,
+        align: "right",
+      });
+      doc.text("Spent", cols.spent, y, {
+        width: rightEdges.spent - cols.spent,
+        align: "right",
+      });
+      doc.text("Bank", cols.bank, y, {
+        width: rightEdges.bank - cols.bank,
+        align: "right",
+      });
+      doc
+        .moveTo(40, y + 13)
+        .lineTo(572, y + 13)
+        .strokeColor("#cbd5e1")
+        .stroke();
+      doc.y = y + 18;
+    };
+
+    drawHeader();
+    doc.fontSize(9);
+    for (const r of rows) {
+      if (doc.y > bottomY) {
+        doc.addPage();
+        drawHeader();
+        doc.fontSize(9);
+      }
+      const y = doc.y;
+      doc.fillColor("#0f172a");
+      doc.text(r.studentName, cols.name, y, { width: 138, ellipsis: true });
+      doc.fillColor("#475569");
+      doc.text(r.localSisId ?? "—", cols.sis, y, { width: 70 });
+      doc.text(r.grade != null ? String(r.grade) : "—", cols.grade, y, {
+        width: 30,
+      });
+      doc.text(r.houseName ?? "—", cols.house, y, {
+        width: 108,
+        ellipsis: true,
+      });
+      doc.fillColor("#0f172a");
+      doc.text(String(r.earned), cols.earned, y, {
+        width: rightEdges.earned - cols.earned,
+        align: "right",
+      });
+      doc.text(String(r.spent), cols.spent, y, {
+        width: rightEdges.spent - cols.spent,
+        align: "right",
+      });
+      doc.fillColor("#15803d");
+      doc.text(String(r.available), cols.bank, y, {
+        width: rightEdges.bank - cols.bank,
+        align: "right",
+      });
+      doc.y = y + 15;
+    }
+
+    if (rows.length === 0) {
+      doc
+        .fillColor("#64748b")
+        .text("No students match these filters.", 40, doc.y + 6);
+    }
+
+    doc.end();
+    return;
+  }
+
+  // ---- JSON (default) ----
+  res.json({
+    scope: scopeText,
+    appliedFilters: {
+      houseId: effectiveHouseId,
+      houseName: houseLabel,
+      sectionId: sectionIdFilter,
+      teacherStaffId: isPrivileged ? teacherStaffIdFilter : null,
+      teacherName: teacherLabel,
+      privileged: isPrivileged,
+    },
+    totals: {
+      students: rows.length,
+      earned: rows.reduce((a, r) => a + r.earned, 0),
+      spent: rows.reduce((a, r) => a + r.spent, 0),
+      available: rows.reduce((a, r) => a + r.available, 0),
+    },
+    rows,
   });
 });
 

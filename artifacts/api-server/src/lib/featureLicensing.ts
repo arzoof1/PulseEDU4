@@ -75,8 +75,23 @@ export type FeatureSpec = {
     | "superFeatureParentPortal"
     | "superFeatureAst"
     | "superFeatureCompTime"
+    | "superFeatureEligibility"
+    | "superFeatureSchoolStoreNotify"
     | null;
   quotas: QuotaSpec[];
+  // Dependency metadata consumed by the plan + per-school override editors to
+  // highlight (and, for `requires`, hard-block) incoherent feature combos.
+  //   requires:   HARD deps — this feature is non-functional without the
+  //               target (e.g. School Store has nothing to redeem without the
+  //               PBIS points economy). Enabling this while a required dep is
+  //               off BLOCKS save in the editor.
+  //   recommends: SOFT deps — this feature works without the target but is
+  //               materially better with it (e.g. Tardy Pass + Bell Schedule
+  //               for lost-instruction minutes). Shown as a non-blocking warn.
+  // Keep `requires` conservative: a wrong hard edge becomes a wall in the
+  // editor. Anything "works, just degraded" belongs in `recommends`.
+  requires?: string[];
+  recommends?: string[];
 };
 
 export const FEATURE_KEYS: FeatureSpec[] = [
@@ -85,6 +100,7 @@ export const FEATURE_KEYS: FeatureSpec[] = [
     label: "Hall Passes",
     description: "Hall pass issuance, queue, and signage tile.",
     schoolSettingsKey: "superFeatureHallPasses",
+    recommends: ["bellSchedule"],
     quotas: [],
   },
   {
@@ -92,6 +108,7 @@ export const FEATURE_KEYS: FeatureSpec[] = [
     label: "Tardy Pass",
     description: "Tardy logging + parent notifications.",
     schoolSettingsKey: "superFeatureTardyPass",
+    recommends: ["bellSchedule"],
     quotas: [],
   },
   {
@@ -114,6 +131,17 @@ export const FEATURE_KEYS: FeatureSpec[] = [
     label: "School Store",
     description: "School-wide PBIS rewards catalog.",
     schoolSettingsKey: "superFeatureSchoolStore",
+    requires: ["pbis"],
+    quotas: [],
+  },
+  {
+    key: "schoolStoreNotify",
+    label: "School Store Fulfillment Notify",
+    description:
+      "Email families when a redeemed School Store item is fulfilled.",
+    schoolSettingsKey: "superFeatureSchoolStoreNotify",
+    requires: ["schoolStore"],
+    recommends: ["familyComm"],
     quotas: [],
   },
   {
@@ -121,6 +149,7 @@ export const FEATURE_KEYS: FeatureSpec[] = [
     label: "Houses",
     description: "House assignment, standings, Spotlight.",
     schoolSettingsKey: "superFeatureHouses",
+    requires: ["pbis"],
     quotas: [],
   },
   {
@@ -149,6 +178,7 @@ export const FEATURE_KEYS: FeatureSpec[] = [
     label: "MTSS Plans",
     description: "Tier 2 / Tier 3 intervention plans + weekly monitoring.",
     schoolSettingsKey: "superFeatureMtssPlans",
+    recommends: ["academics"],
     quotas: [],
   },
   {
@@ -156,6 +186,7 @@ export const FEATURE_KEYS: FeatureSpec[] = [
     label: "Behavior Specialist",
     description: "Behavior specialist case management surface.",
     schoolSettingsKey: "superFeatureBehaviorSpecialist",
+    recommends: ["mtssPlans"],
     quotas: [],
   },
   {
@@ -193,6 +224,7 @@ export const FEATURE_KEYS: FeatureSpec[] = [
     label: "Early Warning",
     description: "Early-warning insights dashboard.",
     schoolSettingsKey: "superFeatureEarlyWarning",
+    recommends: ["academics"],
     quotas: [],
   },
   {
@@ -215,6 +247,7 @@ export const FEATURE_KEYS: FeatureSpec[] = [
     description:
       "Secure parent-facing portal with HeartBEAT data + PDF reports.",
     schoolSettingsKey: "superFeatureParentPortal",
+    recommends: ["familyComm"],
     quotas: [
       {
         name: "maxParentAccounts",
@@ -239,6 +272,14 @@ export const FEATURE_KEYS: FeatureSpec[] = [
     description:
       "Compensatory-time bank for non-exempt staff: 1.5x earn over 40h/wk, 240h cap, admin approval workflow that mirrors AST.",
     schoolSettingsKey: "superFeatureCompTime",
+    quotas: [],
+  },
+  {
+    key: "eligibility",
+    label: "Eligibility Hub",
+    description:
+      "Attendance-based participation eligibility for athletics, clubs, and activities: rosters, at-risk report, parent notes, daily upload, notifications.",
+    schoolSettingsKey: "superFeatureEligibility",
     quotas: [],
   },
 ];
