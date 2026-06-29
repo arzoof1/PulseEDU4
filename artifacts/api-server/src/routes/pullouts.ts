@@ -20,6 +20,7 @@ import {
   sendPulloutReturnEmail,
   sendPulloutSendToIssEmail,
 } from "../lib/pulloutEmail";
+import { sendPulloutDispatchSms } from "../lib/pulloutSms";
 import { upsertIssAttendance } from "./issAttendance";
 import { requireSchool } from "../lib/scope.js";
 
@@ -320,7 +321,10 @@ router.post(
     // verify and route this pullout. Synchronous so the UI can surface
     // the result alongside the row.
     const dispatchEmail = await sendPulloutDispatchEmail(row.id);
-    res.status(201).json({ ...row, dispatchEmail });
+    // SMS sibling of the dispatch email — texts dispatch staff who have a cell
+    // phone on file. Best-effort and inert until SMS is enabled (see pulloutSms).
+    const dispatchSms = await sendPulloutDispatchSms(row.id);
+    res.status(201).json({ ...row, dispatchEmail, dispatchSms });
   },
 );
 

@@ -1,19 +1,21 @@
 import { logger } from "./logger.js";
+import { getTwilioClient, twilioSender } from "./twilioClient.js";
 
 // --------------------------------------------------------------------------
-// Generic SMS sender — AWS SNS, STUBBED.
+// Generic SMS sender — Twilio.
 //
-// This is intentionally a no-op stub today: every call is logged and returns
-// `{ stubbed: true }` without sending anything, so callers (School Tours
-// notify group now; pullout return-message notifications later) can fire it
-// safely before AWS is wired up.
+// Inert until configured: when SMS is disabled, or Twilio credentials / a
+// sender are missing, every call is a logged no-op returning `{ stubbed: true }`
+// — so the existing callers (overdue hall-pass alerts, school-tour lead alerts,
+// tardy notifications) fire safely before the number is provisioned.
 //
 // To go live:
-//   1. `pnpm --filter @workspace/api-server add @aws-sdk/client-sns`
-//   2. Set Secrets: SMS_ENABLED=true, AWS_REGION, AWS_ACCESS_KEY_ID,
-//      AWS_SECRET_ACCESS_KEY (and optionally SMS_SENDER_ID).
-//   3. Replace the body of `deliverViaSns` below with a real
-//      SNSClient + PublishCommand call (sketch left in place, commented).
+//   1. In the account owner's Twilio project, provision a sender — a Messaging
+//      Service (recommended) or a phone number — and complete US A2P 10DLC /
+//      toll-free registration for it.
+//   2. Set Secrets: SMS_ENABLED=true, TWILIO_ACCOUNT_SID, TWILIO_API_KEY_SID,
+//      TWILIO_API_KEY_SECRET, and ONE of TWILIO_MESSAGING_SERVICE_SID or
+//      TWILIO_FROM_NUMBER (see twilioClient.ts).
 //
 // Phone numbers must be E.164 ("+1XXXXXXXXXX"). `toE164` does a best-effort
 // normalization of US 10-digit input; anything already starting with "+" is
@@ -27,18 +29,19 @@ export interface SmsMessage {
 
 export interface SmsResult {
   ok: boolean;
-  // Provider message id when sent for real; empty string when stubbed/failed.
+  // Provider message id (Twilio SID) when sent for real; empty when stubbed/failed.
   id: string;
-  // True when no real send happened (AWS not configured / SMS disabled).
+  // True when no real send happened (Twilio not configured / SMS disabled).
   stubbed: boolean;
 }
 
 function smsEnabled(): boolean {
   return (
     process.env.SMS_ENABLED === "true" &&
-    Boolean(process.env.AWS_ACCESS_KEY_ID) &&
-    Boolean(process.env.AWS_SECRET_ACCESS_KEY) &&
-    Boolean(process.env.AWS_REGION)
+    Boolean(process.env.TWILIO_ACCOUNT_SID) &&
+    Boolean(process.env.TWILIO_API_KEY_SID) &&
+    Boolean(process.env.TWILIO_API_KEY_SECRET) &&
+    twilioSender() !== null
   );
 }
 
@@ -54,16 +57,12 @@ export function toE164(raw: string): string | null {
   return null;
 }
 
-async function deliverViaSns(_to: string, _body: string): Promise<string> {
-  // Real implementation (uncomment once @aws-sdk/client-sns is installed):
-  //
-  // const { SNSClient, PublishCommand } = await import("@aws-sdk/client-sns");
-  // const client = new SNSClient({ region: process.env.AWS_REGION });
-  // const out = await client.send(
-  //   new PublishCommand({ PhoneNumber: _to, Message: _body }),
-  // );
-  // return out.MessageId ?? "";
-  throw new Error("AWS SNS client not installed (SMS stub).");
+async function deliverViaTwilio(to: string, body: string): Promise<string> {
+  const sender = twilioSender();
+  if (!sender) throw new Error("No Twilio sender configured.");
+  const client = getTwilioClient();
+  const res = await client.messages.create({ to, body, ...sender });
+  return res.sid;
 }
 
 // Send a single SMS. Never throws — returns a result the caller can log.
@@ -77,17 +76,17 @@ export async function sendSms(msg: SmsMessage): Promise<SmsResult> {
   if (!smsEnabled()) {
     logger.info(
       { bodyLength: msg.body.length },
-      "sms: STUB (SMS disabled / AWS not configured) — not sent",
+      "sms: STUB (SMS disabled / Twilio not configured) — not sent",
     );
     return { ok: false, id: "", stubbed: true };
   }
 
   try {
-    const id = await deliverViaSns(to, msg.body);
-    logger.info({ to, id }, "sms: sent via SNS");
+    const id = await deliverViaTwilio(to, msg.body);
+    logger.info({ to, id }, "sms: sent via Twilio");
     return { ok: true, id, stubbed: false };
   } catch (err) {
-    logger.warn({ to, err }, "sms: SNS send failed");
+    logger.warn({ to, err }, "sms: Twilio send failed");
     return { ok: false, id: "", stubbed: false };
   }
 }
