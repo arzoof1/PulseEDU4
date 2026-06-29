@@ -19,4 +19,5 @@ export function formatFromHeader(
   return `${safeName} <${fromEmail}>`;
 
 
+
 }
