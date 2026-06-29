@@ -432,3 +432,9 @@ id = "mS17kwsuUcXheB_wBbeld"
 uri = "file://exports/PulseEDU-Migration-Handoff-2026-06-29.pdf"
 type = "pdf"
 title = "PulseEDU — Dev → Live Migration Handoff (PDF, shareable)"
+
+[[outputs]]
+id = "tTcveRF4zgbYkdfaX0Sk7"
+uri = "file://exports/pulseedu-dev-to-live-2026-06-29.patch.txt"
+type = "text"
+title = "PulseEDU code changes — git patch (5aaa9a80 → fbd6847b)"
