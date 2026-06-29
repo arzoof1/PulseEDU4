@@ -18,4 +18,5 @@ export function formatFromHeader(
   const safeName = fromName.replace(/"/g, "'");
   return `${safeName} <${fromEmail}>`;
 
+
 }
