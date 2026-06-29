@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PulseEDU — Dev → Live Migration Handoff</title>
+<style>
+  @page { size: Letter; margin: 14mm 14mm 16mm 14mm; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #1a2230; font-size: 10.5px; line-height: 1.5;
+  }
+  h1 { font-size: 23px; margin: 0 0 2px; color: #0f2747; }
+  h2 { font-size: 14.5px; margin: 22px 0 6px; color: #0f2747; border-bottom: 2px solid #d9e2ef; padding-bottom: 3px; }
+  h3 { font-size: 11.5px; margin: 14px 0 4px; color: #244; }
+  p { margin: 5px 0; }
+  code, pre { font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; }
+  code { background: #eef2f8; padding: 1px 4px; border-radius: 3px; font-size: 9.5px; color: #1c3a5e; }
+  pre { background: #0f1c2e; color: #d7e3f4; padding: 10px 12px; border-radius: 6px; font-size: 8.6px; line-height: 1.45; overflow: hidden; white-space: pre-wrap; }
+  pre .c { color: #6f8aa8; }
+  table { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 9.3px; }
+  th, td { border: 1px solid #cdd8e8; padding: 4px 6px; text-align: left; vertical-align: top; }
+  th { background: #eef3fa; color: #16335c; font-weight: 600; }
+  ul { margin: 5px 0 5px 0; padding-left: 18px; }
+  li { margin: 2.5px 0; }
+  .cover { background: linear-gradient(135deg, #0f2747 0%, #1b4f86 100%); color: #fff; border-radius: 10px; padding: 22px 24px; margin-bottom: 8px; }
+  .cover h1 { color: #fff; }
+  .cover .sub { font-size: 11px; opacity: .9; margin-top: 2px; }
+  .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 18px; margin-top: 14px; font-size: 9.6px; }
+  .meta b { color: #cfe0f5; font-weight: 600; }
+  .pill { display: inline-block; background: #fff; color: #0f2747; border-radius: 20px; padding: 1px 9px; font-size: 8.6px; font-weight: 700; }
+  .crit { background: #fdecec; border: 1px solid #f3b4b4; border-left: 4px solid #d8392b; border-radius: 6px; padding: 9px 12px; margin: 8px 0; }
+  .crit b { color: #b5241a; }
+  .ok { background: #ecf7ee; border: 1px solid #b6dcbd; border-left: 4px solid #2e8b46; border-radius: 6px; padding: 9px 12px; margin: 8px 0; }
+  .warn { background: #fff6e6; border: 1px solid #f0d49a; border-left: 4px solid #d08a14; border-radius: 6px; padding: 9px 12px; margin: 8px 0; }
+  .small { font-size: 9px; color: #5a6b80; }
+  .tag { font-size: 8px; font-weight: 700; padding: 1px 5px; border-radius: 3px; }
+  .tag.man { background: #fdecec; color: #b5241a; }
+  .tag.auto { background: #ecf7ee; color: #2e7d3a; }
+  .nb { page-break-inside: avoid; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>PulseEDU — Developer Migration Handoff</h1>
+  <div class="sub">Everything required to bring the LIVE site up to current dev — for a non‑Replit deployment.</div>
+  <div class="meta">
+    <div><b>Last in‑sync commit</b><br/>5aaa9a80 · 2026‑06‑22</div>
+    <div><b>Target (current dev HEAD)</b><br/>fbd6847b · 2026‑06‑28</div>
+    <div><b>Code changed</b><br/>113 files · +30,142 / −2,376</div>
+    <div><b>New runtime dependencies</b><br/>None (no lockfile change)</div>
+    <div><b>Window</b><br/>2026‑06‑22 → 2026‑06‑28</div>
+    <div><b>Report date</b><br/>2026‑06‑29</div>
+  </div>
+  <p style="margin-top:12px;"><span class="pill">Companion file: pulseedu-dev-to-live-2026-06-29.patch</span></p>
+</div>
+
+<div class="crit nb">
+  <b>⚠ The one thing that breaks live if skipped.</b> Six schema changes have
+  <b>no automatic boot migration</b> (Section 2). They reach dev via
+  <code>db push</code> but will be <b>missing on live</b> unless you apply them.
+  Apply Section 2 against the live database <b>before</b> the app serves traffic.
+  Everything else applies automatically when your api‑server boots.
+</div>
+
+<h2>1 · What to move (code)</h2>
+<p>All application changes live in three workspace packages. The companion
+<b>patch file</b> contains the complete diff and applies cleanly on top of
+<code>5aaa9a80</code>:</p>
+<pre><span class="c"># from the repo root, on a checkout at commit 5aaa9a80</span>
+git apply exports/pulseedu-dev-to-live-2026-06-29.patch
+<span class="c"># or, if not a git tree:</span>
+patch -p1 &lt; pulseedu-dev-to-live-2026-06-29.patch</pre>
+<table class="nb">
+  <tr><th>Package</th><th>What changed</th><th>Notes</th></tr>
+  <tr><td><code>lib/db</code></td><td>7 new schema files + 9 modified</td><td>Source of truth for all tables/columns.</td></tr>
+  <tr><td><code>artifacts/api-server</code></td><td>13 new files (routes + lib) + ~28 modified</td><td>Express backend. Boot runs the auto‑migrations.</td></tr>
+  <tr><td><code>artifacts/client</code></td><td>17 new components + ~24 modified</td><td>Staff app + parent + student portals (single Vite bundle).</td></tr>
+</table>
+<p class="small"><b>Excluded from the patch (not part of the live staff app):</b>
+the demo/marketing slide artifacts (<code>pulseedu-district-demo</code>,
+<code>-features</code>, <code>-pitch</code>), <code>attached_assets/</code>
+screenshots, and <code>docs/</code>. Include them only if you also host the
+demo decks.</p>
+
+<h3>Key new modules this window</h3>
+<table>
+  <tr><th>Feature</th><th>New files (representative)</th></tr>
+  <tr><td>School Store redemption engine + wallet</td><td><code>lib/storeRedemptions.ts</code>, <code>routes/schoolStore.ts</code>, <code>routes/parentStore.ts</code>, <code>SchoolStoreFulfillmentView.tsx</code>, <code>StoreFulfillmentBell.tsx</code>, <code>parent/StoreTab.tsx</code>, schema <code>schoolStoreRedemptions.ts</code></td></tr>
+  <tr><td>Student ClassLink portal + self‑redeem</td><td><code>routes/studentAuth.ts</code>, <code>routes/studentPortal.ts</code>, <code>student/*</code> (App, Login, Dashboard, StoreTab, api)</td></tr>
+  <tr><td>Parent Notifications panel</td><td><code>lib/parentNotify.ts</code>, <code>ParentNotificationsPanel.tsx</code></td></tr>
+  <tr><td>Eligibility Hub</td><td><code>lib/eligibility.ts</code>, <code>lib/eligibilityNotify.ts</code>, <code>routes/eligibility.ts</code>, <code>EligibilityHub.tsx</code></td></tr>
+  <tr><td>Communication Log + Call Initiative</td><td><code>routes/communications.ts</code>, <code>CallInitiativePanel.tsx</code>, <code>ContactRatePage.tsx</code>, <code>ContactFixesPage.tsx</code>, schema <code>communicationLogs/communicationTypes/badNumberFlags/callInitiatives.ts</code></td></tr>
+  <tr><td>PBIS color‑fork + point import</td><td><code>InterventionTypesAdmin.tsx</code>, <code>PulloutReasonsAdmin.tsx</code>, schema <code>pbisPointMigrations.ts</code></td></tr>
+  <tr><td>Insights drill‑downs / FAST pills</td><td><code>FastScorePill.tsx</code>, <code>BandStudentsDrawer.tsx</code> (mod)</td></tr>
+</table>
+
+<h2>2 · Database — manual steps (NO auto‑migration)</h2>
+<p>Apply against the <b>live</b> database. Easiest is one command (derives exact
+DDL from the schema):</p>
+<pre>pnpm --filter @workspace/db run push   <span class="c"># answer "create" to any rename prompt</span></pre>
+<p>…or run this idempotent SQL (safe to re‑run):</p>
+<pre><span class="c">-- 2.1 Confidential Secretary role — read by login/role code (#1 breaker)</span>
+ALTER TABLE staff
+  ADD COLUMN IF NOT EXISTS is_confidential_secretary BOOLEAN NOT NULL DEFAULT FALSE;
+
+<span class="c">-- 2.2 School Store redemption engine — NEW TABLE</span>
+CREATE TABLE IF NOT EXISTS school_store_redemptions (
+  id SERIAL PRIMARY KEY,
+  school_id INTEGER NOT NULL,
+  item_id INTEGER NOT NULL,
+  student_id TEXT NOT NULL,
+  item_name TEXT NOT NULL,
+  points_spent INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  requested_by_type TEXT NOT NULL,
+  requested_by_id INTEGER,
+  approved_by_staff_id INTEGER,  approved_at TEXT,
+  fulfilled_by_staff_id INTEGER, fulfilled_at TEXT,
+  deliver_teacher_name TEXT,     deliver_period TEXT,
+  cancelled_by_staff_id INTEGER, cancelled_at TEXT, cancel_reason TEXT,
+  stock_held BOOLEAN NOT NULL DEFAULT FALSE,
+  points_refunded BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TEXT NOT NULL,       updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS school_store_redemptions_school_status_idx  ON school_store_redemptions (school_id, status);
+CREATE INDEX IF NOT EXISTS school_store_redemptions_school_student_idx ON school_store_redemptions (school_id, student_id);
+CREATE INDEX IF NOT EXISTS school_store_redemptions_school_item_idx    ON school_store_redemptions (school_id, item_id);
+
+<span class="c">-- 2.3 School Store item inventory/approval columns</span>
+ALTER TABLE school_store_items ADD COLUMN IF NOT EXISTS in_stock          BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE school_store_items ADD COLUMN IF NOT EXISTS quantity_on_hand  INTEGER;
+ALTER TABLE school_store_items ADD COLUMN IF NOT EXISTS per_student_limit INTEGER;
+ALTER TABLE school_store_items ADD COLUMN IF NOT EXISTS requires_approval BOOLEAN NOT NULL DEFAULT FALSE;
+
+<span class="c">-- 2.4 School Store inventory mode ('simple' | 'quantity')</span>
+ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS school_store_inventory_mode TEXT NOT NULL DEFAULT 'simple';
+
+<span class="c">-- 2.5 Parent Notifications toggles (default TRUE = today's behavior preserved)</span>
+ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS notify_parent_eligibility    BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS notify_parent_pbis_milestone BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS notify_parent_tardy          BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS notify_parent_event_tickets  BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS notify_parent_esign          BOOLEAN NOT NULL DEFAULT TRUE;</pre>
+
+<h2>3 · Database — applied automatically on api‑server boot</h2>
+<div class="ok">These run from the application code itself (idempotent
+<code>ensure*</code> migrations in <code>seed.ts</code> / <code>index.ts</code>),
+so they apply automatically when <b>your</b> api‑server starts — Replit is not
+involved. No action needed; listed for verification.</div>
+<table>
+  <tr><th>New tables <span class="tag auto">AUTO</span></th><th>Feature</th></tr>
+  <tr><td><code>communication_types</code>, <code>communication_logs</code>, <code>bad_number_flags</code>, <code>call_initiatives</code></td><td>Communication Log + Call Initiative</td></tr>
+  <tr><td><code>eligibility_activities</code>, <code>eligibility_activity_members</code>, <code>eligibility_activity_coaches</code>, <code>eligibility_absences</code></td><td>Eligibility Hub</td></tr>
+  <tr><td><code>teacher_allowlist_import_batches</code>, <code>teacher_allowlist_zone_rules</code></td><td>Hall‑pass bulk destinations</td></tr>
+  <tr><td><code>pbis_point_migrations</code></td><td>PBIS point‑balance import</td></tr>
+  <tr><td><code>app_one_shot_markers</code></td><td>One‑shot job ledger (Section 4)</td></tr>
+</table>
+<table>
+  <tr><th>New columns <span class="tag auto">AUTO</span></th><th>On table</th></tr>
+  <tr><td><code>cap_manage_contact_info</code>, <code>house_id</code>, <code>department</code>, <code>title</code>, <code>is_athletic_director</code></td><td><code>staff</code></td></tr>
+  <tr><td><code>sso_external_id</code>, <code>last_portal_login_at</code></td><td><code>students</code></td></tr>
+  <tr><td><code>behavior_reason</code></td><td><code>intervention_entries</code></td></tr>
+  <tr><td><code>import_job_id</code></td><td><code>pbis_entries</code>, <code>pbis_milestone_emails</code></td></tr>
+  <tr><td><code>restroom_area</code>, <code>gender</code>, <code>school_wide_default</code></td><td><code>locations</code></td></tr>
+  <tr><td><code>staff_id</code> (+ unique index)</td><td><code>teacher_destination_allowlist</code></td></tr>
+  <tr><td><code>intervention_effectiveness_days</code>, <code>iready_ap1_cuts</code>, <code>feature_eligibility</code>, plan/feature flags</td><td><code>school_settings</code></td></tr>
+</table>
+<p class="small"><b>Note the asymmetry:</b> <code>staff.is_athletic_director</code>
+<i>has</i> a boot migration (auto), but <code>staff.is_confidential_secretary</code>
+does <i>not</i> (manual — Section 2.1).</p>
+
+<h2>4 · One‑shot data jobs (auto, run once)</h2>
+<p>Guarded by <code>app_one_shot_markers</code>; each runs exactly once per
+environment, then no‑ops forever. No action needed: enterprise/licensing fold
+(re‑applies plans to existing schools), room‑location seed, demo‑email
+normalization, SuperUser recovery. To re‑run one, delete its marker row and
+reboot.</p>
+
+<h2>5 · Environment variables</h2>
+<div class="warn"><b>Because this is off Replit:</b> the Replit‑injected vars
+(<code>REPLIT_DOMAINS</code>, <code>REPLIT_DEV_DOMAIN</code>, <code>REPL_IDENTITY</code>,
+<code>REPLIT_CONNECTORS_HOSTNAME</code>) will be unset. That makes
+<b><code>PUBLIC_APP_URL</code> required</b> — it is the fallback used to build all
+external links and QR codes (e‑sign, tours, kiosk, student/parent portals).
+Set it to your live HTTPS domain.</div>
+<table>
+  <tr><th>Variable</th><th>Required?</th><th>Purpose</th></tr>
+  <tr><td><code>DATABASE_URL</code></td><td><b>Yes</b></td><td>Your live Postgres connection string.</td></tr>
+  <tr><td><code>SESSION_SECRET</code></td><td><b>Yes</b></td><td>Session signing.</td></tr>
+  <tr><td><code>AUTH_TOKEN_SECRET</code></td><td><b>Yes</b></td><td>Bearer‑token signing (iframe/portal auth).</td></tr>
+  <tr><td><code>PUBLIC_APP_URL</code></td><td><b>Yes</b> (off Replit)</td><td>Live domain for all external links/QR codes.</td></tr>
+  <tr><td><code>RESEND_API_KEY</code></td><td>Yes (email)</td><td>Resend API key — all parent email.</td></tr>
+  <tr><td><code>RESEND_FROM_EMAIL</code></td><td>Yes (email)</td><td>Verified sender address.</td></tr>
+  <tr><td><code>EMAIL_REMINDERS_ENABLED</code></td><td>Yes (email)</td><td>Master switch for scheduled email crons.</td></tr>
+  <tr><td><code>PRIVATE_OBJECT_DIR</code>, <code>PUBLIC_OBJECT_SEARCH_PATHS</code>, <code>AWS_*</code></td><td>If using uploads</td><td>Object storage (item thumbnails, photos, flyers).</td></tr>
+  <tr><td><code>NODE_ENV</code>=production, <code>LOG_LEVEL</code>, <code>SCHEDULER_TZ</code></td><td>Recommended</td><td>Standard runtime config.</td></tr>
+  <tr><td><code>ELIGIBILITY_DIGEST_CRON</code>/<code>_TZ</code>, <code>WEEKLY_HEARTBEAT_CRON</code>/<code>_TZ</code>, other <code>*_CRON</code>/<code>*_TZ</code></td><td>Optional</td><td>Have safe defaults; override only to retime.</td></tr>
+</table>
+<div class="crit"><b>🔒 Security — must NOT be enabled in production:</b>
+<code>STUDENT_DEMO_LOGIN</code> (=1 enables a password‑less student login bypass)
+and <code>DEMO_MODE</code>. Leave both unset. Review
+<code>ALLOW_CROSS_DISTRICT_SUPERUSER</code> before enabling.</div>
+<p class="small">The <code>AI_INTEGRATIONS_ANTHROPIC_*</code> vars point at Replit's
+AI proxy and will not work off‑Replit. Only relevant if you use the AI
+consistency‑check feature; otherwise ignore.</p>
+
+<h2>6 · Dependencies, build &amp; run</h2>
+<div class="ok">No runtime dependency or lockfile changes this window. A plain
+<code>pnpm install</code> after pulling is sufficient.</div>
+<pre>pnpm install
+pnpm run build                 <span class="c"># typecheck + build all packages</span>
+
+<span class="c"># run the API server (boot applies Section 3 auto-migrations)</span>
+pnpm --filter @workspace/api-server run start
+
+<span class="c"># the client is a static Vite build — serve artifacts/client/dist behind your proxy;</span>
+<span class="c"># API is mounted at /api (path-based routing, same as today)</span></pre>
+<p class="small">Node 24 · pnpm · PostgreSQL. The client and API are routed by
+path (<code>/api</code> → server, everything else → client bundle), so keep your
+reverse proxy mapping the same as the current live host.</p>
+
+<h2>7 · Deploy order &amp; verification</h2>
+<ol>
+  <li><b>Back up the live database.</b></li>
+  <li>Move code (Section 1 patch) and <code>pnpm install</code> + <code>pnpm run build</code>.</li>
+  <li>Apply <b>Section 2</b> SQL/push against the live DB.</li>
+  <li>Set/confirm env vars (Section 5), especially <code>PUBLIC_APP_URL</code>.</li>
+  <li>Start the api‑server — confirm boot logs show no migration errors (Section 3/4 run here).</li>
+  <li>Verify:
+    <ul>
+      <li><code>staff</code> has <code>is_confidential_secretary</code>; <code>school_store_redemptions</code> exists; <code>school_settings</code> has the 5 <code>notify_parent_*</code> cols + <code>school_store_inventory_mode</code>.</li>
+      <li>Admin → <b>Family → Parent Notifications</b> loads and a toggle saves (200).</li>
+      <li>A family/student can open the <b>School Store</b> and a redemption creates a row with correct wallet math.</li>
+      <li>Login works for a Confidential‑Secretary user.</li>
+      <li><code>STUDENT_DEMO_LOGIN</code> is unset; a test parent email sends.</li>
+    </ul>
+  </li>
+</ol>
+
+<h2>8 · Rollback</h2>
+<p>Code rolls back by redeploying the prior build. All schema changes here are
+<b>purely additive</b> (new tables, new nullable/defaulted columns) and
+backward‑compatible — the previous build keeps working against the new schema,
+so there is <b>nothing destructive to undo</b>. You generally do not drop
+anything on rollback.</p>
+
+<p class="small" style="margin-top:18px; border-top:1px solid #d9e2ef; padding-top:6px;">
+Generated 2026‑06‑29 · Source of truth: <code>lib/db/src/schema/*.ts</code> and the companion patch
+<code>pulseedu-dev-to-live-2026-06-29.patch</code>. Full markdown version: <code>docs/migration-report-2026-06-29.md</code>.</p>
+
+</body>
+</html>

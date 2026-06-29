@@ -426,3 +426,9 @@ id = "sSma8vwECxH9XxLqO56U9"
 uri = "file://docs/migration-report-2026-06-29.md"
 type = "text"
 title = "Dev → Live Migration Report (2026-06-29)"
+
+[[outputs]]
+id = "mS17kwsuUcXheB_wBbeld"
+uri = "file://exports/PulseEDU-Migration-Handoff-2026-06-29.pdf"
+type = "pdf"
+title = "PulseEDU — Dev → Live Migration Handoff (PDF, shareable)"
