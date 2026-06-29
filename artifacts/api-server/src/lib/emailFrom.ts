@@ -17,4 +17,5 @@ export function formatFromHeader(
   if (fromEmail.includes("<")) return fromEmail;
   const safeName = fromName.replace(/"/g, "'");
   return `${safeName} <${fromEmail}>`;
+
 }
