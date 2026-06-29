@@ -9,6 +9,7 @@ import {
 import { and, eq } from "drizzle-orm";
 import QRCode from "qrcode";
 import { getUncachableResendClient } from "./resendClient.js";
+import { formatFromHeader } from "./emailFrom.js";
 import { renderTicketsPdf } from "./ticketPdf.js";
 import {
   TICKET_RESPONSIBILITY_HEADLINE,
@@ -241,7 +242,7 @@ export async function sendTicketEmailForGrant(
   try {
     const { client, fromEmail } = await getUncachableResendClient();
     const sendRes = await client.emails.send({
-      from: `${fromName} <${fromEmail}>`,
+      from: formatFromHeader(fromName, fromEmail),
       to: toEmail,
       subject,
       text,

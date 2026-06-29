@@ -1,4 +1,5 @@
 import { getUncachableResendClient } from "./resendClient.js";
+import { formatFromHeader } from "./emailFrom.js";
 import { logger } from "./logger.js";
 
 // Build the absolute URL the parent will click in the reset email. Mirrors
@@ -91,7 +92,7 @@ export async function sendParentPasswordResetEmail(
 </html>`;
 
   const result = await client.emails.send({
-    from: fromName ? `${fromName} <${fromEmail}>` : fromEmail,
+    from: formatFromHeader(fromName, fromEmail),
     to,
     subject,
     text,

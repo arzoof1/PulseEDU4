@@ -8,6 +8,7 @@ import {
 } from "@workspace/db";
 import { eq, and, isNull } from "drizzle-orm";
 import { getUncachableResendClient } from "./resendClient";
+import { formatFromHeader } from "./emailFrom";
 
 export type MilestoneResult = {
   milestonePoints: number;
@@ -182,7 +183,7 @@ export async function processMilestonesForStudent(
 
     try {
       const { client, fromEmail } = await getUncachableResendClient();
-      const fromHeader = `${fromName} <${fromEmail}>`;
+      const fromHeader = formatFromHeader(fromName, fromEmail);
       const sendRes = await client.emails.send({
         from: fromHeader,
         to: parentEmail,
