@@ -444,3 +444,9 @@ id = "06aP-xjweorZoU_7b1WZ7"
 uri = "file://exports/PulseEDU-Migration-Handoff-2026-06-29.zip"
 type = "unspecified"
 title = "PulseEDU Migration Handoff — PDF + code patch + report (zip)"
+
+[[outputs]]
+id = "gwrHF4HsiCzZWuONgG47W"
+uri = "file://exports/Pullout-Notifications-Dev-Guide.pdf"
+type = "pdf"
+title = "Pullout Notifications — Developer's Guide"
