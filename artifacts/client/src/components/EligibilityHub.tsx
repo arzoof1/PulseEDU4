@@ -7,6 +7,10 @@ import {
 } from "react";
 import * as XLSX from "xlsx";
 import { authFetch } from "../lib/authToken";
+import {
+  parseAttendanceRows,
+  parseRosterRows,
+} from "../lib/eligibilitySpreadsheet";
 
 // =============================================================================
 // EligibilityHub — attendance-based participation eligibility for athletics,
@@ -456,27 +460,7 @@ function ActivityDetail({
       const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
         defval: "",
       });
-      const rows = json
-        .map((row) => {
-          const localSisId = pickField(row, [
-            "localsisid",
-            "local_sis_id",
-            "sisid",
-            "sis_id",
-            "studentid",
-            "student_id",
-            "id",
-          ]);
-          const jerseyNumber = pickField(row, [
-            "jersey",
-            "jerseynumber",
-            "jersey_number",
-            "number",
-            "#",
-          ]);
-          return { localSisId, jerseyNumber: jerseyNumber || undefined };
-        })
-        .filter((r) => r.localSisId);
+      const rows = parseRosterRows(json);
       if (rows.length === 0) {
         setBulkMsg("No rows with a SIS ID column were found.");
         return;
@@ -698,8 +682,9 @@ function ActivityDetail({
               Download sample
             </button>
             <span style={{ fontSize: 12, color: "var(--muted, #6b7280)" }}>
-              File needs a <strong>SIS ID</strong> column (required) and an
-              optional <strong>Jersey #</strong> column (blank for band/chorus).
+              File needs a <strong>student ID</strong> column (SIS ID, Local ID,
+              Other ID, etc.) and an optional <strong>Jersey #</strong> (blank
+              for band/chorus).
             </span>
           </div>
           {bulkMsg && (
@@ -775,21 +760,6 @@ function ActivityDetail({
       )}
     </div>
   );
-}
-
-function pickField(row: Record<string, unknown>, keys: string[]): string {
-  const norm: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(row)) {
-    norm[k.toLowerCase().replace(/[^a-z0-9#_]/g, "")] = v;
-  }
-  for (const k of keys) {
-    const key = k.toLowerCase().replace(/[^a-z0-9#_]/g, "");
-    const v = norm[key];
-    if (v !== undefined && v !== null && String(v).trim() !== "") {
-      return String(v).trim();
-    }
-  }
-  return "";
 }
 
 // ---------------------------------------------------------------------------
@@ -1190,42 +1160,7 @@ function UploadTab({ onUploaded }: { onUploaded: () => void }) {
       const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
         defval: "",
       });
-      const rows = json
-        .map((row) => {
-          const localSisId = pickField(row, [
-            "localsisid",
-            "local_sis_id",
-            "sisid",
-            "sis_id",
-            "studentid",
-            "student_id",
-            "id",
-          ]);
-          const absenceTotal = Number(
-            pickField(row, [
-              "absencetotal",
-              "absence_total",
-              "absences",
-              "absent",
-              "daysabsent",
-              "days_absent",
-            ]) || "0",
-          );
-          const daysTardy = Number(
-            pickField(row, [
-              "daystardy",
-              "days_tardy",
-              "tardies",
-              "tardy",
-            ]) || "0",
-          );
-          return {
-            localSisId,
-            absenceTotal: Number.isFinite(absenceTotal) ? absenceTotal : 0,
-            daysTardy: Number.isFinite(daysTardy) ? daysTardy : 0,
-          };
-        })
-        .filter((r) => r.localSisId);
+      const rows = parseAttendanceRows(json);
       if (rows.length === 0) {
         setStatus("No rows with a SIS ID column were found.");
         return;
@@ -1260,8 +1195,9 @@ function UploadTab({ onUploaded }: { onUploaded: () => void }) {
       <h3 style={{ marginTop: 0 }}>Daily Attendance Upload</h3>
       <p style={{ color: "var(--muted, #6b7280)", fontSize: 13 }}>
         Each upload REPLACES the stored absence/tardy totals for the current
-        semester (totals are never summed across files). Columns: SIS ID,
-        absence total, days tardy.
+        semester (totals are never summed across files). The file needs a
+        student-ID column (SIS ID, Local ID, Other ID, etc.) plus absence and
+        tardy totals — header names can vary by district export.
       </p>
 
       <label className="btn" style={{ cursor: "pointer", display: "inline-block" }}>
