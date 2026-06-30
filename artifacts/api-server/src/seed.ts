@@ -1151,6 +1151,28 @@ const MTSS_SEED_TITLES = [
 // commit the DDL here so a fresh prod deploy still gets the table without
 // any out-of-band SQL. Mirrors the always-run bell_schedules index fix in
 // seedIfEmpty(). Safe to re-run: every statement uses IF NOT EXISTS.
+// Data Export — append-only audit trail for the customizable exporter.
+// One row per file DOWNLOAD (not per preview). Idempotent.
+export async function ensureDataExportSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS data_export_audit_log (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      dataset_key TEXT NOT NULL,
+      format TEXT NOT NULL DEFAULT 'csv',
+      columns JSONB NOT NULL DEFAULT '[]'::jsonb,
+      filters JSONB NOT NULL DEFAULT '{}'::jsonb,
+      row_count INTEGER NOT NULL DEFAULT 0,
+      actor_staff_id INTEGER,
+      actor_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS data_export_audit_school_idx ON data_export_audit_log (school_id, created_at)`,
+  );
+}
+
 export async function ensureMtssPlansSchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS student_mtss_plans (

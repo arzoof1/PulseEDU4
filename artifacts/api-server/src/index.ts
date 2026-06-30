@@ -44,6 +44,7 @@ import {
   ensureOnTimeTestModeColumns,
   ensureParentMessagesSchema,
   ensureCommunicationSchema,
+  ensureDataExportSchema,
   ensurePulseDnaVideosSchema,
   ensureStudentLocalSisIdBackfill,
   ensureStudentAccommodationsBackfill,
@@ -304,6 +305,8 @@ async function runSeed(): Promise<void> {
   // flags (front office), and "call all families" campaigns. Also adds
   // staff.cap_manage_contact_info. Idempotent.
   await ensureCommunicationSchema();
+  // Data Export audit trail (customizable exporter). Idempotent.
+  await ensureDataExportSchema();
   // PulseDNA videos (Recording Studio) + parent_messages.video_id link.
   // Idempotent.
   await ensurePulseDnaVideosSchema();

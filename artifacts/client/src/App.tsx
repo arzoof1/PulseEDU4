@@ -58,6 +58,7 @@ import StudentPicker from "./components/StudentPicker";
 import { CompanionQueuePanel } from "./components/CompanionQueuePanel";
 import { KioskBanner } from "./components/KioskBanner";
 import { KioskCardsPanel } from "./components/KioskCardsPanel";
+import { DataExportRegistryPanel } from "./components/DataExportRegistryPanel";
 import { KioskWelcomePanel } from "./components/KioskWelcomePanel";
 import { StudentBadgesPanel } from "./components/StudentBadgesPanel";
 import { RollCallPanel } from "./components/RollCallPanel";
@@ -4042,6 +4043,7 @@ NAV_GROUP_OWNERSHIP.schoolAdmin = [
   "interventions",
   // Consolidated AST + Comp Time admin home (was four separate items).
   "staffTime",
+  "dataExport",
 ];
 
 function groupContainsActive(groupId: string, activeSection: string): boolean {
@@ -5686,6 +5688,7 @@ function App() {
     | "bellSchedule"
     | "activeKiosks"
     | "kioskCards"
+    | "dataExport"
     | "parentAccess"
     | "superUserHome"
     | "featureLicensing"
@@ -10056,6 +10059,10 @@ function App() {
     if (!canManageEligibility && activeSection === "eligibility") {
       setActiveSection("hallPasses");
     }
+    // Data Export is admin / Core Team only — bounce anyone else off it.
+    if (!isCoreTeamMember && activeSection === "dataExport") {
+      setActiveSection("hallPasses");
+    }
   }, [
     isAdmin,
     isEseCoord,
@@ -10077,6 +10084,7 @@ function App() {
     canAccessInsightsHub,
     isSuperUser,
     canActAsDistrict,
+    isCoreTeamMember,
   ]);
 
   useEffect(() => {
@@ -11421,6 +11429,7 @@ function App() {
           canManageSettings ||
           canApproveAst ||
           canManageEligibility ||
+          isCoreTeamMember ||
           (canManageBehaviorLists && !isBehaviorSpec);
         // Phase 2 polish — per-user namespace for the NavGroup accordion
         // localStorage so two staff sharing the same browser don't inherit
@@ -12052,6 +12061,12 @@ function App() {
                   renderNavItem({
                     key: "kioskCards",
                     label: "Kiosk Cards",
+                    icon: IconClipboard,
+                  })}
+                {isCoreTeamMember &&
+                  renderNavItem({
+                    key: "dataExport",
+                    label: "Data Export",
                     icon: IconClipboard,
                   })}
                 {isAdmin && renderNavItem(adminNavSections[1])}
@@ -23888,6 +23903,10 @@ function App() {
             </table>
           )}
         </div>
+      )}
+
+      {activeSection === "dataExport" && isCoreTeamMember && (
+        <DataExportRegistryPanel />
       )}
 
       {activeSection === "kioskCards" && canManageSettings && (
