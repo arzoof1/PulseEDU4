@@ -462,3 +462,9 @@ id = "o0gNyrzFpDH-kTa6P4QM7"
 uri = "file://docs/teleprompter-position-migration.pdf"
 type = "pdf"
 title = "Teleprompter Positioning — Dev Migration Guide (PDF)"
+
+[[outputs]]
+id = "-GYGUASFIROFPExuUQ9KK"
+uri = "file://attached_assets/FAKE_Student_LIVE_Grade_Report-SAMPLE-with-teachers.xlsx"
+type = "table"
+title = "Sample grade report (teacher names filled in)"
