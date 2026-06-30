@@ -63,6 +63,7 @@ import {
   type PmPlacementSet,
 } from "../lib/fastCutScores.js";
 import { loadAttendanceMetrics } from "../lib/attendanceMetrics.js";
+import { loadStudentGrades } from "../lib/studentMetrics.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 import {
   loadFastHistory,
@@ -538,6 +539,15 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
     schoolId,
     studentIds: [studentId],
   });
+  // Current grades + GPA (from the Gradebook importer). Same effective-quarter
+  // + GPA logic as the shared metrics engine; GPA is null when the school's
+  // GPA toggle is off.
+  const gradesMap = await loadStudentGrades(schoolId, [studentId]);
+  const grades = gradesMap.get(studentId) ?? {
+    currentGrades: [],
+    gpa: null,
+    gpaEnabled: false,
+  };
   const assessments = await db
     .select({
       name: assessmentsTable.assessmentName,
@@ -1301,6 +1311,11 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
     },
     pillars: {
       academics: {
+        // Current grades + unweighted 4.0 GPA from the Gradebook importer.
+        // `gpa` is null when the school's GPA toggle is off.
+        currentGrades: grades.currentGrades,
+        gpa: grades.gpa,
+        gpaEnabled: grades.gpaEnabled,
         fastScores: fastScores.map((s) => ({
           subject: s.subject,
           pm1: s.pm1,

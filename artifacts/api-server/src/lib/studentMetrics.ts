@@ -30,8 +30,11 @@ import {
   pbisEntriesTable,
   studentMtssPlansTable,
   studentFastScoresTable,
+  studentCourseGradesTable,
+  importJobsTable,
+  schoolSettingsTable,
 } from "@workspace/db";
-import { and, eq, inArray, gte, lte, ne, isNull } from "drizzle-orm";
+import { and, eq, inArray, gte, lte, ne, isNull, desc } from "drizzle-orm";
 import {
   loadAttendanceMetrics,
   type AttendanceMetric,
@@ -75,6 +78,26 @@ export interface StudentMetrics {
   fastMathPm1: number | null;
   fastMathPm2: number | null;
   fastMathPm3: number | null;
+  // --- Current grades (gradebook import; point-in-time, range not applied) ---
+  // One entry per course, current grade = effective-quarter value with a
+  // fallback to the latest populated quarter.
+  currentGrades: CurrentGrade[];
+  // Unweighted 4.0-scale GPA over the current semester's graded courses, or
+  // null when the school has GPA disabled or the student has no grades.
+  gpa: number | null;
+  // Mirror of the school-wide GPA toggle so surfaces can decide whether to
+  // render a GPA at all (the metric is null either way when disabled).
+  gpaEnabled: boolean;
+}
+
+export interface CurrentGrade {
+  courseCode: string;
+  courseDesc: string | null;
+  teacherName: string | null;
+  gradeLevel: string | null;
+  // The numeric current grade (0-100) and which quarter it came from.
+  grade: number | null;
+  quarter: string;
 }
 
 function emptyMetrics(studentId: string, att?: AttendanceMetric): StudentMetrics {
@@ -102,7 +125,19 @@ function emptyMetrics(studentId: string, att?: AttendanceMetric): StudentMetrics
     fastMathPm1: null,
     fastMathPm2: null,
     fastMathPm3: null,
+    currentGrades: [],
+    gpa: null,
+    gpaEnabled: false,
   };
+}
+
+// 4.0-scale grade points for a 0-100 grade.
+function gradePoints(grade: number): number {
+  if (grade >= 90) return 4;
+  if (grade >= 80) return 3;
+  if (grade >= 70) return 2;
+  if (grade >= 60) return 1;
+  return 0;
 }
 
 // Default range = "year to date" from the Aug-1 school-year start (the shared
@@ -151,15 +186,18 @@ export async function loadStudentMetrics(
   const loDay = range.from;
   const hiDay = range.to;
 
-  const [windows, tz, attendance] = await Promise.all([
+  const [windows, tz, attendance, gpaEnabled] = await Promise.all([
     loadDefaultPeriodWindows(schoolId),
     getSchoolTimezone(schoolId),
     loadAttendanceMetrics(schoolId, studentIds),
+    loadGpaEnabled(schoolId),
   ]);
 
   // Seed every requested student so the map always has a complete row.
   for (const sid of studentIds) {
-    out.set(sid, emptyMetrics(sid, attendance.get(sid)));
+    const m = emptyMetrics(sid, attendance.get(sid));
+    m.gpaEnabled = gpaEnabled;
+    out.set(sid, m);
   }
 
   await Promise.all([
@@ -171,9 +209,191 @@ export async function loadStudentMetrics(
     loadPbis(out, schoolId, studentIds, loIso, hiIso),
     loadMtss(out, schoolId, studentIds),
     loadFast(out, schoolId, studentIds),
+    loadCurrentGrades(out, schoolId, studentIds, gpaEnabled),
   ]);
 
   return out;
+}
+
+// School-wide GPA toggle (default false). Controls whether the GPA metric is
+// computed at all — when off, every student's `gpa` stays null.
+async function loadGpaEnabled(schoolId: number): Promise<boolean> {
+  const [row] = await db
+    .select({ gpaEnabled: schoolSettingsTable.gpaEnabled })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId))
+    .limit(1);
+  return row?.gpaEnabled ?? false;
+}
+
+// Current grades per course + the unweighted 4.0 GPA. Current grade for a
+// course = its effective-quarter value, falling back to the latest populated
+// quarter (Q4→Q1). GPA averages grade points across the current semester's
+// graded courses (Fall = Q1/Q2 effective, Spring = Q3/Q4 effective); GPA is
+// suppressed entirely when the school has the toggle off.
+async function loadCurrentGrades(
+  out: Map<string, StudentMetrics>,
+  schoolId: number,
+  ids: string[],
+  gpaEnabled: boolean,
+) {
+  // Gradebook uses JOB-CHAINING for restorable rollback: every upload's rows
+  // are kept (tagged with their import_job_id); the "current" snapshot is the
+  // rows of the LATEST committed gradebook job. Rolling that job back flips it
+  // to rolled_back, so the prior job becomes latest and its grades are
+  // restored automatically — no destructive full-replace. Find that job first;
+  // if there is none the school simply has no current grades.
+  const [latestJob] = await db
+    .select({ id: importJobsTable.id })
+    .from(importJobsTable)
+    .where(
+      and(
+        eq(importJobsTable.schoolId, schoolId),
+        eq(importJobsTable.kind, "gradebook"),
+        eq(importJobsTable.status, "committed"),
+      ),
+    )
+    .orderBy(desc(importJobsTable.id))
+    .limit(1);
+  if (!latestJob) return;
+
+  const rows = await db
+    .select({
+      studentId: studentCourseGradesTable.studentId,
+      courseCode: studentCourseGradesTable.courseCode,
+      courseDesc: studentCourseGradesTable.courseDesc,
+      teacherName: studentCourseGradesTable.teacherName,
+      gradeLevel: studentCourseGradesTable.gradeLevel,
+      q1: studentCourseGradesTable.q1,
+      q2: studentCourseGradesTable.q2,
+      q3: studentCourseGradesTable.q3,
+      q4: studentCourseGradesTable.q4,
+      effectiveQuarter: studentCourseGradesTable.effectiveQuarter,
+    })
+    .from(studentCourseGradesTable)
+    .where(
+      and(
+        eq(studentCourseGradesTable.schoolId, schoolId),
+        eq(studentCourseGradesTable.importJobId, latestJob.id),
+        inArray(studentCourseGradesTable.studentId, ids),
+      ),
+    );
+
+  // Per-student semester-scoped grades for GPA. Keyed separately from the
+  // displayed `currentGrades` because GPA only counts the CURRENT SEMESTER's
+  // courses (Fall = Q1/Q2, Spring = Q3/Q4) using that semester's grade — the
+  // displayed current grade can fall back across the whole year.
+  const semesterGrades = new Map<string, number[]>();
+
+  for (const r of rows) {
+    const m = out.get(r.studentId);
+    if (!m) continue;
+    const byQuarter: Record<string, number | null> = {
+      Q1: r.q1,
+      Q2: r.q2,
+      Q3: r.q3,
+      Q4: r.q4,
+    };
+    const effective = (r.effectiveQuarter ?? "").toUpperCase();
+    // Displayed current grade: effective quarter, else latest populated (Q4→Q1).
+    let grade: number | null = null;
+    let quarter = effective || "Q1";
+    if (byQuarter[effective] != null) {
+      grade = byQuarter[effective];
+      quarter = effective;
+    } else {
+      for (const q of ["Q4", "Q3", "Q2", "Q1"]) {
+        if (byQuarter[q] != null) {
+          grade = byQuarter[q];
+          quarter = q;
+          break;
+        }
+      }
+    }
+    m.currentGrades.push({
+      courseCode: r.courseCode,
+      courseDesc: r.courseDesc,
+      teacherName: r.teacherName,
+      gradeLevel: r.gradeLevel,
+      grade,
+      quarter,
+    });
+
+    // GPA contribution: only this course's CURRENT-SEMESTER grade. The
+    // semester is derived from the effective quarter (Q3/Q4 = Spring, else
+    // Fall). Prefer the effective quarter's value when it's in-semester,
+    // otherwise fall back to the latest populated quarter WITHIN the semester
+    // only. Courses with no in-semester grade are excluded.
+    if (gpaEnabled) {
+      const semester =
+        effective === "Q3" || effective === "Q4"
+          ? ["Q3", "Q4"]
+          : ["Q1", "Q2"];
+      let semGrade: number | null = null;
+      if (semester.includes(effective) && byQuarter[effective] != null) {
+        semGrade = byQuarter[effective];
+      } else {
+        for (const q of [...semester].reverse()) {
+          if (byQuarter[q] != null) {
+            semGrade = byQuarter[q];
+            break;
+          }
+        }
+      }
+      if (semGrade != null) {
+        const list = semesterGrades.get(r.studentId) ?? [];
+        list.push(semGrade);
+        semesterGrades.set(r.studentId, list);
+      }
+    }
+  }
+
+  // Stable display order + GPA. Sort courses by code so every surface lists
+  // them the same way.
+  for (const [sid, m] of out) {
+    m.currentGrades.sort((a, b) => a.courseCode.localeCompare(b.courseCode));
+    if (!gpaEnabled) continue;
+    const graded = semesterGrades.get(sid) ?? [];
+    if (graded.length === 0) continue;
+    const sum = graded.reduce((acc, g) => acc + gradePoints(g), 0);
+    m.gpa = Math.round((sum / graded.length) * 100) / 100;
+  }
+}
+
+// Focused loader for the Student Profile / per-student surfaces that only need
+// the current-grade list + GPA (not the full whole-child engine). Reuses the
+// exact same effective-quarter + GPA logic as `loadStudentMetrics` so every
+// surface agrees on each student's current grade and GPA.
+export async function loadStudentGrades(
+  schoolId: number,
+  studentIds: string[],
+): Promise<
+  Map<
+    string,
+    { currentGrades: CurrentGrade[]; gpa: number | null; gpaEnabled: boolean }
+  >
+> {
+  const result = new Map<
+    string,
+    { currentGrades: CurrentGrade[]; gpa: number | null; gpaEnabled: boolean }
+  >();
+  if (studentIds.length === 0) return result;
+  const gpaEnabled = await loadGpaEnabled(schoolId);
+  const tmp = new Map<string, StudentMetrics>();
+  for (const sid of studentIds) {
+    const m = emptyMetrics(sid);
+    m.gpaEnabled = gpaEnabled;
+    tmp.set(sid, m);
+  }
+  await loadCurrentGrades(tmp, schoolId, studentIds, gpaEnabled);
+  for (const [sid, m] of tmp) {
+    result.set(sid, {
+      currentGrades: m.currentGrades,
+      gpa: m.gpa,
+      gpaEnabled,
+    });
+  }
+  return result;
 }
 
 async function loadTardies(

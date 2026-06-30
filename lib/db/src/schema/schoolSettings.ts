@@ -582,6 +582,14 @@ export const schoolSettingsTable = pgTable(
   onTimeSimClockSetAt: timestamp("on_time_sim_clock_set_at", {
     withTimezone: true,
   }),
+  // -----------------------------------------------------------------
+  // Gradebook GPA. When true, the Student Profile / Snapshot surface a
+  // computed unweighted GPA (4.0 scale) from the imported gradebook
+  // current grades. OFF by default — not every school grades on a GPA
+  // scale, and exposing one where it's not used would be misleading.
+  // Core Team / admin controlled (gated in the PUT handler).
+  // -----------------------------------------------------------------
+  gpaEnabled: boolean("gpa_enabled").notNull().default(false),
   },
   (t) => ({
     schoolIdUnique: uniqueIndex("school_settings_school_id_unique").on(

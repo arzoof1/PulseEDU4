@@ -5857,6 +5857,7 @@ function App() {
     staffDirectoryShowCellPhone: boolean;
     manualRosterUploadEnabled: boolean;
     strictHouseNameMatch: boolean;
+    gpaEnabled: boolean;
     // Two-tier feature flags. Defaults are TRUE so the optimistic UI
     // matches what the server returns for any school that has not yet
     // flipped anything off.
@@ -5923,6 +5924,7 @@ function App() {
     staffDirectoryShowCellPhone: false,
     manualRosterUploadEnabled: false,
     strictHouseNameMatch: false,
+    gpaEnabled: false,
     featureFamilyComm: true,
     featurePbis: true,
     featureSchoolStore: true,
@@ -7755,6 +7757,8 @@ function App() {
             typeof data.strictHouseNameMatch === "boolean"
               ? data.strictHouseNameMatch
               : false,
+          gpaEnabled:
+            typeof data.gpaEnabled === "boolean" ? data.gpaEnabled : false,
           featureFamilyComm: boolOrTrue(data.featureFamilyComm),
           featurePbis: boolOrTrue(data.featurePbis),
           featureSchoolStore: boolOrTrue(data.featureSchoolStore),
@@ -7905,6 +7909,8 @@ function App() {
           typeof data.strictHouseNameMatch === "boolean"
             ? data.strictHouseNameMatch
             : false,
+        gpaEnabled:
+          typeof data.gpaEnabled === "boolean" ? data.gpaEnabled : false,
         featureFamilyComm: boolOrTrue(data.featureFamilyComm),
         featurePbis: boolOrTrue(data.featurePbis),
         featureSchoolStore: boolOrTrue(data.featureSchoolStore),
@@ -24931,6 +24937,60 @@ function App() {
                 </span>
               </span>
             </label>
+            {Boolean(
+              authUser?.isSuperUser ||
+                authUser?.isDistrictAdmin ||
+                authUser?.isAdmin ||
+                authUser?.isBehaviorSpecialist ||
+                authUser?.isMtssCoordinator ||
+                authUser?.isSchoolPsychologist ||
+                authUser?.isCoreTeam ||
+                authUser?.isConfidentialSecretary,
+            ) && (
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: "0.5rem",
+                  padding: "0.6rem 0.75rem",
+                  border: "1px solid var(--border-subtle, #e2e8f0)",
+                  borderRadius: 6,
+                  background: "var(--surface-subtle, #f8fafc)",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={schoolSettings.gpaEnabled}
+                  onChange={(e) =>
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      gpaEnabled: e.target.checked,
+                    })
+                  }
+                  style={{ marginTop: "0.2rem" }}
+                />
+                <span style={{ display: "grid", gap: "0.15rem" }}>
+                  <span style={{ fontWeight: 600 }}>
+                    Show GPA (unweighted 4.0) from current grades
+                  </span>
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontSize: "0.85rem",
+                      fontWeight: "normal",
+                    }}
+                  >
+                    Off by default. Core Team only. When on, an unweighted
+                    4.0 GPA is computed from the imported current grades and
+                    surfaced on the Student Profile, Student Snapshot, and
+                    parent communications. Scale: 90–100 = 4, 80–89 = 3,
+                    70–79 = 2, 60–69 = 1, below 60 = 0 — a simple average
+                    over the current semester's graded courses. Requires a
+                    Gradebook import (Data &amp; Integrations).
+                  </span>
+                </span>
+              </label>
+            )}
             <label style={{ display: "grid", gap: "0.25rem" }}>
               <span>
                 Number of Periods in the School Day

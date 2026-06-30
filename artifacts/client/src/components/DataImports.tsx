@@ -25,6 +25,7 @@ type Kind =
   | "fast_scores"
   | "fast_prior_year"
   | "fast_florida"
+  | "gradebook"
   | "points_migration";
 type Scope = "school" | "district";
 
@@ -584,6 +585,25 @@ const KIND_DEFS: Record<Kind, KindDef> = {
       "12 MB file limit. Split by grade if the state export exceeds it.",
     ],
   },
+  gradebook: {
+    label: "Gradebook (current grades — Live Grade Report xlsx)",
+    // Fixed-layout xlsx, like fast_florida — no column-mapping step.
+    targetsFor: () => [],
+    supportsDistrict: false,
+    helpText:
+      "Per-student current course grades from your SIS 'Live Grade Report' xlsx. One row per student×course with Q1-Q4 + final. Pick which quarter the grades represent. Each upload fully replaces the school's current grades.",
+    description:
+      "Drop in the SIS 'Live Grade Report' xlsx — one row per student per course, with columns for Grade level, Other ID (the student's local SIS id), the course code, Section, Course Desc, Teacher, Length, Start/Stop Term, the four quarter grades (Q1-Q4) and a Final (FIN). No column mapping needed — the layout is fixed and auto-detected. On the upload step you pick which quarter these grades currently represent (Q1-Q4) and an effective date (defaults to today). Students are matched by Other ID against your roster's local SIS id; rows that don't match a student are skipped and listed on the preview. Each upload FULLY REPLACES the school's stored current grades, so always upload the complete report. Reversible from History → Roll back (which clears the grades; re-upload to restore).",
+    columns: [],
+    sampleCsv: "",
+    notes: [
+      "School-scope only. Matched by Other ID == local SIS id — import rosters first. Unmatched / ambiguous ids are reported and skipped, never guessed.",
+      "Pick the quarter (Q1-Q4) these grades represent on the upload step. The current grade shown per course is that quarter's value, falling back to the latest populated quarter.",
+      "Each upload FULLY REPLACES the school's current grades. Roll back deletes this upload's rows (the prior upload is already gone — re-upload the previous file to restore).",
+      "GPA (when enabled in Settings) is an unweighted 4.0 average over the current semester's graded courses: 90-100=4, 80-89=3, 70-79=2, 60-69=1, below 60=0.",
+      "12 MB file limit. .xlsx or .xls.",
+    ],
+  },
   points_migration: {
     label: "PBIS point balances (migrate from another app)",
     targetsFor: () => POINTS_MIGRATION_TARGETS,
@@ -1097,6 +1117,15 @@ export default function DataImports({
   const [selectedSchoolYear, setSelectedSchoolYear] = useState<string>(
     () => floridaSchoolYearOptions()[0] ?? "",
   );
+  // Gradebook xlsx flow — which quarter the uploaded grades represent and
+  // the effective date (defaults to today, school-local enough for a date).
+  const [gradebookQuarter, setGradebookQuarter] = useState<
+    "Q1" | "Q2" | "Q3" | "Q4"
+  >("Q1");
+  const [gradebookDate, setGradebookDate] = useState<string>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  });
   const [dragActive, setDragActive] = useState(false);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [mapping, setMapping] = useState<Record<string, string>>({});
@@ -1172,6 +1201,7 @@ export default function DataImports({
     fast_scores: "FAST",
     fast_prior_year: "FAST",
     fast_florida: "FLORIDA",
+    gradebook: "GRADEBOOK",
     points_migration: "POINTS",
   };
   const echoWord = KIND_ECHO_WORDS[kind];
@@ -1323,10 +1353,12 @@ export default function DataImports({
     const isXlsx = /\.xlsx$/i.test(file.name);
     const isXls = /\.xls$/i.test(file.name);
     const isCsv = /\.csv$/i.test(file.name);
-    if (kind === "fast_florida") {
+    if (kind === "fast_florida" || kind === "gradebook") {
       if (!isXlsx && !isXls) {
         setError(
-          "Please choose a .xlsx or .xls file exported from the Florida FAST portal.",
+          kind === "gradebook"
+            ? "Please choose a .xlsx or .xls Live Grade Report file."
+            : "Please choose a .xlsx or .xls file exported from the Florida FAST portal.",
         );
         return;
       }
@@ -1414,7 +1446,12 @@ export default function DataImports({
   const runPreview = async (
     text: string,
     overrideMapping: Record<string, string>,
-    floridaOverride?: { xlsxBase64?: string; schoolYear?: string },
+    floridaOverride?: {
+      xlsxBase64?: string;
+      schoolYear?: string;
+      quarter?: "Q1" | "Q2" | "Q3" | "Q4";
+      effectiveDate?: string;
+    },
   ) => {
     // Callers that have just called setXlsxBase64 / setSelectedSchoolYear
     // can pass the fresh values via `floridaOverride` to avoid a stale-
@@ -1422,6 +1459,8 @@ export default function DataImports({
     // returns the *previous* value).
     const floridaXlsx = floridaOverride?.xlsxBase64 ?? xlsxBase64;
     const floridaYear = floridaOverride?.schoolYear ?? selectedSchoolYear;
+    const gbQuarter = floridaOverride?.quarter ?? gradebookQuarter;
+    const gbDate = floridaOverride?.effectiveDate ?? gradebookDate;
     // Snapshot the token + scope at call time. After the network round
     // trip we only commit state if (a) no newer preview has been kicked
     // off and (b) the scope hasn't been toggled in flight — otherwise a
@@ -1500,6 +1539,86 @@ export default function DataImports({
         setMapping({});
         return;
       }
+      // Gradebook xlsx path — dedicated endpoint, matched-by-local-SIS-id
+      // response. Adapt onto PreviewResponse so step 3 renders counts +
+      // sample courses, and surface unmatched/ambiguous ids as "errors".
+      if (kind === "gradebook") {
+        const r = await authFetch(endpoints.preview, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            xlsxBase64: floridaXlsx,
+            quarter: gbQuarter,
+            effectiveDate: gbDate,
+            filename,
+          }),
+        });
+        if (previewTokenRef.current !== myToken || callScope !== scope) return;
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          setError(j.error ?? `Preview failed (HTTP ${r.status})`);
+          setPreview(null);
+          return;
+        }
+        const data = await r.json();
+        const qKey = (gbQuarter.toLowerCase() as "q1" | "q2" | "q3" | "q4");
+        const adapted: PreviewResponse = {
+          headers: ["local_sis_id", "course", "teacher", "grade"],
+          autoMapping: {},
+          suggestedMapping: {},
+          unmappedCsvColumns: [],
+          totalRows: data.totalRows ?? 0,
+          validRows: data.matchedRows ?? 0,
+          errorRows: data.unmatchedRows ?? 0,
+          sampleRows: (data.sampleRows ?? []).map(
+            (s: {
+              localSisId: string;
+              courseCode: string;
+              courseDesc: string | null;
+              teacherName: string | null;
+              q1: number | null;
+              q2: number | null;
+              q3: number | null;
+              q4: number | null;
+              fin: number | null;
+            }) => {
+              const cur =
+                s[qKey] ?? s.q4 ?? s.q3 ?? s.q2 ?? s.q1 ?? null;
+              return {
+                studentId: s.localSisId,
+                assessmentName:
+                  `${s.courseCode}` +
+                  (s.courseDesc ? ` · ${s.courseDesc}` : "") +
+                  (s.teacherName ? ` · ${s.teacherName}` : ""),
+                score: cur,
+                scoreLevel: gradebookQuarter,
+                administeredAt: "",
+                source: "Gradebook",
+              };
+            },
+          ),
+          errors: [
+            ...(data.warnings ?? []).map(
+              (w: { row: number; message: string }) => ({
+                row: w.row,
+                message: w.message,
+              }),
+            ),
+            ...(data.unmatchedSisIds ?? []).map((id: string) => ({
+              row: 0,
+              message: `No student matched Other ID "${id}" — skipped.`,
+            })),
+            ...(data.ambiguousSisIds ?? []).map((id: string) => ({
+              row: 0,
+              message: `Other ID "${id}" matched more than one student — skipped.`,
+            })),
+          ],
+          readyToCommit: !!data.readyToCommit,
+        };
+        setPreview(adapted);
+        setMapping({});
+        return;
+      }
       const r = await authFetch(endpoints.preview, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1549,8 +1668,9 @@ export default function DataImports({
 
   const handleCommit = async () => {
     if (!preview) return;
-    if (kind !== "fast_florida" && !csvText) return;
-    if (kind === "fast_florida" && !xlsxBase64) return;
+    if (kind !== "fast_florida" && kind !== "gradebook" && !csvText) return;
+    if ((kind === "fast_florida" || kind === "gradebook") && !xlsxBase64)
+      return;
     // For fast_florida, intercept the first click and require an
     // explicit current-vs-historical pick. doCommit() below is what
     // actually performs the upload after the modal resolves.
@@ -1578,6 +1698,13 @@ export default function DataImports({
                 schoolYear: selectedSchoolYear || undefined,
                 filename,
                 isHistorical: historical,
+              })
+            : kind === "gradebook"
+            ? JSON.stringify({
+                xlsxBase64,
+                quarter: gradebookQuarter,
+                effectiveDate: gradebookDate,
+                filename,
               })
             : kind === "points_migration"
               ? JSON.stringify({
@@ -1682,11 +1809,14 @@ export default function DataImports({
         // Need both a parsed preview and a chosen school year.
         return preview !== null && !!selectedSchoolYear;
       }
+      if (kind === "gradebook") {
+        return preview !== null && !!gradebookQuarter && !!gradebookDate;
+      }
       return preview !== null;
     }
     if (step === 2) {
-      // Florida xlsx skips column mapping entirely.
-      if (kind === "fast_florida") return true;
+      // Florida / gradebook xlsx skip column mapping entirely.
+      if (kind === "fast_florida" || kind === "gradebook") return true;
       if (!preview) return false;
       if (missingRequired.length > 0) return false;
       // Defense against an all-Ignore mapping — at least one column
@@ -1701,15 +1831,17 @@ export default function DataImports({
   const goNext = () => {
     if (!canAdvance()) return;
     setStep((s) => {
-      // FAST Florida skips the mapping step (1 → 3 directly).
-      if (kind === "fast_florida" && s === 1) return 3;
+      // FAST Florida / gradebook skip the mapping step (1 → 3 directly).
+      if ((kind === "fast_florida" || kind === "gradebook") && s === 1)
+        return 3;
       return (Math.min(4, s + 1) as 0 | 1 | 2 | 3 | 4);
     });
   };
   const goBack = () => {
     setStep((s) => {
-      // Mirror goNext: FAST Florida back from preview goes to upload.
-      if (kind === "fast_florida" && s === 3) return 1;
+      // Mirror goNext: FAST Florida / gradebook back from preview → upload.
+      if ((kind === "fast_florida" || kind === "gradebook") && s === 3)
+        return 1;
       return (Math.max(0, s - 1) as 0 | 1 | 2 | 3 | 4);
     });
   };
@@ -2293,6 +2425,13 @@ export default function DataImports({
                         file: string;
                         label: string;
                       },
+                      // Gradebook is a fixed-layout SIS xlsx export —
+                      // admins supply their own Live Grade Report, so
+                      // there is no sample to ship.
+                      gradebook: null as unknown as {
+                        file: string;
+                        label: string;
+                      },
                     };
                     const sample = SAMPLES[kind];
                     if (!sample) return null;
@@ -2413,7 +2552,7 @@ export default function DataImports({
                     ref={fileInputRef}
                     type="file"
                     accept={
-                      kind === "fast_florida"
+                      kind === "fast_florida" || kind === "gradebook"
                         ? ".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                         : ".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                     }
@@ -2507,6 +2646,98 @@ export default function DataImports({
                         />
                         Import as historical (PM3-only back-fill)
                       </label>
+                    </div>
+                  )}
+                  {/* Gradebook xlsx — quarter + effective-date pickers.
+                      Mirrors the Florida year picker: sits below the drop
+                      zone, re-previews on change so counts stay honest. */}
+                  {kind === "gradebook" && (
+                    <div
+                      style={{
+                        marginTop: "0.75rem",
+                        padding: "0.75rem",
+                        border: "1px solid var(--border, #2a3447)",
+                        borderRadius: 8,
+                        display: "flex",
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        gap: "0.75rem",
+                        fontSize: 13,
+                      }}
+                    >
+                      <label
+                        htmlFor="gradebook-quarter"
+                        style={{ fontWeight: 600 }}
+                      >
+                        Quarter:
+                      </label>
+                      <select
+                        id="gradebook-quarter"
+                        value={gradebookQuarter}
+                        onChange={(e) => {
+                          const q = e.target.value as
+                            | "Q1"
+                            | "Q2"
+                            | "Q3"
+                            | "Q4";
+                          setGradebookQuarter(q);
+                          if (xlsxBase64)
+                            void runPreview("", {}, {
+                              xlsxBase64,
+                              quarter: q,
+                              effectiveDate: gradebookDate,
+                            });
+                        }}
+                        style={{
+                          padding: "0.4rem 0.6rem",
+                          border: "1px solid var(--border, #2a3447)",
+                          borderRadius: 6,
+                          background: "var(--surface)",
+                          color: "inherit",
+                          font: "inherit",
+                          fontSize: 13,
+                        }}
+                      >
+                        <option value="Q1">Q1</option>
+                        <option value="Q2">Q2</option>
+                        <option value="Q3">Q3</option>
+                        <option value="Q4">Q4</option>
+                      </select>
+                      <label
+                        htmlFor="gradebook-date"
+                        style={{ fontWeight: 600 }}
+                      >
+                        Effective date:
+                      </label>
+                      <input
+                        id="gradebook-date"
+                        type="date"
+                        value={gradebookDate}
+                        onChange={(e) => {
+                          const d = e.target.value;
+                          setGradebookDate(d);
+                          if (xlsxBase64)
+                            void runPreview("", {}, {
+                              xlsxBase64,
+                              quarter: gradebookQuarter,
+                              effectiveDate: d,
+                            });
+                        }}
+                        style={{
+                          padding: "0.4rem 0.6rem",
+                          border: "1px solid var(--border, #2a3447)",
+                          borderRadius: 6,
+                          background: "var(--surface)",
+                          color: "inherit",
+                          font: "inherit",
+                          fontSize: 13,
+                        }}
+                      />
+                      <span style={{ color: "var(--text-subtle)" }}>
+                        Which quarter these grades currently represent. The
+                        current grade per course uses this quarter, falling
+                        back to the latest populated quarter.
+                      </span>
                     </div>
                   )}
                 </div>
@@ -3554,6 +3785,22 @@ export default function DataImports({
                               <span>
                                 {" "}· {j.mapping.windows_seen.toUpperCase()}
                               </span>
+                            )}
+                          </div>
+                        )}
+                        {j.kind === "gradebook" && j.mapping && (
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: "var(--text-subtle)",
+                              marginTop: 2,
+                            }}
+                          >
+                            {j.mapping.quarter && (
+                              <span>{j.mapping.quarter}</span>
+                            )}
+                            {j.mapping.effective_date && (
+                              <span> · as of {j.mapping.effective_date}</span>
                             )}
                           </div>
                         )}

@@ -66,6 +66,7 @@ export * from "./assessments";
 export * from "./schoolBranding";
 export * from "./studentFastScores";
 export * from "./studentFastItemResponses";
+export * from "./studentCourseGrades";
 export * from "./parents";
 export * from "./houses";
 export * from "./classSignins";

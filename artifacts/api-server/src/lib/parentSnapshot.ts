@@ -46,6 +46,7 @@ import {
   hallPassLostMinutes,
   periodLengthMinutes,
 } from "./lostInstruction.js";
+import { loadStudentGrades } from "./studentMetrics.js";
 
 // Returns the YYYY-MM-DD bounds of the current school year. The cutover
 // is Aug 1 — anything before that rolls back to the previous Aug 1 so a
@@ -81,6 +82,10 @@ export interface ParentSnapshot {
     hallPasses: boolean;
     accommodations: boolean;
     fastScores: boolean;
+    // Current grades (Gradebook importer) share the academics-section
+    // (`showFastScores`) visibility gate — they are both academic-performance
+    // data, so a school/parent that hides FAST also hides current grades.
+    currentGrades: boolean;
     commHistory: boolean;
     pullouts: boolean;
     interventions: boolean;
@@ -209,6 +214,17 @@ export interface ParentSnapshot {
     priorYearScore: number | null;
     priorYearBq: boolean;
   }>;
+  // Current grades per course (Gradebook importer) + unweighted 4.0 GPA.
+  // `gpa` is null when the school's GPA toggle is off.
+  currentGrades: Array<{
+    courseCode: string;
+    courseDesc: string | null;
+    teacherName: string | null;
+    gradeLevel: string | null;
+    grade: number | null;
+    quarter: string;
+  }>;
+  gpa: number | null;
   interventions: Array<{
     interventionType: string;
     note: string | null;
@@ -375,6 +391,8 @@ export async function buildParentSnapshot(
     hallPasses: gate(settingsRow?.showHallPasses, true, prefsRow?.showHallPasses),
     accommodations: gate(settingsRow?.showAccommodations, true, prefsRow?.showAccommodations),
     fastScores: gate(settingsRow?.showFastScores, true, prefsRow?.showFastScores),
+    // Current grades reuse the academics-section (`showFastScores`) gate.
+    currentGrades: gate(settingsRow?.showFastScores, true, prefsRow?.showFastScores),
     commHistory: gate(settingsRow?.showCommHistory, true, prefsRow?.showCommHistory),
     pullouts: gate(settingsRow?.showPullouts, true, prefsRow?.showPullouts),
     interventions: gate(settingsRow?.showInterventions, false, prefsRow?.showInterventions),
@@ -899,6 +917,16 @@ export async function buildParentSnapshot(
         )
     : [];
 
+  // ----- Current grades + GPA -----
+  const gradesData = sectionsAvailable.currentGrades
+    ? await loadStudentGrades(student.schoolId, [student.studentId])
+    : null;
+  const studentGrades = gradesData?.get(student.studentId) ?? {
+    currentGrades: [],
+    gpa: null,
+    gpaEnabled: false,
+  };
+
   // ----- Interventions -----
   const interventions = sectionsAvailable.interventions
     ? await db
@@ -1178,6 +1206,8 @@ export async function buildParentSnapshot(
         createdAt: n.createdAt,
       })),
       fastScores: fastScoresRows,
+      currentGrades: studentGrades.currentGrades,
+      gpa: studentGrades.gpaEnabled ? studentGrades.gpa : null,
       interventions,
       mtss: {
         tier: mtssTier,

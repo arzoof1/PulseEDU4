@@ -76,6 +76,16 @@ interface RawMetrics {
   fastMathPm1: number | null;
   fastMathPm2: number | null;
   fastMathPm3: number | null;
+  currentGrades: {
+    courseCode: string;
+    courseDesc: string | null;
+    teacherName: string | null;
+    gradeLevel: string | null;
+    grade: number | null;
+    quarter: string;
+  }[];
+  gpa: number | null;
+  gpaEnabled: boolean;
 }
 
 interface Snapshot {
@@ -450,6 +460,78 @@ export default function StudentSnapshotPage({
                 )}
             </div>
           </div>
+
+          {/* Academics — current grades + GPA */}
+          {snapshot.rawMetrics.currentGrades.length > 0 && (
+            <div className="card">
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  justifyContent: "space-between",
+                  gap: 8,
+                }}
+              >
+                <h3 style={{ marginTop: 0 }}>Current Grades</h3>
+                {snapshot.rawMetrics.gpaEnabled &&
+                  snapshot.rawMetrics.gpa != null && (
+                    <div style={{ fontSize: 14 }}>
+                      GPA{" "}
+                      <span style={{ fontWeight: 700 }}>
+                        {snapshot.rawMetrics.gpa.toFixed(2)}
+                      </span>
+                    </div>
+                  )}
+              </div>
+              <p style={{ marginTop: 0, color: "var(--muted)", fontSize: 13 }}>
+                Current grade per course (latest reported quarter).
+                {snapshot.rawMetrics.gpaEnabled
+                  ? " Unweighted 4.0 GPA across the current semester's graded courses."
+                  : ""}
+              </p>
+              <table
+                style={{
+                  width: "100%",
+                  borderCollapse: "collapse",
+                  fontSize: 14,
+                }}
+              >
+                <thead>
+                  <tr style={{ color: "var(--muted)", textAlign: "left" }}>
+                    <th style={{ padding: "4px 8px" }}>Course</th>
+                    <th style={{ padding: "4px 8px" }}>Teacher</th>
+                    <th style={{ padding: "4px 8px", textAlign: "right" }}>
+                      Grade
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {snapshot.rawMetrics.currentGrades.map((g, i) => (
+                    <tr
+                      key={`${g.courseCode}-${i}`}
+                      style={{ borderTop: "1px solid var(--border)" }}
+                    >
+                      <td style={{ padding: "4px 8px" }}>
+                        {g.courseDesc || g.courseCode}
+                      </td>
+                      <td style={{ padding: "4px 8px" }}>
+                        {g.teacherName || "—"}
+                      </td>
+                      <td
+                        style={{
+                          padding: "4px 8px",
+                          textAlign: "right",
+                          fontWeight: 600,
+                        }}
+                      >
+                        {g.grade != null ? `${g.grade} (${g.quarter})` : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {/* Academics — FAST PM trajectory */}
           <div className="card">

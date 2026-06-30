@@ -62,6 +62,20 @@ interface ProfilePayload {
   window: { from: string; to: string; label: string; days: number | null };
   pillars: {
     academics: {
+      // Current grades per course (from the Gradebook importer) + unweighted
+      // 4.0 GPA. `gpa` is null when the school's GPA toggle is off; `gpaEnabled`
+      // mirrors that toggle so the UI can hide the GPA line. Defaulted `?? []`
+      // at the call site for version-skew safety.
+      currentGrades?: Array<{
+        courseCode: string;
+        courseDesc: string | null;
+        teacherName: string | null;
+        gradeLevel: string | null;
+        grade: number | null;
+        quarter: string;
+      }>;
+      gpa?: number | null;
+      gpaEnabled?: boolean;
       fastScores: Array<{
         subject: string;
         pm1: number | null;
@@ -3333,6 +3347,7 @@ export default function StudentProfile({
         <Card
           title="Academics"
           empty={
+            (pillars.academics.currentGrades ?? []).length === 0 &&
             pillars.academics.fastScores.length === 0 &&
             // Defensive `?? []` / `?? null` defaults — a stale-cache /
             // version-skew race (old API response in memory while the new
@@ -3344,6 +3359,55 @@ export default function StudentProfile({
             pillars.academics.assessments.length === 0
           }
         >
+          {(pillars.academics.currentGrades ?? []).length > 0 && (
+            <div style={{ marginBottom: "0.75rem" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  justifyContent: "space-between",
+                  gap: "0.5rem",
+                  marginBottom: 4,
+                }}
+              >
+                <div style={{ fontWeight: 600, fontSize: "0.85rem" }}>
+                  Current Grades
+                </div>
+                {pillars.academics.gpaEnabled &&
+                  pillars.academics.gpa != null && (
+                    <div style={{ fontSize: "0.85rem", color: "#374151" }}>
+                      GPA{" "}
+                      <span style={{ fontWeight: 700 }}>
+                        {pillars.academics.gpa.toFixed(2)}
+                      </span>
+                    </div>
+                  )}
+              </div>
+              <table
+                className="pulse-table"
+                style={{ width: "100%", fontSize: "0.85rem" }}
+              >
+                <thead>
+                  <tr style={{ color: "#6b7280" }}>
+                    <th style={{ textAlign: "left" }}>Course</th>
+                    <th style={{ textAlign: "left" }}>Teacher</th>
+                    <th style={{ textAlign: "right" }}>Grade</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(pillars.academics.currentGrades ?? []).map((g, i) => (
+                    <tr key={`${g.courseCode}-${i}`}>
+                      <td>{g.courseDesc || g.courseCode}</td>
+                      <td>{g.teacherName || "—"}</td>
+                      <td style={{ textAlign: "right", fontWeight: 600 }}>
+                        {g.grade != null ? `${g.grade} (${g.quarter})` : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
           {pillars.academics.fastScores.length > 0 && (
             <div style={{ marginBottom: "0.5rem" }}>
               <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: 4 }}>
