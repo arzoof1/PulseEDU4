@@ -18,6 +18,11 @@ import {
   mapOneRosterStaff,
   mapOneRosterStudents,
 } from "./oneroster/mapToSis.js";
+import {
+  OneRosterLiveClient,
+  resolveClasslinkBaseUrl,
+  resolveClasslinkTokenUrl,
+} from "./oneroster/liveClient.js";
 import type { OneRosterFixtureBundle } from "./oneroster/types.js";
 
 // ClassLink can be used two ways: as a OneRoster-compatible rostering
@@ -28,6 +33,8 @@ import type { OneRosterFixtureBundle } from "./oneroster/types.js";
 export interface ClasslinkConfig {
   /** OneRoster base URL, e.g. "https://example.classlink.com/oneroster/v1p1" */
   rostersBaseUrl?: string;
+  /** OAuth2 token URL (defaults to ClassLink proxy or CLASSLINK_ONEROSTER_TOKEN_URL). */
+  rostersTokenUrl?: string;
   rostersClientIdEnvVar?: string;
   rostersClientSecretEnvVar?: string;
 
@@ -64,6 +71,7 @@ function normalizeClasslinkConfig(
   const c = raw as Record<string, unknown>;
   return {
     rostersBaseUrl: c.rostersBaseUrl as string | undefined,
+    rostersTokenUrl: c.rostersTokenUrl as string | undefined,
     rostersClientIdEnvVar: c.rostersClientIdEnvVar as string | undefined,
     rostersClientSecretEnvVar: c.rostersClientSecretEnvVar as
       | string
@@ -79,12 +87,25 @@ function normalizeClasslinkConfig(
   };
 }
 
+function readRosterCredential(
+  envVarName: string | undefined,
+  fallbackEnvName: string,
+): string | null {
+  if (envVarName) {
+    const fromNamed = process.env[envVarName]?.trim();
+    if (fromNamed) return fromNamed;
+  }
+  const fromFallback = process.env[fallbackEnvName]?.trim();
+  return fromFallback || null;
+}
+
 export class ClasslinkRosterAdapter implements RosterAdapter {
   readonly id = "classlink";
   readonly displayName = "ClassLink (OneRoster)";
 
   private readonly config: ClasslinkConfig;
   private fixtureBundle: OneRosterFixtureBundle | null = null;
+  private liveBundle: OneRosterFixtureBundle | null = null;
 
   constructor(
     config: ClasslinkConfig | Record<string, unknown>,
@@ -107,10 +128,47 @@ export class ClasslinkRosterAdapter implements RosterAdapter {
     return this.fixtureBundle;
   }
 
-  private requireLiveApi(): never {
-    throw new AdapterNotImplementedError(
-      `${this.id} live OneRoster API (set CLASSLINK_MOCK=true or useFixtures in sis_config until credentials are wired)`,
+  private buildLiveClient(): OneRosterLiveClient {
+    const baseUrl = resolveClasslinkBaseUrl(this.config.rostersBaseUrl);
+    if (!baseUrl) {
+      throw new Error("Missing ClassLink OneRoster base URL.");
+    }
+
+    const clientId = readRosterCredential(
+      this.config.rostersClientIdEnvVar,
+      "CLASSLINK_ONEROSTER_CLIENT_ID",
     );
+    if (!clientId) {
+      throw new Error("Missing ClassLink rostering client id.");
+    }
+
+    const clientSecret = readRosterCredential(
+      this.config.rostersClientSecretEnvVar,
+      "CLASSLINK_ONEROSTER_CLIENT_SECRET",
+    );
+    if (!clientSecret) {
+      throw new Error("Missing ClassLink rostering client secret.");
+    }
+
+    return new OneRosterLiveClient({
+      baseUrl,
+      tokenUrl: resolveClasslinkTokenUrl(this.config.rostersTokenUrl),
+      clientId,
+      clientSecret,
+    });
+  }
+
+  private async getRosterBundle(): Promise<OneRosterFixtureBundle> {
+    if (this.usingFixtures()) {
+      return this.getFixtures();
+    }
+    if (!this.liveBundle) {
+      const client = this.buildLiveClient();
+      this.liveBundle = await client.fetchFixtureBundle(
+        this.config.schoolOrgSourcedId,
+      );
+    }
+    return this.liveBundle;
   }
 
   async ping(): Promise<{ ok: boolean; message: string }> {
@@ -130,35 +188,26 @@ export class ClasslinkRosterAdapter implements RosterAdapter {
       };
     }
 
-    const idVar = this.config.rostersClientIdEnvVar;
-    const secretVar = this.config.rostersClientSecretEnvVar;
-    if (!idVar || !process.env[idVar]) {
-      return { ok: false, message: "Missing ClassLink rostering client id." };
-    }
-    if (!secretVar || !process.env[secretVar]) {
+    try {
+      const client = this.buildLiveClient();
+      await client.ping();
       return {
-        ok: false,
-        message: "Missing ClassLink rostering client secret.",
+        ok: true,
+        message: "ClassLink OneRoster API reachable.",
       };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, message: msg };
     }
-    if (!this.config.rostersBaseUrl?.trim()) {
-      return { ok: false, message: "Missing ClassLink OneRoster base URL." };
-    }
-
-    this.requireLiveApi();
   }
 
   async listStudents(): Promise<SisStudent[]> {
-    if (!this.usingFixtures()) this.requireLiveApi();
-    return mapOneRosterStudents(
-      this.getFixtures(),
-      this.config.schoolOrgSourcedId,
-    );
+    const bundle = await this.getRosterBundle();
+    return mapOneRosterStudents(bundle, this.config.schoolOrgSourcedId);
   }
 
   async listStaff(): Promise<SisStaff[]> {
-    if (!this.usingFixtures()) this.requireLiveApi();
-    const bundle = this.getFixtures();
+    const bundle = await this.getRosterBundle();
     const staff = mapOneRosterStaff(bundle, this.config.schoolOrgSourcedId);
     const rooms = mapOneRosterRoomAssignments(
       bundle,
@@ -174,32 +223,23 @@ export class ClasslinkRosterAdapter implements RosterAdapter {
   }
 
   async listRoomAssignments(): Promise<SisRoomAssignment[]> {
-    if (!this.usingFixtures()) this.requireLiveApi();
-    return mapOneRosterRoomAssignments(
-      this.getFixtures(),
-      this.config.schoolOrgSourcedId,
-    );
+    const bundle = await this.getRosterBundle();
+    return mapOneRosterRoomAssignments(bundle, this.config.schoolOrgSourcedId);
   }
 
   async listClassSections(): Promise<SisClassSection[]> {
-    if (!this.usingFixtures()) this.requireLiveApi();
-    return mapOneRosterClassSections(
-      this.getFixtures(),
-      this.config.schoolOrgSourcedId,
-    );
+    const bundle = await this.getRosterBundle();
+    return mapOneRosterClassSections(bundle, this.config.schoolOrgSourcedId);
   }
 
   async listEnrollments(): Promise<SisEnrollment[]> {
-    if (!this.usingFixtures()) this.requireLiveApi();
-    return mapOneRosterEnrollments(
-      this.getFixtures(),
-      this.config.schoolOrgSourcedId,
-    );
+    const bundle = await this.getRosterBundle();
+    return mapOneRosterEnrollments(bundle, this.config.schoolOrgSourcedId);
   }
 
   async listSchoolOrgs(): Promise<SisSchoolOrg[]> {
-    if (!this.usingFixtures()) this.requireLiveApi();
-    return mapOneRosterSchoolOrgs(this.getFixtures().orgs);
+    const bundle = await this.getRosterBundle();
+    return mapOneRosterSchoolOrgs(bundle.orgs);
   }
 
   async listOrgs(): Promise<
@@ -211,8 +251,8 @@ export class ClasslinkRosterAdapter implements RosterAdapter {
       identifier?: string;
     }>
   > {
-    if (!this.usingFixtures()) this.requireLiveApi();
-    return this.getFixtures().orgs;
+    const bundle = await this.getRosterBundle();
+    return bundle.orgs;
   }
 }
 

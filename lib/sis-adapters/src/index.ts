@@ -31,6 +31,13 @@ export {
   mapStudentDemographics,
   parseOptionalBoolFlag,
 } from "./oneroster/demographicsMap.js";
+export {
+  OneRosterLiveClient,
+  OneRosterApiError,
+  CLASSLINK_DEFAULT_TOKEN_URL,
+  resolveClasslinkBaseUrl,
+  resolveClasslinkTokenUrl,
+} from "./oneroster/liveClient.js";
 
 import type { RosterAdapter, SsoAdapter } from "./types.js";
 import { SkywardAdapter } from "./skywardAdapter.js";
