@@ -70,6 +70,12 @@ function isCsrfExempt(path: string, method: string): boolean {
   // where a staff session cookie is still active; CSRF must not block them.
   if (path.startsWith("/api/esign/sign/")) return true;
 
+  // Public School Tours — brag-page request form, post-tour survey, and guide
+  // live-walk sync. Families and guides use token/public links with no login;
+  // staff often test the brag page while still signed in on the same browser.
+  if (path.startsWith("/api/tours/public/")) return true;
+  if (path.startsWith("/api/tours/walk/")) return true;
+
   return false;
 }
 
