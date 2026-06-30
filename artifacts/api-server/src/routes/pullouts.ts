@@ -12,8 +12,9 @@ import {
   studentsTable,
   interventionEntriesTable,
   issRosterTable,
+  schoolSettingsTable,
 } from "@workspace/db";
-import { eq, and, gte, desc, inArray } from "drizzle-orm";
+import { eq, and, gte, desc, inArray, or, asc } from "drizzle-orm";
 import {
   sendPulloutArrivalEmail,
   sendPulloutDispatchEmail,
@@ -102,6 +103,140 @@ async function hasRecentIntervention(
     .limit(1);
   return rows.length > 0;
 }
+
+// ---------------------------------------------------------------------------
+// Request Pullout — dispatch notification config (admin / superuser only).
+// No-code surface for WHO is notified (role-based dispatchers + hand-picked
+// extras such as a reading coach) and whether a TEXT is also sent. Registered
+// before the dynamic GETs; all GETs here use literal prefixes so there's no
+// shadowing, but keeping it first is the safe convention.
+// ---------------------------------------------------------------------------
+const isPulloutNotifyAdmin = (s: StaffRow) => s.isSuperUser || s.isAdmin;
+
+function pulloutRoleLabels(s: StaffRow): string[] {
+  const labels: string[] = [];
+  if (s.isAdmin) labels.push("Admin");
+  if (s.isDean) labels.push("Dean");
+  if (s.isMtssCoordinator) labels.push("MTSS Coordinator");
+  if (s.isIssTeacher) labels.push("ISS Teacher");
+  return labels;
+}
+
+router.get(
+  "/pullouts/notify-config",
+  requireStaffMW(isPulloutNotifyAdmin, "Admin"),
+  async (req: Request, res: Response) => {
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(400).json({ error: "No active school" });
+      return;
+    }
+    const [settings] = await db
+      .select()
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId));
+    const extraIds: number[] =
+      settings && Array.isArray(settings.pulloutExtraRecipientStaffIds)
+        ? settings.pulloutExtraRecipientStaffIds.filter(
+            (n): n is number => typeof n === "number" && Number.isInteger(n),
+          )
+        : [];
+    // Active staff are pickable; we ALSO surface any already-selected extra
+    // whose account has since gone inactive so an admin can still remove it
+    // (otherwise a departed staffer would be stuck on the list with no row to
+    // toggle off).
+    const activeOrExtra = extraIds.length
+      ? or(eq(staffTable.active, true), inArray(staffTable.id, extraIds))
+      : eq(staffTable.active, true);
+    const staff = await db
+      .select()
+      .from(staffTable)
+      .where(and(eq(staffTable.schoolId, schoolId), activeOrExtra))
+      .orderBy(asc(staffTable.displayName));
+    const list = staff.map((s) => {
+      const roleLabels = pulloutRoleLabels(s);
+      return {
+        id: s.id,
+        displayName: s.displayName,
+        roleLabels,
+        isActive: !!s.active,
+        isAutoRecipient: roleLabels.length > 0,
+        hasEmail: !!(s.email && s.email.includes("@")),
+        hasCell: !!(s.cellPhone && s.cellPhone.trim().length > 0),
+        isExtra: extraIds.includes(s.id),
+      };
+    });
+    res.json({
+      smsEnabled: !!settings?.pulloutSmsEnabled,
+      extraRecipientStaffIds: extraIds,
+      staff: list,
+    });
+  },
+);
+
+router.put(
+  "/pullouts/notify-config",
+  requireStaffMW(isPulloutNotifyAdmin, "Admin"),
+  async (req: Request, res: Response) => {
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(400).json({ error: "No active school" });
+      return;
+    }
+    const { smsEnabled, extraRecipientStaffIds } = (req.body ?? {}) as {
+      smsEnabled?: unknown;
+      extraRecipientStaffIds?: unknown;
+    };
+    const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
+    if (typeof smsEnabled === "boolean") {
+      updates.pulloutSmsEnabled = smsEnabled;
+    }
+    if (extraRecipientStaffIds !== undefined) {
+      if (!Array.isArray(extraRecipientStaffIds)) {
+        res
+          .status(400)
+          .json({ error: "extraRecipientStaffIds must be an array of ids" });
+        return;
+      }
+      const ids = Array.from(
+        new Set(
+          extraRecipientStaffIds.filter(
+            (n): n is number => Number.isInteger(n) && (n as number) > 0,
+          ),
+        ),
+      );
+      // Only keep ids that actually belong to THIS school (tenant safety).
+      let valid: number[] = [];
+      if (ids.length > 0) {
+        const rows = await db
+          .select({ id: staffTable.id })
+          .from(staffTable)
+          .where(
+            and(eq(staffTable.schoolId, schoolId), inArray(staffTable.id, ids)),
+          );
+        valid = rows.map((r) => r.id);
+      }
+      updates.pulloutExtraRecipientStaffIds = valid;
+    }
+    if (Object.keys(updates).length === 0) {
+      res.status(400).json({ error: "Nothing to update" });
+      return;
+    }
+    const [existing] = await db
+      .select({ schoolId: schoolSettingsTable.schoolId })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId));
+    if (existing) {
+      await db
+        .update(schoolSettingsTable)
+        .set(updates)
+        .where(eq(schoolSettingsTable.schoolId, schoolId));
+    } else {
+      await db.insert(schoolSettingsTable).values({ schoolId, ...updates });
+    }
+    res.json({ ok: true, ...updates });
+  },
+);
 
 // Pre-flight check used by the form to decide whether to show the
 // "no recent interventions, ack required" warning.

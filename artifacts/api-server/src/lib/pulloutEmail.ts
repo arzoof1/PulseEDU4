@@ -5,8 +5,9 @@ import {
   schoolSettingsTable,
   staffTable,
 } from "@workspace/db";
-import { and, eq, or } from "drizzle-orm";
+import { and, eq, or, inArray } from "drizzle-orm";
 import { getUncachableResendClient } from "./resendClient";
+import { sendSmsBatch } from "./sms";
 
 // Tiny HTML escaper used when interpolating staff-supplied free text
 // (e.g. parent_message authored in the Verify modal) into the HTML
@@ -434,27 +435,47 @@ export async function sendPulloutDispatchEmail(
 
   const nowIso = new Date().toISOString();
 
-  // Recipients: any active staff in THIS pullout's school with
-  // admin / dean / MTSS / ISS role. School-scoped so pullout details
-  // (student id, reason, teacher) don't leak to dispatchers in other
-  // schools.
+  // Load settings up front — needed here for the SMS toggle + extra
+  // recipients, and below for school / from name.
+  const [settings] = await db
+    .select()
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, p.schoolId));
+
+  const extraIds: number[] =
+    settings && Array.isArray(settings.pulloutExtraRecipientStaffIds)
+      ? settings.pulloutExtraRecipientStaffIds.filter(
+          (n): n is number => typeof n === "number" && Number.isInteger(n),
+        )
+      : [];
+
+  // Recipients: active staff in THIS pullout's school who EITHER hold a
+  // dispatch role (admin / dean / MTSS / ISS) OR were hand-picked as extra
+  // pullout recipients (e.g. a reading coach who helps with pullouts but
+  // isn't one of those roles). School-scoped so pullout details (student id,
+  // reason, teacher) don't leak to dispatchers in other schools.
+  const roleClauses = [
+    eq(staffTable.isAdmin, true),
+    eq(staffTable.isDean, true),
+    eq(staffTable.isMtssCoordinator, true),
+    eq(staffTable.isIssTeacher, true),
+  ];
+  const recipientClause = extraIds.length
+    ? or(...roleClauses, inArray(staffTable.id, extraIds))
+    : or(...roleClauses);
   const dispatchers = await db
     .select()
     .from(staffTable)
-    .where(
-      and(
-        eq(staffTable.schoolId, p.schoolId),
-        or(
-          eq(staffTable.isAdmin, true),
-          eq(staffTable.isDean, true),
-          eq(staffTable.isMtssCoordinator, true),
-          eq(staffTable.isIssTeacher, true),
-        ),
-      ),
-    );
-  const recipients = dispatchers
-    .filter((s) => s.active && s.email && s.email.includes("@"))
-    .map((s) => s.email);
+    .where(and(eq(staffTable.schoolId, p.schoolId), recipientClause));
+
+  const activeDispatchers = dispatchers.filter((s) => s.active);
+  const recipients = Array.from(
+    new Set(
+      activeDispatchers
+        .filter((s) => s.email && s.email.includes("@"))
+        .map((s) => s.email as string),
+    ),
+  );
 
   if (recipients.length === 0) {
     await db
@@ -482,16 +503,18 @@ export async function sendPulloutDispatchEmail(
         eq(studentsTable.schoolId, p.schoolId),
       ),
     );
-  const [settings] = await db
-    .select()
-    .from(schoolSettingsTable)
-    .where(eq(schoolSettingsTable.schoolId, p.schoolId));
   const schoolName = settings?.schoolName ?? "PulseED";
   const fromName = settings?.fromName ?? schoolName;
 
+  // NEVER surface the canonical FLEID (`p.studentId`) in forward-facing
+  // dispatch comms — only the local SIS id is displayable. Extra recipients
+  // broaden who sees this, so the label must stay FLEID-free.
+  const studentSisLabel = student?.localSisId ?? null;
   const studentLabel = student
-    ? `${student.firstName} ${student.lastName} (${p.studentId})`
-    : p.studentId;
+    ? `${student.firstName} ${student.lastName}${
+        studentSisLabel ? ` (${studentSisLabel})` : ""
+      }`
+    : (studentSisLabel ?? "Student");
   const reasonText = (p.editedReason ?? p.reason).trim();
   const periodText = p.period ? `Period ${p.period}` : "Period n/a";
   const teacherText = p.referringTeacherName || "(unspecified)";
@@ -539,6 +562,28 @@ export async function sendPulloutDispatchEmail(
         dispatchEmailErrorMsg: null,
       })
       .where(eq(pulloutsTable.id, pulloutId));
+
+    // Optional TEXT alert (off by default; admin-controlled). Best-effort —
+    // never fails the dispatch over a text, and carries NO student
+    // identifying info (no name / FLEID): recipients open PulseED to see
+    // details, keeping PII out of SMS.
+    if (settings?.pulloutSmsEnabled) {
+      const smsTo = Array.from(
+        new Set(
+          activeDispatchers
+            .map((s) => s.cellPhone)
+            .filter(
+              (c): c is string => typeof c === "string" && c.trim().length > 0,
+            ),
+        ),
+      );
+      if (smsTo.length > 0) {
+        await sendSmsBatch(
+          smsTo,
+          `New ${schoolName} pullout request (${periodText}). Open PulseED \u2192 Verify Pullouts to review.`,
+        );
+      }
+    }
     return { status: "sent", emailTo: recipientStr, errorMsg: null };
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : String(e);

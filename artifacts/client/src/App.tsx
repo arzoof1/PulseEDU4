@@ -20,6 +20,7 @@ import {
 import AdminHubPage from "./components/AdminHubPage";
 import FamilyMessagesHub from "./components/FamilyMessagesHub";
 import ParentNotificationsPanel from "./components/ParentNotificationsPanel";
+import PulloutNotificationsPanel from "./components/PulloutNotificationsPanel";
 import PulseDnaStudio from "./components/PulseDnaStudio";
 import HelpAssistant from "./components/HelpAssistant";
 import { TileHome, type Tile as TileHomeTile } from "./pages/TileHome";
@@ -4003,7 +4004,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "behaviorReview",
   ],
   specialPrograms: ["accommodations", "ese"],
-  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess", "callCampaign", "parentNotifications"],
+  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess", "callCampaign", "parentNotifications", "pulloutNotifications"],
   people: ["teacherRoster", "staffRoles"],
   // hallPassMgmt is reached via the Hall Passes admin tools; it has no
   // dedicated nav item so we anchor it to School Admin so the sidebar
@@ -5731,6 +5732,7 @@ function App() {
     | "familyMessages"
     | "pulseDnaStudio"
     | "parentNotifications"
+    | "pulloutNotifications"
     | "eligibility"
     | "tileHome"
     | "pbisWallets"
@@ -12002,6 +12004,12 @@ function App() {
                   renderNavItem({
                     key: "parentNotifications",
                     label: "Parent Notifications",
+                    icon: IconUser,
+                  })}
+                {canManageSettings &&
+                  renderNavItem({
+                    key: "pulloutNotifications",
+                    label: "Pullout Notifications",
                     icon: IconUser,
                   })}
               </NavGroup>
@@ -23230,6 +23238,10 @@ function App() {
 
       {activeSection === "parentNotifications" && canManageSettings && (
         <ParentNotificationsPanel />
+      )}
+
+      {activeSection === "pulloutNotifications" && canManageSettings && (
+        <PulloutNotificationsPanel />
       )}
 
       {activeSection === "insightsWatchlist" && (

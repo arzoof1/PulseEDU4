@@ -2085,6 +2085,15 @@ export async function ensureAdminHubSchema() {
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_sms_scope TEXT NOT NULL DEFAULT 'all'`,
   );
 
+  // Request Pullout dispatch notifications — SMS on/off + extra (non-role)
+  // recipient staff ids. Additive; email behavior unchanged when off.
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS pullout_sms_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS pullout_extra_recipient_staff_ids JSONB NOT NULL DEFAULT '[]'::jsonb`,
+  );
+
   // School Tours — Phase 2 "never lose a lead" SLA settings (additive).
   await db.execute(
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tour_first_contact_hours INTEGER NOT NULL DEFAULT 24`,
