@@ -456,3 +456,9 @@ id = "irJFPi2YuAK4qV0qfyeOT"
 uri = "file://docs/teleprompter-position-migration.md"
 type = "text"
 title = "Teleprompter Positioning — Dev Migration Guide"
+
+[[outputs]]
+id = "o0gNyrzFpDH-kTa6P4QM7"
+uri = "file://docs/teleprompter-position-migration.pdf"
+type = "pdf"
+title = "Teleprompter Positioning — Dev Migration Guide (PDF)"
