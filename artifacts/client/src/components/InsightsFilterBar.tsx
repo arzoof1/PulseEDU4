@@ -14,6 +14,7 @@
 // dashboard composes the resulting query string and re-fetches.
 
 import { useEffect, useState } from "react";
+import { TeacherPicker } from "./TeacherPicker";
 import { authFetch } from "../lib/authToken";
 
 export type InsightsFilterValue = {
@@ -145,25 +146,19 @@ export default function InsightsFilterBar({ value, onChange }: Props) {
         {showTeacherPicker && (
           <label style={labelStyle}>
             <span style={labelTextStyle}>Teacher</span>
-            <select
-              value={value.teacherId ?? ""}
-              onChange={(e) => {
-                const next = e.target.value
-                  ? Number.parseInt(e.target.value, 10)
-                  : null;
+            <TeacherPicker
+              teachers={teachers}
+              value={value.teacherId ?? null}
+              allowEmpty
+              emptyLabel="School-wide"
+              disabled={teachersLoading}
+              ariaLabel="Teacher"
+              selectStyle={selectStyle}
+              onChange={(next) => {
                 // Clearing the teacher also clears the period.
                 update({ teacherId: next, period: null });
               }}
-              style={selectStyle}
-              disabled={teachersLoading}
-            >
-              <option value="">School-wide</option>
-              {teachers.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.displayName}
-                </option>
-              ))}
-            </select>
+            />
           </label>
         )}
 

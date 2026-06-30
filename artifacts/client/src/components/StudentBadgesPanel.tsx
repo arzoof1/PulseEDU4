@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import { CardDesignPanel } from "./CardDesignPanel";
+import { TeacherPicker } from "./TeacherPicker";
 
 // Admin tool — print Student ID badges (PDF, a single landscape
 // credit-card / CR80 ID, with a rectangle photo on the badge when consent
@@ -418,27 +419,25 @@ export function StudentBadgesPanel() {
             student that teacher sees. Rosters come from Skyward/RosterOne.
           </p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
-            <select
-              value={teacherId}
-              onChange={(e) => {
-                setTeacherId(e.target.value);
-                setPeriodSel("");
-              }}
-              style={{
-                flex: "1 1 240px",
+            <TeacherPicker
+              teachers={teachers}
+              value={teacherId ? Number(teacherId) : null}
+              allowEmpty
+              emptyLabel="Select a teacher…"
+              showDeptFilter
+              ariaLabel="Teacher"
+              style={{ flex: "1 1 240px" }}
+              selectStyle={{
+                width: "100%",
                 padding: "0.45rem 0.6rem",
                 borderRadius: 6,
                 border: "1px solid var(--border, rgba(0,0,0,0.15))",
               }}
-            >
-              <option value="">Select a teacher…</option>
-              {teachers.map((t) => (
-                <option key={t.id} value={String(t.id)}>
-                  {t.displayName}
-                  {t.department ? ` · ${t.department}` : ""}
-                </option>
-              ))}
-            </select>
+              onChange={(id) => {
+                setTeacherId(id ? String(id) : "");
+                setPeriodSel("");
+              }}
+            />
             <select
               value={periodSel}
               onChange={(e) => setPeriodSel(e.target.value)}

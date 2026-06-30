@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import * as LucideIcons from "lucide-react";
 import { authFetch } from "../lib/authToken";
 import StudentPhoto from "./StudentPhoto";
+import { TeacherPicker } from "./TeacherPicker";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 // Spotlight — fair, fast, "pull a name from the hat" picker for whole-class
@@ -856,27 +857,20 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
           <div style={{ fontWeight: 600, fontSize: "0.85rem" }}>
             Admin test mode:
           </div>
-          <select
-            value={teacherOverride}
-            onChange={(e) =>
-              setTeacherOverride(
-                e.target.value === "" ? "" : Number(e.target.value),
-              )
-            }
-            style={{
+          <TeacherPicker
+            teachers={teacherList}
+            value={teacherOverride === "" ? null : teacherOverride}
+            allowEmpty
+            emptyLabel="My own roster (default)"
+            ariaLabel="Admin test mode teacher"
+            selectStyle={{
               padding: "0.4rem 0.6rem",
               borderRadius: 8,
               border: "1px solid #cbd5e1",
               minWidth: 220,
             }}
-          >
-            <option value="">My own roster (default)</option>
-            {teacherList.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.displayName ?? `Staff #${t.id}`}
-              </option>
-            ))}
-          </select>
+            onChange={(id) => setTeacherOverride(id ?? "")}
+          />
           {teacherOverride !== "" && (
             <button
               type="button"

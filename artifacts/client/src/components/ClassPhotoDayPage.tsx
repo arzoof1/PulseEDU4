@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import StudentPhoto from "./StudentPhoto";
+import { TeacherPicker } from "./TeacherPicker";
+import { type TeacherOpt } from "./teacherDepartments";
 import {
   HowToUseHelp,
   HowToSection,
@@ -23,11 +25,6 @@ import {
 //
 // Uploaded-this-session state is tracked locally; refreshing the page
 // will re-show students as "needs photo" until you reload the roster.
-
-interface Teacher {
-  id: number;
-  displayName: string | null;
-}
 
 interface RosterStudent {
   studentId: string;
@@ -81,7 +78,7 @@ export default function ClassPhotoDayPage({
   isCoreTeam,
   onBack,
 }: Props) {
-  const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [teachers, setTeachers] = useState<TeacherOpt[]>([]);
   const [teacherId, setTeacherId] = useState<number | null>(defaultTeacherId);
   const [period, setPeriod] = useState<number | null>(null);
   const [roster, setRoster] = useState<RosterResponse | null>(null);
@@ -93,6 +90,14 @@ export default function ClassPhotoDayPage({
   // Index into the filtered "needs photo" queue. We always render the
   // student at queue[cursor]; advancing skips already-done students.
   const [cursor, setCursor] = useState(0);
+  // Class mode: after a successful save we pause on a confirm view
+  // (saved shot + Retake / Next student) instead of auto-advancing.
+  const [classSavedFor, setClassSavedFor] = useState<string | null>(null);
+  // Reopen a specific (often already-"done") student to retake — drives
+  // the Back button and clicking a chip after "class complete".
+  const [retakeStudentId, setRetakeStudentId] = useState<string | null>(null);
+  // Index of the student we last moved on from, for the Back button.
+  const [prevHandled, setPrevHandled] = useState<number | null>(null);
 
   // ---------- Mode: class roster walk (default) vs single-student ----------
   // Single-student mode swaps the teacher/period roster picker for a
@@ -126,7 +131,7 @@ export default function ClassPhotoDayPage({
     (async () => {
       const r = await authFetch("/api/teacher-roster/teachers");
       if (!r.ok || cancelled) return;
-      const j = (await r.json()) as { teachers: Teacher[] };
+      const j = (await r.json()) as { teachers: TeacherOpt[] };
       if (cancelled) return;
       setTeachers(j.teachers);
       if (!teacherId && j.teachers.length > 0) {
@@ -155,9 +160,15 @@ export default function ClassPhotoDayPage({
         const j = (await r.json()) as RosterResponse;
         if (cancelled) return;
         setRoster(j);
-        // Fresh roster → reset queue state.
+        // Fresh roster → reset queue + all class-flow transient state so a
+        // prior class's confirm/back/retake context can't bleed into the new
+        // one (e.g. stale prevHandled reopening an unrelated student index).
         setStatus({});
         setCursor(0);
+        setClassSavedFor(null);
+        setRetakeStudentId(null);
+        setPrevHandled(null);
+        setPreviewBlob(null);
         // If period unset, snap to first available so the queue isn't
         // the whole-day union (which can repeat students across periods
         // — server already dedupes, but the period chip looks empty).
@@ -347,8 +358,32 @@ export default function ClassPhotoDayPage({
     if (remainingCount === 0) return null;
     return queue[cursor] ?? null;
   }, [queue, cursor, remainingCount]);
+  // When retaking, the capture target is the explicitly chosen student
+  // (which may already be "done"), regardless of queue position.
+  const retakeStudent = useMemo(
+    () =>
+      retakeStudentId
+        ? queue.find((s) => s.studentId === retakeStudentId) ?? null
+        : null,
+    [queue, retakeStudentId],
+  );
+  // Class mode: the just-saved student awaiting Next/Retake confirmation.
+  const savedStudent = useMemo(
+    () =>
+      mode === "class" && classSavedFor
+        ? queue.find((s) => s.studentId === classSavedFor) ?? null
+        : null,
+    [mode, classSavedFor, queue],
+  );
   // In single mode the "current" student is whoever the search picked.
-  const current = mode === "single" ? singleStudent : classCurrent;
+  // In class mode, a retake or the just-saved student takes precedence
+  // over the queue cursor so the card/confirm view stays put.
+  const current =
+    mode === "single"
+      ? singleStudent
+      : retakeStudent ?? savedStudent ?? classCurrent;
+  // True while showing the post-save confirm view (Saved ✓ / Next).
+  const inSavedConfirm = !!savedStudent && !retakeStudent;
 
   // advanceFrom: pure helper — takes the *current* status map and finds
   // the next pending index after `fromIdx`, wrapping once. Pulled out so
@@ -427,20 +462,34 @@ export default function ClassPhotoDayPage({
             : s,
         );
       } else {
-        // Build the fresh status map up-front and hand it to advanceFrom
-        // so the cursor jumps to the *next* pending student — never back
-        // to the one we just finished. (Reading `status` from the closure
-        // here would still be stale.)
+        // Mark done and PAUSE on a confirm view (Retake / Next student)
+        // instead of auto-advancing — gives the photographer visual proof
+        // the shot saved. Keep previewBlob so the confirm view shows it.
         const fresh: Record<string, RowStatus> = {
           ...status,
           [studentId]: "done",
         };
         setStatus(fresh);
-        setPreviewBlob(null);
-        // Use the current cursor as the search origin. We compute it from
-        // the queue so a manual jump (clicking a chip) is respected.
-        const fromIdx = queue.findIndex((s) => s.studentId === studentId);
-        advanceFrom(fromIdx >= 0 ? fromIdx : cursor, fresh);
+        setClassSavedFor(studentId);
+        setRetakeStudentId(null);
+        // Stamp the saved key onto the roster row so the line-up strip
+        // thumbnail updates immediately (no full reload needed).
+        setRoster((r) =>
+          r
+            ? {
+                ...r,
+                students: r.students.map((s) =>
+                  s.studentId === studentId
+                    ? {
+                        ...s,
+                        photoObjectKey: objectPath,
+                        photoConsent: true,
+                      }
+                    : s,
+                ),
+              }
+            : r,
+        );
       }
     } catch (e) {
       setStatus((p) => ({ ...p, [studentId]: "failed" }));
@@ -466,17 +515,56 @@ export default function ClassPhotoDayPage({
     setPreviewBlob(null);
   }
 
+  // Confirm view → discard the saved shot and re-photograph the SAME
+  // student (overwrites on next save).
+  function handleRetakeSaved() {
+    const sid = classSavedFor;
+    setClassSavedFor(null);
+    setPreviewBlob(null);
+    if (sid) setRetakeStudentId(sid);
+  }
+
+  // Confirm view → advance to the next pending student.
+  function handleNextStudent() {
+    const sid = classSavedFor;
+    const fromIdx = sid
+      ? queue.findIndex((s) => s.studentId === sid)
+      : cursor;
+    setPrevHandled(fromIdx >= 0 ? fromIdx : cursor);
+    setClassSavedFor(null);
+    setPreviewBlob(null);
+    setRetakeStudentId(null);
+    advanceFrom(fromIdx >= 0 ? fromIdx : cursor, status);
+  }
+
+  // Reopen the student we last moved on from, to retake their photo.
+  function handleBack() {
+    if (prevHandled == null) return;
+    const s = queue[prevHandled];
+    if (!s) return;
+    setClassSavedFor(null);
+    setPreviewBlob(null);
+    setCursor(prevHandled);
+    setRetakeStudentId(s.studentId);
+    setPrevHandled(null);
+  }
+
   function handleSkip() {
     if (!current) return;
     // Mirror the upload path: build a fresh status map and advance
     // from it so a skipped student never lands as `current` again on
     // the next render.
+    const sid = current.studentId;
     const fresh: Record<string, RowStatus> = {
       ...status,
-      [current.studentId]: "skipped",
+      [sid]: "skipped",
     };
     setStatus(fresh);
-    advanceFrom(cursor, fresh);
+    const fromIdx = queue.findIndex((s) => s.studentId === sid);
+    setPrevHandled(fromIdx >= 0 ? fromIdx : cursor);
+    setRetakeStudentId(null);
+    setClassSavedFor(null);
+    advanceFrom(fromIdx >= 0 ? fromIdx : cursor, fresh);
   }
 
   // ---------- Single-student helpers ----------
@@ -486,6 +574,10 @@ export default function ClassPhotoDayPage({
     setPreviewBlob(null);
     setErr(null);
     setSingleSavedFor(null);
+    // Drop any class-flow confirm/back/retake context when toggling modes.
+    setClassSavedFor(null);
+    setRetakeStudentId(null);
+    setPrevHandled(null);
     setMode(m);
   }
 
@@ -633,23 +725,20 @@ export default function ClassPhotoDayPage({
               <span style={{ fontSize: "0.85rem", color: "#475569" }}>
                 Teacher
               </span>
-              <select
-                value={teacherId ?? ""}
-                onChange={(e) => setTeacherId(Number(e.target.value) || null)}
+              <TeacherPicker
+                teachers={teachers}
+                value={teacherId}
+                showDeptFilter
                 disabled={!isCoreTeam && teachers.length <= 1}
-                style={{
+                ariaLabel="Teacher"
+                selectStyle={{
                   padding: "0.35rem 0.5rem",
                   borderRadius: 6,
                   border: "1px solid #cbd5e1",
                   minWidth: 200,
                 }}
-              >
-                {teachers.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.displayName ?? `Teacher #${t.id}`}
-                  </option>
-                ))}
-              </select>
+                onChange={(id) => setTeacherId(id)}
+              />
             </label>
             <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ fontSize: "0.85rem", color: "#475569" }}>
@@ -936,7 +1025,33 @@ export default function ClassPhotoDayPage({
 
             {/* Action buttons */}
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {previewBlob ? (
+              {inSavedConfirm ? (
+                <>
+                  <div
+                    style={{
+                      color: "#16a34a",
+                      fontWeight: 700,
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    ✓ Saved — does this look right?
+                  </div>
+                  <button
+                    type="button"
+                    style={btnPrimary}
+                    onClick={handleNextStudent}
+                  >
+                    Next student →
+                  </button>
+                  <button
+                    type="button"
+                    style={btn}
+                    onClick={handleRetakeSaved}
+                  >
+                    ↺ Retake
+                  </button>
+                </>
+              ) : previewBlob ? (
                 <>
                   <button
                     type="button"
@@ -978,23 +1093,27 @@ export default function ClassPhotoDayPage({
                   Start camera
                 </button>
               )}
-              <button
-                type="button"
-                style={btn}
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
-              >
-                Upload file…
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                style={{ display: "none" }}
-                onChange={handleFilePicked}
-              />
-              {mode === "class" && (
+              {!inSavedConfirm && (
+                <>
+                  <button
+                    type="button"
+                    style={btn}
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                  >
+                    Upload file…
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    style={{ display: "none" }}
+                    onChange={handleFilePicked}
+                  />
+                </>
+              )}
+              {mode === "class" && !inSavedConfirm && (
                 <button
                   type="button"
                   style={btnDanger}
@@ -1002,6 +1121,16 @@ export default function ClassPhotoDayPage({
                   disabled={uploading}
                 >
                   Skip → next
+                </button>
+              )}
+              {mode === "class" && prevHandled != null && (
+                <button
+                  type="button"
+                  style={btn}
+                  onClick={handleBack}
+                  disabled={uploading}
+                >
+                  ← Back / retake previous
                 </button>
               )}
             </div>
@@ -1098,7 +1227,11 @@ export default function ClassPhotoDayPage({
                   type="button"
                   onClick={() => {
                     setPreviewBlob(null);
+                    setClassSavedFor(null);
                     setCursor(idx);
+                    // Clicking a chip reopens that student for a (re)take,
+                    // even after the class is complete.
+                    setRetakeStudentId(s.studentId);
                   }}
                   title={`${s.firstName} ${s.lastName} — ${st}`}
                   style={{

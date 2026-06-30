@@ -31,48 +31,13 @@ import TeacherInstructionLogTab from "./TeacherInstructionLogTab";
 import Tier3WeeklyForm from "./Tier3WeeklyForm";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 import { LEVEL_BG, LEVEL_FG } from "./FastScorePill";
+import { TeacherPicker } from "./TeacherPicker";
+import { type TeacherOpt } from "./teacherDepartments";
 
 // Top-level tab in this page. "roster" is the original FAST PM
 // pills + flags table; "benchmarks" is the FAST Phase 2 per-item
 // mastery heatmap + bottom-3 tile.
 type RosterTab = "roster" | "benchmarks" | "instruction" | "groupInsights";
-
-interface TeacherOpt {
-  id: number;
-  displayName: string | null;
-  // Server-inferred department label (from course names on
-  // class_sections). May be missing on older bundles.
-  department?: string;
-}
-
-// Color tints per department for the picker. Light pastel backgrounds so
-// the colored rows remain legible against black option text. Chrome and
-// Firefox honor inline backgroundColor on <option>; Safari ignores it
-// (rows still group via <optgroup>, just without color).
-const DEPARTMENT_ORDER: string[] = [
-  "ELA",
-  "Math",
-  "Science",
-  "Social Studies",
-  "World Languages",
-  "PE / Health",
-  "Electives",
-  "CTE / STEM",
-  "Support",
-  "Other",
-];
-const DEPARTMENT_TINTS: Record<string, string> = {
-  ELA: "#dbeafe",
-  Math: "#fee2e2",
-  Science: "#dcfce7",
-  "Social Studies": "#fef3c7",
-  "World Languages": "#ede9fe",
-  "PE / Health": "#ffedd5",
-  Electives: "#fce7f3",
-  "CTE / STEM": "#cffafe",
-  Support: "#f1f5f9",
-  Other: "#ffffff",
-};
 
 interface Placement {
   level: 1 | 2 | 3 | 4 | 5;
@@ -1782,9 +1747,6 @@ export default function TeacherRosterPage({
   onTeacherChange,
 }: Props) {
   const [teachers, setTeachers] = useState<TeacherOpt[]>([]);
-  // Department filter for the picker. Empty string = "All departments".
-  // Persisted only for the page lifetime; resets on reload.
-  const [deptFilter, setDeptFilter] = useState<string>("");
   const [teacherId, setTeacherId] = useState<number | null>(
     defaultTeacherId,
   );
@@ -2227,88 +2189,22 @@ export default function TeacherRosterPage({
           <h2 style={{ margin: 0 }}>Teacher Roster</h2>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {isCoreTeam && teachers.length > 1 && (() => {
-            // Departments actually present in this school's teacher list,
-            // ordered by our canonical sequence so the dropdowns stay
-            // consistent year over year.
-            const presentDepts = DEPARTMENT_ORDER.filter((d) =>
-              teachers.some((t) => (t.department ?? "Other") === d),
-            );
-            const filtered = deptFilter
-              ? teachers.filter(
-                  (t) => (t.department ?? "Other") === deptFilter,
-                )
-              : teachers;
-            // Group filtered teachers by department for <optgroup>.
-            const grouped: Record<string, TeacherOpt[]> = {};
-            for (const t of filtered) {
-              const d = t.department ?? "Other";
-              (grouped[d] ??= []).push(t);
-            }
-            return (
-              <>
-                {presentDepts.length > 1 && (
-                  <label style={{ fontSize: 13 }}>
-                    Dept:&nbsp;
-                    <select
-                      value={deptFilter}
-                      onChange={(e) => setDeptFilter(e.target.value)}
-                      style={{
-                        background: deptFilter
-                          ? DEPARTMENT_TINTS[deptFilter] ?? "#ffffff"
-                          : "#ffffff",
-                      }}
-                    >
-                      <option value="">All departments</option>
-                      {presentDepts.map((d) => (
-                        <option
-                          key={d}
-                          value={d}
-                          style={{
-                            backgroundColor:
-                              DEPARTMENT_TINTS[d] ?? "#ffffff",
-                          }}
-                        >
-                          {d}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                <label style={{ fontSize: 13 }}>
-                  Teacher:&nbsp;
-                  <select
-                    value={teacherId ?? ""}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      userPickedTeacherRef.current = true;
-                      setTeacherId(v ? Number(v) : null);
-                      setPeriod(null);
-                    }}
-                  >
-                    {presentDepts
-                      .filter((d) => grouped[d]?.length)
-                      .map((d) => (
-                        <optgroup key={d} label={d}>
-                          {grouped[d]!.map((t) => (
-                            <option
-                              key={t.id}
-                              value={t.id}
-                              style={{
-                                backgroundColor:
-                                  DEPARTMENT_TINTS[d] ?? "#ffffff",
-                              }}
-                            >
-                              {t.displayName ?? `Staff #${t.id}`}
-                            </option>
-                          ))}
-                        </optgroup>
-                      ))}
-                  </select>
-                </label>
-              </>
-            );
-          })()}
+          {isCoreTeam && teachers.length > 1 && (
+            <label style={{ fontSize: 13 }}>
+              Teacher:&nbsp;
+              <TeacherPicker
+                teachers={teachers}
+                value={teacherId}
+                showDeptFilter
+                ariaLabel="Teacher"
+                onChange={(id) => {
+                  userPickedTeacherRef.current = true;
+                  setTeacherId(id);
+                  setPeriod(null);
+                }}
+              />
+            </label>
+          )}
         </div>
       </div>
 
