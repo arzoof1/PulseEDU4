@@ -43,6 +43,7 @@ import {
 } from "drizzle-orm";
 import { isCoreTeam } from "./coreTeam.js";
 import { getVisibleStudentIds } from "../routes/insights.js";
+import { loadStudentMetrics, resolveMetricRange } from "./studentMetrics.js";
 
 export type StaffRow = typeof staffTable.$inferSelect;
 
@@ -484,11 +485,144 @@ const interventionsDataset: Dataset = {
   },
 };
 
+// ===========================================================================
+// Dataset: Student Summary (whole-child aggregates)
+// ===========================================================================
+// One row per student with every per-student aggregate from the shared metrics
+// engine (lib/studentMetrics.ts), ordered as the "mindset for learning" arc:
+// Shows up -> Stays in the room -> Engages/discipline -> Is supported ->
+// Achieves. Event metrics RESPECT the date range (default YTD when none set);
+// attendance is the latest semester upload and MTSS/FAST are point-in-time —
+// see studentMetrics.ts. Identity is the same student row as the Students
+// dataset, so the FLEID never leaves (local_sis_id only).
+function num(v: number | null | undefined): string {
+  return v == null ? "" : String(v);
+}
+
+const studentSummaryDataset: Dataset = {
+  key: "student_summary",
+  label: "Student Summary",
+  description:
+    "One row per student: attendance, lost instruction, hall passes, behavior pullouts, OSS/ISS served days, PBIS, MTSS tier, and FAST PM3 — a whole-child snapshot. Event metrics respect the date range (defaults to year-to-date).",
+  category: "Roster",
+  supportsGrade: true,
+  supportsTeacher: true,
+  supportsStudent: true,
+  supportsDateRange: true,
+  permission: (staff) => isCoreTeam(staff),
+  columns: [
+    { id: "localSisId", label: "Local SIS ID" },
+    { id: "lastName", label: "Last Name" },
+    { id: "firstName", label: "First Name" },
+    { id: "grade", label: "Grade" },
+    { id: "gender", label: "Gender" },
+    { id: "ell", label: "ELL" },
+    { id: "ese", label: "ESE" },
+    { id: "is504", label: "504" },
+    // Shows up
+    { id: "attendancePct", label: "Attendance % (est)" },
+    { id: "daysAbsent", label: "Days Absent" },
+    { id: "tardies", label: "Tardies" },
+    // Stays in the room
+    { id: "lostInstructionMinutes", label: "Lost Instruction (min)" },
+    { id: "hallPassCount", label: "Hall Passes" },
+    { id: "hallPassMinutes", label: "Hall Pass Minutes" },
+    { id: "pulloutCount", label: "Behavior Pullouts" },
+    { id: "pulloutMinutes", label: "Pullout Minutes" },
+    // Engages / discipline
+    { id: "ossServedDays", label: "OSS Days Served" },
+    { id: "issServedDays", label: "ISS Days Served" },
+    { id: "pbisNetPoints", label: "PBIS Net Points" },
+    { id: "pbisPositivePoints", label: "PBIS Positive Points" },
+    { id: "pbisNegativePoints", label: "PBIS Negative Points" },
+    // Is supported
+    { id: "mtssT2", label: "MTSS Tier 2 (active)" },
+    { id: "mtssT3Academic", label: "MTSS Tier 3 Academic (active)" },
+    { id: "mtssT3Behavior", label: "MTSS Tier 3 Behavior (active)" },
+    // Achieves
+    { id: "fastElaPm3", label: "FAST ELA PM3" },
+    { id: "fastMathPm3", label: "FAST Math PM3" },
+  ],
+  run: async (ctx) => {
+    const scope = await resolveStudentScope(ctx);
+    if (!scope.full && scope.ids.size === 0) return [];
+
+    const where = [eq(studentsTable.schoolId, ctx.schoolId)];
+    if (ctx.filters.grade != null)
+      where.push(eq(studentsTable.grade, ctx.filters.grade));
+    if (!scope.full)
+      where.push(inArray(studentsTable.studentId, [...scope.ids]));
+
+    const base = db
+      .select({
+        studentId: studentsTable.studentId,
+        localSisId: studentsTable.localSisId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+        gender: studentsTable.gender,
+        ell: studentsTable.ell,
+        ese: studentsTable.ese,
+        is504: studentsTable.is504,
+      })
+      .from(studentsTable)
+      .where(and(...where))
+      .orderBy(asc(studentsTable.lastName), asc(studentsTable.firstName));
+
+    const students =
+      ctx.limit != null ? await base.limit(ctx.limit) : await base;
+    if (students.length === 0) return [];
+
+    const range = await resolveMetricRange(ctx.schoolId, {
+      from: ctx.filters.dateFrom,
+      to: ctx.filters.dateTo,
+    });
+    const metrics = await loadStudentMetrics(
+      ctx.schoolId,
+      students.map((s) => s.studentId),
+      range,
+    );
+
+    return students.map((s) => {
+      const m = metrics.get(s.studentId);
+      return {
+        localSisId: txt(s.localSisId),
+        lastName: txt(s.lastName),
+        firstName: txt(s.firstName),
+        grade: txt(s.grade),
+        gender: txt(s.gender),
+        ell: yesNo(s.ell),
+        ese: yesNo(s.ese),
+        is504: yesNo(s.is504),
+        attendancePct: num(m?.attendancePct),
+        daysAbsent: num(m?.daysAbsent),
+        tardies: num(m?.tardies),
+        lostInstructionMinutes: num(m?.lostInstructionMinutes),
+        hallPassCount: num(m?.hallPassCount),
+        hallPassMinutes: num(m?.hallPassMinutes),
+        pulloutCount: num(m?.pulloutCount),
+        pulloutMinutes: num(m?.pulloutMinutes),
+        ossServedDays: num(m?.ossServedDays),
+        issServedDays: num(m?.issServedDays),
+        pbisNetPoints: num(m?.pbisNetPoints),
+        pbisPositivePoints: num(m?.pbisPositivePoints),
+        pbisNegativePoints: num(m?.pbisNegativePoints),
+        mtssT2: yesNo(m?.mtssT2Active),
+        mtssT3Academic: yesNo(m?.mtssT3AcademicActive),
+        mtssT3Behavior: yesNo(m?.mtssT3BehaviorActive),
+        fastElaPm3: num(m?.fastElaPm3),
+        fastMathPm3: num(m?.fastMathPm3),
+      };
+    });
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Registry + lookup helpers
 // ---------------------------------------------------------------------------
 export const DATASETS: Dataset[] = [
   studentsDataset,
+  studentSummaryDataset,
   hallPassesDataset,
   interventionsDataset,
 ];

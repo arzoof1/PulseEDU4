@@ -59,6 +59,7 @@ import { CompanionQueuePanel } from "./components/CompanionQueuePanel";
 import { KioskBanner } from "./components/KioskBanner";
 import { KioskCardsPanel } from "./components/KioskCardsPanel";
 import { DataExportRegistryPanel } from "./components/DataExportRegistryPanel";
+import StudentSnapshotPage from "./components/StudentSnapshotPage";
 import { KioskWelcomePanel } from "./components/KioskWelcomePanel";
 import { StudentBadgesPanel } from "./components/StudentBadgesPanel";
 import { RollCallPanel } from "./components/RollCallPanel";
@@ -5689,6 +5690,7 @@ function App() {
     | "activeKiosks"
     | "kioskCards"
     | "dataExport"
+    | "studentSnapshot"
     | "parentAccess"
     | "superUserHome"
     | "featureLicensing"
@@ -5790,6 +5792,15 @@ function App() {
   // by clicking the red "SP" pill on the Teacher Roster (or by future
   // entry points like StudentProfile).
   const [safetyPlanStudentId, setSafetyPlanStudentId] = useState<
+    string | null
+  >(null);
+  // Pre-selected student when launching the Student Snapshot from the Student
+  // Profile ("Open Snapshot"). The Snapshot page falls back to its own search
+  // when these are null.
+  const [snapshotStudentId, setSnapshotStudentId] = useState<string | null>(
+    null,
+  );
+  const [snapshotStudentLabel, setSnapshotStudentLabel] = useState<
     string | null
   >(null);
   // Where to return when the user clicks Back on the StudentProfile.
@@ -10063,6 +10074,10 @@ function App() {
     if (!isCoreTeamMember && activeSection === "dataExport") {
       setActiveSection("hallPasses");
     }
+    // Student Snapshot shares the Data Export gate (Core Team only).
+    if (!isCoreTeamMember && activeSection === "studentSnapshot") {
+      setActiveSection("hallPasses");
+    }
   }, [
     isAdmin,
     isEseCoord,
@@ -12067,6 +12082,12 @@ function App() {
                   renderNavItem({
                     key: "dataExport",
                     label: "Data Export",
+                    icon: IconClipboard,
+                  })}
+                {isCoreTeamMember &&
+                  renderNavItem({
+                    key: "studentSnapshot",
+                    label: "Student Snapshot",
                     icon: IconClipboard,
                   })}
                 {isAdmin && renderNavItem(adminNavSections[1])}
@@ -19908,6 +19929,15 @@ function App() {
                 authUser?.isGuidanceCounselor ||
                 authUser?.capManageDismissal,
             )}
+            onOpenSnapshot={
+              isCoreTeamMember
+                ? (sid, label) => {
+                    setSnapshotStudentId(sid);
+                    setSnapshotStudentLabel(label);
+                    setActiveSection("studentSnapshot");
+                  }
+                : undefined
+            }
           />
         </PrivacyGate>
       )}
@@ -23907,6 +23937,14 @@ function App() {
 
       {activeSection === "dataExport" && isCoreTeamMember && (
         <DataExportRegistryPanel />
+      )}
+
+      {activeSection === "studentSnapshot" && isCoreTeamMember && (
+        <StudentSnapshotPage
+          initialStudentId={snapshotStudentId}
+          initialStudentLabel={snapshotStudentLabel}
+          onBack={() => setActiveSection("hallPasses")}
+        />
       )}
 
       {activeSection === "kioskCards" && canManageSettings && (

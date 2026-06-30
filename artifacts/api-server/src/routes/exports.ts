@@ -16,6 +16,7 @@ import { Router, type IRouter, type Request } from "express";
 import {
   db,
   staffTable,
+  studentsTable,
   classSectionsTable,
   dataExportAuditLogTable,
 } from "@workspace/db";
@@ -34,6 +35,14 @@ import {
   type ColumnDef,
   type DatasetRow,
 } from "../lib/exportRegistry.js";
+import {
+  loadStudentMetrics,
+  resolveMetricRange,
+  computeCohortComparison,
+  METRIC_DESCRIPTORS,
+  type StudentMetrics,
+} from "../lib/studentMetrics.js";
+import { getVisibleStudentIds } from "./insights.js";
 
 const router: IRouter = Router();
 
@@ -276,6 +285,207 @@ router.post("/exports/download", async (req, res) => {
     `attachment; filename="${dataset.key}-${stamp}.csv"`,
   );
   res.send(csv);
+});
+
+// ===========================================================================
+// GET /api/exports/snapshot/:studentId — visual single-student snapshot
+// ===========================================================================
+// Returns the student's whole-child metrics plus a grade-cohort comparison
+// (mean + percentile per numeric metric, suppressed below the min cohort size)
+// and an oriented-percentile radar (bigger shape = healthier). Same gate as the
+// export datasets (isCoreTeam) PLUS getVisibleStudentIds defensive scoping.
+//
+// FLEID boundary: the response carries localSisId only. The metrics engine keys
+// on studentId, but we strip it from everything emitted — the wire shape holds
+// numbers (the student's values + de-identified cohort value arrays) only.
+const snapshotQuerySchema = z.object({
+  from: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+  to: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+});
+
+// Orient a percentile so "outward / higher" always means healthier, regardless
+// of whether the underlying metric is good or bad when large.
+function orientedPercentile(
+  percentile: number | null,
+  direction: "higher_better" | "higher_worse",
+): number | null {
+  if (percentile == null) return null;
+  return direction === "higher_better" ? percentile : 100 - percentile;
+}
+
+router.get("/exports/snapshot/:studentId", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const staff = await loadActor(req);
+  if (!staff) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  if (!isCoreTeam(staff)) {
+    res.status(403).json({ error: "Not permitted" });
+    return;
+  }
+  const studentId = req.params.studentId;
+  const q = snapshotQuerySchema.safeParse(req.query);
+  if (!studentId || !q.success) {
+    res.status(400).json({ error: "Invalid request" });
+    return;
+  }
+
+  // Load the target student (school-scoped). Identity is local_sis_id only.
+  const [student] = await db
+    .select({
+      studentId: studentsTable.studentId,
+      localSisId: studentsTable.localSisId,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      grade: studentsTable.grade,
+      gender: studentsTable.gender,
+      ell: studentsTable.ell,
+      ese: studentsTable.ese,
+      is504: studentsTable.is504,
+    })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.schoolId, schoolId),
+        eq(studentsTable.studentId, studentId),
+      ),
+    );
+  if (!student) {
+    res.status(404).json({ error: "Student not found" });
+    return;
+  }
+
+  // Defensive visibility scoping (Core Team => full; still guards future gates).
+  const vis = await getVisibleStudentIds(staff, schoolId);
+  if (!vis.full && !vis.ids.has(studentId)) {
+    res.status(404).json({ error: "Student not found" });
+    return;
+  }
+
+  const range = await resolveMetricRange(schoolId, {
+    from: q.data.from ?? null,
+    to: q.data.to ?? null,
+  });
+
+  // Cohort = every student in the same grade at this school.
+  const cohortRows =
+    student.grade == null
+      ? []
+      : await db
+          .select({ studentId: studentsTable.studentId })
+          .from(studentsTable)
+          .where(
+            and(
+              eq(studentsTable.schoolId, schoolId),
+              eq(studentsTable.grade, student.grade),
+            ),
+          );
+  const cohortIds = cohortRows.map((r) => r.studentId);
+  // Always include the target even if grade is null / not in the grade query.
+  if (!cohortIds.includes(studentId)) cohortIds.push(studentId);
+
+  const metricsMap = await loadStudentMetrics(schoolId, cohortIds, range);
+  const me = metricsMap.get(studentId);
+  if (!me) {
+    res.status(404).json({ error: "Student not found" });
+    return;
+  }
+
+  const numericKeys = METRIC_DESCRIPTORS.map((d) => d.key);
+  // Pre-collect cohort value arrays per metric key (de-identified numbers).
+  const cohortValues: Record<string, (number | null | undefined)[]> = {};
+  for (const key of numericKeys) cohortValues[key] = [];
+  for (const m of metricsMap.values()) {
+    for (const key of numericKeys) {
+      cohortValues[key].push(m[key] as number | null | undefined);
+    }
+  }
+
+  const metrics = METRIC_DESCRIPTORS.map((d) => {
+    const value = me[d.key] as number | null;
+    const cmp = computeCohortComparison(value, cohortValues[d.key], 10);
+    return {
+      key: d.key,
+      label: d.label,
+      direction: d.direction,
+      pillar: d.pillar,
+      value: cmp.value,
+      mean: cmp.mean,
+      percentile: cmp.percentile,
+      n: cmp.n,
+      suppressed: cmp.suppressed,
+      orientedPercentile: cmp.suppressed
+        ? null
+        : orientedPercentile(cmp.percentile, d.direction),
+      // De-identified cohort distribution (numbers only), omitted when suppressed.
+      distribution: cmp.suppressed
+        ? []
+        : cohortValues[d.key].filter(
+            (v): v is number => typeof v === "number" && Number.isFinite(v),
+          ),
+    };
+  });
+
+  // Pillar radar: average oriented percentile across each pillar's metrics.
+  const pillarLabels: Record<string, string> = {
+    shows_up: "Shows Up",
+    stays: "Stays in Room",
+    engages: "Engages",
+    achieves: "Achieves",
+  };
+  const radar = (["shows_up", "stays", "engages", "achieves"] as const).map(
+    (pillar) => {
+      const vals = metrics
+        .filter((m) => m.pillar === pillar && m.orientedPercentile != null)
+        .map((m) => m.orientedPercentile as number);
+      const studentScore = vals.length
+        ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length)
+        : null;
+      return {
+        pillar,
+        label: pillarLabels[pillar],
+        studentScore,
+        suppressed: vals.length === 0,
+      };
+    },
+  );
+
+  // The student's raw metrics WITHOUT the FLEID key (for the supports/academics
+  // sections that show actual values, not comparisons).
+  const { studentId: _omit, ...rawMetrics } = me satisfies StudentMetrics;
+  void _omit;
+
+  res.json({
+    student: {
+      localSisId: student.localSisId ?? null,
+      firstName: student.firstName,
+      lastName: student.lastName,
+      grade: student.grade,
+      gender: student.gender,
+      ell: student.ell,
+      ese: student.ese,
+      is504: student.is504,
+    },
+    range,
+    cohort: {
+      grade: student.grade,
+      label: student.grade == null ? "Grade —" : `Grade ${student.grade}`,
+      n: cohortIds.length,
+      minCohort: 10,
+      suppressed: cohortIds.length < 10,
+    },
+    metrics,
+    radar,
+    rawMetrics,
+  });
 });
 
 export default router;

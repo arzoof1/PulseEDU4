@@ -31,6 +31,9 @@ interface Props {
   // Gated to pickup/dismissal managers — when true the StudentProfile's
   // car-rider/dismissal status becomes editable; otherwise read-only.
   canManageDismissal?: boolean;
+  // Core-Team-only: when provided, the snapshot view shows an "Open Snapshot"
+  // button that hands the selected student to the visual Student Snapshot page.
+  onOpenSnapshot?: (studentId: string, label: string) => void;
 }
 
 const MAX_NOTE_LEN = 1000;
@@ -43,6 +46,7 @@ function gradeLabel(grade: number): string {
 export default function StudentLookupPage({
   onBack,
   canManageDismissal = false,
+  onOpenSnapshot,
 }: Props) {
   const [selected, setSelected] = useState<SearchHit | null>(null);
 
@@ -66,6 +70,7 @@ export default function StudentLookupPage({
           hit={selected}
           onBackToSearch={() => setSelected(null)}
           canManageDismissal={canManageDismissal}
+          onOpenSnapshot={onOpenSnapshot}
         />
       </div>
     );
@@ -128,17 +133,19 @@ function SnapshotView({
   hit,
   onBackToSearch,
   canManageDismissal,
+  onOpenSnapshot,
 }: {
   hit: SearchHit;
   onBackToSearch: () => void;
   canManageDismissal: boolean;
+  onOpenSnapshot?: (studentId: string, label: string) => void;
 }) {
   // HeartBEAT note editor is collapsed by default — staff open it only when
   // they want to leave a parent-facing message for this week's HeartBEAT.
   const [showNote, setShowNote] = useState(false);
   return (
     <div>
-      <div style={{ marginBottom: 12 }}>
+      <div style={{ marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button
           className="btn-secondary"
           onClick={() => setShowNote((v) => !v)}
@@ -147,6 +154,19 @@ function SnapshotView({
             ? "Hide HeartBEAT message"
             : "✏️ Leave a message for this week's HeartBEAT"}
         </button>
+        {onOpenSnapshot && (
+          <button
+            className="btn-secondary"
+            onClick={() =>
+              onOpenSnapshot(
+                hit.studentId,
+                `${hit.lastName}, ${hit.firstName}`,
+              )
+            }
+          >
+            📊 Open Snapshot
+          </button>
+        )}
       </div>
       {showNote && <HeartbeatNoteCard studentId={hit.studentId} />}
       <StudentProfile
