@@ -3,6 +3,44 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Historical FAST (multi-year) table on Student Profile.** Admin/Core-Team
+  "Historical FAST" section on the Student Profile (Student Lookup / Snapshot
+  only — deliberately NOT teacher roster, parent portal, or HeartBEAT). Renders
+  the **current year as the top anchor row** then comparable prior years, with
+  full PM1/PM2/PM3 as FAST level pills, **within-year growth** (PM1→latest
+  same-year PM) and a per-year learning-gain flag; **no cross-grade summed
+  total** (grade bands differ year to year, so a running total would be
+  meaningless). Comparable years only — FAST launched in FL in 22-23, so older
+  FSA (a non-comparable scale) is excluded, grade-permitting.
+  - **Loader/route.** `lib/fastHistory.ts` `loadFastFullHistory` +
+    `resolveCurrentFastYear`; endpoint in `routes/studentLookup.ts`,
+    visibility-scoped via `getVisibleStudentIds`, returns `localSisId` only
+    (**never FLEID**). Client table lives in `StudentProfile.tsx`
+    (`HistoricalFastSection`).
+  - **Admin-only cap.** Assignment is gated by `capViewFastHistory`, grantable
+    **only by Admin/SuperUser** — Core Team (including `capStaffRoles` holders,
+    who otherwise pass `hasFullRoleAuthority` and keep the full PATCH field set)
+    **cannot delegate it**. Enforced by an explicit admin-only gate in the
+    `adminStaff.ts` PATCH alongside the existing role-management-cap gate; the
+    client `StaffRolesMatrix` toggle (Admin group, auto-locked in import-only
+    mode) is UX only.
+  - **Data-derived current year (key invariant).** Both the seed and the read
+    route resolve "current school year" from the DATA
+    (`resolveCurrentFastYear` = `MAX(school_year) WHERE is_historical=false`,
+    school-scoped), **not the wall clock** (`schoolYearLabelFor`). The demo
+    dataset is frozen at the year it was seeded, so once the wall clock crosses
+    the July school-year boundary it drifts ahead of the data — a wall-clock
+    "current" would (a) make the seed treat the real current-year rows as a
+    prior year and mint phantom historical rows, and (b) make the loader drop
+    the real current-year anchor and shift grade-in-year math by a year.
+    Falls back to the wall clock only when the school has no current-year FAST.
+  - **Dev seed.** `seedHistoricalFastIfEmpty` backfills PM1/PM2/PM3 for all
+    students in the demo school. Demo-school-scoped + idempotent (keyed to its
+    own sentinel import job `[seed] Historical FAST Backfill.xlsx`) and skips
+    any `(student, subject, year)` combo that already exists, so it never
+    duplicates or clobbers real current-year or legitimately-imported
+    historical rows.
+
 - **Student metrics engine + Student Summary export + Student Snapshot report.**
   A shared per-student metrics engine (`lib/studentMetrics.ts`,
   `loadStudentMetrics(schoolId, ids, range)`) computes whole-child aggregates

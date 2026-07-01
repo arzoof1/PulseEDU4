@@ -9,6 +9,7 @@ import {
   seedAcademicMinutesDemoIfEmpty,
   seedEligibilityForSchool1,
   seedFastScoresIfEmpty,
+  seedHistoricalFastIfEmpty,
   seedHousesIfEmpty,
   seedIreadyAndSciIfEmpty,
   seedEngagementEventsIfEmpty,
@@ -165,6 +166,12 @@ async function runSeed(): Promise<void> {
   // Same pattern: ensure schema + skip-if-non-empty per school. Required
   // before the Teacher Roster API has anything to render.
   await seedFastScoresIfEmpty();
+  // Multi-year historical FAST (PM1/PM2/PM3) backfill for the demo school so
+  // the admin/Core-Team "Historical FAST" table renders. Demo-school-scoped +
+  // idempotent (keyed to its own sentinel import job) and skips any
+  // (student,subject,year) combo that already exists, so it never duplicates
+  // or clobbers real current-year or legitimately-imported historical rows.
+  await seedHistoricalFastIfEmpty();
   // iReady AP1/AP2/AP3 (K-8) + SCI Benchmark 1/2/3 (G6-12) demo data
   // landed in the generic assessments table. Per-school + per-source
   // skip-if-non-empty so re-runs are a near-noop.

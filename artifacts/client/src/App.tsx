@@ -5511,6 +5511,9 @@ function App() {
     capImportIready?: boolean;
     capManageDisplays?: boolean;
     capManageDismissal?: boolean;
+    // Admin-only-assignable: Historical FAST multi-year table on the Student
+    // Profile. Core Team cannot delegate this (only Admin can grant it).
+    capViewFastHistory?: boolean;
     capTourNotify?: boolean;
     capManageEsign?: boolean;
     capManageContactInfo?: boolean;
@@ -9667,6 +9670,16 @@ function App() {
     authUser?.isConfidentialSecretary === true ||
     authUser?.isAthleticDirector === true ||
     authUser?.capManageDismissal === true;
+  // Historical FAST table gate — mirrors server canViewFastHistory()
+  // (isCoreTeam OR the admin-only-assignable capViewFastHistory). Admin/SU
+  // are already core team; capViewFastHistory is grantable ONLY by an admin
+  // (Core Team cannot delegate it). Server enforces the same gate — this
+  // just hides the section for everyone else.
+  const canViewFastHistory =
+    isAdmin ||
+    authUser?.isSuperUser === true ||
+    authUser?.isCoreTeam === true ||
+    authUser?.capViewFastHistory === true;
   // Contact Info Fixes gate — front-office staff (capManageContactInfo) plus
   // admin tier. Mirrors canManageContactInfo() server-side.
   const canManageContactInfo =
@@ -20012,6 +20025,7 @@ function App() {
                 authUser?.isGuidanceCounselor ||
                 authUser?.capManageDismissal,
             )}
+            canViewFastHistory={canViewFastHistory}
             onOpenSnapshot={
               isCoreTeamMember
                 ? (sid, label) => {
@@ -23593,6 +23607,7 @@ function App() {
               authUser?.isGuidanceCounselor ||
               authUser?.capManageDismissal,
           )}
+          canViewFastHistory={canViewFastHistory}
           isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
           // Change-house affordance: mirrors the server-side
           // PATCH /students/:id/house gate (isCoreTeam). Wider than

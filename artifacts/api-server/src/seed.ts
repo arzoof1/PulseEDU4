@@ -62,6 +62,7 @@ import { eq, sql, and, inArray, isNull, asc, desc } from "drizzle-orm";
 import { logger } from "./lib/logger";
 import { fetchWeatherForLocation } from "./lib/weatherFetcher";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./lib/schoolYear.js";
+import { resolveCurrentFastYear } from "./lib/fastHistory.js";
 import {
   FEATURE_KEYS,
   reapplyLicensingToSchool,
@@ -432,6 +433,11 @@ export async function ensureCommunicationSchema() {
   // "Contact Info Fixes" queue. Additive boolean on staff; default FALSE.
   await db.execute(
     sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS cap_manage_contact_info BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  // Assignable "view historical FAST" cap (admin-delegable read access
+  // to the multi-year PM1/PM2/PM3 table on the Student Profile).
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS cap_view_fast_history BOOLEAN NOT NULL DEFAULT FALSE`,
   );
 }
 
@@ -3980,6 +3986,182 @@ export async function seedFastScoresIfEmpty() {
       "[seed] FAST scores seeded (placeholder PM1/PM2/PM3 + prior year)",
     );
   }
+}
+
+// =============================================================================
+// Historical FAST backfill (multi-year PM1/PM2/PM3) — DEMO, school 1 only
+// =============================================================================
+// Seeds several PRIOR school years of full PM1/PM2/PM3 data per student so
+// the admin/Core-Team "Historical FAST" table on the Student Profile has
+// something to render (and to light up the multi-year PM3 growth chip on
+// the Teacher Roster).
+//
+// Design notes:
+//   * FAST launched in FL in 22-23 — nothing older is a comparable scale
+//     score, so we clamp the oldest seeded year to 22-23 (never FSA).
+//   * Scores are grade-in-year aware: a current 8th grader gets rows for
+//     the grade they actually were in each prior year (>=3, chart-permitting;
+//     Math charts only cover G3-G8). Scale scores are re-referenced per
+//     grade, which is exactly why the UI never sums cross-year growth.
+//   * Each (student, subject) gets a stable trajectory (climb / plateau /
+//     dip) so "growth and patterns" is visible rather than uniform.
+//   * Rows are tagged is_historical=true and stamped with a sentinel
+//     import job so they are identifiable, never collide with a real
+//     historical import, and could be rolled back cleanly.
+//   * Idempotent: skipped once school 1 already has any is_historical rows.
+// =============================================================================
+const HISTORICAL_FAST_SEED_SCHOOL_ID = 1;
+const FAST_LAUNCH_START_YY = 22; // FL FAST began in 22-23
+
+export async function seedHistoricalFastIfEmpty() {
+  await ensureFastScoresSchema();
+
+  const [school] = await db
+    .select()
+    .from(schoolsTable)
+    .where(eq(schoolsTable.id, HISTORICAL_FAST_SEED_SCHOOL_ID));
+  if (!school) return;
+
+  // Idempotent per school, keyed to THIS seed's sentinel job — NOT to any
+  // is_historical row. A dev DB may already carry legitimately-imported
+  // historical FAST (e.g. the prior-year import feature / demo reseed);
+  // guarding on "any historical row" would let that pre-existing data
+  // permanently suppress this backfill. Guard on our own sentinel filename
+  // instead, and below we skip (student,subject,year) combos that already
+  // have a row so we never duplicate or clobber imported history.
+  const [{ c }] = (
+    await db.execute(
+      sql`SELECT COUNT(*)::int AS c FROM import_jobs WHERE school_id = ${school.id} AND kind = 'fast_florida' AND filename = '[seed] Historical FAST Backfill.xlsx'`,
+    )
+  ).rows as { c: number }[];
+  if (c > 0) return;
+
+  const studentRows = await db
+    .select({ studentId: studentsTable.studentId, grade: studentsTable.grade })
+    .from(studentsTable)
+    .where(eq(studentsTable.schoolId, school.id));
+  if (studentRows.length === 0) return;
+
+  // Build the comparable prior-year set (newest-first), clamped to the
+  // FAST launch year. e.g. current 25-26 → ["24-25","23-24","22-23"].
+  // Anchor on the DATA's current year (newest non-historical row), NOT the
+  // wall clock — the demo dataset is frozen, so once the clock crosses the
+  // July boundary a wall-clock "current" would drift ahead of the data and
+  // this seed would (wrongly) treat the real current year as a prior year.
+  const current = await resolveCurrentFastYear(school.id);
+  const m = /^(\d{2})-(\d{2})$/.exec(current);
+  const curYY = m ? Number(m[1]) : null;
+  if (curYY == null) return;
+  const pad = (n: number) => String(n % 100).padStart(2, "0");
+  const priorYears: { label: string; yearsAgo: number }[] = [];
+  for (let off = 1; off <= 5; off++) {
+    const yy = curYY - off;
+    if (yy < FAST_LAUNCH_START_YY) break;
+    priorYears.push({ label: `${pad(yy)}-${pad(yy + 1)}`, yearsAgo: off });
+  }
+  if (priorYears.length === 0) return;
+  // Oldest year first so a per-student level can drift forward in time.
+  const yearsOldestFirst = [...priorYears].sort(
+    (a, b) => b.yearsAgo - a.yearsAgo,
+  );
+
+  // Sentinel import job so the seeded rows are identifiable + rollback-safe.
+  const [anyStaff] = await db
+    .select({ id: staffTable.id })
+    .from(staffTable)
+    .where(eq(staffTable.schoolId, school.id))
+    .limit(1);
+  const [job] = await db
+    .insert(importJobsTable)
+    .values({
+      schoolId: school.id,
+      kind: "fast_florida",
+      filename: "[seed] Historical FAST Backfill.xlsx",
+      uploadedBy: anyStaff?.id ?? null,
+      status: "committed",
+      committedAt: new Date(),
+      mapping: { _seed: "true", historical: "true" },
+    })
+    .returning({ id: importJobsTable.id });
+
+  const rng = makeRng(0x415e + school.id * 7919);
+  // Existing (student,subject,year) combos — never duplicate/clobber real
+  // current-year data or legitimately-imported prior-year history.
+  const existingRows = await db
+    .select({
+      studentId: studentFastScoresTable.studentId,
+      subject: studentFastScoresTable.subject,
+      schoolYear: studentFastScoresTable.schoolYear,
+    })
+    .from(studentFastScoresTable)
+    .where(eq(studentFastScoresTable.schoolId, school.id));
+  const existingCombos = new Set(
+    existingRows.map((r) => `${r.studentId}|${r.subject}|${r.schoolYear}`),
+  );
+
+  const inserts: (typeof studentFastScoresTable.$inferInsert)[] = [];
+  const now = new Date();
+
+  for (const stu of studentRows) {
+    const currentGrade = Number(stu.grade);
+    if (!Number.isInteger(currentGrade)) continue;
+
+    for (const subject of ["ela", "math"] as const) {
+      const bands = subject === "ela" ? ELA_BANDS : MATH_BANDS;
+      // Stable per-(student,subject) trajectory: >0.7 climbs, <0.2 dips,
+      // otherwise plateaus. Seeds the earliest year's level, then drifts.
+      const trajectory = rng();
+      let level = pickLevel(rng);
+
+      for (const yr of yearsOldestFirst) {
+        const gradeInYear = currentGrade - yr.yearsAgo;
+        if (gradeInYear < 3 || gradeInYear > 10) continue;
+        const band = bands[gradeInYear];
+        if (!band) continue; // Math charts only cover G3-G8
+
+        const range = band[`L${level}` as `L${1 | 2 | 3 | 4 | 5}`];
+        const fullLo = band.L1[0];
+        const fullHi = band.L5[1];
+        const pm1Base = randInRange(rng, range[0], range[1]);
+        const pm2Base = pm1Base + randInRange(rng, -3, 10);
+        const pm3Base = pm2Base + randInRange(rng, -2, 12);
+
+        // Skip combos that already exist (real current-year rows or
+        // legitimately-imported prior-year history). Draw the RNG above first
+        // so the trajectory stays deterministic regardless of what's skipped.
+        if (!existingCombos.has(`${stu.studentId}|${subject}|${yr.label}`)) {
+          inserts.push({
+            schoolId: school.id,
+            studentId: stu.studentId,
+            subject,
+            schoolYear: yr.label,
+            pm1: clamp(pm1Base, fullLo, fullHi),
+            pm2: clamp(pm2Base, fullLo, fullHi),
+            pm3: clamp(pm3Base, fullLo, fullHi),
+            importJobId: job.id,
+            isHistorical: true,
+            importedAsHistoricalAt: now,
+          });
+        }
+
+        // Drift the level for the next (newer) year per trajectory type.
+        if (trajectory > 0.7 && level < 5) {
+          if (rng() < 0.5) level = (level + 1) as 1 | 2 | 3 | 4 | 5;
+        } else if (trajectory < 0.2 && level > 1) {
+          if (rng() < 0.4) level = (level - 1) as 1 | 2 | 3 | 4 | 5;
+        }
+      }
+    }
+  }
+
+  if (inserts.length === 0) return;
+  for (let i = 0; i < inserts.length; i += 500) {
+    await db.insert(studentFastScoresTable).values(inserts.slice(i, i + 500));
+  }
+  logger.info(
+    { schoolId: school.id, count: inserts.length, job: job.id },
+    "[seed] Historical FAST backfill seeded (multi-year PM1/PM2/PM3)",
+  );
 }
 
 // =============================================================================

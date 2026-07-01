@@ -325,6 +325,27 @@ export function canManageSchoolGrade(staff: {
   return isCoreTeam(staff);
 }
 
+// Historical FAST view gate. Read access to a student's multi-year
+// PM1/PM2/PM3 table on the Student Profile / Snapshot. Core Team + admins
+// get it implicitly; an admin can additionally delegate the view to a
+// specific non-Core-Team staffer via the assignable `capViewFastHistory`
+// flag (admin-only to assign — it is NOT in the Core-Team-delegable
+// import-cap set). Never surfaced in the teacher roster view, parent
+// portal, or HeartBEAT.
+export function canViewFastHistory(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  isBehaviorSpecialist?: boolean | null;
+  isMtssCoordinator?: boolean | null;
+  isSchoolPsychologist?: boolean | null;
+  isCoreTeam?: boolean | null;
+  isConfidentialSecretary?: boolean | null;
+  capViewFastHistory?: boolean | null;
+}): boolean {
+  return isCoreTeam(staff) || Boolean(staff.capViewFastHistory);
+}
+
 // Document e-Signing gate. Per product decision the audience is the
 // admin tier plus anyone an admin explicitly grants the assignable
 // `capManageEsign` flag (typically a registrar or confidential

@@ -25,9 +25,27 @@
 // Returned shape is intentionally a Map-of-Maps so callers can do a
 // cheap per-student lookup without re-grouping in the route handler.
 
-import { and, eq, inArray, lt, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, lt, isNotNull, sql } from "drizzle-orm";
 import { db, studentFastScoresTable, schoolSettingsTable } from "@workspace/db";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./schoolYear.js";
+
+// Resolve a school's "current" FAST school-year label from the DATA, not the
+// wall clock. Demo/seed datasets are frozen at the year they were seeded, so
+// once the wall clock crosses the July school-year boundary, schoolYearLabelFor
+// drifts ahead of the data (e.g. clock says "26-27" while the newest real rows
+// are "25-26") — that mismatch would drop the real current-year row and mis-place
+// grade-in-year math. Anchor on the newest NON-historical row instead; fall back
+// to the wall clock only when the school has no current-year FAST at all.
+export async function resolveCurrentFastYear(
+  schoolId: number,
+): Promise<string> {
+  const [row] = (
+    await db.execute(
+      sql`SELECT MAX(school_year) AS y FROM student_fast_scores WHERE school_id = ${schoolId} AND is_historical = FALSE`,
+    )
+  ).rows as { y: string | null }[];
+  return row?.y ?? schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+}
 
 export interface FastHistoryEntry {
   schoolYear: string;
@@ -174,4 +192,98 @@ export function pickHistory(
   subject: string,
 ): FastHistoryEntry[] {
   return map.get(studentId)?.get(subject) ?? [];
+}
+
+// ---------------------------------------------------------------------------
+// FULL multi-year history (PM1 + PM2 + PM3) for ONE student.
+//
+// The PM3-only loader above powers the roster "prior-year PM3" growth chip.
+// The admin/Core-Team "Historical FAST" table on the Student Profile needs
+// the WHOLE progress-monitoring trajectory (PM1/PM2/PM3) for every year,
+// INCLUDING the current year as the top anchor row.
+//
+// Scope: single student, school-scoped. Returns raw scale scores only —
+// achievement-LEVEL placement is deliberately computed by the caller,
+// because each year's scores must be placed on the grade the student was
+// in THAT year (grade-in-year = current grade − years-ago), and only the
+// route knows the student's current grade. This is exactly why the table
+// never sums growth across years: the scales are re-referenced per grade.
+//
+// Rows returned:
+//   - the current-year row (school_year === current), if present, and
+//   - every is_historical=true row with school_year < current.
+// Stale non-historical prior-year copies (in-year transfer artifacts) are
+// excluded, matching loadFastHistory's is_historical gate.
+// ---------------------------------------------------------------------------
+export interface FastFullYearRow {
+  schoolYear: string;
+  subject: string; // "ela" | "math"
+  pm1: number | null;
+  pm2: number | null;
+  pm3: number | null;
+  isCurrent: boolean;
+  isHistorical: boolean;
+}
+
+export async function loadFastFullHistory(args: {
+  schoolId: number;
+  studentId: string;
+  subjects?: string[];
+  currentSchoolYear?: string;
+}): Promise<FastFullYearRow[]> {
+  const current =
+    args.currentSchoolYear ??
+    schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+
+  const rows = await db
+    .select({
+      subject: studentFastScoresTable.subject,
+      schoolYear: studentFastScoresTable.schoolYear,
+      pm1: studentFastScoresTable.pm1,
+      pm2: studentFastScoresTable.pm2,
+      pm3: studentFastScoresTable.pm3,
+      isHistorical: studentFastScoresTable.isHistorical,
+    })
+    .from(studentFastScoresTable)
+    .where(
+      and(
+        eq(studentFastScoresTable.schoolId, args.schoolId),
+        eq(studentFastScoresTable.studentId, args.studentId),
+      ),
+    );
+
+  const subjectFilter =
+    args.subjects && args.subjects.length > 0
+      ? new Set(args.subjects)
+      : null;
+
+  const out: FastFullYearRow[] = [];
+  for (const r of rows) {
+    if (subjectFilter && !subjectFilter.has(r.subject)) continue;
+    const isCurrent = r.schoolYear === current;
+    // Keep the current-year row (any flag) + tagged historical prior rows.
+    // Drop stale non-historical prior-year copies.
+    if (!isCurrent) {
+      if (!r.isHistorical) continue;
+      if (!(r.schoolYear < current)) continue;
+    }
+    out.push({
+      schoolYear: r.schoolYear,
+      subject: r.subject,
+      pm1: r.pm1 ?? null,
+      pm2: r.pm2 ?? null,
+      pm3: r.pm3 ?? null,
+      isCurrent,
+      isHistorical: Boolean(r.isHistorical),
+    });
+  }
+
+  // Newest year first (current anchor at the top), then subject for stable
+  // ordering within a year.
+  out.sort(
+    (a, b) =>
+      b.schoolYear.localeCompare(a.schoolYear) ||
+      a.subject.localeCompare(b.subject),
+  );
+  return out;
 }

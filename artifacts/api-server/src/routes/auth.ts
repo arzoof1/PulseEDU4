@@ -60,6 +60,7 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     capImportAttendance: row.capImportAttendance,
     capImportFast: row.capImportFast,
     capImportIready: row.capImportIready,
+    capViewFastHistory: row.capViewFastHistory,
     canApproveAst: row.canApproveAst,
     canApproveCompTime: row.canApproveCompTime,
     exemptStatus: row.exemptStatus,
