@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { searchStudents } from "../lib/students";
 import StudentPhoto from "./StudentPhoto";
 import {
   HowToUseHelp,
@@ -193,10 +194,28 @@ export default function ClassPhotoDayPage({
     setSearching(true);
     const t = setTimeout(async () => {
       try {
-        const r = await authFetch(`/api/students?q=${encodeURIComponent(q)}`);
-        if (!r.ok || cancelled) return;
-        const j = (await r.json()) as RosterStudent[];
-        if (!cancelled) setSearchResults(j.slice(0, 20));
+        const hits = await searchStudents<{
+          studentId: string;
+          localSisId?: string | null;
+          firstName: string;
+          lastName: string;
+          grade: number;
+          photoObjectKey?: string | null;
+          photoConsent?: boolean;
+        }>(q, 20);
+        if (!cancelled) {
+          setSearchResults(
+            hits.map((s) => ({
+              studentId: s.studentId,
+              localSisId: s.localSisId ?? null,
+              firstName: s.firstName,
+              lastName: s.lastName,
+              gradeLevel: s.grade,
+              photoObjectKey: s.photoObjectKey,
+              photoConsent: s.photoConsent,
+            })),
+          );
+        }
       } catch {
         if (!cancelled) setSearchResults([]);
       } finally {
