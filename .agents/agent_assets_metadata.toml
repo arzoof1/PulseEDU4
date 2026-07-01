@@ -474,3 +474,9 @@ id = "K9AgQTm9MEGzjZAM992-u"
 uri = "file://exports/Attendance_25-26_Parrott_Seeded.xlsx"
 type = "table"
 title = "Attendance 25-26 — Parrott Seeded (454 students)"
+
+[[outputs]]
+id = "rElA9nRt6313JHdznyd1z"
+uri = "file://exports/PulseEDU_Migration_2026-07-01.pdf"
+type = "pdf"
+title = "PulseEDU — Production Migration (2026-07-01)"
