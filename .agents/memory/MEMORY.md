@@ -96,3 +96,4 @@
 - [Two export systems coexist](data-export-two-systems.md) — registry exporter (School Admin→Data Export, /api/exports/*) is SEPARATE from the importer-mirror (Settings→Data Mgmt, DataExportPanel, /api/data-imports/export); don't merge/delete either.
 - [Profile radar Attendance source](profile-radar-attendance-source.md) — the whole-child radar "flow"/Attendance axis is a SEPARATE calc; must call loadAttendanceMetrics (eligibility_absences) or absences silently vanish from the profile.
 - [Eligibility per-activity export](eligibility-activity-export.md) — "as of" date = latest eligibility_uploads createdAt (school+semester); format server-side ONCE (asOfLabel) so UI + CSV/PDF headers can't drift.
+- [FAST historical year window + PM3 growth](fast-historical-year-window.md) — FAST year ranges clamp to 22-23 (pre-FAST is non-comparable FSA); roster growth is PM3-only & deltas are NEVER summed (per-grade re-referenced).

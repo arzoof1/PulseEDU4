@@ -159,6 +159,15 @@ interface SubjectBlock {
   // subject) yet. Only one prior year is surfaced on the roster;
   // multi-year history still lives on the student profile FAST card.
   priorPm3: PriorPm3 | null;
+  // Multi-year PM3 growth series (PM3-only) for the roster growth chip.
+  // Prior-year historical PM3 rows within the school's visible window,
+  // ordered NEWEST-FIRST. `delta` is the year-over-year change vs. the
+  // immediately-older year (this entry's pm3 − next-older entry's pm3);
+  // null on the oldest entry (nothing older to compare against). NOTE:
+  // FAST scale scores are per-grade re-referenced, so year-over-year
+  // deltas are directional signal only — never sum them into a total.
+  // Empty when no historical rows exist for this (student, subject).
+  pm3History: Array<{ schoolYear: string; pm3: number; delta: number | null }>;
   // FAST Learning Gain (FLDOE rule, Phase 1 subset).
   //   true  — student demonstrated a learning gain this year. Either
   //           moved up a performance level vs. prior-year PM3, or
@@ -238,6 +247,18 @@ function buildSubjectBlock(
         : null,
     };
   })();
+  // Multi-year PM3 growth series (newest-first, PM3-only). `delta` for
+  // each entry compares against the immediately-older year; the oldest
+  // year has no comparison so its delta is null. Do NOT sum these —
+  // FAST scale scores are re-referenced per grade year to year.
+  const pm3History = history.map((h, i) => {
+    const older = history[i + 1];
+    return {
+      schoolYear: h.schoolYear,
+      pm3: h.pm3,
+      delta: older ? h.pm3 - older.pm3 : null,
+    };
+  });
   if (!row) {
     return {
       pm1: null,
@@ -256,6 +277,7 @@ function buildSubjectBlock(
       priorYearScore: null,
       priorYearBq: false,
       priorPm3,
+      pm3History,
       learningGain: null,
       noChart,
     };
@@ -331,6 +353,7 @@ function buildSubjectBlock(
     priorYearScore: row.priorYearScore,
     priorYearBq: row.priorYearBq,
     priorPm3,
+    pm3History,
     learningGain,
     noChart,
   };

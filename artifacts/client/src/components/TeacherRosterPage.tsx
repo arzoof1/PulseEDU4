@@ -82,6 +82,16 @@ interface SubjectBlock {
     pm3: number;
     placement: Placement | null;
   } | null;
+  // Multi-year PM3 growth series (PM3-only), newest-first. `delta` is
+  // the year-over-year change vs. the immediately-older year; null on
+  // the oldest entry. Powers the expandable growth chip. FAST scale
+  // scores are re-referenced per grade, so deltas are directional
+  // signal only — never summed into a total.
+  pm3History: Array<{
+    schoolYear: string;
+    pm3: number;
+    delta: number | null;
+  }>;
   // FAST Learning Gain (server-computed). When true the LG column
   // renders a green check instead of the bucket icon — the student
   // either moved up a performance level vs. prior-year PM3 or
@@ -898,6 +908,158 @@ function PmDelta({
   );
 }
 
+// Multi-year PM3 growth chip. Compact trigger showing the most-recent
+// year-over-year delta; on click it expands an absolutely-positioned
+// card listing each year's PM3 and its "+pts" change (newest-first).
+// PM3-only, no summed total (FAST scale scores are re-referenced per
+// grade year to year, so a running sum is meaningless). Renders nothing
+// unless there are at least two historical years (one delta to show).
+function Pm3GrowthChip({
+  history,
+  subjectLabel,
+}: {
+  history: Array<{ schoolYear: string; pm3: number; delta: number | null }>;
+  subjectLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  // Need ≥2 years for a year-over-year delta to exist.
+  if (history.length < 2) return null;
+  const latest = history[0];
+  const deltaColor = (d: number | null): string =>
+    d == null || d === 0 ? "#6b7280" : d > 0 ? "#15803d" : "#b91c1c";
+  const deltaText = (d: number | null): string => {
+    if (d == null) return "—";
+    const sign = d > 0 ? "+" : d < 0 ? "−" : "±";
+    return `${sign}${Math.abs(d)}`;
+  };
+  return (
+    <div style={{ position: "relative", marginTop: 3 }}>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        title={`${subjectLabel} multi-year PM3 growth — click for year-by-year detail`}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 3,
+          padding: "1px 6px",
+          border: "1px solid var(--border, #d1d5db)",
+          borderRadius: 999,
+          background: open ? "var(--surface, #f3f4f6)" : "transparent",
+          color: deltaColor(latest.delta),
+          font: "inherit",
+          fontSize: 10,
+          fontWeight: 700,
+          lineHeight: 1.4,
+          cursor: "pointer",
+          whiteSpace: "nowrap",
+        }}
+      >
+        <span aria-hidden style={{ fontSize: 9 }}>
+          {latest.delta != null && latest.delta > 0
+            ? "▲"
+            : latest.delta != null && latest.delta < 0
+              ? "▼"
+              : "•"}
+        </span>
+        {deltaText(latest.delta)}
+        <span style={{ color: "#9ca3af", fontWeight: 500 }}>growth</span>
+      </button>
+      {open && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 30,
+            minWidth: 150,
+            padding: "8px 10px",
+            background: "var(--surface, #ffffff)",
+            border: "1px solid var(--border, #d1d5db)",
+            borderRadius: 8,
+            boxShadow: "0 6px 20px rgba(0,0,0,0.18)",
+            textAlign: "left",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              color: "var(--text-muted, #6b7280)",
+              textTransform: "uppercase",
+              letterSpacing: 0.4,
+              marginBottom: 4,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {subjectLabel} PM3 growth
+          </div>
+          <table
+            style={{
+              borderCollapse: "collapse",
+              fontSize: 12,
+              width: "100%",
+            }}
+          >
+            <tbody>
+              {history.map((h) => (
+                <tr key={h.schoolYear}>
+                  <td
+                    style={{
+                      padding: "2px 8px 2px 0",
+                      color: "var(--text, #374151)",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {h.schoolYear}
+                  </td>
+                  <td
+                    style={{
+                      padding: "2px 8px 2px 0",
+                      fontWeight: 600,
+                      color: "var(--text, #374151)",
+                      textAlign: "right",
+                    }}
+                  >
+                    {h.pm3}
+                  </td>
+                  <td
+                    style={{
+                      padding: "2px 0",
+                      fontWeight: 700,
+                      color: deltaColor(h.delta),
+                      textAlign: "right",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {deltaText(h.delta)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div
+            style={{
+              marginTop: 5,
+              fontSize: 9,
+              lineHeight: 1.3,
+              color: "#9ca3af",
+            }}
+          >
+            Year-over-year PM3 change. Scale scores re-reference each
+            grade, so changes are directional — not a running total.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SubjectCells({
   block,
   subjectLabel,
@@ -985,6 +1147,10 @@ function SubjectCells({
               >
                 {prior.schoolYear}
               </div>
+              <Pm3GrowthChip
+                history={block.pm3History}
+                subjectLabel={subjectLabel}
+              />
             </>
           ) : (
             <span style={{ color: "#d1d5db", fontSize: 12 }}>—</span>
