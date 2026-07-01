@@ -136,12 +136,12 @@ const tabBtnStyle = (active: boolean): CSSProperties => ({
   cursor: "pointer",
 });
 
-async function downloadPdf(url: string, fallbackName: string) {
-  // Authed PDFs can't open in the preview iframe (session cookie blocked;
+async function downloadFile(url: string, fallbackName: string) {
+  // Authed PDFs/CSVs can't open in the preview iframe (session cookie blocked;
   // window.open(blob) renders blank). Download to disk — see replit.md Gotchas.
   const res = await authFetch(url);
   if (!res.ok) {
-    alert(`Could not generate PDF (${res.status})`);
+    alert(`Could not generate download (${res.status})`);
     return;
   }
   const blob = await res.blob();
@@ -380,6 +380,7 @@ function ActivityDetail({
   onChanged: () => Promise<void> | void;
 }) {
   const [roster, setRoster] = useState<RosterEntry[]>([]);
+  const [asOfLabel, setAsOfLabel] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [addSis, setAddSis] = useState("");
   const [addJersey, setAddJersey] = useState("");
@@ -403,10 +404,15 @@ function ActivityDetail({
         `/api/eligibility/activities/${activity.id}/roster`,
       );
       if (r.ok) {
-        const d = (await r.json()) as { roster: RosterEntry[] };
+        const d = (await r.json()) as {
+          roster: RosterEntry[];
+          asOfLabel?: string | null;
+        };
         setRoster(d.roster ?? []);
+        setAsOfLabel(d.asOfLabel ?? null);
       } else {
         setRoster([]);
+        setAsOfLabel(null);
       }
     } finally {
       setLoading(false);
@@ -961,6 +967,51 @@ function ActivityDetail({
         </div>
       </div>
 
+      {/* Download toolbar — export this activity's eligibility status */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <span style={{ fontSize: 13, color: "var(--muted, #6b7280)" }}>
+          {asOfLabel
+            ? `Attendance eligibility as of ${asOfLabel}`
+            : "No attendance upload yet"}
+        </span>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            className="btn"
+            disabled={roster.length === 0}
+            onClick={() =>
+              downloadFile(
+                `/api/eligibility/activities/${activity.id}/roster.csv`,
+                `eligibility-${activity.name}.csv`,
+              )
+            }
+          >
+            Download CSV
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={roster.length === 0}
+            onClick={() =>
+              downloadFile(
+                `/api/eligibility/activities/${activity.id}/roster.pdf`,
+                `eligibility-${activity.name}.pdf`,
+              )
+            }
+          >
+            Download PDF
+          </button>
+        </div>
+      </div>
+
       {/* Roster table */}
       {loading ? (
         <p>Loading roster…</p>
@@ -1078,7 +1129,7 @@ function AtRiskTab() {
           type="button"
           className="btn"
           onClick={() =>
-            downloadPdf(
+            downloadFile(
               "/api/eligibility/at-risk.pdf",
               "at-risk-eligibility.pdf",
             )
