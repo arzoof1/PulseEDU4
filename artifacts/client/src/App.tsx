@@ -23053,7 +23053,7 @@ function App() {
                 icon: "🗂️",
                 title: "Data Management",
                 subtitle:
-                  "Import CSVs (FAST, iReady, MAP, rosters, behavior) and export your school's current data with filters and column picker.",
+                  "Import grades (gradebook), FAST, iReady, MAP, rosters, and behavior, and export your school's current data with filters and column picker.",
                 group: "admin-tenancy",
               });
             }
