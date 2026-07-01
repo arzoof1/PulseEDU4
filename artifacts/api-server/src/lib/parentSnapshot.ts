@@ -43,9 +43,9 @@ import {
   loadDefaultPeriodWindows,
   tardyLostMinutes,
   hallPassLostMinutes,
-  periodLengthMinutes,
 } from "./lostInstruction.js";
 import { loadStudentGrades } from "./studentMetrics.js";
+import { loadAttendanceMetrics } from "./attendanceMetrics.js";
 
 // Returns the YYYY-MM-DD bounds of the current school year. The cutover
 // is Aug 1 — anything before that rolls back to the previous Aug 1 so a
@@ -135,20 +135,27 @@ export interface ParentSnapshot {
     }>;
   };
   // School-year-to-date "Lost Instructional Time" summary, surfaced at the
-  // TOP of the parent portal. Three contributors, each with a count and the
-  // minutes of instruction lost, plus a grand total. Pieces whose parent
-  // section is hidden are zeroed (and excluded from `totalMinutes`). See the
-  // computation block for the definitions — note ABSENCES are kiosk-derived
-  // (class periods with no door-kiosk check-in), not official SIS attendance.
+  // TOP of the parent portal. Two MEASURED contributors (hall passes +
+  // tardies), each with a count and the minutes of instruction lost, plus a
+  // grand total. Pieces whose parent section is hidden are zeroed (and
+  // excluded from `totalMinutes`). The old kiosk-derived absence ESTIMATE
+  // was removed — official absences now surface in `attendance.official`
+  // from the Eligibility Hub upload instead.
   lostInstruction: {
     hallPasses: { count: number; minutes: number };
     tardies: { count: number; minutes: number };
-    absences: { count: number; minutes: number };
     totalMinutes: number;
   };
   attendance: {
     tardiesThisWeek: number;
     checkInsThisWeek: number;
+    // OFFICIAL absence/tardy counts from the latest Eligibility Hub upload
+    // for the current semester (lib/attendanceMetrics.ts — same source of
+    // truth as the Teacher Roster / Insights "Days Absent" columns). `null`
+    // when the school isn't using the Eligibility Hub (no upload row for
+    // this student) so the surfaces omit the tiles entirely rather than
+    // fabricating a 0.
+    official: { daysAbsent: number; daysTardy: number } | null;
     // Aggregated attendance %. `null` when the window has zero logged
     // school days for the student (avoids showing a meaningless "0%").
     // `present` counts attendance_day rows with status='present' OR
@@ -767,17 +774,14 @@ async function assembleSnapshot(
   }
 
   // ----- Lost Instructional Time (top-of-portal SY-to-date summary) -----
-  // Three contributors, all school-year-to-date, per child. Each piece is
-  // gated on its parent section toggle so a hidden section never leaks a
-  // count/minutes into this summary or its grand total.
+  // Two MEASURED contributors, both school-year-to-date, per child. Each
+  // piece is gated on its parent section toggle so a hidden section never
+  // leaks a count/minutes into this summary or its grand total.
   //  • Hall passes — minutes out of class (return − checkout, capped).
   //  • Tardies     — lateness minutes (check-in − scheduled period start).
-  //  • Absences    — KIOSK-DERIVED: class periods the student never scanned
-  //    into at a door kiosk. "Expected" periods are the (day, period) slots
-  //    where the attendance module actually ran for the school (some student
-  //    checked in) AND the period is on the default bell schedule; each is
-  //    valued by that period's length. This is an estimate, NOT official SIS
-  //    attendance — it over-counts when kiosks aren't run every period.
+  // The old kiosk-derived absence ESTIMATE (periods with no door-kiosk
+  // check-in) was removed from this summary — official absences come from
+  // the Eligibility Hub upload and surface in `attendance.official`.
   let hpLostCount = 0;
   let hpLostMinutes = 0;
   if (sectionsAvailable.hallPasses) {
@@ -804,8 +808,6 @@ async function assembleSnapshot(
 
   let tardiesYtd = 0;
   let lostInstructionMinutesYtd = 0;
-  let absenceCount = 0;
-  let absenceMinutes = 0;
   if (sectionsAvailable.attendance) {
     const windows = await loadDefaultPeriodWindows(student.schoolId);
 
@@ -834,59 +836,28 @@ async function assembleSnapshot(
       }
     }
 
-    // Absences — only computable once a bell schedule exists (to value the
-    // missed minutes) AND the attendance module has actually run this SY.
-    if (windows.size > 0) {
-      const operatingSlots = await db
-        .selectDistinct({
-          day: attendanceCheckinsTable.day,
-          periodNumber: attendanceCheckinsTable.periodNumber,
-        })
-        .from(attendanceCheckinsTable)
-        .where(
-          and(
-            eq(attendanceCheckinsTable.schoolId, student.schoolId),
-            eq(attendanceCheckinsTable.kind, "checkin"),
-            gte(attendanceCheckinsTable.day, syStartIso),
-            lt(attendanceCheckinsTable.day, syEndIso),
-          ),
-        );
-      if (operatingSlots.length > 0) {
-        const studentSlots = await db
-          .selectDistinct({
-            day: attendanceCheckinsTable.day,
-            periodNumber: attendanceCheckinsTable.periodNumber,
-          })
-          .from(attendanceCheckinsTable)
-          .where(
-            and(
-              eq(attendanceCheckinsTable.schoolId, student.schoolId),
-              eq(attendanceCheckinsTable.studentId, student.studentId),
-              eq(attendanceCheckinsTable.kind, "checkin"),
-              gte(attendanceCheckinsTable.day, syStartIso),
-              lt(attendanceCheckinsTable.day, syEndIso),
-            ),
-          );
-        const present = new Set(
-          studentSlots.map((r) => `${r.day}|${r.periodNumber}`),
-        );
-        for (const slot of operatingSlots) {
-          const w = windows.get(slot.periodNumber);
-          if (!w) continue; // off-schedule / non-instructional period
-          if (present.has(`${slot.day}|${slot.periodNumber}`)) continue;
-          absenceCount += 1;
-          absenceMinutes += periodLengthMinutes(w);
-        }
-      }
-    }
   }
 
   const lostInstruction = {
     hallPasses: { count: hpLostCount, minutes: hpLostMinutes },
     tardies: { count: tardiesYtd, minutes: lostInstructionMinutesYtd },
-    absences: { count: absenceCount, minutes: absenceMinutes },
-    totalMinutes: hpLostMinutes + lostInstructionMinutesYtd + absenceMinutes,
+    totalMinutes: hpLostMinutes + lostInstructionMinutesYtd,
   };
+
+  // ----- Official absences (Eligibility Hub upload) -----
+  // Same source of truth as the Teacher Roster / Insights "Days Absent"
+  // columns. `null` (omitted on every surface) when the school isn't using
+  // the Eligibility Hub — no upload row exists for this student.
+  let officialAttendance: ParentSnapshot["attendance"]["official"] = null;
+  if (sectionsAvailable.attendance) {
+    const metrics = await loadAttendanceMetrics(student.schoolId, [
+      student.studentId,
+    ]);
+    const m = metrics.get(student.studentId);
+    if (m) {
+      officialAttendance = { daysAbsent: m.daysAbsent, daysTardy: m.daysTardy };
+    }
+  }
 
   // ----- Accommodations -----
   let accommodations: Array<{ id: number; name: string; category: string }> = [];
@@ -1221,6 +1192,7 @@ async function assembleSnapshot(
       attendance: {
         tardiesThisWeek: tardyThisWeek,
         checkInsThisWeek: checkInThisWeek,
+        official: officialAttendance,
         pct: attendancePct,
         onTimeStreak,
         onTimeArrivals,

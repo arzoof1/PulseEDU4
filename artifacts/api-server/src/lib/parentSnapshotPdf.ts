@@ -357,24 +357,8 @@ function drawLostInstructionBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
       value: `${li.tardies.minutes} min`,
       color: COLORS.muted,
     });
-    stats.push({
-      label: `Absences · ${li.absences.count}`,
-      value: `${li.absences.minutes} min`,
-      color: COLORS.muted,
-    });
   }
   drawStatRow(doc, stats);
-  if (s.sectionsAvailable.attendance) {
-    doc.moveDown(0.2);
-    doc
-      .fontSize(8)
-      .font("Helvetica")
-      .fillColor(COLORS.muted)
-      .text(
-        "Absences are estimated from class periods with no door-kiosk check-in, not official daily attendance.",
-      );
-    doc.fillColor(COLORS.text);
-  }
 }
 
 // ---------- Attendance / Hall passes ----------
@@ -392,23 +376,40 @@ function drawAttendanceBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
       value: String(s.attendance.checkInsThisWeek),
       color: COLORS.muted,
     });
+    // Official absences from the Eligibility Hub upload — omitted entirely
+    // when the school isn't using the Eligibility Hub (`official` null).
+    if (s.attendance.official) {
+      stats.push({
+        label: "Days absent (official)",
+        value: String(s.attendance.official.daysAbsent),
+        color:
+          s.attendance.official.daysAbsent === 0
+            ? COLORS.positive
+            : COLORS.warn,
+      });
+    }
     // Aggregate attendance metrics mirroring the parent Dashboard.
-    // Render dashes when the school hasn't loaded any attendance-day
-    // data yet so the PDF doesn't pretend to know a 0% rate.
-    stats.push({
-      label: "Attendance (YTD)",
-      value: s.attendance.pct.ytd ? `${s.attendance.pct.ytd.pct}%` : "—",
-      color: COLORS.accent,
-    });
-    stats.push({
-      label: "Attendance (30d)",
-      value: s.attendance.pct.last30 ? `${s.attendance.pct.last30.pct}%` : "—",
-      color: COLORS.accent,
-    });
+    // Omitted entirely when the school hasn't loaded any attendance-day
+    // data (null buckets) so the PDF never shows placeholder dashes.
+    if (s.attendance.pct.ytd) {
+      stats.push({
+        label: "Attendance (YTD)",
+        value: `${s.attendance.pct.ytd.pct}%`,
+        color: COLORS.accent,
+      });
+    }
+    if (s.attendance.pct.last30) {
+      stats.push({
+        label: "Attendance (30d)",
+        value: `${s.attendance.pct.last30.pct}%`,
+        color: COLORS.accent,
+      });
+    }
     // Period-level on-time streak — only when the school has a default
-    // bell schedule configured (otherwise `onTimeStreak` is null and we
-    // skip the streak tiles entirely, matching the parent dashboard).
-    if (s.attendance.onTimeStreak) {
+    // bell schedule configured AND attendance data actually produced
+    // counted periods (otherwise the school isn't using this system and
+    // the tiles are omitted, matching the parent dashboard).
+    if (s.attendance.onTimeStreak && s.attendance.onTimeStreak.countedPeriods > 0) {
       stats.push({
         label: "On-time streak",
         value: `${s.attendance.onTimeStreak.current} pds`,

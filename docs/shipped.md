@@ -3,6 +3,24 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **HeartBEAT official absences + omit-when-unused attendance metrics.** The
+  parent HeartBEAT surfaces (parent dashboard, family PDF used by the weekly
+  email + staff print) dropped the kiosk-derived absence ESTIMATE: the "Lost
+  Instructional Time" total is now hall passes + tardies only, and the
+  "Absences are estimated from class periods with no door-kiosk check-in…"
+  disclaimer is gone. Official days-absent (latest Eligibility Hub
+  `eligibility_absences` upload for the current semester, via
+  `lib/attendanceMetrics.ts` `loadAttendanceMetrics` — same source as the
+  Teacher Roster / Insights "Days Absent" columns) surfaces as
+  `attendance.official` on the snapshot and renders as a "Days absent"
+  tile/stat. Every attendance metric now OMITS cleanly when its source system
+  isn't in use: no Eligibility upload → no official tile (`official` null,
+  never a fabricated 0), no attendance-day data → % rows omitted (previously
+  "—" dashes), on-time streak tiles additionally gated on
+  `countedPeriods > 0`, kiosk arrivals already gated on `checkinCount > 0`.
+  The official approximate % is NOT used — the `student_attendance_day` %
+  stays the only attendance-% source. Files: `lib/parentSnapshot.ts`,
+  `lib/parentSnapshotPdf.ts`, client `parent/Dashboard.tsx`.
 - **Staff "Print HeartBEAT" on Parent Access.** A staff-facing button next to
   "Preview as parent" (Parent Access page, Admin/Core Team) downloads the SAME
   family HeartBEAT PDF a parent receives — for data chats / family meetings, no

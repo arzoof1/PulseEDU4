@@ -99,12 +99,14 @@ interface Snapshot {
   lostInstruction: {
     hallPasses: { count: number; minutes: number };
     tardies: { count: number; minutes: number };
-    absences: { count: number; minutes: number };
     totalMinutes: number;
   };
   attendance: {
     tardiesThisWeek: number;
     checkInsThisWeek: number;
+    // Official absence/tardy counts from the Eligibility Hub upload; null
+    // when the school isn't using the Eligibility Hub (tiles omitted).
+    official: { daysAbsent: number; daysTardy: number } | null;
     pct: {
       ytd: { presentDays: number; totalDays: number; pct: number } | null;
       last30: { presentDays: number; totalDays: number; pct: number } | null;
@@ -837,12 +839,13 @@ function HomeTab({ snapshot }: { snapshot: Snapshot }) {
       </div>
 
       {/* Lost Instructional Time — pinned to the top. Grand total plus a
-          per-source breakdown (hall passes / tardies / absences), all
+          per-source breakdown (hall passes / tardies), all
           school-year-to-date. Each row respects its own section toggle:
-          hall passes hide with the Hall Passes section, tardies + absences
-          with the Attendance section, and the grand total only sums the
-          rows that are visible. Absences are KIOSK-DERIVED (periods with no
-          door-kiosk check-in), not official daily attendance. */}
+          hall passes hide with the Hall Passes section, tardies with the
+          Attendance section, and the grand total only sums the rows that
+          are visible. Official absences (Eligibility Hub upload) surface
+          in the Attendance section instead — the old kiosk-derived
+          absence estimate was removed. */}
       {(sec.hallPasses || sec.attendance) && (
         <Section
           title="Lost Instructional Time"
@@ -856,7 +859,7 @@ function HomeTab({ snapshot }: { snapshot: Snapshot }) {
               {snapshot.lostInstruction.totalMinutes} min
             </div>
             <div className="text-[11px] text-slate-500">
-              estimated instruction missed
+              instruction missed
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -882,24 +885,7 @@ function HomeTab({ snapshot }: { snapshot: Snapshot }) {
                 }`}
               />
             )}
-            {sec.attendance && (
-              <AttendanceTile
-                label="Absences"
-                value={`${snapshot.lostInstruction.absences.minutes} min`}
-                sub={`${snapshot.lostInstruction.absences.count} ${
-                  snapshot.lostInstruction.absences.count === 1
-                    ? "period missed"
-                    : "periods missed"
-                }`}
-              />
-            )}
           </div>
-          {sec.attendance && (
-            <p className="text-[11px] text-slate-400 mt-2">
-              Absences are estimated from class periods with no door-kiosk
-              check-in, not official daily attendance.
-            </p>
-          )}
         </Section>
       )}
 
@@ -1069,44 +1055,46 @@ function BehaviorTab({ snapshot }: { snapshot: Snapshot }) {
           title="Attendance"
           icon={<Calendar className="h-4 w-4 text-orange-600" />}
         >
-          {/* Aggregate tiles. Attendance % (YTD + 30d) shows whenever
-              any attendance-day data exists. On-time streak tiles only
-              appear when the school has a default bell schedule with
-              at least one counted period AND the student has logged
-              attendance days to back the calculation. Hides cleanly
-              when nothing has been recorded yet so a new SIS feed
-              doesn't render placeholder tiles. */}
-          {(snapshot.attendance.pct.ytd ||
+          {/* Aggregate tiles. Every tile only appears when its source
+              system is actually in use: official days-absent needs an
+              Eligibility Hub upload, attendance % needs attendance-day
+              data, and on-time streak tiles need a default bell schedule
+              with counted periods backed by logged attendance days.
+              Nothing renders as a placeholder dash. */}
+          {(snapshot.attendance.official ||
+            snapshot.attendance.pct.ytd ||
             snapshot.attendance.pct.last30 ||
-            snapshot.attendance.onTimeStreak) && (
+            (snapshot.attendance.onTimeStreak &&
+              snapshot.attendance.onTimeStreak.countedPeriods > 0)) && (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 mb-4">
-              <AttendanceTile
-                label="Attendance · YTD"
-                value={
-                  snapshot.attendance.pct.ytd
-                    ? `${snapshot.attendance.pct.ytd.pct}%`
-                    : "—"
-                }
-                sub={
-                  snapshot.attendance.pct.ytd
-                    ? `${snapshot.attendance.pct.ytd.presentDays} / ${snapshot.attendance.pct.ytd.totalDays} days`
-                    : "no data yet"
-                }
-              />
-              <AttendanceTile
-                label="Attendance · 30d"
-                value={
-                  snapshot.attendance.pct.last30
-                    ? `${snapshot.attendance.pct.last30.pct}%`
-                    : "—"
-                }
-                sub={
-                  snapshot.attendance.pct.last30
-                    ? `${snapshot.attendance.pct.last30.presentDays} / ${snapshot.attendance.pct.last30.totalDays} days`
-                    : "no data yet"
-                }
-              />
-              {snapshot.attendance.onTimeStreak && (
+              {snapshot.attendance.official && (
+                <AttendanceTile
+                  label="Days absent"
+                  value={`${snapshot.attendance.official.daysAbsent}`}
+                  sub="official · this semester"
+                  accent={
+                    snapshot.attendance.official.daysAbsent === 0
+                      ? "emerald"
+                      : undefined
+                  }
+                />
+              )}
+              {snapshot.attendance.pct.ytd && (
+                <AttendanceTile
+                  label="Attendance · YTD"
+                  value={`${snapshot.attendance.pct.ytd.pct}%`}
+                  sub={`${snapshot.attendance.pct.ytd.presentDays} / ${snapshot.attendance.pct.ytd.totalDays} days`}
+                />
+              )}
+              {snapshot.attendance.pct.last30 && (
+                <AttendanceTile
+                  label="Attendance · 30d"
+                  value={`${snapshot.attendance.pct.last30.pct}%`}
+                  sub={`${snapshot.attendance.pct.last30.presentDays} / ${snapshot.attendance.pct.last30.totalDays} days`}
+                />
+              )}
+              {snapshot.attendance.onTimeStreak &&
+                snapshot.attendance.onTimeStreak.countedPeriods > 0 && (
                 <>
                   <AttendanceTile
                     label="On-time streak"
