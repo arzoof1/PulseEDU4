@@ -55,7 +55,6 @@ import {
 import FastCoveragePage from "./components/FastCoveragePage";
 import CameraRegistryPage from "./components/CameraRegistryPage";
 import CreatePassModal from "./components/CreatePassModal";
-import { HeaderDropdown } from "./components/HeaderDropdown";
 import StudentPicker from "./components/StudentPicker";
 import { CompanionQueuePanel } from "./components/CompanionQueuePanel";
 import { KioskBanner } from "./components/KioskBanner";
@@ -5545,54 +5544,6 @@ function App() {
   >(null);
   const currentStaffUser = authUser?.displayName ?? "";
   const [showChangePw, setShowChangePw] = useState(false);
-  // Header layout mode. When the top-bar would wrap onto a second line, the
-  // secondary controls (school switcher, filters, Tile Home, Help) collapse
-  // into a single "More" dropdown so the header stays one clean row. We
-  // detect the wrap directly (rather than a fixed pixel breakpoint) so it
-  // adapts to any window width, zoom level, or content length.
-  const headerRef = useRef<HTMLElement>(null);
-  const headerCollapseWidthRef = useRef<number>(0);
-  const [headerCompact, setHeaderCompact] = useState(false);
-  useEffect(() => {
-    const header = headerRef.current;
-    if (!header) return;
-    let raf = 0;
-    const measure = () => {
-      const brand = header.querySelector<HTMLElement>(".brand");
-      const controls = header.querySelector<HTMLElement>(".header-controls");
-      if (!brand || !controls) return;
-      if (!headerCompact) {
-        // Inline: collapse if the row wrapped (controls dropped below the
-        // brand) OR the controls got pushed off the right edge of the
-        // viewport (horizontal overflow). Remember the viewport width at
-        // which it happened for the expand hysteresis below.
-        const wrapped = controls.offsetTop > brand.offsetTop + 4;
-        const clipped =
-          controls.getBoundingClientRect().right > window.innerWidth + 1;
-        if (wrapped || clipped) {
-          headerCollapseWidthRef.current = window.innerWidth;
-          setHeaderCompact(true);
-        }
-      } else if (window.innerWidth > headerCollapseWidthRef.current + 80) {
-        // Compact: only expand back once we have comfortably more room than
-        // when we collapsed (hysteresis prevents flicker at the boundary).
-        setHeaderCompact(false);
-      }
-    };
-    const schedule = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(measure);
-    };
-    const ro = new ResizeObserver(schedule);
-    ro.observe(header);
-    window.addEventListener("resize", schedule);
-    measure();
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", schedule);
-      cancelAnimationFrame(raf);
-    };
-  }, [headerCompact]);
   // Student Finder state. `null` = closed. Otherwise a discriminated
   // open-state: either { kind: "search", query } for the top-bar entry
   // point (search field shown) or { kind: "student", studentId,
@@ -11131,7 +11082,7 @@ function App() {
           </button>
         </div>
       )}
-      <header className="app-header" ref={headerRef}>
+      <header className="app-header">
         <div className="brand" aria-label="PulseED">
           <svg
             className="ekg-layer ekg-bg"
@@ -11213,187 +11164,87 @@ function App() {
           Finder
         </button>
         <div className="header-controls">
-          {!headerCompact ? (
-            <>
-              <SchoolSwitcher />
-              <label>
-                Show
-                <select
-                  value={dateFilter}
-                  onChange={(e) =>
-                    setDateFilter(e.target.value as "today" | "all")
-                  }
-                >
-                  <option value="all">All Records</option>
-                  <option value="today">Today Only</option>
-                </select>
-              </label>
-              <label>
-                Staff
-                <select
-                  value={staffFilter}
-                  onChange={(e) =>
-                    setStaffFilter(e.target.value as "all" | "mine")
-                  }
-                >
-                  <option value="all">All Staff</option>
-                  <option value="mine">My Records Only</option>
-                </select>
-              </label>
-              {/* Tile Home launcher — top-right pill. Stashes the current
-                  section so the full-screen tile page's "Back to app"
-                  button can return the user to exactly this view. */}
-              <button
-                type="button"
-                onClick={goToTileHome}
-                aria-label="Open Tile Home"
-                title="Tile Home"
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 6,
-                  background:
-                    "linear-gradient(135deg, rgba(124,58,237,0.18), rgba(34,211,238,0.18))",
-                  border: "1px solid rgba(124,58,237,0.45)",
-                  borderRadius: 8,
-                  padding: "4px 12px",
-                  cursor: "pointer",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: "inherit",
-                  marginRight: 6,
-                }}
-              >
-                <span aria-hidden="true" style={{ fontSize: 14 }}>⊞</span>
-                Tile Home
-              </button>
-              {/* Global help toggle. Default ON; persists in localStorage so
-                  once a user dismisses the in-page "How to use" shells they
-                  stay hidden across reloads until re-enabled here. */}
-              <HelpToggleButton />
-            </>
-          ) : (
-            /* Narrow laptop/PC (and tablet/phone): collapse the secondary
-               controls into a single "More" menu so the header stays one
-               row instead of wrapping. */
-            <HeaderDropdown
-              align="right"
-              panelWidth={240}
-              renderTrigger={({ open, toggle }) => (
-                <button
-                  type="button"
-                  className="header-more-btn"
-                  onClick={toggle}
-                  aria-haspopup="menu"
-                  aria-expanded={open}
-                  aria-label="More controls"
-                  title="More controls"
-                >
-                  <span aria-hidden="true">⋯</span>
-                  More
-                </button>
-              )}
+          <SchoolSwitcher />
+          <label>
+            Show
+            <select
+              value={dateFilter}
+              onChange={(e) => setDateFilter(e.target.value as "today" | "all")}
             >
-              {(close) => (
-                <div className="header-menu-group">
-                  <SchoolSwitcher />
-                  <label>
-                    Show
-                    <select
-                      value={dateFilter}
-                      onChange={(e) =>
-                        setDateFilter(e.target.value as "today" | "all")
-                      }
-                    >
-                      <option value="all">All Records</option>
-                      <option value="today">Today Only</option>
-                    </select>
-                  </label>
-                  <label>
-                    Staff
-                    <select
-                      value={staffFilter}
-                      onChange={(e) =>
-                        setStaffFilter(e.target.value as "all" | "mine")
-                      }
-                    >
-                      <option value="all">All Staff</option>
-                      <option value="mine">My Records Only</option>
-                    </select>
-                  </label>
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => {
-                      goToTileHome();
-                      close();
-                    }}
-                  >
-                    ⊞ Tile Home
-                  </button>
-                  <HelpToggleButton />
-                </div>
-              )}
-            </HeaderDropdown>
-          )}
-
-          {/* Account menu — the avatar is the trigger; the signed-in name,
-              Change password, and Sign out live inside the dropdown so they
-              never crowd (or wrap) the header row. */}
-          <HeaderDropdown
-            align="right"
-            panelWidth={220}
-            renderTrigger={({ open, toggle }) => (
-              <button
-                type="button"
-                className="user-pill"
-                onClick={toggle}
-                aria-haspopup="menu"
-                aria-expanded={open}
-                aria-label="Account menu"
-                title={currentStaffUser}
-              >
-                <span className="avatar">{userInitials || "?"}</span>
-                {!headerCompact && (
-                  <span className="user-pill-name">{currentStaffUser}</span>
-                )}
-                <span className="user-pill-caret" aria-hidden="true">
-                  ▾
-                </span>
-              </button>
-            )}
+              <option value="all">All Records</option>
+              <option value="today">Today Only</option>
+            </select>
+          </label>
+          <label>
+            Staff
+            <select
+              value={staffFilter}
+              onChange={(e) =>
+                setStaffFilter(e.target.value as "all" | "mine")
+              }
+            >
+              <option value="all">All Staff</option>
+              <option value="mine">My Records Only</option>
+            </select>
+          </label>
+          {/* Tile Home launcher — top-right pill. Stashes the current
+              section so the full-screen tile page's "Back to app"
+              button can return the user to exactly this view. */}
+          <button
+            type="button"
+            onClick={goToTileHome}
+            aria-label="Open Tile Home"
+            title="Tile Home"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              background:
+                "linear-gradient(135deg, rgba(124,58,237,0.18), rgba(34,211,238,0.18))",
+              border: "1px solid rgba(124,58,237,0.45)",
+              borderRadius: 8,
+              padding: "4px 12px",
+              cursor: "pointer",
+              fontSize: 13,
+              fontWeight: 600,
+              color: "inherit",
+              marginRight: 6,
+            }}
           >
-            {(close) => (
-              <>
-                <div className="header-menu-user">{currentStaffUser}</div>
-                <button
-                  type="button"
-                  className="header-menu-item"
-                  onClick={() => {
-                    setChangePwCurrent("");
-                    setChangePwNew("");
-                    setChangePwError("");
-                    setChangePwOk(false);
-                    setShowChangePw(true);
-                    close();
-                  }}
-                >
-                  Change password
-                </button>
-                <button
-                  type="button"
-                  className="header-menu-item"
-                  onClick={async () => {
-                    close();
-                    await authFetch("/api/auth/logout", { method: "POST" });
-                    setAuthUser(null);
-                  }}
-                >
-                  Sign out
-                </button>
-              </>
-            )}
-          </HeaderDropdown>
+            <span aria-hidden="true" style={{ fontSize: 14 }}>⊞</span>
+            Tile Home
+          </button>
+          {/* Global help toggle. Default ON; persists in localStorage so
+              once a user dismisses the in-page "How to use" shells they
+              stay hidden across reloads until re-enabled here. */}
+          <HelpToggleButton />
+          <div className="user-pill" title={currentStaffUser}>
+            <span className="avatar">{userInitials || "?"}</span>
+            <span className="user-pill-name">{currentStaffUser}</span>
+          </div>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              setChangePwCurrent("");
+              setChangePwNew("");
+              setChangePwError("");
+              setChangePwOk(false);
+              setShowChangePw(true);
+            }}
+          >
+            Change password
+          </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={async () => {
+              await authFetch("/api/auth/logout", { method: "POST" });
+              setAuthUser(null);
+            }}
+          >
+            Sign out
+          </button>
         </div>
       </header>
 
