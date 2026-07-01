@@ -55,6 +55,7 @@ import {
 import FastCoveragePage from "./components/FastCoveragePage";
 import CameraRegistryPage from "./components/CameraRegistryPage";
 import CreatePassModal from "./components/CreatePassModal";
+import { AccountMenu } from "./components/AccountMenu";
 import StudentPicker from "./components/StudentPicker";
 import { CompanionQueuePanel } from "./components/CompanionQueuePanel";
 import { KioskBanner } from "./components/KioskBanner";
@@ -11218,33 +11219,21 @@ function App() {
               once a user dismisses the in-page "How to use" shells they
               stay hidden across reloads until re-enabled here. */}
           <HelpToggleButton />
-          <div className="user-pill" title={currentStaffUser}>
-            <span className="avatar">{userInitials || "?"}</span>
-            <span className="user-pill-name">{currentStaffUser}</span>
-          </div>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => {
+          <AccountMenu
+            initials={userInitials}
+            name={currentStaffUser}
+            onChangePassword={() => {
               setChangePwCurrent("");
               setChangePwNew("");
               setChangePwError("");
               setChangePwOk(false);
               setShowChangePw(true);
             }}
-          >
-            Change password
-          </button>
-          <button
-            type="button"
-            className="btn"
-            onClick={async () => {
+            onSignOut={async () => {
               await authFetch("/api/auth/logout", { method: "POST" });
               setAuthUser(null);
             }}
-          >
-            Sign out
-          </button>
+          />
         </div>
       </header>
 
