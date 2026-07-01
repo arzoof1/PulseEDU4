@@ -1910,67 +1910,6 @@ export default function DataImports({
         </RoleSection>
       </HowToUseHelp>
 
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "stretch",
-          gap: "0.4rem",
-          marginTop: "0.75rem",
-          padding: "0.6rem 0.75rem",
-          background: "rgba(34, 197, 94, 0.06)",
-          border: "1px solid var(--border, #2a3447)",
-          borderRadius: 8,
-        }}
-      >
-        <span style={{ fontSize: 13, fontWeight: 600 }}>Data type:</span>
-        {visibleKinds.map((k) => {
-          // Roster card is opt-in per school. Server enforces the same
-          // gate on /rosters/preview + /commit, so the disabled state
-          // here is purely a UX hint — a stale tab can't bypass it.
-          const isRoster = k === "rosters";
-          const disabled = isRoster && rosterEnabled === false;
-          return (
-            <label
-              key={k}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                fontSize: 13,
-                cursor: disabled ? "not-allowed" : "pointer",
-                opacity: disabled ? 0.5 : 1,
-              }}
-              title={
-                disabled
-                  ? "Manual roster uploads are disabled for this school. Most schools sync from Classlink or Clever (OneRoster). An admin can enable manual uploads in School Settings → Data & Integrations."
-                  : undefined
-              }
-            >
-              <input
-                type="radio"
-                name="data-imports-kind"
-                checked={kind === k}
-                disabled={disabled}
-                onChange={() => handleKindChange(k)}
-              />
-              {KIND_DEFS[k].label}
-            </label>
-          );
-        })}
-        <span
-          style={{
-            color: "var(--text-subtle)",
-            fontSize: 12,
-            marginTop: "0.35rem",
-            paddingTop: "0.4rem",
-            borderTop: "1px solid var(--border, #2a3447)",
-          }}
-        >
-          {kindDef.helpText}
-        </span>
-      </div>
-
       {canActAsDistrict && kindDef.supportsDistrict && (
         <div
           style={{
@@ -2233,17 +2172,22 @@ export default function DataImports({
                 })}
               </div>
 
-              {/* Step 0 — Choose data type. Cards instead of radios so the
-                  Roster card can show a clear disabled affordance + an
-                  inline explainer when the per-school toggle is OFF. */}
+              {/* Step 0 — Choose data type. A single-column list: each row
+                  is name + one-line summary; the selected row expands to
+                  show the full definition inline. One picker only (the old
+                  persistent "Data type" row above the wizard was removed)
+                  so the choice is never made twice. The Roster row shows a
+                  disabled "Off" affordance when the per-school toggle is
+                  OFF, with an inline explainer below. */}
               {step === 0 && (
                 <div>
                   <div
+                    role="radiogroup"
+                    aria-label="Data type"
                     style={{
-                      display: "grid",
-                      gridTemplateColumns:
-                        "repeat(auto-fill, minmax(220px, 1fr))",
-                      gap: "0.6rem",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "0.5rem",
                       marginBottom: "0.85rem",
                     }}
                   >
@@ -2253,6 +2197,13 @@ export default function DataImports({
                       const disabled =
                         isRoster && rosterEnabled === false;
                       const selected = kind === k;
+                      // Short name for the row title — strip any trailing
+                      // parenthetical (e.g. "Gradebook (current grades …)"
+                      // → "Gradebook"); the full detail lives in the
+                      // expanded definition below the selected row.
+                      const shortName = def.label
+                        .replace(/\s*\(.*?\)\s*$/, "")
+                        .trim();
                       return (
                         <button
                           key={k}
@@ -2262,9 +2213,13 @@ export default function DataImports({
                             handleKindChange(k);
                           }}
                           disabled={disabled}
+                          role="radio"
+                          aria-checked={selected}
                           style={{
                             textAlign: "left",
-                            padding: "0.85rem",
+                            width: "100%",
+                            display: "block",
+                            padding: "0.7rem 0.85rem",
                             borderRadius: 8,
                             border: selected
                               ? "2px solid var(--accent, #3b82f6)"
@@ -2285,16 +2240,33 @@ export default function DataImports({
                         >
                           <div
                             style={{
-                              fontWeight: 700,
-                              fontSize: 14,
-                              marginBottom: 4,
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
                             }}
                           >
-                            {def.label}
+                            <span
+                              aria-hidden="true"
+                              style={{
+                                width: 15,
+                                height: 15,
+                                borderRadius: "50%",
+                                flexShrink: 0,
+                                boxSizing: "border-box",
+                                border: selected
+                                  ? "5px solid var(--accent, #3b82f6)"
+                                  : "2px solid var(--text-subtle, #64748b)",
+                              }}
+                            />
+                            <span
+                              style={{ fontWeight: 700, fontSize: 14 }}
+                            >
+                              {shortName}
+                            </span>
                             {disabled && (
                               <span
                                 style={{
-                                  marginLeft: 6,
+                                  marginLeft: 2,
                                   fontSize: 10,
                                   fontWeight: 700,
                                   letterSpacing: "0.05em",
@@ -2314,10 +2286,28 @@ export default function DataImports({
                               fontSize: 12,
                               color: "var(--text-subtle)",
                               lineHeight: 1.4,
+                              marginTop: 4,
+                              marginLeft: 23,
                             }}
                           >
                             {def.helpText}
                           </div>
+                          {selected && !disabled && (
+                            <div
+                              style={{
+                                marginTop: "0.55rem",
+                                marginLeft: 23,
+                                paddingTop: "0.55rem",
+                                borderTop:
+                                  "1px solid var(--border, #2a3447)",
+                                fontSize: 12.5,
+                                color: "var(--text)",
+                                lineHeight: 1.5,
+                              }}
+                            >
+                              {def.description}
+                            </div>
+                          )}
                         </button>
                       );
                     })}
