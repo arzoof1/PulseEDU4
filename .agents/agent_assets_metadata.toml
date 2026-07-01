@@ -480,3 +480,9 @@ id = "rElA9nRt6313JHdznyd1z"
 uri = "file://exports/PulseEDU_Migration_2026-07-01.pdf"
 type = "pdf"
 title = "PulseEDU — Production Migration (2026-07-01)"
+
+[[outputs]]
+id = "zJfko-_5fGYuuE-2sn-er"
+uri = "file://exports/FAKE_Student_LIVE_Grade_Report-School1-Full.xlsx"
+type = "table"
+title = "School-1 Full Grade Report (Skyward-style, all students)"
