@@ -49,6 +49,9 @@ import {
   canImportDistrictData,
   canActAsDistrict,
   getDistrictIdForSchool,
+  hasAnySchoolImportCap,
+  canImportKind,
+  allowedSchoolImportKinds,
 } from "../lib/scope.js";
 import {
   DEFAULT_SCHOOL_TZ,
@@ -88,11 +91,31 @@ function requireImporter() {
       res.status(401).json({ error: "Sign-in required" });
       return;
     }
-    if (!canImportSchoolData(staff)) {
+    // Entry gate: admins (every importer) OR anyone holding at least one
+    // delegated school-import cap. Per-kind authorization is enforced
+    // separately by requireImportKind() / canImportKind() so a grades-only
+    // clerk who passes here still can't touch FAST/roster routes.
+    if (!hasAnySchoolImportCap(staff)) {
       res.status(403).json({ error: "Data import access required" });
       return;
     }
     (req as Request & { staff: StaffRow }).staff = staff;
+    next();
+  };
+}
+
+// Per-kind authorization for fixed-kind importer routes. Chains AFTER
+// requireImporter() (which attaches req.staff). Admins bypass; a delegated
+// clerk needs the cap mapped to this kind. Unmapped kinds (rosters / behavior
+// / points_migration) reject every non-admin, preserving today's admin-only
+// behavior for those importers.
+function requireImportKind(kind: string) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    if (!staff || !canImportKind(staff, kind)) {
+      res.status(403).json({ error: "Data import access required" });
+      return;
+    }
     next();
   };
 }
@@ -523,6 +546,7 @@ function parseCsv(csv: string): {
 router.post(
   "/data-imports/assessments/preview",
   requireImporter(),
+  requireImportKind("assessments"),
   async (req, res) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
@@ -606,6 +630,7 @@ router.post(
 router.post(
   "/data-imports/assessments/commit",
   requireImporter(),
+  requireImportKind("assessments"),
   async (req, res) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
@@ -999,8 +1024,27 @@ router.get("/data-imports/jobs", requireImporter(), async (req, res) => {
     scopePredicate = eq(importJobsTable.schoolId, schoolId);
   }
 
-  const where = kind
-    ? and(scopePredicate, eq(importJobsTable.kind, kind))
+  // Delegated clerks (non-admins) only see jobs for the kinds they're allowed
+  // to import. A specific ?kind request from such a clerk is rejected if it's
+  // outside their grant; an unfiltered request is clamped to their allowed set.
+  // Admins (canImportSchoolData) skip this and see everything in scope.
+  let kindPredicate = kind ? eq(importJobsTable.kind, kind) : undefined;
+  if (scope === "school" && !canImportSchoolData(staff)) {
+    const allowed = allowedSchoolImportKinds(staff);
+    if (kind) {
+      if (!canImportKind(staff, kind)) {
+        res.status(403).json({ error: "Data import access required" });
+        return;
+      }
+    } else if (allowed.length === 0) {
+      res.json([]);
+      return;
+    } else {
+      kindPredicate = inArray(importJobsTable.kind, allowed);
+    }
+  }
+  const where = kindPredicate
+    ? and(scopePredicate, kindPredicate)
     : scopePredicate;
   const rows = await db
     .select()
@@ -1052,6 +1096,13 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
     req.query.scope === "district" && kindRaw === "assessments"
       ? "district"
       : "school";
+  // Delegated clerks may only export the kinds they can import (school scope).
+  // Admins bypass via canImportKind. District scope is gated below by
+  // canActAsDistrict, so this only matters for school-scope exports.
+  if (scope === "school" && !canImportKind(staff, kindRaw)) {
+    res.status(403).json({ error: "Data import access required" });
+    return;
+  }
 
   // ---- Optional row filters (kind-specific). All read off req.query
   // and silently ignored if the kind doesn't support them.
@@ -1533,6 +1584,13 @@ router.post(
         res.status(404).json({ error: "Job not found" });
         return;
       }
+      // A delegated clerk can only roll back the kinds they can import.
+      // Admins bypass via canImportKind. (District jobs above never reach a
+      // delegated clerk — they can't canActAsDistrict.)
+      if (!canImportKind(staff, job.kind)) {
+        res.status(403).json({ error: "Data import access required" });
+        return;
+      }
     } else {
       // Malformed job row (neither scope set) — refuse to touch it.
       res.status(409).json({ error: "Job has no scope" });
@@ -1698,6 +1756,11 @@ router.get(
       if (!schoolId) return;
       if (job.schoolId !== schoolId) {
         res.status(404).json({ error: "Job not found" });
+        return;
+      }
+      const staff = (req as Request & { staff: StaffRow }).staff;
+      if (!canImportKind(staff, job.kind)) {
+        res.status(403).json({ error: "Data import access required" });
         return;
       }
     } else {
@@ -3673,6 +3736,7 @@ function validateSchoolYearLabel(
 router.post(
   "/data-imports/fast_florida/preview",
   requireImporter(),
+  requireImportKind("fast_florida"),
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
@@ -3724,6 +3788,7 @@ router.post(
 router.post(
   "/data-imports/fast_florida/commit",
   requireImporter(),
+  requireImportKind("fast_florida"),
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
@@ -3974,6 +4039,7 @@ router.post(
 router.post(
   "/data-imports/gradebook/preview",
   requireImporter(),
+  requireImportKind("gradebook"),
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
@@ -4045,6 +4111,7 @@ router.post(
 router.post(
   "/data-imports/gradebook/commit",
   requireImporter(),
+  requireImportKind("gradebook"),
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
@@ -4824,53 +4891,63 @@ function requireManualRosterUploadEnabled() {
 router.post(
   "/data-imports/rosters/preview",
   requireImporter(),
+  requireImportKind("rosters"),
   requireManualRosterUploadEnabled(),
   makePreviewHandler("rosters", ROSTERS_CONFIG),
 );
 router.post(
   "/data-imports/rosters/commit",
   requireImporter(),
+  requireImportKind("rosters"),
   requireManualRosterUploadEnabled(),
   makeCommitHandler("rosters", ROSTERS_CONFIG),
 );
 router.post(
   "/data-imports/behavior/preview",
   requireImporter(),
+  requireImportKind("behavior"),
   makePreviewHandler("behavior", BEHAVIOR_CONFIG),
 );
 router.post(
   "/data-imports/behavior/commit",
   requireImporter(),
+  requireImportKind("behavior"),
   makeCommitHandler("behavior", BEHAVIOR_CONFIG),
 );
 router.post(
   "/data-imports/fast_scores/preview",
   requireImporter(),
+  requireImportKind("fast_scores"),
   makePreviewHandler("fast_scores", FAST_SCORES_CONFIG),
 );
 router.post(
   "/data-imports/fast_scores/commit",
   requireImporter(),
+  requireImportKind("fast_scores"),
   makeCommitHandler("fast_scores", FAST_SCORES_CONFIG),
 );
 router.post(
   "/data-imports/fast_prior_year/preview",
   requireImporter(),
+  requireImportKind("fast_prior_year"),
   makePreviewHandler("fast_prior_year", FAST_PRIOR_YEAR_CONFIG),
 );
 router.post(
   "/data-imports/fast_prior_year/commit",
   requireImporter(),
+  requireImportKind("fast_prior_year"),
   makeCommitHandler("fast_prior_year", FAST_PRIOR_YEAR_CONFIG),
 );
 router.post(
   "/data-imports/points_migration/preview",
   requireImporter(),
+  requireImportKind("points_migration"),
   makePreviewHandler("points_migration", POINTS_MIGRATION_CONFIG),
 );
 router.post(
   "/data-imports/points_migration/commit",
   requireImporter(),
+  requireImportKind("points_migration"),
   makeCommitHandler("points_migration", POINTS_MIGRATION_CONFIG),
 );
 
@@ -4954,6 +5031,12 @@ router.get(
         : null;
     if (!kind) {
       res.status(400).json({ error: "kind is required" });
+      return;
+    }
+    // Delegated clerks may only list templates for the kinds they can import.
+    // Admins bypass via canImportKind; district scope is gated below.
+    if (scope === "school" && !canImportKind(staff, kind)) {
+      res.status(403).json({ error: "Data import access required" });
       return;
     }
 
@@ -5041,6 +5124,12 @@ router.post(
     }
     if (!name) {
       res.status(400).json({ error: "name is required" });
+      return;
+    }
+    // Delegated clerks may only save templates for the kinds they can import.
+    // Admins bypass via canImportKind; district scope is gated below.
+    if (scope === "school" && !canImportKind(staff, kind)) {
+      res.status(403).json({ error: "Data import access required" });
       return;
     }
     const mappingError = validateTemplateMapping(mapping, kind);
@@ -5152,6 +5241,11 @@ router.delete(
       if (!schoolId) return;
       if (tpl.schoolId !== schoolId) {
         res.status(404).json({ error: "Template not found" });
+        return;
+      }
+      // Delegated clerks may only delete templates for kinds they can import.
+      if (!canImportKind(staff, tpl.kind)) {
+        res.status(403).json({ error: "Data import access required" });
         return;
       }
     } else {

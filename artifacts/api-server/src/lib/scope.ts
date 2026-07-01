@@ -43,6 +43,76 @@ export function canImportDistrictData(staff: {
   return Boolean(staff.isSuperUser) || Boolean(staff.isDistrictAdmin);
 }
 
+// ---------------------------------------------------------------------------
+// Per-kind delegated import capabilities (school scope only).
+//
+// Four assignable caps let an admin (or Core Team) hand a single importer to a
+// data clerk without the full admin surface. Admins / DA / SuperUser keep
+// every importer via canImportSchoolData(); a delegated clerk needs the
+// specific cap for the kind they're uploading. District-scope imports are
+// unaffected — they stay gated by canImportDistrictData().
+//
+// Map of importer `kind` → the cap that unlocks it. Kinds NOT in this map
+// (rosters, behavior, points_migration) are NOT delegable and remain
+// admin-only. Attendance is NOT here because it lives on the Eligibility
+// route, not the dataImports router — it's gated there by canManageEligibility
+// OR capImportAttendance.
+type ImportCapStaff = {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  capImportGrades?: boolean | null;
+  capImportAttendance?: boolean | null;
+  capImportFast?: boolean | null;
+  capImportIready?: boolean | null;
+};
+
+export const SCHOOL_IMPORT_KIND_CAP: Record<
+  string,
+  "capImportGrades" | "capImportFast" | "capImportIready"
+> = {
+  gradebook: "capImportGrades",
+  fast_florida: "capImportFast",
+  fast_scores: "capImportFast",
+  fast_prior_year: "capImportFast",
+  assessments: "capImportIready",
+};
+
+// True if the staff member can reach the Data Imports surface at all — admins
+// (every importer) or anyone holding at least one delegated import cap.
+// Attendance-only clerks are intentionally excluded here: attendance lives on
+// the Eligibility route, so a clerk with ONLY capImportAttendance has no
+// business on the dataImports router.
+export function hasAnySchoolImportCap(staff: ImportCapStaff): boolean {
+  return (
+    canImportSchoolData(staff) ||
+    Boolean(staff.capImportGrades) ||
+    Boolean(staff.capImportFast) ||
+    Boolean(staff.capImportIready)
+  );
+}
+
+// Authorize a specific importer `kind` for a staff member. Admins bypass;
+// otherwise the staff needs the cap mapped to that kind. Unmapped kinds
+// (rosters / behavior / points_migration) return false for non-admins.
+export function canImportKind(staff: ImportCapStaff, kind: string): boolean {
+  if (canImportSchoolData(staff)) return true;
+  const cap = SCHOOL_IMPORT_KIND_CAP[kind];
+  return cap ? Boolean(staff[cap]) : false;
+}
+
+// The set of importer kinds a non-admin delegated clerk may see/list. Used to
+// scope the jobs/templates history so a grades-only clerk never sees FAST or
+// roster jobs. Admins get the full set elsewhere (callers check
+// canImportSchoolData first).
+export function allowedSchoolImportKinds(staff: ImportCapStaff): string[] {
+  const out: string[] = [];
+  for (const [kind, cap] of Object.entries(SCHOOL_IMPORT_KIND_CAP)) {
+    if (staff[cap]) out.push(kind);
+  }
+  return out;
+}
+
 // Tiny helper to require a resolved school for a request. Most routes call
 // this at the top of each handler so the type narrows from `number | null`
 // to `number` and a 401 is written if the request is unauthenticated.

@@ -1159,7 +1159,7 @@ function ParentNotesTab() {
 // Tab: Upload
 // ---------------------------------------------------------------------------
 
-function UploadTab({ onUploaded }: { onUploaded: () => void }) {
+export function UploadTab({ onUploaded }: { onUploaded: () => void }) {
   const [uploads, setUploads] = useState<UploadAudit[]>([]);
   const [result, setResult] = useState<{
     matched: number;

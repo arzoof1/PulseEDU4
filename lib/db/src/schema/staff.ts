@@ -230,6 +230,23 @@ export const staffTable = pgTable("staff", {
     .notNull()
     .default(false),
 
+  // Data Import delegation — four independently-assignable capabilities that
+  // let an admin (or Core Team) hand a single importer to a data clerk
+  // without granting the rest of the admin surface. Default false (today's
+  // behavior: data imports are admin-only). Admin / District Admin / SuperUser
+  // get every importer implicitly via the route gate, so they never need these
+  // flags set. SCHOOL-SCOPED ONLY — district-wide CSV imports (the -district
+  // routes) stay District Admin / SuperUser. Map: grades→gradebook,
+  // attendance→eligibility attendance upload, fast→FAST importers
+  // (fast_florida / fast_scores / fast_prior_year), iready→generic assessments
+  // importer (iReady / SCI / MAP).
+  capImportGrades: boolean("cap_import_grades").notNull().default(false),
+  capImportAttendance: boolean("cap_import_attendance")
+    .notNull()
+    .default(false),
+  capImportFast: boolean("cap_import_fast").notNull().default(false),
+  capImportIready: boolean("cap_import_iready").notNull().default(false),
+
   // Comp Time (FLSA compensatory time) per-staff capabilities. Mirrors
   // the AST gate above so the role-management UI can sit them side by
   // side under "Time Tracking."

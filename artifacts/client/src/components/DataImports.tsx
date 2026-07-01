@@ -18,7 +18,7 @@ import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowTo
 // dictionary.
 // ---------------------------------------------------------------------------
 
-type Kind =
+export type Kind =
   | "assessments"
   | "rosters"
   | "behavior"
@@ -1077,13 +1077,29 @@ type DataImportsProps = {
   // When false, the scope toggle is hidden and every request goes to the
   // school-scope endpoints.
   canActAsDistrict?: boolean;
+  // When provided, restricts the wizard to just these import kinds — used
+  // by delegated importers (staff granted only capImportGrades / Fast /
+  // Iready) so they see ONLY the importer(s) they can run. Undefined = full
+  // access (admins). The server enforces the same per-kind cap, so this is a
+  // UX filter, not the security boundary.
+  allowedKinds?: Kind[];
 };
 
 export default function DataImports({
   canActAsDistrict = false,
+  allowedKinds,
 }: DataImportsProps) {
+  const visibleKinds = useMemo<Kind[]>(
+    () =>
+      (Object.keys(KIND_DEFS) as Kind[]).filter(
+        (k) => !allowedKinds || allowedKinds.includes(k),
+      ),
+    [allowedKinds],
+  );
   const [tab, setTab] = useState<"upload" | "history">("upload");
-  const [kind, setKind] = useState<Kind>("assessments");
+  const [kind, setKind] = useState<Kind>(
+    () => visibleKinds[0] ?? "assessments",
+  );
   const [scope, setScope] = useState<Scope>("school");
   // points_migration only — how migrated points behave. Default false =
   // "Store balance only" (spendable, excluded from houses/leaderboards).
@@ -1170,6 +1186,15 @@ export default function DataImports({
   // server enforces the same toggle on /rosters/preview and /commit, so
   // this is purely a UX hint — a stale value can't cause a bad commit.
   const [rosterEnabled, setRosterEnabled] = useState<boolean | null>(null);
+  // Defense-in-depth: if allowedKinds narrows at runtime (e.g. caps revoked
+  // on re-auth) and the selected kind is no longer visible, clamp back to
+  // the first allowed kind so the wizard never operates on a hidden kind.
+  useEffect(() => {
+    if (!visibleKinds.includes(kind) && visibleKinds.length > 0) {
+      setKind(visibleKinds[0]);
+    }
+  }, [visibleKinds, kind]);
+
   useEffect(() => {
     let alive = true;
     void (async () => {
@@ -1899,7 +1924,7 @@ export default function DataImports({
         }}
       >
         <span style={{ fontSize: 13, fontWeight: 600 }}>Data type:</span>
-        {(Object.keys(KIND_DEFS) as Kind[]).map((k) => {
+        {visibleKinds.map((k) => {
           // Roster card is opt-in per school. Server enforces the same
           // gate on /rosters/preview + /commit, so the disabled state
           // here is purely a UX hint — a stale tab can't bypass it.
@@ -2220,7 +2245,7 @@ export default function DataImports({
                       marginBottom: "0.85rem",
                     }}
                   >
-                    {(Object.keys(KIND_DEFS) as Kind[]).map((k) => {
+                    {visibleKinds.map((k) => {
                       const def = KIND_DEFS[k];
                       const isRoster = k === "rosters";
                       const disabled =

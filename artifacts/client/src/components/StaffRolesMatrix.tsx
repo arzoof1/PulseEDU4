@@ -61,8 +61,17 @@ interface Props {
     isSuperUser?: boolean;
     isDistrictAdmin?: boolean;
     isAdmin?: boolean;
+    isCoreTeam?: boolean;
+    capStaffRoles?: boolean;
     capManageRoles?: boolean;
   };
+}
+
+// Full role-management authority mirrors the server: Admin / SuperUser /
+// cap_staff_roles. Core Team without one of these is admitted in a restricted
+// "import-only" mode where the ONLY editable caps are the four data importers.
+function hasFullRoleAuthority(u: Props["currentUser"]): boolean {
+  return Boolean(u.isSuperUser || u.isAdmin || u.capStaffRoles);
 }
 
 // Pages displayed as the columns of the matrix.
@@ -95,6 +104,19 @@ const PAGES: { key: BoolKey; label: string; group: string }[] = [
   { group: "Admin", key: "capTourGuide", label: "Tour Guide" },
   { group: "Admin", key: "capManageEsign", label: "e-Sign Documents" },
   { group: "Admin", key: "capManageContactInfo", label: "Contact Info Fixes" },
+  { group: "Data Import", key: "capImportGrades", label: "Import Grades" },
+  { group: "Data Import", key: "capImportAttendance", label: "Import Attendance" },
+  { group: "Data Import", key: "capImportFast", label: "Import FAST" },
+  { group: "Data Import", key: "capImportIready", label: "Import iReady" },
+];
+
+// The four delegable data-import caps. A Core-Team-but-not-admin actor may
+// assign ONLY these; the server strips everything else from their PATCH.
+const IMPORT_CAP_KEYS: BoolKey[] = [
+  "capImportGrades",
+  "capImportAttendance",
+  "capImportFast",
+  "capImportIready",
 ];
 
 const TEACHER_BASELINE: BoolKey[] = [
@@ -361,6 +383,11 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
     email: string;
   } | null>(null);
 
+  const fullAuthority = hasFullRoleAuthority(currentUser);
+  // Restricted mode: a Core-Team member without full role authority can only
+  // delegate the four data-import caps. The roster is read-only otherwise, and
+  // the create / add-role / export / password buttons are hidden.
+  const importOnlyMode = !fullAuthority && Boolean(currentUser.isCoreTeam);
   const canManageRoles =
     Boolean(currentUser.isSuperUser) || Boolean(currentUser.capManageRoles);
   const canResetPasswords =
@@ -681,23 +708,27 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
             onChange={(e) => setFilter(e.target.value)}
             style={{ minWidth: 220 }}
           />
-          <button type="button" onClick={() => setShowAddStaff(true)}>
-            + Add Staff
-          </button>
-          {canManageRoles && (
+          {!importOnlyMode && (
+            <button type="button" onClick={() => setShowAddStaff(true)}>
+              + Add Staff
+            </button>
+          )}
+          {!importOnlyMode && canManageRoles && (
             <button type="button" onClick={() => setShowAddRole(true)}>
               + Add Role
             </button>
           )}
-          <button
-            type="button"
-            className="ghost"
-            onClick={exportCsv}
-            disabled={exporting}
-            title="Download the full staff roster (name, email, role, department, and contact details) as a CSV you can open in Excel."
-          >
-            {exporting ? "Exporting…" : "Export staff (CSV)"}
-          </button>
+          {!importOnlyMode && (
+            <button
+              type="button"
+              className="ghost"
+              onClick={exportCsv}
+              disabled={exporting}
+              title="Download the full staff roster (name, email, role, department, and contact details) as a CSV you can open in Excel."
+            >
+              {exporting ? "Exporting…" : "Export staff (CSV)"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -905,7 +936,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                   >
                     <DefaultRoomCell
                       value={(s["defaultRoom"] as string | null) ?? ""}
-                      saving={isSaving}
+                      saving={isSaving || importOnlyMode}
                       onSave={(next) =>
                         patchStaff(s.id, {
                           defaultRoom: next.trim() === "" ? null : next.trim(),
@@ -923,7 +954,9 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                     <ReceivingLocationsCell
                       assignedIds={receivedByStaff[s.id] ?? []}
                       locations={assignableLocations}
-                      onEdit={() => setCoverageTarget(s)}
+                      onEdit={
+                        importOnlyMode ? undefined : () => setCoverageTarget(s)
+                      }
                     />
                   </td>
                   <td
@@ -937,7 +970,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                       value={(s["houseId"] as number | null) ?? null}
                       houses={housesWithLiveCounts}
                       recommendedHouseId={recommendedHouseId}
-                      saving={isSaving}
+                      saving={isSaving || importOnlyMode}
                       onSave={(next) =>
                         patchStaff(s.id, { houseId: next })
                       }
@@ -952,7 +985,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                   >
                     <select
                       value={(s["department"] as string | null) ?? ""}
-                      disabled={isSaving}
+                      disabled={isSaving || importOnlyMode}
                       onChange={(e) =>
                         patchStaff(s.id, {
                           department: e.target.value === "" ? null : e.target.value,
@@ -977,7 +1010,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                   >
                     <select
                       value={(s["title"] as string | null) ?? ""}
-                      disabled={isSaving}
+                      disabled={isSaving || importOnlyMode}
                       onChange={(e) =>
                         patchStaff(s.id, {
                           title: e.target.value === "" ? null : e.target.value,
@@ -1216,7 +1249,7 @@ function ReceivingLocationsCell({
 }: {
   assignedIds: number[];
   locations: LocationOption[];
-  onEdit: () => void;
+  onEdit?: () => void;
 }) {
   const byId = useMemo(() => {
     const m = new Map<number, LocationOption>();
@@ -1242,16 +1275,18 @@ function ReceivingLocationsCell({
           </span>
         )}
       </div>
-      <div>
-        <button
-          type="button"
-          className="ghost"
-          onClick={onEdit}
-          style={{ fontSize: 12, padding: "2px 10px" }}
-        >
-          Edit locations
-        </button>
-      </div>
+      {onEdit && (
+        <div>
+          <button
+            type="button"
+            className="ghost"
+            onClick={onEdit}
+            style={{ fontSize: 12, padding: "2px 10px" }}
+          >
+            Edit locations
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1425,6 +1460,7 @@ const PAGE_GROUPS: { key: string; label: string }[] = [
   { key: "Daily", label: "Daily tools" },
   { key: "Manage", label: "Manage & oversight" },
   { key: "Admin", label: "Administration" },
+  { key: "Data Import", label: "Data imports" },
 ];
 
 function StaffAccessModal({
@@ -1445,6 +1481,12 @@ function StaffAccessModal({
   const isSelf = staff.id === currentUser.id;
   const canManageSensitiveCaps =
     Boolean(currentUser.isSuperUser) || Boolean(currentUser.isAdmin);
+  // Core Team without full role authority: only the four data-import caps are
+  // editable; roles are hidden and every other cap is locked. Mirrors the
+  // server field-strip so the modal never builds a body the server rejects.
+  const importOnlyMode =
+    !hasFullRoleAuthority(currentUser) && Boolean(currentUser.isCoreTeam);
+  const importCapSet = new Set<BoolKey>(IMPORT_CAP_KEYS);
 
   const [caps, setCaps] = useState<Set<BoolKey>>(
     () => new Set(PAGES.filter((p) => Boolean(staff[p.key])).map((p) => p.key)),
@@ -1456,6 +1498,8 @@ function StaffAccessModal({
   });
 
   function canSetRole(flag: BoolKey): boolean {
+    // Import-only delegators cannot change ANY role — only the import caps.
+    if (importOnlyMode) return false;
     if (flag === "isSuperUser" || flag === "isDistrictAdmin")
       return Boolean(currentUser.isSuperUser);
     if (flag === "isAdmin")
@@ -1480,6 +1524,9 @@ function StaffAccessModal({
   // we batch the save) would sink every other change in the request. Lock
   // both cases so the modal never builds a body the server rejects.
   function capLockReason(key: BoolKey): string | undefined {
+    // Import-only delegators may toggle ONLY the four data-import caps.
+    if (importOnlyMode && !importCapSet.has(key))
+      return "You may only assign data-import access.";
     if (key === "capStaffRoles" || key === "capManageRoles") {
       if (!canManageSensitiveCaps)
         return "Only an Admin or SuperUser can change this page.";
@@ -1568,13 +1615,16 @@ function StaffAccessModal({
         </div>
         <div className="tdp-body">
           <p className="tdp-intro">
-            Pick a role to grant a starter set of pages, then check or uncheck
-            individual pages below. Nothing changes until you click Save.
+            {importOnlyMode
+              ? "Turn on the data importers this person should be able to run. Nothing changes until you click Save."
+              : "Pick a role to grant a starter set of pages, then check or uncheck individual pages below. Nothing changes until you click Save."}
           </p>
           <div className="tdp-scroll">
-            <div className="cp-group-label">Roles</div>
-            <ul className="cp-list">
-              {ROLE_PRESETS.map((r) => {
+            {!importOnlyMode && (
+              <>
+                <div className="cp-group-label">Roles</div>
+                <ul className="cp-list">
+                  {ROLE_PRESETS.map((r) => {
                 const on = Boolean(roleFlags[r.flag]);
                 const locked = roleLocked(r.flag);
                 return (
@@ -1643,6 +1693,8 @@ function StaffAccessModal({
                     </button>
                   ))}
                 </div>
+              </>
+            )}
               </>
             )}
 

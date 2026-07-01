@@ -85,6 +85,24 @@ function requireManager(
   next();
 }
 
+// The attendance/tardy upload is one of the four delegable data importers.
+// Eligibility managers reach it as before; a delegated clerk may also reach it
+// with capImportAttendance alone (without the rest of the Eligibility Hub).
+function requireAttendanceImporter(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const staff = staffOf(req);
+  if (!canManageEligibility(staff) && !staff.capImportAttendance) {
+    res
+      .status(403)
+      .json({ error: "Not authorized to import attendance" });
+    return;
+  }
+  next();
+}
+
 // Settings edits are limited to admin / district admin / SuperUser /
 // Athletic Director (district-default ownership). Core Team / front-office
 // dismissal staff can manage rosters + notes but not the school-wide rules.
@@ -661,7 +679,7 @@ router.post(
 router.post(
   "/eligibility/attendance/upload",
   requireStaff,
-  requireManager,
+  requireAttendanceImporter,
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
     if (schoolId === null) return;
@@ -773,7 +791,7 @@ router.post(
 router.get(
   "/eligibility/uploads",
   requireStaff,
-  requireManager,
+  requireAttendanceImporter,
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
     if (schoolId === null) return;

@@ -40,6 +40,7 @@ import TourAdminPage, { TourLeadBanner } from "./components/TourAdminPage";
 import TicketingAdminPage from "./components/TicketingAdminPage";
 import EligibilityHub, {
   EligibilitySettingsPanel,
+  UploadTab as AttendanceUploadTab,
 } from "./components/EligibilityHub";
 import SchoolGradeCalculatorPage from "./components/SchoolGradeCalculatorPage";
 import EsignManagerPage from "./components/EsignManagerPage";
@@ -160,7 +161,7 @@ import SettingsHub, {
   type SettingsTile,
   type SettingsTileId,
 } from "./components/SettingsHub";
-import DataImports from "./components/DataImports";
+import DataImports, { type Kind as ImportKind } from "./components/DataImports";
 import DataManagementHub from "./components/DataManagementHub";
 import SchoolSwitcher from "./components/SchoolSwitcher";
 import SchoolBrandingPanel from "./components/SchoolBrandingPanel";
@@ -4045,6 +4046,7 @@ NAV_GROUP_OWNERSHIP.schoolAdmin = [
   // Consolidated AST + Comp Time admin home (was four separate items).
   "staffTime",
   "dataExport",
+  "importData",
 ];
 
 function groupContainsActive(groupId: string, activeSection: string): boolean {
@@ -5500,6 +5502,12 @@ function App() {
     classroomStoreEnabled?: boolean;
     capStaffRoles?: boolean;
     capManageRoles?: boolean;
+    // Delegated data-importer caps — Admin/Core Team can grant each
+    // individually so a data clerk runs ONE importer without full admin.
+    capImportGrades?: boolean;
+    capImportAttendance?: boolean;
+    capImportFast?: boolean;
+    capImportIready?: boolean;
     capManageDisplays?: boolean;
     capManageDismissal?: boolean;
     capTourNotify?: boolean;
@@ -5686,6 +5694,7 @@ function App() {
     | "studentLookup"
     | "settings"
     | "staffRoles"
+    | "importData"
     | "bellSchedule"
     | "activeKiosks"
     | "kioskCards"
@@ -9860,6 +9869,31 @@ function App() {
     Boolean(authUser?.isSuperUser) ||
     Boolean(authUser?.isAdmin) ||
     Boolean(authUser?.capStaffRoles);
+  // Core Team can reach the Staff & Roles page to delegate ONLY the four
+  // data-importer capabilities (the modal renders in import-only mode for
+  // them). Full role management still requires canManageStaffRoles.
+  const canDelegateImporters = canManageStaffRoles || isCoreTeamMember;
+  // Delegated data-importer caps — an Admin/Core-Team member can grant each
+  // importer to a data clerk individually. The clerk reaches a dedicated
+  // "Data Imports" page (importData) rather than Settings → Data Management.
+  // Admins keep the existing Settings + Eligibility paths, so this page is
+  // gated to non-admin-tier staff to avoid a redundant second entry point.
+  const capImportGrades = Boolean(authUser?.capImportGrades);
+  const capImportFast = Boolean(authUser?.capImportFast);
+  const capImportIready = Boolean(authUser?.capImportIready);
+  const capImportAttendance = Boolean(authUser?.capImportAttendance);
+  const hasDelegatedImportCap =
+    capImportGrades || capImportFast || capImportIready || capImportAttendance;
+  const isAdminTier = isAdmin || isSuperUser || isDistrictAdmin;
+  const showImportDataPage = hasDelegatedImportCap && !isAdminTier;
+  const importAllowedKinds = useMemo<ImportKind[]>(() => {
+    const kinds: ImportKind[] = [];
+    if (capImportGrades) kinds.push("gradebook");
+    if (capImportFast)
+      kinds.push("fast_scores", "fast_florida", "fast_prior_year");
+    if (capImportIready) kinds.push("assessments");
+    return kinds;
+  }, [capImportGrades, capImportFast, capImportIready]);
   const canViewIssDashboard =
     isSuperUser ||
     isAdmin ||
@@ -10000,7 +10034,10 @@ function App() {
     if (!canManageSettings && activeSection === "settings") {
       setActiveSection("hallPasses");
     }
-    if (!canManageStaffRoles && activeSection === "staffRoles") {
+    if (!canDelegateImporters && activeSection === "staffRoles") {
+      setActiveSection("hallPasses");
+    }
+    if (!showImportDataPage && activeSection === "importData") {
       setActiveSection("hallPasses");
     }
     if (!isEseCoord && activeSection === "ese") {
@@ -11444,6 +11481,8 @@ function App() {
         const showSchoolAdmin =
           isAdmin ||
           canManageStaffRoles ||
+          canDelegateImporters ||
+          showImportDataPage ||
           canManageBellSchedules ||
           canManageDisplays ||
           canAccessMtssHub ||
@@ -12058,8 +12097,14 @@ function App() {
                   activeSection,
                 )}
               >
-                {(isAdmin || canManageStaffRoles) &&
+                {(isAdmin || canDelegateImporters) &&
                   renderNavItem(adminNavSections[0])}
+                {showImportDataPage &&
+                  renderNavItem({
+                    key: "importData",
+                    label: "Data Imports",
+                    icon: IconClipboard,
+                  })}
                 {canManageBellSchedules &&
                   bellScheduleNavSections.map(renderNavItem)}
                 {canManageDisplays &&
@@ -22432,8 +22477,29 @@ function App() {
         <TrustedAdultInterventionsAdmin />
       )}
 
-      {activeSection === "staffRoles" && canManageStaffRoles && authUser && (
+      {activeSection === "staffRoles" && canDelegateImporters && authUser && (
         <StaffRolesMatrix currentUser={authUser} />
+      )}
+
+      {activeSection === "importData" && showImportDataPage && (
+        <div>
+          <h2 style={{ marginTop: 0 }}>Data Imports</h2>
+          <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+            Upload the data you've been given access to. Each importer previews
+            your file before anything is saved.
+          </p>
+          {importAllowedKinds.length > 0 && (
+            <DataImports
+              canActAsDistrict={false}
+              allowedKinds={importAllowedKinds}
+            />
+          )}
+          {capImportAttendance && (
+            <div className="card" style={{ marginTop: "1rem" }}>
+              <AttendanceUploadTab onUploaded={() => undefined} />
+            </div>
+          )}
+        </div>
       )}
 
       {activeSection === "bellSchedule" && canManageBellSchedules && (

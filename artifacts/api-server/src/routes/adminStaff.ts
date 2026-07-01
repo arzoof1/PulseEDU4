@@ -56,6 +56,34 @@ function requireAdminOrSuper() {
   };
 }
 
+// True when the actor holds full role-management authority (Admin / SuperUser
+// / cap_staff_roles). Core Team (without one of these) is admitted only to the
+// list + PATCH endpoints below, and only to assign the four data-import caps —
+// every other field is stripped from their PATCH.
+function hasFullRoleAuthority(staff: StaffRow): boolean {
+  return Boolean(staff.isAdmin || staff.isSuperUser || staff.capStaffRoles);
+}
+
+// Wider gate used ONLY for the staff list + the role-management PATCH so Core
+// Team can delegate data importers. The create / reset-password / delete /
+// bulk endpoints stay on requireAdminOrSuper(). Strict field-stripping in the
+// PATCH handler keeps a Core-Team-only actor limited to the import caps.
+function requireRoleManagerOrCoreTeam() {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const staff = await loadStaff(req);
+    if (!staff) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    if (!hasFullRoleAuthority(staff) && !staff.isCoreTeam) {
+      res.status(403).json({ error: "Admin access required" });
+      return;
+    }
+    (req as Request & { staff: StaffRow }).staff = staff;
+    next();
+  };
+}
+
 const ROLE_FLAGS = [
   "isSuperUser",
   "isDistrictAdmin",
@@ -109,8 +137,22 @@ const CAP_FLAGS = [
   "capTourGuide",
   "capManageEsign",
   "capManageContactInfo",
+  "capImportGrades",
+  "capImportAttendance",
+  "capImportFast",
+  "capImportIready",
 ] as const;
 type CapFlag = (typeof CAP_FLAGS)[number];
+
+// The four delegable data-import caps. Admin OR Core Team may assign these to
+// any staff member; a Core-Team-but-not-admin actor may set ONLY these (every
+// other role flag / cap is stripped from their PATCH below).
+const IMPORT_CAP_FLAGS: readonly CapFlag[] = [
+  "capImportGrades",
+  "capImportAttendance",
+  "capImportFast",
+  "capImportIready",
+] as const;
 
 const ALL_BOOL_FIELDS = [...ROLE_FLAGS, ...CAP_FLAGS, "active" as const];
 
@@ -181,6 +223,10 @@ const STAFF_SELECT = {
   capTourGuide: staffTable.capTourGuide,
   capManageEsign: staffTable.capManageEsign,
   capManageContactInfo: staffTable.capManageContactInfo,
+  capImportGrades: staffTable.capImportGrades,
+  capImportAttendance: staffTable.capImportAttendance,
+  capImportFast: staffTable.capImportFast,
+  capImportIready: staffTable.capImportIready,
   defaultRoom: staffTable.defaultRoom,
   houseId: staffTable.houseId,
   department: staffTable.department,
@@ -295,7 +341,7 @@ function csvCell(value: unknown): string {
 // (e.g. districtOverview.ts), gated by capability, not this roster surface.
 router.get(
   "/admin/staff",
-  requireAdminOrSuper(),
+  requireRoleManagerOrCoreTeam(),
   async (req: Request, res: Response) => {
     const schoolId = req.schoolId;
     if (!schoolId) {
@@ -433,7 +479,7 @@ router.get(
 // Update any subset of role/capability flags + active for one staff member.
 router.patch(
   "/admin/staff/:id",
-  requireAdminOrSuper(),
+  requireRoleManagerOrCoreTeam(),
   async (req: Request, res: Response) => {
     const targetId = Number(req.params.id);
     if (!Number.isFinite(targetId)) {
@@ -541,6 +587,25 @@ router.patch(
     }
 
     const actor = (req as Request & { staff: StaffRow }).staff;
+
+    // Core-Team-without-full-authority actors are admitted to this PATCH ONLY
+    // to delegate the four data-import caps. Strip every other field BEFORE the
+    // role-escalation gates so a stray flag can't 403 the whole save (and can't
+    // be smuggled through by a hand-crafted request — client gating is
+    // bypassable). Full role managers (Admin/SuperUser/cap_staff_roles) keep
+    // the complete field set.
+    if (!hasFullRoleAuthority(actor)) {
+      const allowed = new Set<string>(IMPORT_CAP_FLAGS);
+      for (const key of Object.keys(updates)) {
+        if (!allowed.has(key)) delete updates[key];
+      }
+      if (Object.keys(updates).length === 0) {
+        res
+          .status(403)
+          .json({ error: "You may only assign data-import capabilities." });
+        return;
+      }
+    }
 
     // Only SuperUser may grant or remove SuperUser. Only SuperUser/Admin may
     // change Admin. cap_staff_roles by itself does NOT permit escalation —
