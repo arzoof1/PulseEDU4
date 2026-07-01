@@ -315,12 +315,41 @@ export async function buildParentSnapshot(
       ),
     );
   if (!link) return { ok: false, status: 403, error: "Not your student" };
+  return assembleSnapshot(studentId, { mode: "parent", parentId });
+}
 
+// Staff-facing variant. Renders the SAME family HeartBEAT a parent would see so
+// staff can print it during a data chat (e.g. when a family hasn't been invited
+// to the portal). The caller (route) MUST already have verified staff auth +
+// visibility via getVisibleStudentIds; we re-check the school boundary here as
+// defense-in-depth. There is no parent account, so section visibility uses the
+// school defaults only (no per-parent prefs) — i.e. exactly what the school
+// permits families to see.
+export async function buildStaffSnapshot(
+  studentId: number,
+  schoolId: number,
+): Promise<SnapshotResult> {
+  return assembleSnapshot(studentId, { mode: "staff", schoolId });
+}
+
+type SnapshotContext =
+  | { mode: "parent"; parentId: number }
+  | { mode: "staff"; schoolId: number };
+
+async function assembleSnapshot(
+  studentId: number,
+  ctx: SnapshotContext,
+): Promise<SnapshotResult> {
   const [student] = await db
     .select()
     .from(studentsTable)
     .where(eq(studentsTable.id, studentId));
   if (!student)
+    return { ok: false, status: 404, error: "Student not found" };
+  // Staff school boundary — never render another school's student even if the
+  // upstream visibility check was somehow skipped. 404 (not 403) so we don't
+  // leak the existence of an out-of-school id.
+  if (ctx.mode === "staff" && student.schoolId !== ctx.schoolId)
     return { ok: false, status: 404, error: "Student not found" };
 
   // Retention indicator (R-in-circle on the parent portal student card).
@@ -338,28 +367,31 @@ export async function buildParentSnapshot(
     .map((r) => r.gradeLevel)
     .sort((a, b) => a - b);
 
-  const [parent] = await db
-    .select({ displayName: parentsTable.displayName, email: parentsTable.email })
-    .from(parentsTable)
-    .where(eq(parentsTable.id, parentId));
+  // Parent identity only exists on the parent-facing surface. For the staff
+  // print there is no parent account, so leave it blank — the return path
+  // already null-coalesces displayName/email to "".
+  const parent =
+    ctx.mode === "parent"
+      ? (
+          await db
+            .select({
+              displayName: parentsTable.displayName,
+              email: parentsTable.email,
+            })
+            .from(parentsTable)
+            .where(eq(parentsTable.id, ctx.parentId))
+        )[0]
+      : undefined;
 
-  // School + parent visibility prefs in parallel; gate() enforces the
-  // contract: schoolEnabled AND parentPref !== false.
-  const [settingsRow, prefsRow, featureRow] = await Promise.all([
+  // School visibility settings + academic-evidence feature always load. The
+  // per-parent prefs row only exists in parent mode; staff print falls back to
+  // the school defaults. gate() enforces the contract: schoolEnabled AND
+  // parentPref !== false (undefined prefs => school default wins).
+  const [settingsRow, featureRow] = await Promise.all([
     db
       .select()
       .from(schoolHeartbeatSettingsTable)
       .where(eq(schoolHeartbeatSettingsTable.schoolId, student.schoolId))
-      .then((rows) => rows[0]),
-    db
-      .select()
-      .from(parentHeartbeatPrefsTable)
-      .where(
-        and(
-          eq(parentHeartbeatPrefsTable.parentId, parentId),
-          eq(parentHeartbeatPrefsTable.studentId, studentId),
-        ),
-      )
       .then((rows) => rows[0]),
     db
       .select({
@@ -370,6 +402,19 @@ export async function buildParentSnapshot(
       .where(eq(schoolSettingsTable.schoolId, student.schoolId))
       .then((rows) => rows[0]),
   ]);
+  const prefsRow =
+    ctx.mode === "parent"
+      ? await db
+          .select()
+          .from(parentHeartbeatPrefsTable)
+          .where(
+            and(
+              eq(parentHeartbeatPrefsTable.parentId, ctx.parentId),
+              eq(parentHeartbeatPrefsTable.studentId, studentId),
+            ),
+          )
+          .then((rows) => rows[0])
+      : undefined;
   const gate = (
     schoolFlag: boolean | null | undefined,
     schoolDefault: boolean,

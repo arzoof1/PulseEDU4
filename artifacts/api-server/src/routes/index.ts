@@ -80,6 +80,7 @@ import myWatchlistRouter from "./myWatchlist";
 import heartbeatSettingsRouter from "./heartbeatSettings";
 import parentHeartbeatPrefsRouter from "./parentHeartbeatPrefs";
 import parentSnapshotPdfRouter from "./parentSnapshotPdf";
+import staffHeartbeatPdfRouter from "./staffHeartbeatPdf";
 import displaysRouter from "./displays";
 import displayOverridesRouter from "./displayOverrides";
 import uiPrefsRouter from "./uiPrefs";
@@ -134,6 +135,7 @@ router.use(healthRouter);
 // otherwise shadow `GET /students/id-badges.pdf`.
 router.use(studentIdBadgesRouter);
 router.use(studentLookupRouter);
+router.use(staffHeartbeatPdfRouter);
 router.use(studentsRouter);
 router.use(hallPassesRouter);
 router.use(coverageRouter);

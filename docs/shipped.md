@@ -3,6 +3,28 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Staff "Print HeartBEAT" on Parent Access.** A staff-facing button next to
+  "Preview as parent" (Parent Access page, Admin/Core Team) downloads the SAME
+  family HeartBEAT PDF a parent receives — for data chats / family meetings, no
+  email sent, no parent account required.
+  - **Server.** New `GET /api/staff/heartbeat.pdf?studentId=<numeric db id>`
+    (`routes/staffHeartbeatPdf.ts`): inline `requireStaff`, `requireSchool`,
+    then a visibility gate via the shared `getVisibleStudentIds` (teachers →
+    own roster + trusted-adult; core team / admin / counselor → school-wide).
+    Out-of-scope OR non-existent students both return an **indistinguishable
+    404** so staff can't probe existence. Renders via the existing
+    `renderSnapshotPdf`.
+  - **Snapshot reuse.** `lib/parentSnapshot.ts` split into a thin
+    `buildParentSnapshot` wrapper + shared private `assembleSnapshot(studentId,
+    ctx)` core + new exported `buildStaffSnapshot(studentId, schoolId)`. Staff
+    mode has no parent account (parent identity blank) and no per-parent prefs,
+    so section visibility falls back to the school's HeartBEAT defaults; it also
+    re-checks `student.schoolId === schoolId` (404 otherwise). Parent-mode data
+    path is byte-for-byte unchanged. `localSisId` only — never FLEID.
+  - **Client.** `ParentAccess.tsx` gained a `btnGhost` "Print HeartBEAT" button
+    (per-student busy state, double-click guard) that `authFetch`es the route
+    and downloads the blob as `HeartBEAT-<Last>-<First>.pdf`.
+
 - **Teacher-Roster FAST parity on Student Snapshot + Family HeartBEAT PDF.**
   Replaced the raw scale-score "FAST Progress Monitoring" views with the same
   achievement-level presentation the Teacher Roster / Insights drill-downs use,
