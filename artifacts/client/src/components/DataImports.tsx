@@ -2000,7 +2000,11 @@ export default function DataImports({
 
       {tab === "upload" && (
         <div style={{ marginTop: "1rem" }}>
-          <DirectionsPanel kind={kind} kindDef={kindDef} />
+          {/* File directions are kind-specific, so only show them once a
+              data type has been chosen (step > 0). On the "Choose data"
+              step they'd appear ABOVE the picker and users start reading
+              upload instructions for a type they haven't selected yet. */}
+          {step > 0 && <DirectionsPanel kind={kind} kindDef={kindDef} />}
           {commitResult ? (
             <div
               style={{
