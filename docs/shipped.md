@@ -3,6 +3,32 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Student metrics engine + Student Summary export + Student Snapshot report.**
+  A shared per-student metrics engine (`lib/studentMetrics.ts`,
+  `loadStudentMetrics(schoolId, ids, range)`) computes whole-child aggregates
+  over a date range (default YTD = Aug 1): attendance (% est + days absent),
+  tardies, hall passes (count + minutes), lost instruction, behavior pullouts,
+  OSS/ISS **served** days (distinct served day-rows), PBIS net points, active
+  MTSS tier flags, and FAST PM by subject. `computeCohortComparison` returns
+  mean + percentile for a target student vs a distribution and **suppresses**
+  comparison below the min cohort size (n < 10). Two surfaces sit on the
+  engine: (A) a **Student Summary** bulk dataset in the existing Data Export
+  page (`exportRegistry.ts`, key `student_summary`, isCoreTeam-gated,
+  date-range aware, FLEID-safe — `localSisId` only), and (B) a new visual
+  **Student Snapshot** report page (`StudentSnapshotPage.tsx`, sidebar
+  **Student Snapshot**, Core Team only) that compares one student to their
+  **grade cohort** with a 4-pillar radar (oriented so a bigger shape =
+  healthier, vs the cohort-median ring), per-metric peer bars (percentile +
+  value vs cohort mean), a distribution strip, plus supports (active MTSS
+  tiers) and FAST PM trajectory. Backed by
+  `GET /api/exports/snapshot/:studentId` (isCoreTeam + `getVisibleStudentIds`,
+  school+grade-scoped cohort, suppressed n<10, de-identified numeric
+  distributions, `localSisId` only). Sections follow the "mindset for
+  learning" arc (Shows Up → Stays in Room → Engages → Is Supported →
+  Achieves). An **Open Snapshot** button on the Student Profile (Student
+  Lookup) hands the selected student to the report; both surfaces share the
+  Data Export Core Team gate.
+
 - **Parent Notifications control panel (Family Communication).** A new
   admin-only panel (sidebar **Family → Parent Notifications**, gated by
   `canManageSettings`) lets a school turn each automated/recurring parent

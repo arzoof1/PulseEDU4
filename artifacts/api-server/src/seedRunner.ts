@@ -10,6 +10,7 @@ import {
   ensureClassComposerPlansSchema,
   ensureClassComposerSkillClusterSchema,
   ensureCommunicationSchema,
+  ensureDataExportSchema,
   ensureDataImporterRollbackSchema,
   ensureDistrictIntegrationsSchema,
   ensureDemoAdminAccountOnce,
@@ -132,6 +133,7 @@ export async function runSeed(): Promise<void> {
   await ensureOnTimeTestModeColumns();
   await ensureParentMessagesSchema();
   await ensureCommunicationSchema();
+  await ensureDataExportSchema();
   await ensurePulseDnaVideosSchema();
   await ensureStudentLocalSisIdBackfill();
   try {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { TeacherPicker } from "../TeacherPicker";
 import { ModalShell } from "../pulseBrainLab/GroupsTab";
 import {
   fetchTeachers,
@@ -216,24 +217,20 @@ export default function PartneringWithParentsHub() {
           >
             {t("Assisting teacher", "Ayudando al docente")}
           </label>
-          <select
-            value={teacherId ?? ""}
-            onChange={(e) => setTeacherId(Number(e.target.value))}
-            style={{
+          <TeacherPicker
+            teachers={teachers}
+            value={teacherId ?? null}
+            showDeptFilter
+            ariaLabel="Assisting teacher"
+            selectStyle={{
               border: `1px solid ${C.line}`,
               borderRadius: 8,
               padding: "0.4rem 0.6rem",
               fontSize: "0.9rem",
               color: C.ink,
             }}
-          >
-            {teachers.map((tch) => (
-              <option key={tch.id} value={tch.id}>
-                {tch.displayName}
-                {tch.department ? ` · ${tch.department}` : ""}
-              </option>
-            ))}
-          </select>
+            onChange={(id) => setTeacherId(id)}
+          />
           {isCoreAssisting && (
             <span
               style={{

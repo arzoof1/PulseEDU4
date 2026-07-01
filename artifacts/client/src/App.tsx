@@ -20,6 +20,7 @@ import {
 import AdminHubPage from "./components/AdminHubPage";
 import FamilyMessagesHub from "./components/FamilyMessagesHub";
 import ParentNotificationsPanel from "./components/ParentNotificationsPanel";
+import PulloutNotificationsPanel from "./components/PulloutNotificationsPanel";
 import PulseDnaStudio from "./components/PulseDnaStudio";
 import HelpAssistant from "./components/HelpAssistant";
 import { TileHome, type Tile as TileHomeTile } from "./pages/TileHome";
@@ -39,6 +40,7 @@ import TourAdminPage, { TourLeadBanner } from "./components/TourAdminPage";
 import TicketingAdminPage from "./components/TicketingAdminPage";
 import EligibilityHub, {
   EligibilitySettingsPanel,
+  UploadTab as AttendanceUploadTab,
 } from "./components/EligibilityHub";
 import SchoolGradeCalculatorPage from "./components/SchoolGradeCalculatorPage";
 import EsignManagerPage from "./components/EsignManagerPage";
@@ -53,10 +55,13 @@ import {
 import FastCoveragePage from "./components/FastCoveragePage";
 import CameraRegistryPage from "./components/CameraRegistryPage";
 import CreatePassModal from "./components/CreatePassModal";
+import { AccountMenu } from "./components/AccountMenu";
 import StudentPicker from "./components/StudentPicker";
 import { CompanionQueuePanel } from "./components/CompanionQueuePanel";
 import { KioskBanner } from "./components/KioskBanner";
 import { KioskCardsPanel } from "./components/KioskCardsPanel";
+import { DataExportRegistryPanel } from "./components/DataExportRegistryPanel";
+import StudentSnapshotPage from "./components/StudentSnapshotPage";
 import { KioskWelcomePanel } from "./components/KioskWelcomePanel";
 import { StudentBadgesPanel } from "./components/StudentBadgesPanel";
 import { RollCallPanel } from "./components/RollCallPanel";
@@ -158,7 +163,7 @@ import SettingsHub, {
   type SettingsTile,
   type SettingsTileId,
 } from "./components/SettingsHub";
-import DataImports from "./components/DataImports";
+import DataImports, { type Kind as ImportKind } from "./components/DataImports";
 import DataManagementHub from "./components/DataManagementHub";
 import SchoolSwitcher from "./components/SchoolSwitcher";
 import SchoolBrandingPanel from "./components/SchoolBrandingPanel";
@@ -4004,7 +4009,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "behaviorReview",
   ],
   specialPrograms: ["accommodations", "ese"],
-  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess", "callCampaign", "parentNotifications"],
+  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess", "callCampaign", "parentNotifications", "pulloutNotifications"],
   people: ["teacherRoster", "staffRoles"],
   // hallPassMgmt is reached via the Hall Passes admin tools; it has no
   // dedicated nav item so we anchor it to School Admin so the sidebar
@@ -4042,6 +4047,8 @@ NAV_GROUP_OWNERSHIP.schoolAdmin = [
   "interventions",
   // Consolidated AST + Comp Time admin home (was four separate items).
   "staffTime",
+  "dataExport",
+  "importData",
 ];
 
 function groupContainsActive(groupId: string, activeSection: string): boolean {
@@ -5613,6 +5620,12 @@ function App() {
     classroomStoreEnabled?: boolean;
     capStaffRoles?: boolean;
     capManageRoles?: boolean;
+    // Delegated data-importer caps — Admin/Core Team can grant each
+    // individually so a data clerk runs ONE importer without full admin.
+    capImportGrades?: boolean;
+    capImportAttendance?: boolean;
+    capImportFast?: boolean;
+    capImportIready?: boolean;
     capManageDisplays?: boolean;
     capManageDismissal?: boolean;
     capTourNotify?: boolean;
@@ -5632,6 +5645,10 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [staffUsers, setStaffUsers] = useState<string[]>([]);
   const [settingsTile, setSettingsTile] = useState<SettingsTileId | null>(null);
+  // Bumped every time a sidebar nav item is clicked while ALREADY on that
+  // section. Used as the <main> remount key so re-clicking a section returns
+  // it to its home view (resets any child-held sub-navigation / drill-down).
+  const [navHomeTick, setNavHomeTick] = useState(0);
   const [callWorklistOpen, setCallWorklistOpen] = useState(false);
   // True after the user clicked "Open" on a row in the Onboarding
   // Checklist. Drives the floating "← Back to Onboarding" banner that
@@ -5799,9 +5816,12 @@ function App() {
     | "studentLookup"
     | "settings"
     | "staffRoles"
+    | "importData"
     | "bellSchedule"
     | "activeKiosks"
     | "kioskCards"
+    | "dataExport"
+    | "studentSnapshot"
     | "parentAccess"
     | "superUserHome"
     | "featureLicensing"
@@ -5848,6 +5868,7 @@ function App() {
     | "familyMessages"
     | "pulseDnaStudio"
     | "parentNotifications"
+    | "pulloutNotifications"
     | "eligibility"
     | "tileHome"
     | "pbisWallets"
@@ -5904,6 +5925,15 @@ function App() {
   const [safetyPlanStudentId, setSafetyPlanStudentId] = useState<
     string | null
   >(null);
+  // Pre-selected student when launching the Student Snapshot from the Student
+  // Profile ("Open Snapshot"). The Snapshot page falls back to its own search
+  // when these are null.
+  const [snapshotStudentId, setSnapshotStudentId] = useState<string | null>(
+    null,
+  );
+  const [snapshotStudentLabel, setSnapshotStudentLabel] = useState<
+    string | null
+  >(null);
   // Where to return when the user clicks Back on the StudentProfile.
   // Tracks which surface launched the drill-in so we don't always dump
   // them on the Watchlist. Defaults to "insightsWatchlist" for legacy
@@ -5958,6 +5988,7 @@ function App() {
     staffDirectoryShowCellPhone: boolean;
     manualRosterUploadEnabled: boolean;
     strictHouseNameMatch: boolean;
+    gpaEnabled: boolean;
     // Two-tier feature flags. Defaults are TRUE so the optimistic UI
     // matches what the server returns for any school that has not yet
     // flipped anything off.
@@ -6024,6 +6055,7 @@ function App() {
     staffDirectoryShowCellPhone: false,
     manualRosterUploadEnabled: false,
     strictHouseNameMatch: false,
+    gpaEnabled: false,
     featureFamilyComm: true,
     featurePbis: true,
     featureSchoolStore: true,
@@ -6088,6 +6120,46 @@ function App() {
   const [activityStudentId, setActivityStudentId] = useState("");
   const [activityStudentSearch, setActivityStudentSearch] = useState("");
   const [summaryChecks, setSummaryChecks] = useState<Record<string, boolean>>({});
+  // Family Communication attendance (absences) — read from the shared
+  // Eligibility source of truth so it agrees with Insights / Roster / Profile.
+  const [familyCommAttendance, setFamilyCommAttendance] = useState<{
+    daysAbsent: number | null;
+    attendancePct: number | null;
+    daysTardy: number | null;
+  } | null>(null);
+  useEffect(() => {
+    if (!activityStudentId) {
+      setFamilyCommAttendance(null);
+      return;
+    }
+    let cancelled = false;
+    setFamilyCommAttendance(null);
+    (async () => {
+      try {
+        const r = await authFetch(
+          `/api/insights/students/${encodeURIComponent(
+            activityStudentId,
+          )}/attendance`,
+        );
+        if (!r.ok) {
+          if (!cancelled) setFamilyCommAttendance(null);
+          return;
+        }
+        const data = await r.json();
+        if (!cancelled)
+          setFamilyCommAttendance({
+            daysAbsent: data?.daysAbsent ?? null,
+            attendancePct: data?.attendancePct ?? null,
+            daysTardy: data?.daysTardy ?? null,
+          });
+      } catch {
+        if (!cancelled) setFamilyCommAttendance(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activityStudentId]);
   type MtssTemplate = { id: string; name: string; subject: string; body: string };
   const MTSS_TEMPLATES_KEY = "pulseed.mtssTemplates.v1";
   const defaultMtssTemplates: MtssTemplate[] = [
@@ -7858,6 +7930,8 @@ function App() {
             typeof data.strictHouseNameMatch === "boolean"
               ? data.strictHouseNameMatch
               : false,
+          gpaEnabled:
+            typeof data.gpaEnabled === "boolean" ? data.gpaEnabled : false,
           featureFamilyComm: boolOrTrue(data.featureFamilyComm),
           featurePbis: boolOrTrue(data.featurePbis),
           featureSchoolStore: boolOrTrue(data.featureSchoolStore),
@@ -8008,6 +8082,8 @@ function App() {
           typeof data.strictHouseNameMatch === "boolean"
             ? data.strictHouseNameMatch
             : false,
+        gpaEnabled:
+          typeof data.gpaEnabled === "boolean" ? data.gpaEnabled : false,
         featureFamilyComm: boolOrTrue(data.featureFamilyComm),
         featurePbis: boolOrTrue(data.featurePbis),
         featureSchoolStore: boolOrTrue(data.featureSchoolStore),
@@ -9956,6 +10032,31 @@ function App() {
     Boolean(authUser?.isSuperUser) ||
     Boolean(authUser?.isAdmin) ||
     Boolean(authUser?.capStaffRoles);
+  // Core Team can reach the Staff & Roles page to delegate ONLY the four
+  // data-importer capabilities (the modal renders in import-only mode for
+  // them). Full role management still requires canManageStaffRoles.
+  const canDelegateImporters = canManageStaffRoles || isCoreTeamMember;
+  // Delegated data-importer caps — an Admin/Core-Team member can grant each
+  // importer to a data clerk individually. The clerk reaches a dedicated
+  // "Data Imports" page (importData) rather than Settings → Data Management.
+  // Admins keep the existing Settings + Eligibility paths, so this page is
+  // gated to non-admin-tier staff to avoid a redundant second entry point.
+  const capImportGrades = Boolean(authUser?.capImportGrades);
+  const capImportFast = Boolean(authUser?.capImportFast);
+  const capImportIready = Boolean(authUser?.capImportIready);
+  const capImportAttendance = Boolean(authUser?.capImportAttendance);
+  const hasDelegatedImportCap =
+    capImportGrades || capImportFast || capImportIready || capImportAttendance;
+  const isAdminTier = isAdmin || isSuperUser || isDistrictAdmin;
+  const showImportDataPage = hasDelegatedImportCap && !isAdminTier;
+  const importAllowedKinds = useMemo<ImportKind[]>(() => {
+    const kinds: ImportKind[] = [];
+    if (capImportGrades) kinds.push("gradebook");
+    if (capImportFast)
+      kinds.push("fast_scores", "fast_florida", "fast_prior_year");
+    if (capImportIready) kinds.push("assessments");
+    return kinds;
+  }, [capImportGrades, capImportFast, capImportIready]);
   const canViewIssDashboard =
     isSuperUser ||
     isAdmin ||
@@ -10096,7 +10197,10 @@ function App() {
     if (!canManageSettings && activeSection === "settings") {
       setActiveSection("hallPasses");
     }
-    if (!canManageStaffRoles && activeSection === "staffRoles") {
+    if (!canDelegateImporters && activeSection === "staffRoles") {
+      setActiveSection("hallPasses");
+    }
+    if (!showImportDataPage && activeSection === "importData") {
       setActiveSection("hallPasses");
     }
     if (!isEseCoord && activeSection === "ese") {
@@ -10172,6 +10276,14 @@ function App() {
     if (!canManageEligibility && activeSection === "eligibility") {
       setActiveSection("hallPasses");
     }
+    // Data Export is admin / Core Team only — bounce anyone else off it.
+    if (!isCoreTeamMember && activeSection === "dataExport") {
+      setActiveSection("hallPasses");
+    }
+    // Student Snapshot shares the Data Export gate (Core Team only).
+    if (!isCoreTeamMember && activeSection === "studentSnapshot") {
+      setActiveSection("hallPasses");
+    }
   }, [
     isAdmin,
     isEseCoord,
@@ -10193,6 +10305,7 @@ function App() {
     canAccessInsightsHub,
     isSuperUser,
     canActAsDistrict,
+    isCoreTeamMember,
   ]);
 
   useEffect(() => {
@@ -10533,6 +10646,16 @@ function App() {
     }
     return null;
   };
+  // Sidebar navigation click. Clicking a section you are ALREADY on returns
+  // it to its home view: we bump `navHomeTick` (the <main> remount key) so
+  // any child-held sub-navigation / drill-down resets, and clear the
+  // App-level Settings hub tile. Switching to a different section behaves as
+  // before (no forced remount — the outgoing section unmounts naturally).
+  const handleNavClick = (key: typeof activeSection) => {
+    if (key === activeSection) setNavHomeTick((t) => t + 1);
+    setSettingsTile(null);
+    setActiveSection(key);
+  };
   const renderNavItem = (s: NavSection) => {
     // Centralized role gate. Applied here (not at each call site) so
     // every sidebar surface — Quick Access, themed accordions, admin
@@ -10549,7 +10672,7 @@ function App() {
         key={s.key}
         type="button"
         className={"nav-item" + (activeSection === s.key ? " active" : "")}
-        onClick={() => setActiveSection(s.key)}
+        onClick={() => handleNavClick(s.key)}
       >
         <span className="nav-icon">{s.icon}</span>
         {s.label}
@@ -11219,9 +11342,7 @@ function App() {
             Show
             <select
               value={dateFilter}
-              onChange={(e) =>
-                setDateFilter(e.target.value as "today" | "all")
-              }
+              onChange={(e) => setDateFilter(e.target.value as "today" | "all")}
             >
               <option value="all">All Records</option>
               <option value="today">Today Only</option>
@@ -11270,52 +11391,21 @@ function App() {
               once a user dismisses the in-page "How to use" shells they
               stay hidden across reloads until re-enabled here. */}
           <HelpToggleButton />
-          <span className="user-pill">
-            <span className="avatar">{userInitials || "?"}</span>
-            <span style={{ padding: "0 0.5rem", whiteSpace: "nowrap" }}>
-              {currentStaffUser}
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                setChangePwCurrent("");
-                setChangePwNew("");
-                setChangePwError("");
-                setChangePwOk(false);
-                setShowChangePw(true);
-              }}
-              style={{
-                background: "transparent",
-                border: "1px solid var(--border)",
-                color: "inherit",
-                borderRadius: 6,
-                padding: "0.25rem 0.6rem",
-                cursor: "pointer",
-                fontSize: "0.85rem",
-                marginRight: 4,
-              }}
-            >
-              Change password
-            </button>
-            <button
-              type="button"
-              onClick={async () => {
-                await authFetch("/api/auth/logout", { method: "POST" });
-                setAuthUser(null);
-              }}
-              style={{
-                background: "transparent",
-                border: "1px solid var(--border)",
-                color: "inherit",
-                borderRadius: 6,
-                padding: "0.25rem 0.6rem",
-                cursor: "pointer",
-                fontSize: "0.85rem",
-              }}
-            >
-              Sign out
-            </button>
-          </span>
+          <AccountMenu
+            initials={userInitials}
+            name={currentStaffUser}
+            onChangePassword={() => {
+              setChangePwCurrent("");
+              setChangePwNew("");
+              setChangePwError("");
+              setChangePwOk(false);
+              setShowChangePw(true);
+            }}
+            onSignOut={async () => {
+              await authFetch("/api/auth/logout", { method: "POST" });
+              setAuthUser(null);
+            }}
+          />
         </div>
       </header>
 
@@ -11531,12 +11621,15 @@ function App() {
         const showSchoolAdmin =
           isAdmin ||
           canManageStaffRoles ||
+          canDelegateImporters ||
+          showImportDataPage ||
           canManageBellSchedules ||
           canManageDisplays ||
           canAccessMtssHub ||
           canManageSettings ||
           canApproveAst ||
           canManageEligibility ||
+          isCoreTeamMember ||
           (canManageBehaviorLists && !isBehaviorSpec);
         // Phase 2 polish — per-user namespace for the NavGroup accordion
         // localStorage so two staff sharing the same browser don't inherit
@@ -11732,7 +11825,7 @@ function App() {
                 .nav-item) — gradient + rotating label invites a tap. */}
             <SpotlightLaunchButton
               active={activeSection === "spotlight"}
-              onClick={() => setActiveSection("spotlight")}
+              onClick={() => handleNavClick("spotlight")}
             />
             {/* Active Kiosks moved out of Quick Access into School Admin
                 (admin-only operational monitoring lives with the other
@@ -12122,6 +12215,12 @@ function App() {
                     label: "Parent Notifications",
                     icon: IconUser,
                   })}
+                {canManageSettings &&
+                  renderNavItem({
+                    key: "pulloutNotifications",
+                    label: "Pullout Notifications",
+                    icon: IconUser,
+                  })}
               </NavGroup>
             )}
             {/* People accordion removed — Teacher Roster lives in
@@ -12138,8 +12237,14 @@ function App() {
                   activeSection,
                 )}
               >
-                {(isAdmin || canManageStaffRoles) &&
+                {(isAdmin || canDelegateImporters) &&
                   renderNavItem(adminNavSections[0])}
+                {showImportDataPage &&
+                  renderNavItem({
+                    key: "importData",
+                    label: "Data Imports",
+                    icon: IconClipboard,
+                  })}
                 {canManageBellSchedules &&
                   bellScheduleNavSections.map(renderNavItem)}
                 {canManageDisplays &&
@@ -12164,6 +12269,18 @@ function App() {
                     label: "Kiosk Cards",
                     icon: IconClipboard,
                   })}
+                {isCoreTeamMember &&
+                  renderNavItem({
+                    key: "dataExport",
+                    label: "Data Export",
+                    icon: IconClipboard,
+                  })}
+                {isCoreTeamMember &&
+                  renderNavItem({
+                    key: "studentSnapshot",
+                    label: "Student Snapshot",
+                    icon: IconClipboard,
+                  })}
                 {isAdmin && renderNavItem(adminNavSections[1])}
                 {(canApproveAst || canApproveCompTime) &&
                   renderNavItem(adminNavSections[2])}
@@ -12184,7 +12301,7 @@ function App() {
         );
       })()}
 
-      <main className="app-main">
+      <main className="app-main" key={navHomeTick}>
 
       {/* "Kiosk active on this device" banner — surfaces the still-live
           kiosk token (if any) so a teacher who flipped to the staff app
@@ -15204,6 +15321,16 @@ function App() {
                     </h3>
                     <ul style={{ margin: 0 }}>
                       <li>Student Name: {studentName}</li>
+                      <li>
+                        Absences (This semester):{" "}
+                        {familyCommAttendance?.daysAbsent != null
+                          ? `${familyCommAttendance.daysAbsent}${
+                              familyCommAttendance.attendancePct != null
+                                ? ` (~${familyCommAttendance.attendancePct}% attendance)`
+                                : ""
+                            }`
+                          : "—"}
+                      </li>
                       <li>Hall Passes {label}: {sPasses.length}</li>
                       <li>Tardies {label}: {tardyCount}</li>
                       <li>Check-Ins {label}: {checkInCount}</li>
@@ -19896,6 +20023,15 @@ function App() {
                 authUser?.isGuidanceCounselor ||
                 authUser?.capManageDismissal,
             )}
+            onOpenSnapshot={
+              isCoreTeamMember
+                ? (sid, label) => {
+                    setSnapshotStudentId(sid);
+                    setSnapshotStudentLabel(label);
+                    setActiveSection("studentSnapshot");
+                  }
+                : undefined
+            }
           />
         </PrivacyGate>
       )}
@@ -22384,8 +22520,29 @@ function App() {
         <TrustedAdultInterventionsAdmin />
       )}
 
-      {activeSection === "staffRoles" && canManageStaffRoles && authUser && (
+      {activeSection === "staffRoles" && canDelegateImporters && authUser && (
         <StaffRolesMatrix currentUser={authUser} />
+      )}
+
+      {activeSection === "importData" && showImportDataPage && (
+        <div>
+          <h2 style={{ marginTop: 0 }}>Data Imports</h2>
+          <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+            Upload the data you've been given access to. Each importer previews
+            your file before anything is saved.
+          </p>
+          {importAllowedKinds.length > 0 && (
+            <DataImports
+              canActAsDistrict={false}
+              allowedKinds={importAllowedKinds}
+            />
+          )}
+          {capImportAttendance && (
+            <div className="card" style={{ marginTop: "1rem" }}>
+              <AttendanceUploadTab onUploaded={() => undefined} />
+            </div>
+          )}
+        </div>
       )}
 
       {activeSection === "bellSchedule" && canManageBellSchedules && (
@@ -22939,7 +23096,7 @@ function App() {
                 icon: "🗂️",
                 title: "Data Management",
                 subtitle:
-                  "Import CSVs (FAST, iReady, MAP, rosters, behavior) and export your school's current data with filters and column picker.",
+                  "Import grades (gradebook), FAST, iReady, MAP, rosters, and behavior, and export your school's current data with filters and column picker.",
                 group: "admin-tenancy",
               });
             }
@@ -23241,6 +23398,10 @@ function App() {
 
       {activeSection === "parentNotifications" && canManageSettings && (
         <ParentNotificationsPanel />
+      )}
+
+      {activeSection === "pulloutNotifications" && canManageSettings && (
+        <PulloutNotificationsPanel />
       )}
 
       {activeSection === "insightsWatchlist" && (
@@ -23887,6 +24048,18 @@ function App() {
             </table>
           )}
         </div>
+      )}
+
+      {activeSection === "dataExport" && isCoreTeamMember && (
+        <DataExportRegistryPanel />
+      )}
+
+      {activeSection === "studentSnapshot" && isCoreTeamMember && (
+        <StudentSnapshotPage
+          initialStudentId={snapshotStudentId}
+          initialStudentLabel={snapshotStudentLabel}
+          onBack={() => setActiveSection("hallPasses")}
+        />
       )}
 
       {activeSection === "kioskCards" && canManageSettings && (
@@ -24873,6 +25046,60 @@ function App() {
                 </span>
               </span>
             </label>
+            {Boolean(
+              authUser?.isSuperUser ||
+                authUser?.isDistrictAdmin ||
+                authUser?.isAdmin ||
+                authUser?.isBehaviorSpecialist ||
+                authUser?.isMtssCoordinator ||
+                authUser?.isSchoolPsychologist ||
+                authUser?.isCoreTeam ||
+                authUser?.isConfidentialSecretary,
+            ) && (
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: "0.5rem",
+                  padding: "0.6rem 0.75rem",
+                  border: "1px solid var(--border-subtle, #e2e8f0)",
+                  borderRadius: 6,
+                  background: "var(--surface-subtle, #f8fafc)",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={schoolSettings.gpaEnabled}
+                  onChange={(e) =>
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      gpaEnabled: e.target.checked,
+                    })
+                  }
+                  style={{ marginTop: "0.2rem" }}
+                />
+                <span style={{ display: "grid", gap: "0.15rem" }}>
+                  <span style={{ fontWeight: 600 }}>
+                    Show GPA (unweighted 4.0) from current grades
+                  </span>
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontSize: "0.85rem",
+                      fontWeight: "normal",
+                    }}
+                  >
+                    Off by default. Core Team only. When on, an unweighted
+                    4.0 GPA is computed from the imported current grades and
+                    surfaced on the Student Profile, Student Snapshot, and
+                    parent communications. Scale: 90–100 = 4, 80–89 = 3,
+                    70–79 = 2, 60–69 = 1, below 60 = 0 — a simple average
+                    over the current semester's graded courses. Requires a
+                    Gradebook import (Data &amp; Integrations).
+                  </span>
+                </span>
+              </label>
+            )}
             <label style={{ display: "grid", gap: "0.25rem" }}>
               <span>
                 Number of Periods in the School Day

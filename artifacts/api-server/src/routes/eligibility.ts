@@ -85,6 +85,24 @@ function requireManager(
   next();
 }
 
+// The attendance/tardy upload is one of the four delegable data importers.
+// Eligibility managers reach it as before; a delegated clerk may also reach it
+// with capImportAttendance alone (without the rest of the Eligibility Hub).
+function requireAttendanceImporter(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const staff = staffOf(req);
+  if (!canManageEligibility(staff) && !staff.capImportAttendance) {
+    res
+      .status(403)
+      .json({ error: "Not authorized to import attendance" });
+    return;
+  }
+  next();
+}
+
 // Settings edits are limited to admin / district admin / SuperUser /
 // Athletic Director (district-default ownership). Core Team / front-office
 // dismissal staff can manage rosters + notes but not the school-wide rules.
@@ -468,7 +486,226 @@ router.get(
     }
     const settings = await loadEligibilitySettings(schoolId);
     const roster = await rosterForActivity(schoolId, activityId, settings);
-    res.json({ settings, roster });
+    const asOfDate = await latestUploadAsOf(schoolId, settings.semesterLabel);
+    res.json({
+      settings,
+      roster,
+      asOf: asOfDate?.toISOString() ?? null,
+      asOfLabel: formatAsOf(asOfDate),
+    });
+  },
+);
+
+// ---- Per-activity eligibility export (CSV / PDF) ---------------------------
+// "Select a team or club first, then print." Both downloads carry an
+// "Attendance Eligibility as of <upload date>" header where the date is the
+// latest attendance upload for the current semester.
+
+// Latest attendance upload timestamp for the semester (the "as of" date).
+async function latestUploadAsOf(
+  schoolId: number,
+  semesterLabel: string,
+): Promise<Date | null> {
+  const [row] = await db
+    .select({ createdAt: eligibilityUploadsTable.createdAt })
+    .from(eligibilityUploadsTable)
+    .where(
+      and(
+        eq(eligibilityUploadsTable.schoolId, schoolId),
+        eq(eligibilityUploadsTable.semesterLabel, semesterLabel),
+      ),
+    )
+    .orderBy(desc(eligibilityUploadsTable.createdAt))
+    .limit(1);
+  return row?.createdAt ?? null;
+}
+
+function formatAsOf(d: Date | null): string {
+  if (!d) return "no attendance upload yet";
+  // School-local (Eastern) calendar date — the upload's day is what matters.
+  return d.toLocaleDateString("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
+// CSV formula-injection guard (mirrors routes/reports.ts csvCell).
+function csvCell(value: unknown): string {
+  let s = value == null ? "" : String(value);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+const EXPORT_STATUS_LABEL: Record<string, string> = {
+  ok: "OK",
+  warning: "Warning",
+  ineligible: "Ineligible",
+};
+
+// Fetch the activity row (name/category) after school-scoping. Returns null
+// when the activity is missing or belongs to another school.
+async function activityInSchool(activityId: number, schoolId: number) {
+  if (!Number.isInteger(activityId) || activityId <= 0) return null;
+  const [row] = await db
+    .select()
+    .from(eligibilityActivitiesTable)
+    .where(
+      and(
+        eq(eligibilityActivitiesTable.id, activityId),
+        eq(eligibilityActivitiesTable.schoolId, schoolId),
+      ),
+    );
+  return row ?? null;
+}
+
+function safeFilePart(s: string): string {
+  return s.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "activity";
+}
+
+router.get(
+  "/eligibility/activities/:id/roster.csv",
+  requireStaff,
+  requireManager,
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (schoolId === null) return;
+    const activityId = Number(req.params.id);
+    const activity = await activityInSchool(activityId, schoolId);
+    if (!activity) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const settings = await loadEligibilitySettings(schoolId);
+    const roster = await rosterForActivity(schoolId, activityId, settings);
+    const asOf = formatAsOf(await latestUploadAsOf(schoolId, settings.semesterLabel));
+
+    const lines: string[] = [];
+    lines.push(csvCell(`Attendance Eligibility as of ${asOf}`));
+    lines.push(csvCell(`Activity: ${activity.name}`));
+    lines.push(
+      csvCell(
+        `${settings.semesterLabel} · ineligible at ${settings.threshold}+ counted absences`,
+      ),
+    );
+    lines.push("");
+    const header = [
+      "Name",
+      "Grade",
+      "SIS ID",
+      "Jersey",
+      "Counted Absences",
+      "Tardies",
+      "Notes Left",
+      "Status",
+    ];
+    lines.push(header.map(csvCell).join(","));
+    for (const m of roster) {
+      lines.push(
+        [
+          `${m.lastName}, ${m.firstName}`,
+          m.grade ?? "",
+          m.localSisId ?? "",
+          m.jerseyNumber ?? "",
+          m.countedAbsences,
+          m.daysTardy,
+          m.notesLeft,
+          EXPORT_STATUS_LABEL[m.status] ?? m.status,
+        ]
+          .map(csvCell)
+          .join(","),
+      );
+    }
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="eligibility-${safeFilePart(activity.name)}-${settings.semesterLabel.replace(/\s+/g, "-")}.csv"`,
+    );
+    res.send(lines.join("\r\n"));
+  },
+);
+
+router.get(
+  "/eligibility/activities/:id/roster.pdf",
+  requireStaff,
+  requireManager,
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (schoolId === null) return;
+    const activityId = Number(req.params.id);
+    const activity = await activityInSchool(activityId, schoolId);
+    if (!activity) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const settings = await loadEligibilitySettings(schoolId);
+    const roster = await rosterForActivity(schoolId, activityId, settings);
+    const asOf = formatAsOf(await latestUploadAsOf(schoolId, settings.semesterLabel));
+
+    const doc = new PDFDocument({ size: "LETTER", margin: 48 });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="eligibility-${safeFilePart(activity.name)}-${settings.semesterLabel.replace(/\s+/g, "-")}.pdf"`,
+    );
+    doc.pipe(res);
+
+    doc
+      .fontSize(18)
+      .fillColor("#111827")
+      .text(`Attendance Eligibility as of ${asOf}`);
+    doc
+      .moveDown(0.2)
+      .fontSize(12)
+      .fillColor("#374151")
+      .text(activity.name);
+    doc
+      .moveDown(0.1)
+      .fontSize(10)
+      .fillColor("#6b7280")
+      .text(
+        `${settings.semesterLabel}  •  Ineligible at ${settings.threshold}+ counted absences  •  Warning within ${settings.warningWindowDays}`,
+      );
+    doc.moveDown(0.6);
+
+    if (roster.length === 0) {
+      doc
+        .fontSize(12)
+        .fillColor("#111827")
+        .text("No students on this roster yet.");
+      doc.end();
+      return;
+    }
+
+    doc
+      .fontSize(9)
+      .fillColor("#6b7280")
+      .text(
+        "Name                              Grade  Jersey  Counted Abs  Tardies  Status",
+      );
+    doc.moveDown(0.1);
+    for (const m of roster) {
+      const name = `${m.lastName}, ${m.firstName}`.padEnd(32, " ").slice(0, 32);
+      const grade = String(m.grade ?? "—").padEnd(5, " ");
+      const jersey = (m.jerseyNumber ?? "—").padEnd(6, " ");
+      const abs = String(m.countedAbsences).padEnd(11, " ");
+      const tard = String(m.daysTardy).padEnd(7, " ");
+      doc
+        .fontSize(10)
+        .fillColor(
+          m.status === "ineligible"
+            ? "#b91c1c"
+            : m.status === "warning"
+              ? "#b45309"
+              : "#111827",
+        )
+        .text(
+          `${name}  ${grade}  ${jersey}  ${abs}  ${tard}  ${(EXPORT_STATUS_LABEL[m.status] ?? m.status).toUpperCase()}`,
+        );
+    }
+    doc.end();
   },
 );
 
@@ -661,7 +898,7 @@ router.post(
 router.post(
   "/eligibility/attendance/upload",
   requireStaff,
-  requireManager,
+  requireAttendanceImporter,
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
     if (schoolId === null) return;
@@ -773,7 +1010,7 @@ router.post(
 router.get(
   "/eligibility/uploads",
   requireStaff,
-  requireManager,
+  requireAttendanceImporter,
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
     if (schoolId === null) return;

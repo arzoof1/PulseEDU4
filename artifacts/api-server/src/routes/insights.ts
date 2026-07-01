@@ -63,6 +63,7 @@ import {
   type PmPlacementSet,
 } from "../lib/fastCutScores.js";
 import { loadAttendanceMetrics } from "../lib/attendanceMetrics.js";
+import { loadStudentGrades } from "../lib/studentMetrics.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 import {
   loadFastHistory,
@@ -443,6 +444,37 @@ function buildBucketTrajectory(
 }
 
 // (retention indicator data is loaded per request below — not at module scope.)
+// Lightweight per-student attendance read for surfaces (e.g. Family
+// Communication daily summary) that need absences without loading the whole
+// whole-child profile. Reuses the shared Eligibility source of truth so the
+// numbers agree with Insights / Teacher Roster / Early Warning / Profile.
+router.get("/insights/students/:studentId/attendance", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId == null) return;
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+
+  const studentId = String(req.params.studentId ?? "").trim();
+  if (!studentId) {
+    res.status(400).json({ error: "Missing studentId" });
+    return;
+  }
+
+  const visibility = await getVisibleStudentIds(staff, schoolId);
+  if (!visibility.full && !visibility.ids.has(studentId)) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+
+  const map = await loadAttendanceMetrics(schoolId, [studentId]);
+  const m = map.get(studentId) ?? null;
+  res.json({
+    daysAbsent: m?.daysAbsent ?? null,
+    attendancePct: m?.attendancePct ?? null,
+    daysTardy: m?.daysTardy ?? null,
+  });
+});
+
 router.get("/insights/students/:studentId/profile", async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (schoolId == null) return;
@@ -538,6 +570,15 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
     schoolId,
     studentIds: [studentId],
   });
+  // Current grades + GPA (from the Gradebook importer). Same effective-quarter
+  // + GPA logic as the shared metrics engine; GPA is null when the school's
+  // GPA toggle is off.
+  const gradesMap = await loadStudentGrades(schoolId, [studentId]);
+  const grades = gradesMap.get(studentId) ?? {
+    currentGrades: [],
+    gpa: null,
+    gpaEnabled: false,
+  };
   const assessments = await db
     .select({
       name: assessmentsTable.assessmentName,
@@ -658,6 +699,18 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
       ),
     );
   const hallPassCount = studentHallPasses.length;
+
+  // Absences come from the Eligibility Hub upload (eligibility_absences) —
+  // the school-wide source of truth for cumulative semester attendance, and
+  // the SAME reader used by the Insights lists, Teacher Roster, and Early
+  // Warning. Loading it here keeps the Attendance axis in agreement with
+  // those surfaces. NOTE: daysAbsent / attendancePct are SEMESTER-cumulative
+  // (not windowed like the tardy / ISS counts above).
+  const attendanceMap = await loadAttendanceMetrics(schoolId, [studentId]);
+  const attendanceMetrics = attendanceMap.get(studentId);
+  const daysAbsent = attendanceMetrics?.daysAbsent ?? null;
+  const attendancePct = attendanceMetrics?.attendancePct ?? null;
+
   const [hallPassAvgRow] = await db
     .select({
       total: sql<number>`COUNT(*)::int`,
@@ -1107,17 +1160,42 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
   // Flow (attendance & transitions): tardies + ISS days + over-average
   // hall-pass usage drag from a 100 baseline. Hall-pass excess only
   // counts when the student is materially above their grade peers.
-  let flowScore = 100;
+  // Absences (semester source of truth) drive the baseline: when we know the
+  // attendance %, that IS the starting score; otherwise fall back to a
+  // per-absence drag, and finally to the old 100 baseline when the student
+  // has no absence data at all. In-window frictions (tardies, ISS days,
+  // excess hall passes) then subtract on top.
+  let flowScore: number;
+  if (attendancePct != null) {
+    flowScore = attendancePct;
+  } else if (daysAbsent != null) {
+    flowScore = 100 - Math.min(daysAbsent * 4, 60);
+  } else {
+    flowScore = 100;
+  }
   flowScore -= tardyRows.length * 5;
   flowScore -= issRows.length * 15;
   const hallPassExcess =
     hallPassSchoolAvg > 0 ? Math.max(0, hallPassCount - hallPassSchoolAvg * 2) : 0;
   flowScore -= Math.min(hallPassExcess * 5, 25);
   flowScore = Math.max(0, Math.min(100, Math.round(flowScore)));
+  const flowParts: string[] = [];
+  if (daysAbsent != null) {
+    flowParts.push(
+      `${daysAbsent} day${daysAbsent === 1 ? "" : "s"} absent${
+        attendancePct != null ? ` (~${attendancePct}%)` : ""
+      } this semester`,
+    );
+  }
+  if (tardyRows.length > 0 || issRows.length > 0 || hallPassCount > 0) {
+    flowParts.push(
+      `${tardyRows.length} tardies, ${issRows.length} ISS days, ${hallPassCount} hall passes (${window.label.toLowerCase()})`,
+    );
+  }
   const flowRationale =
-    tardyRows.length === 0 && issRows.length === 0
-      ? `No tardies or ISS days (${window.label.toLowerCase()})`
-      : `${tardyRows.length} tardies, ${issRows.length} ISS days, ${hallPassCount} hall passes`;
+    flowParts.length > 0
+      ? flowParts.join(" · ")
+      : "No absences, tardies, or ISS days on record";
 
   // Supports in place: this axis is intentionally a "scaffolding meter"
   // rather than a wellness signal. A high score means the student is
@@ -1301,6 +1379,11 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
     },
     pillars: {
       academics: {
+        // Current grades + unweighted 4.0 GPA from the Gradebook importer.
+        // `gpa` is null when the school's GPA toggle is off.
+        currentGrades: grades.currentGrades,
+        gpa: grades.gpa,
+        gpaEnabled: grades.gpaEnabled,
         fastScores: fastScores.map((s) => ({
           subject: s.subject,
           pm1: s.pm1,
@@ -1413,6 +1496,9 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
           })),
       },
       flow: {
+        // Semester absences from the Eligibility Hub (source of truth).
+        daysAbsent,
+        attendancePct,
         tardyCount: tardyRows.length,
         recentTardies: tardyRows.slice(0, 10),
         issDayCount: issRows.length,

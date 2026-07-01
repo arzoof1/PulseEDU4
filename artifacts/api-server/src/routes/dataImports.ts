@@ -28,10 +28,13 @@ import {
   importJobsTable,
   importTemplatesTable,
   assessmentsTable,
+  classSectionsTable,
+  sectionRosterTable,
   studentsTable,
   supportNotesTable,
   studentFastScoresTable,
   studentFastItemResponsesTable,
+  studentCourseGradesTable,
   studentImportSnapshotsTable,
   schoolSettingsTable,
   housesTable,
@@ -41,13 +44,16 @@ import {
   pbisMilestoneEmailsTable,
 } from "@workspace/db";
 import { recommendNextHouse } from "./houses.js";
-import { eq, and, or, desc, sql, isNull, inArray, gte, lte, ilike } from "drizzle-orm";
+import { eq, and, or, desc, sql, isNull, inArray, gte, lte, ilike, ne, not } from "drizzle-orm";
 import {
   requireSchool,
   canImportSchoolData,
   canImportDistrictData,
   canActAsDistrict,
   getDistrictIdForSchool,
+  hasAnySchoolImportCap,
+  canImportKind,
+  allowedSchoolImportKinds,
 } from "../lib/scope.js";
 import {
   DEFAULT_SCHOOL_TZ,
@@ -87,11 +93,31 @@ function requireImporter() {
       res.status(401).json({ error: "Sign-in required" });
       return;
     }
-    if (!canImportSchoolData(staff)) {
+    // Entry gate: admins (every importer) OR anyone holding at least one
+    // delegated school-import cap. Per-kind authorization is enforced
+    // separately by requireImportKind() / canImportKind() so a grades-only
+    // clerk who passes here still can't touch FAST/roster routes.
+    if (!hasAnySchoolImportCap(staff)) {
       res.status(403).json({ error: "Data import access required" });
       return;
     }
     (req as Request & { staff: StaffRow }).staff = staff;
+    next();
+  };
+}
+
+// Per-kind authorization for fixed-kind importer routes. Chains AFTER
+// requireImporter() (which attaches req.staff). Admins bypass; a delegated
+// clerk needs the cap mapped to this kind. Unmapped kinds (rosters / behavior
+// / points_migration) reject every non-admin, preserving today's admin-only
+// behavior for those importers.
+function requireImportKind(kind: string) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    if (!staff || !canImportKind(staff, kind)) {
+      res.status(403).json({ error: "Data import access required" });
+      return;
+    }
     next();
   };
 }
@@ -552,6 +578,7 @@ function parseCsv(csv: string): {
 router.post(
   "/data-imports/assessments/preview",
   requireImporter(),
+  requireImportKind("assessments"),
   async (req, res) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
@@ -628,6 +655,7 @@ router.post(
 router.post(
   "/data-imports/assessments/commit",
   requireImporter(),
+  requireImportKind("assessments"),
   async (req, res) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
@@ -1000,8 +1028,27 @@ router.get("/data-imports/jobs", requireImporter(), async (req, res) => {
     scopePredicate = eq(importJobsTable.schoolId, schoolId);
   }
 
-  const where = kind
-    ? and(scopePredicate, eq(importJobsTable.kind, kind))
+  // Delegated clerks (non-admins) only see jobs for the kinds they're allowed
+  // to import. A specific ?kind request from such a clerk is rejected if it's
+  // outside their grant; an unfiltered request is clamped to their allowed set.
+  // Admins (canImportSchoolData) skip this and see everything in scope.
+  let kindPredicate = kind ? eq(importJobsTable.kind, kind) : undefined;
+  if (scope === "school" && !canImportSchoolData(staff)) {
+    const allowed = allowedSchoolImportKinds(staff);
+    if (kind) {
+      if (!canImportKind(staff, kind)) {
+        res.status(403).json({ error: "Data import access required" });
+        return;
+      }
+    } else if (allowed.length === 0) {
+      res.json([]);
+      return;
+    } else {
+      kindPredicate = inArray(importJobsTable.kind, allowed);
+    }
+  }
+  const where = kindPredicate
+    ? and(scopePredicate, kindPredicate)
     : scopePredicate;
   const rows = await db
     .select()
@@ -1053,6 +1100,13 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
     req.query.scope === "district" && kindRaw === "assessments"
       ? "district"
       : "school";
+  // Delegated clerks may only export the kinds they can import (school scope).
+  // Admins bypass via canImportKind. District scope is gated below by
+  // canActAsDistrict, so this only matters for school-scope exports.
+  if (scope === "school" && !canImportKind(staff, kindRaw)) {
+    res.status(403).json({ error: "Data import access required" });
+    return;
+  }
 
   // ---- Optional row filters (kind-specific). All read off req.query
   // and silently ignored if the kind doesn't support them.
@@ -1122,6 +1176,20 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
             .filter(Boolean),
         )
       : null;
+  // teacherStaffId / period: restrict the export to students enrolled in a
+  // specific teacher's class and/or a specific class period. Both optional
+  // and independent (teacher alone, period alone, or both). Applies to every
+  // kind — each export is student-centric, so we intersect its student set
+  // with the section_roster ⨝ class_sections enrollment set below.
+  const teacherStaffId =
+    typeof req.query.teacherStaffId === "string" &&
+    /^\d+$/.test(req.query.teacherStaffId)
+      ? Number(req.query.teacherStaffId)
+      : null;
+  const periodFilter =
+    typeof req.query.period === "string" && /^\d+$/.test(req.query.period)
+      ? Number(req.query.period)
+      : null;
 
   let schoolIds: number[] = [];
   if (scope === "district") {
@@ -1145,6 +1213,39 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
     if (!schoolId) return;
     schoolIds = [schoolId];
   }
+  // Section-enrollment subselect: the set of student_ids enrolled in a
+  // section matching the teacher and/or period filters. Null when neither
+  // filter is set. class_sections is school-scoped (teacher/period unique
+  // per school) so this naturally narrows even a district-scope export to
+  // the relevant school(s). Planning periods are excluded — they hold no
+  // real roster. Reused at most once per request (one kind runs).
+  const sectionStudentSub =
+    teacherStaffId != null || periodFilter != null
+      ? db
+          .select({ sid: sectionRosterTable.studentId })
+          .from(sectionRosterTable)
+          .innerJoin(
+            classSectionsTable,
+            eq(sectionRosterTable.sectionId, classSectionsTable.id),
+          )
+          .where(
+            and(
+              // Explicit tenant predicates on BOTH joined tables — the
+              // codebase invariant (student_id text is not globally unique)
+              // requires school-scoping every tenant table, even though the
+              // sectionId→class_sections PK join already narrows the section.
+              inArray(sectionRosterTable.schoolId, schoolIds),
+              inArray(classSectionsTable.schoolId, schoolIds),
+              eq(classSectionsTable.isPlanning, false),
+              ...(teacherStaffId != null
+                ? [eq(classSectionsTable.teacherStaffId, teacherStaffId)]
+                : []),
+              ...(periodFilter != null
+                ? [eq(classSectionsTable.period, periodFilter)]
+                : []),
+            )!,
+          )
+      : null;
   // Build (header, rows) per kind. Rows are arrays of strings/numbers
   // in the same order as the headers; Papa.unparse handles quoting and
   // newlines.
@@ -1152,13 +1253,12 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
   let rows: (string | number | null)[][] = [];
 
   if (kindRaw === "rosters") {
-    // Roster filter: grade only.
-    const rosterWhere = grades
-      ? and(
-          inArray(studentsTable.schoolId, schoolIds),
-          inArray(studentsTable.grade, grades),
-        )!
-      : inArray(studentsTable.schoolId, schoolIds);
+    // Roster filter: grade + optional teacher/period (via section enrollment).
+    const rosterConds = [inArray(studentsTable.schoolId, schoolIds)];
+    if (grades) rosterConds.push(inArray(studentsTable.grade, grades));
+    if (sectionStudentSub)
+      rosterConds.push(inArray(studentsTable.studentId, sectionStudentSub));
+    const rosterWhere = and(...rosterConds)!;
     const list = await db
       .select({
         studentId: studentsTable.studentId,
@@ -1242,6 +1342,8 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
     const conds = [inArray(supportNotesTable.schoolId, schoolIds)];
     if (gradeSubselect)
       conds.push(inArray(supportNotesTable.studentId, gradeSubselect));
+    if (sectionStudentSub)
+      conds.push(inArray(supportNotesTable.studentId, sectionStudentSub));
     if (fromYmd)
       conds.push(gte(supportNotesTable.createdAt, fromYmd));
     if (toYmd)
@@ -1289,6 +1391,8 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
     const fsConds = [inArray(studentFastScoresTable.schoolId, schoolIds)];
     if (fsGradeSub)
       fsConds.push(inArray(studentFastScoresTable.studentId, fsGradeSub));
+    if (sectionStudentSub)
+      fsConds.push(inArray(studentFastScoresTable.studentId, sectionStudentSub));
     if (subjectFilter)
       fsConds.push(eq(studentFastScoresTable.subject, subjectFilter));
     const list = await db
@@ -1342,6 +1446,8 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
     const fpyConds = [inArray(studentFastScoresTable.schoolId, schoolIds)];
     if (fpyGradeSub)
       fpyConds.push(inArray(studentFastScoresTable.studentId, fpyGradeSub));
+    if (sectionStudentSub)
+      fpyConds.push(inArray(studentFastScoresTable.studentId, sectionStudentSub));
     if (subjectFilter)
       fpyConds.push(eq(studentFastScoresTable.subject, subjectFilter));
     const list = await db
@@ -1383,6 +1489,8 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
     const aConds = [inArray(assessmentsTable.schoolId, schoolIds)];
     if (aGradeSub)
       aConds.push(inArray(assessmentsTable.studentId, aGradeSub));
+    if (sectionStudentSub)
+      aConds.push(inArray(assessmentsTable.studentId, sectionStudentSub));
     if (fromYmd)
       aConds.push(gte(assessmentsTable.administeredAt, new Date(fromYmd)));
     if (toYmd)
@@ -1468,6 +1576,62 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
   sendCsv(res, kindRaw, [headers, ...rows]);
 });
 
+// ---------------------------------------------------------------------------
+// GET /api/data-imports/export/section-filters
+//   Populates the export panel's Teacher + Period pickers with exactly the
+//   teachers and periods that have a real (non-planning) section this school
+//   year, so a chosen filter never yields a surprise-empty export. School
+//   scope only — teacher/period are school concepts. Gated by requireImporter
+//   (same actors as the export itself). Distinct path from /export so no
+//   route shadowing.
+// ---------------------------------------------------------------------------
+router.get(
+  "/data-imports/export/section-filters",
+  requireImporter(),
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const secs = await db
+      .select({
+        teacherStaffId: classSectionsTable.teacherStaffId,
+        period: classSectionsTable.period,
+      })
+      .from(classSectionsTable)
+      .where(
+        and(
+          eq(classSectionsTable.schoolId, schoolId),
+          eq(classSectionsTable.isPlanning, false),
+        )!,
+      );
+    const teacherIds = Array.from(new Set(secs.map((s) => s.teacherStaffId)));
+    const periods = Array.from(new Set(secs.map((s) => s.period))).sort(
+      (a, b) => a - b,
+    );
+    const staffRows = teacherIds.length
+      ? await db
+          .select({
+            id: staffTable.id,
+            displayName: staffTable.displayName,
+          })
+          .from(staffTable)
+          .where(
+            and(
+              eq(staffTable.schoolId, schoolId),
+              inArray(staffTable.id, teacherIds),
+            )!,
+          )
+      : [];
+    const nameById = new Map(staffRows.map((s) => [s.id, s.displayName]));
+    const teachers = teacherIds
+      .map((id) => ({ id, displayName: nameById.get(id) ?? null }))
+      .filter((t) => t.displayName)
+      .sort((a, b) =>
+        (a.displayName ?? "").localeCompare(b.displayName ?? ""),
+      );
+    res.json({ teachers, periods });
+  },
+);
+
 // CSV writer used by the export endpoint above. Pulled out so each
 // kind branch stays focused on its query shape.
 function sendCsv(
@@ -1534,6 +1698,13 @@ router.post(
         res.status(404).json({ error: "Job not found" });
         return;
       }
+      // A delegated clerk can only roll back the kinds they can import.
+      // Admins bypass via canImportKind. (District jobs above never reach a
+      // delegated clerk — they can't canActAsDistrict.)
+      if (!canImportKind(staff, job.kind)) {
+        res.status(403).json({ error: "Data import access required" });
+        return;
+      }
     } else {
       // Malformed job row (neither scope set) — refuse to touch it.
       res.status(409).json({ error: "Job has no scope" });
@@ -1544,6 +1715,32 @@ router.post(
         .status(409)
         .json({ error: `Cannot roll back a ${job.status} job` });
       return;
+    }
+    // Gradebook uses job-chaining with a TWO-generation retention window, so
+    // only a SINGLE-STEP undo is restorable: rolling back the latest committed
+    // gradebook job exposes the prior generation. Rolling back an OLDER job
+    // would leave the latest pointing at a generation whose rows were already
+    // pruned (empty grades), so we refuse it and require undoing newest-first.
+    if (job.kind === "gradebook" && job.schoolId != null) {
+      const [latest] = await db
+        .select({ id: importJobsTable.id })
+        .from(importJobsTable)
+        .where(
+          and(
+            eq(importJobsTable.schoolId, job.schoolId),
+            eq(importJobsTable.kind, "gradebook"),
+            eq(importJobsTable.status, "committed"),
+          ),
+        )
+        .orderBy(desc(importJobsTable.id))
+        .limit(1);
+      if (!latest || latest.id !== job.id) {
+        res.status(409).json({
+          error:
+            "Only the most recent gradebook upload can be rolled back. Undo newer uploads first.",
+        });
+        return;
+      }
     }
     // FAST score and FAST prior-year imports now carry an
     // `import_job_id` on every row written by the upsert path. Their
@@ -1585,6 +1782,20 @@ router.post(
         count =
           ((itemRes as unknown as { rowCount?: number }).rowCount ?? 0) +
           ((scoreRes as unknown as { rowCount?: number }).rowCount ?? 0);
+      } else if (job.kind === "gradebook" && job.schoolId != null) {
+        // Gradebook uses job-chaining: each upload keeps the prior generation's
+        // rows, so deleting THIS job's rows + flipping its status to
+        // rolled_back makes the previous committed gradebook job the latest
+        // again — loadCurrentGrades then reads it, restoring the prior grades.
+        const r = await tx
+          .delete(studentCourseGradesTable)
+          .where(
+            and(
+              eq(studentCourseGradesTable.importJobId, id),
+              eq(studentCourseGradesTable.schoolId, job.schoolId),
+            ),
+          );
+        count = (r as unknown as { rowCount?: number }).rowCount ?? 0;
       } else if (job.kind === "assessments") {
         if (job.districtId != null && job.schoolId == null) {
           // District-scope rollback: rows span multiple schools. We
@@ -1659,6 +1870,11 @@ router.get(
       if (!schoolId) return;
       if (job.schoolId !== schoolId) {
         res.status(404).json({ error: "Job not found" });
+        return;
+      }
+      const staff = (req as Request & { staff: StaffRow }).staff;
+      if (!canImportKind(staff, job.kind)) {
+        res.status(403).json({ error: "Data import access required" });
         return;
       }
     } else {
@@ -3390,6 +3606,198 @@ async function parseFloridaXlsx(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Gradebook ("Live Grade Report") xlsx parser. One row per student×course;
+// each row carries ALL four quarters (Q1-Q4) plus a final (FIN). Matched to
+// students by the "Other ID" column == students.local_sis_id. Distinct from
+// FAST/iReady — this is the school's own gradebook.
+//
+// Expected columns (case-insensitive; the course-code header is year-prefixed
+// e.g. "2026 Course" so we match on a trailing "course"):
+//   Grade · Other ID · Full Name · <YYYY> Course · Section · Course Desc ·
+//   Teacher · Length · Start Term · Stop Term · Q1 · Q2 · Q3 · Q4 · FIN
+// ---------------------------------------------------------------------------
+type GradebookParsedRow = {
+  rowIndex: number; // 1-based xlsx data row (for warnings)
+  localSisId: string;
+  gradeLevel: string | null;
+  courseCode: string;
+  section: string | null;
+  courseDesc: string | null;
+  teacherName: string | null;
+  length: string | null;
+  startTerm: string | null;
+  stopTerm: string | null;
+  q1: number | null;
+  q2: number | null;
+  q3: number | null;
+  q4: number | null;
+  fin: number | null;
+};
+
+type GradebookParse =
+  | { ok: false; error: string }
+  | {
+      ok: true;
+      rows: GradebookParsedRow[];
+      warnings: Array<{ row: number; message: string }>;
+    };
+
+// A grade cell: numeric 0-100, sometimes stored as leading-zero text
+// ("067"). Out-of-range / non-numeric -> null (with a warning collected by
+// the caller). FIN can also be blank on un-finalized courses.
+function parseGradeCell(v: unknown): { value: number | null; bad: boolean } {
+  const s = parseCellString(v);
+  if (!s) return { value: null, bad: false };
+  const n = Number(s);
+  if (!Number.isFinite(n)) return { value: null, bad: true };
+  const r = Math.round(n);
+  if (r < 0 || r > 100) return { value: null, bad: true };
+  return { value: r, bad: false };
+}
+
+async function parseGradebookXlsx(buffer: Buffer): Promise<GradebookParse> {
+  let wb: ExcelJS.Workbook;
+  try {
+    wb = new ExcelJS.Workbook();
+    const ab = buffer.buffer.slice(
+      buffer.byteOffset,
+      buffer.byteOffset + buffer.byteLength,
+    );
+    await wb.xlsx.load(ab as ArrayBuffer);
+  } catch (e) {
+    return { ok: false, error: `Could not read xlsx: ${(e as Error).message}` };
+  }
+  const ws = wb.worksheets[0];
+  if (!ws || ws.rowCount < 2) {
+    return { ok: false, error: "xlsx is empty (no data rows)." };
+  }
+
+  const headerRow = ws.getRow(1);
+  const headers: string[] = [];
+  for (let c = 1; c <= ws.columnCount; c++) {
+    headers.push(parseCellString(headerRow.getCell(c).value));
+  }
+  const findIdx = (predicate: (h: string) => boolean): number =>
+    headers.findIndex(predicate);
+
+  const idxOtherId = findIdx((h) => /^other id$/i.test(h));
+  const idxGrade = findIdx((h) => /^grade$/i.test(h));
+  // Course code header is year-prefixed ("2026 Course"); match a trailing
+  // "course" but never the description column ("Course Desc").
+  const idxCourse = findIdx(
+    (h) => /course\s*$/i.test(h) && !/desc/i.test(h),
+  );
+  const idxSection = findIdx((h) => /^section$/i.test(h));
+  const idxCourseDesc = findIdx((h) => /course\s*desc/i.test(h));
+  const idxTeacher = findIdx((h) => /^teacher$/i.test(h));
+  const idxLength = findIdx((h) => /^length$/i.test(h));
+  const idxStartTerm = findIdx((h) => /^start\s*term$/i.test(h));
+  const idxStopTerm = findIdx((h) => /^stop\s*term$/i.test(h));
+  const idxQ1 = findIdx((h) => /^q1$/i.test(h));
+  const idxQ2 = findIdx((h) => /^q2$/i.test(h));
+  const idxQ3 = findIdx((h) => /^q3$/i.test(h));
+  const idxQ4 = findIdx((h) => /^q4$/i.test(h));
+  const idxFin = findIdx((h) => /^fin$/i.test(h));
+
+  if (idxOtherId < 0) {
+    return {
+      ok: false,
+      error:
+        "Missing 'Other ID' column — this is the student local SIS id used to match students. This does not look like a Live Grade Report export.",
+    };
+  }
+  if (idxCourse < 0) {
+    return {
+      ok: false,
+      error:
+        "Missing the course-code column (e.g. '2026 Course'). Re-export with the course column included.",
+    };
+  }
+  if (idxQ1 < 0 && idxQ2 < 0 && idxQ3 < 0 && idxQ4 < 0) {
+    return {
+      ok: false,
+      error:
+        "No quarter grade columns (Q1-Q4) found. Re-export with the quarter grade columns included.",
+    };
+  }
+
+  const cell = (row: ExcelJS.Row, idx: number): unknown =>
+    idx >= 0 ? row.getCell(idx + 1).value : null;
+  const str = (row: ExcelJS.Row, idx: number): string | null =>
+    idx >= 0 ? parseCellString(row.getCell(idx + 1).value) || null : null;
+
+  const rows: GradebookParsedRow[] = [];
+  const warnings: Array<{ row: number; message: string }> = [];
+
+  for (let r = 2; r <= ws.rowCount; r++) {
+    const row = ws.getRow(r);
+    const localSisId = parseCellString(cell(row, idxOtherId));
+    if (!localSisId) continue; // blank trailing row
+    const courseCode = parseCellString(cell(row, idxCourse));
+    if (!courseCode) {
+      warnings.push({ row: r, message: `Row ${r}: blank course code — skipped.` });
+      continue;
+    }
+    const q1 = parseGradeCell(cell(row, idxQ1));
+    const q2 = parseGradeCell(cell(row, idxQ2));
+    const q3 = parseGradeCell(cell(row, idxQ3));
+    const q4 = parseGradeCell(cell(row, idxQ4));
+    const fin = parseGradeCell(cell(row, idxFin));
+    if (q1.bad || q2.bad || q3.bad || q4.bad || fin.bad) {
+      warnings.push({
+        row: r,
+        message: `Row ${r}: one or more grade cells were not a number in 0-100 and were stored blank.`,
+      });
+    }
+    rows.push({
+      rowIndex: r,
+      localSisId,
+      gradeLevel: str(row, idxGrade),
+      courseCode,
+      section: str(row, idxSection),
+      courseDesc: str(row, idxCourseDesc),
+      teacherName: str(row, idxTeacher),
+      length: str(row, idxLength),
+      startTerm: str(row, idxStartTerm),
+      stopTerm: str(row, idxStopTerm),
+      q1: q1.value,
+      q2: q2.value,
+      q3: q3.value,
+      q4: q4.value,
+      fin: fin.value,
+    });
+  }
+
+  if (rows.length === 0) {
+    return { ok: false, error: "No student grade rows found." };
+  }
+  return { ok: true, rows, warnings };
+}
+
+// Validate the uploader-chosen quarter + effective date for a gradebook
+// import. Returns the normalized values or an error string.
+const GRADEBOOK_QUARTERS = ["Q1", "Q2", "Q3", "Q4"] as const;
+type GradebookQuarter = (typeof GRADEBOOK_QUARTERS)[number];
+function validateGradebookParams(
+  body: unknown,
+): { quarter: GradebookQuarter; effectiveDate: string } | string {
+  const b = (body ?? {}) as { quarter?: unknown; effectiveDate?: unknown };
+  const q = typeof b.quarter === "string" ? b.quarter.trim().toUpperCase() : "";
+  if (!GRADEBOOK_QUARTERS.includes(q as GradebookQuarter)) {
+    return "Pick which quarter these grades represent (Q1-Q4).";
+  }
+  const d = typeof b.effectiveDate === "string" ? b.effectiveDate.trim() : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    return "Effective date must be a valid YYYY-MM-DD date.";
+  }
+  const t = Date.parse(`${d}T00:00:00`);
+  if (!Number.isFinite(t)) {
+    return "Effective date must be a valid calendar date.";
+  }
+  return { quarter: q as GradebookQuarter, effectiveDate: d };
+}
+
 // Pull the xlsx bytes off a JSON body. Accepts `xlsxBase64` (string) —
 // matches the existing CSV-as-string pattern so we don't have to wire
 // multipart middleware just for this one route. Capped at ~12 MB pre
@@ -3442,6 +3850,7 @@ function validateSchoolYearLabel(
 router.post(
   "/data-imports/fast_florida/preview",
   requireImporter(),
+  requireImportKind("fast_florida"),
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
@@ -3493,6 +3902,7 @@ router.post(
 router.post(
   "/data-imports/fast_florida/commit",
   requireImporter(),
+  requireImportKind("fast_florida"),
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
@@ -3728,6 +4138,240 @@ router.post(
       totalRows: parsed.students.length,
       successRows: parsed.students.length,
       errorRows: 0,
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Gradebook ("Live Grade Report") import — preview + commit. Fixed-column
+// xlsx (one row per student×course, all four quarters per row). Matched to
+// students by Other ID == local_sis_id within the active school; unmatched
+// rows are skipped and surfaced. Each commit FULL-REPLACES the school's
+// gradebook rows (delete-then-insert in one tx). Rollback is special-cased
+// in the jobs/:id/rollback handler (deletes by import_job_id).
+// ---------------------------------------------------------------------------
+router.post(
+  "/data-imports/gradebook/preview",
+  requireImporter(),
+  requireImportKind("gradebook"),
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const decoded = decodeXlsxBody(req.body);
+    if (typeof decoded === "string") {
+      res.status(400).json({ error: decoded });
+      return;
+    }
+    const params = validateGradebookParams(req.body);
+    if (typeof params === "string") {
+      res.status(400).json({ error: params });
+      return;
+    }
+    const parsed = await parseGradebookXlsx(decoded);
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+
+    const distinctSisIds = Array.from(
+      new Set(parsed.rows.map((r) => r.localSisId)),
+    );
+    const { map, ambiguous } = await resolveLocalSisIds(
+      schoolId,
+      distinctSisIds,
+    );
+    const matchedRows = parsed.rows.filter((r) =>
+      map.has(r.localSisId.trim().toLowerCase()),
+    );
+    const unmatchedSet = new Set<string>();
+    for (const id of distinctSisIds) {
+      if (!map.has(id.trim().toLowerCase())) unmatchedSet.add(id);
+    }
+    const matchedStudents = new Set(
+      matchedRows.map((r) => map.get(r.localSisId.trim().toLowerCase())),
+    );
+
+    res.json({
+      kind: "gradebook",
+      quarter: params.quarter,
+      effectiveDate: params.effectiveDate,
+      totalRows: parsed.rows.length,
+      matchedRows: matchedRows.length,
+      matchedStudents: matchedStudents.size,
+      unmatchedRows: parsed.rows.length - matchedRows.length,
+      // Distinct local SIS ids in the file that didn't match a student in
+      // this school (capped so a fully-mismatched file can't blow up the
+      // payload). Ambiguous ids (matching >1 student) are called out too.
+      unmatchedSisIds: Array.from(unmatchedSet).slice(0, 100),
+      ambiguousSisIds: Array.from(ambiguous).slice(0, 100),
+      warnings: parsed.warnings.slice(0, 100),
+      // First few matched rows for the review pane.
+      sampleRows: matchedRows.slice(0, 8).map((r) => ({
+        localSisId: r.localSisId,
+        courseCode: r.courseCode,
+        courseDesc: r.courseDesc,
+        teacherName: r.teacherName,
+        q1: r.q1,
+        q2: r.q2,
+        q3: r.q3,
+        q4: r.q4,
+        fin: r.fin,
+      })),
+      readyToCommit: matchedRows.length > 0,
+    });
+  },
+);
+
+router.post(
+  "/data-imports/gradebook/commit",
+  requireImporter(),
+  requireImportKind("gradebook"),
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const decoded = decodeXlsxBody(req.body);
+    if (typeof decoded === "string") {
+      res.status(400).json({ error: decoded });
+      return;
+    }
+    const params = validateGradebookParams(req.body);
+    if (typeof params === "string") {
+      res.status(400).json({ error: params });
+      return;
+    }
+    const filename =
+      typeof (req.body as { filename?: unknown })?.filename === "string" &&
+      (req.body as { filename: string }).filename.trim()
+        ? (req.body as { filename: string }).filename.trim().slice(0, 200)
+        : "gradebook.xlsx";
+    const parsed = await parseGradebookXlsx(decoded);
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+
+    const distinctSisIds = Array.from(
+      new Set(parsed.rows.map((r) => r.localSisId)),
+    );
+    const { map } = await resolveLocalSisIds(schoolId, distinctSisIds);
+    const matchedRows = parsed.rows.filter((r) =>
+      map.has(r.localSisId.trim().toLowerCase()),
+    );
+    if (matchedRows.length === 0) {
+      res.status(400).json({
+        error:
+          "None of the rows matched a student in this school (matched by Other ID == local SIS id). Check that you're uploading to the right school.",
+      });
+      return;
+    }
+
+    const result = await db.transaction(async (tx) => {
+      const [job] = await tx
+        .insert(importJobsTable)
+        .values({
+          schoolId,
+          districtId: null,
+          kind: "gradebook",
+          filename,
+          uploadedBy: staff.id,
+          status: "committed",
+          totalRows: parsed.rows.length,
+          successRows: 0,
+          errorRows: 0,
+          errorLog: parsed.warnings,
+          mapping: {
+            quarter: params.quarter,
+            effective_date: params.effectiveDate,
+            matched_rows: String(matchedRows.length),
+            total_rows: String(parsed.rows.length),
+          },
+          committedAt: new Date(),
+        })
+        .returning({ id: importJobsTable.id });
+
+      // JOB-CHAINING (restorable full replace): a gradebook upload is the
+      // authoritative snapshot of current grades, but instead of destructively
+      // wiping prior rows we KEEP the immediately-previous generation so a
+      // rollback can restore it (loadCurrentGrades reads only the latest
+      // committed gradebook job's rows). We keep exactly two generations —
+      // this new job + the prior latest committed job — and prune anything
+      // older so the table can't grow unbounded across quarterly uploads.
+      const [priorLatest] = await tx
+        .select({ id: importJobsTable.id })
+        .from(importJobsTable)
+        .where(
+          and(
+            eq(importJobsTable.schoolId, schoolId),
+            eq(importJobsTable.kind, "gradebook"),
+            eq(importJobsTable.status, "committed"),
+            ne(importJobsTable.id, job.id),
+          ),
+        )
+        .orderBy(desc(importJobsTable.id))
+        .limit(1);
+      const keepJobIds = [job.id, ...(priorLatest ? [priorLatest.id] : [])];
+      await tx
+        .delete(studentCourseGradesTable)
+        .where(
+          and(
+            eq(studentCourseGradesTable.schoolId, schoolId),
+            not(inArray(studentCourseGradesTable.importJobId, keepJobIds)),
+          ),
+        );
+
+      const values = matchedRows.map((r) => ({
+        schoolId,
+        studentId: map.get(r.localSisId.trim().toLowerCase()) as string,
+        gradeLevel: r.gradeLevel,
+        courseCode: r.courseCode,
+        section: r.section,
+        courseDesc: r.courseDesc,
+        teacherName: r.teacherName,
+        length: r.length,
+        startTerm: r.startTerm,
+        stopTerm: r.stopTerm,
+        q1: r.q1,
+        q2: r.q2,
+        q3: r.q3,
+        q4: r.q4,
+        fin: r.fin,
+        effectiveQuarter: params.quarter,
+        effectiveDate: params.effectiveDate,
+        importJobId: job.id,
+      }));
+      for (let i = 0; i < values.length; i += 500) {
+        await tx
+          .insert(studentCourseGradesTable)
+          .values(values.slice(i, i + 500));
+      }
+
+      await tx
+        .update(importJobsTable)
+        .set({ successRows: matchedRows.length })
+        .where(eq(importJobsTable.id, job.id));
+
+      return { id: job.id };
+    });
+
+    req.log.info(
+      {
+        jobId: result.id,
+        matchedRows: matchedRows.length,
+        totalRows: parsed.rows.length,
+        quarter: params.quarter,
+      },
+      "[gradebook] committed",
+    );
+
+    res.json({
+      jobId: result.id,
+      quarter: params.quarter,
+      effectiveDate: params.effectiveDate,
+      totalRows: parsed.rows.length,
+      successRows: matchedRows.length,
+      errorRows: parsed.rows.length - matchedRows.length,
+      warningCount: parsed.warnings.length,
     });
   },
 );
@@ -4347,53 +4991,63 @@ function requireManualRosterUploadEnabled() {
 router.post(
   "/data-imports/rosters/preview",
   requireImporter(),
+  requireImportKind("rosters"),
   requireManualRosterUploadEnabled(),
   makePreviewHandler("rosters", ROSTERS_CONFIG),
 );
 router.post(
   "/data-imports/rosters/commit",
   requireImporter(),
+  requireImportKind("rosters"),
   requireManualRosterUploadEnabled(),
   makeCommitHandler("rosters", ROSTERS_CONFIG),
 );
 router.post(
   "/data-imports/behavior/preview",
   requireImporter(),
+  requireImportKind("behavior"),
   makePreviewHandler("behavior", BEHAVIOR_CONFIG),
 );
 router.post(
   "/data-imports/behavior/commit",
   requireImporter(),
+  requireImportKind("behavior"),
   makeCommitHandler("behavior", BEHAVIOR_CONFIG),
 );
 router.post(
   "/data-imports/fast_scores/preview",
   requireImporter(),
+  requireImportKind("fast_scores"),
   makePreviewHandler("fast_scores", FAST_SCORES_CONFIG),
 );
 router.post(
   "/data-imports/fast_scores/commit",
   requireImporter(),
+  requireImportKind("fast_scores"),
   makeCommitHandler("fast_scores", FAST_SCORES_CONFIG),
 );
 router.post(
   "/data-imports/fast_prior_year/preview",
   requireImporter(),
+  requireImportKind("fast_prior_year"),
   makePreviewHandler("fast_prior_year", FAST_PRIOR_YEAR_CONFIG),
 );
 router.post(
   "/data-imports/fast_prior_year/commit",
   requireImporter(),
+  requireImportKind("fast_prior_year"),
   makeCommitHandler("fast_prior_year", FAST_PRIOR_YEAR_CONFIG),
 );
 router.post(
   "/data-imports/points_migration/preview",
   requireImporter(),
+  requireImportKind("points_migration"),
   makePreviewHandler("points_migration", POINTS_MIGRATION_CONFIG),
 );
 router.post(
   "/data-imports/points_migration/commit",
   requireImporter(),
+  requireImportKind("points_migration"),
   makeCommitHandler("points_migration", POINTS_MIGRATION_CONFIG),
 );
 
@@ -4477,6 +5131,12 @@ router.get(
         : null;
     if (!kind) {
       res.status(400).json({ error: "kind is required" });
+      return;
+    }
+    // Delegated clerks may only list templates for the kinds they can import.
+    // Admins bypass via canImportKind; district scope is gated below.
+    if (scope === "school" && !canImportKind(staff, kind)) {
+      res.status(403).json({ error: "Data import access required" });
       return;
     }
 
@@ -4564,6 +5224,12 @@ router.post(
     }
     if (!name) {
       res.status(400).json({ error: "name is required" });
+      return;
+    }
+    // Delegated clerks may only save templates for the kinds they can import.
+    // Admins bypass via canImportKind; district scope is gated below.
+    if (scope === "school" && !canImportKind(staff, kind)) {
+      res.status(403).json({ error: "Data import access required" });
       return;
     }
     const mappingError = validateTemplateMapping(mapping, kind);
@@ -4675,6 +5341,11 @@ router.delete(
       if (!schoolId) return;
       if (tpl.schoolId !== schoolId) {
         res.status(404).json({ error: "Template not found" });
+        return;
+      }
+      // Delegated clerks may only delete templates for kinds they can import.
+      if (!canImportKind(staff, tpl.kind)) {
+        res.status(403).json({ error: "Data import access required" });
         return;
       }
     } else {

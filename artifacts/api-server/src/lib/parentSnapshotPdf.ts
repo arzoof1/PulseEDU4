@@ -98,6 +98,7 @@ function drawDocument(
   if (sec.recognition) drawRecognitionBlock(doc, s);
   if (sec.attendance || sec.hallPasses) drawAttendanceBlock(doc, s);
   if (sec.fastScores) drawFastScoresBlock(doc, s);
+  if (sec.currentGrades) drawCurrentGradesBlock(doc, s);
   if (sec.mtss) drawMtssBlock(doc, s);
   if (sec.interventions) drawInterventionsBlock(doc, s);
   if (sec.staffNotes) drawStaffNotesBlock(doc, s);
@@ -558,6 +559,62 @@ function drawFastScoresBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
     cells.forEach((c, i) => {
       doc.text(c, left + colW * i, y, { width: colW - 8 });
     });
+    y += 16;
+  }
+  doc.y = y + 4;
+}
+
+// ---------- Current grades ----------
+function drawCurrentGradesBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
+  sectionTitle(doc, "Current Grades");
+  if (s.currentGrades.length === 0) {
+    drawEmpty(doc, "No current grades yet.");
+    return;
+  }
+  if (s.gpa != null) {
+    doc
+      .fontSize(11)
+      .font("Helvetica-Bold")
+      .fillColor(COLORS.text)
+      .text(`GPA: ${s.gpa.toFixed(2)} (unweighted 4.0)`);
+    doc.moveDown(0.3);
+  }
+  // Mini table: Course | Teacher | Grade
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const tableW = right - left;
+  const colCourse = left;
+  const colTeacher = left + tableW * 0.45;
+  const colGrade = left + tableW * 0.8;
+  const rowY = doc.y;
+  ensureSpace(doc, 16 + 16 * (s.currentGrades.length + 1));
+
+  doc.fontSize(10).font("Helvetica-Bold").fillColor(COLORS.muted);
+  doc.text("Course", colCourse, rowY, { width: tableW * 0.45 - 8 });
+  doc.text("Teacher", colTeacher, rowY, { width: tableW * 0.35 - 8 });
+  doc.text("Grade", colGrade, rowY, { width: tableW * 0.2 - 8 });
+  let y = rowY + 16;
+  doc
+    .moveTo(left, y - 2)
+    .lineTo(right, y - 2)
+    .lineWidth(0.5)
+    .strokeColor(COLORS.border)
+    .stroke();
+
+  doc.font("Helvetica").fillColor(COLORS.text);
+  for (const g of s.currentGrades) {
+    doc.text(g.courseDesc || g.courseCode, colCourse, y, {
+      width: tableW * 0.45 - 8,
+    });
+    doc.text(g.teacherName || "—", colTeacher, y, {
+      width: tableW * 0.35 - 8,
+    });
+    doc.text(
+      g.grade == null ? "—" : `${g.grade} (${g.quarter})`,
+      colGrade,
+      y,
+      { width: tableW * 0.2 - 8 },
+    );
     y += 16;
   }
   doc.y = y + 4;

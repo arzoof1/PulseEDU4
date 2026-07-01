@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import { fetchAllStudents } from "../lib/students";
 import StudentPhoto from "./StudentPhoto";
+import { TeacherPicker } from "./TeacherPicker";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 import InterventionTypesAdmin from "./InterventionTypesAdmin";
 import PulloutReasonsAdmin from "./PulloutReasonsAdmin";
@@ -2249,10 +2250,14 @@ function ClassesView({
           <span style={{ fontSize: "0.85rem", color: "#475569" }}>
             Teacher:
           </span>
-          <select
-            value={selectedTeacherId ?? ""}
-            onChange={(e) => onChangeTeacher(Number(e.target.value))}
-            style={{
+          <TeacherPicker
+            teachers={teachers!.map((t) => ({
+              id: t.id,
+              displayName: t.name,
+            }))}
+            value={selectedTeacherId ?? null}
+            ariaLabel="Admin view teacher"
+            selectStyle={{
               padding: "0.35rem 0.5rem",
               border: "1px solid #cbd5e1",
               borderRadius: "0.35rem",
@@ -2260,13 +2265,10 @@ function ClassesView({
               background: "white",
               minWidth: "14rem",
             }}
-          >
-            {teachers!.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
+            onChange={(id) => {
+              if (id != null) onChangeTeacher(id);
+            }}
+          />
         </div>
       )}
 
@@ -7301,18 +7303,18 @@ export function PbisPointsReportView({ me }: { me: Me | null }) {
             <span style={{ fontSize: "0.78rem", color: "var(--muted, #64748b)" }}>
               Teacher
             </span>
-            <select
-              value={teacherStaffId}
-              onChange={(e) => setTeacherStaffId(e.target.value)}
-              style={selectStyle}
-            >
-              <option value="">All teachers</option>
-              {teacherOpts.map((t) => (
-                <option key={t.id} value={String(t.id)}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
+            <TeacherPicker
+              teachers={teacherOpts.map((t) => ({
+                id: t.id,
+                displayName: t.name,
+              }))}
+              value={teacherStaffId ? Number(teacherStaffId) : null}
+              allowEmpty
+              emptyLabel="All teachers"
+              ariaLabel="Teacher"
+              selectStyle={selectStyle}
+              onChange={(id) => setTeacherStaffId(id ? String(id) : "")}
+            />
           </label>
         )}
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>

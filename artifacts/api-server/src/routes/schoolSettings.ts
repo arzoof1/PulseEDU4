@@ -3,6 +3,7 @@ import { db, schoolSettingsTable, staffTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { bindObjectToSchool } from "./storage.js";
+import { isCoreTeam } from "../lib/coreTeam.js";
 
 const router: IRouter = Router();
 
@@ -151,6 +152,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     onTimeLotteryBonusPoints,
     onTimeLotteryRevealLeadMinutes,
     schoolStoreInventoryMode,
+    gpaEnabled,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -671,6 +673,40 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.onTimeLotteryEnabled = onTimeLotteryEnabled;
+  }
+  // -----------------------------------------------------------------
+  // GPA display toggle. School-wide policy that decides whether the
+  // unweighted 4.0 GPA is computed + surfaced anywhere (Student Profile,
+  // Snapshot, parent comms). CORE TEAM (or admin/SuperUser) only — a
+  // stricter gate than the rest of this PUT — since it changes what an
+  // academic metric every staff member sees. Boolean only. Default OFF.
+  // -----------------------------------------------------------------
+  if (gpaEnabled !== undefined) {
+    if (typeof gpaEnabled !== "boolean") {
+      res.status(400).json({ error: "gpaEnabled must be a boolean" });
+      return;
+    }
+    // Only CHANGING the flag requires Core Team. The bulk settings save
+    // (sent by any settings-manager) echoes the current value back; gating
+    // on change keeps that save from 403-ing while still blocking a real
+    // flip by a non-Core-Team actor.
+    if (gpaEnabled !== current.gpaEnabled) {
+      let gpaActor: typeof staffTable.$inferSelect | undefined;
+      if (req.staffId) {
+        const [s] = await db
+          .select()
+          .from(staffTable)
+          .where(eq(staffTable.id, req.staffId));
+        gpaActor = s;
+      }
+      if (!(gpaActor?.active && isCoreTeam(gpaActor))) {
+        res.status(403).json({
+          error: "Only Core Team may change the GPA setting",
+        });
+        return;
+      }
+      updates.gpaEnabled = gpaEnabled;
+    }
   }
   if (onTimeLotteryLabel !== undefined) {
     if (typeof onTimeLotteryLabel !== "string") {

@@ -190,6 +190,20 @@ export default function RecordingStudio({
       : (window.matchMedia?.("(orientation: portrait)").matches ??
         window.innerHeight > window.innerWidth),
   );
+  // Whether this is a touch device (coarse pointer). Used to tell a tablet held
+  // sideways (landscape, touch) apart from a laptop/desktop (also "landscape"):
+  // the sideways tablet puts the teleprompter on the far left, the laptop keeps
+  // it top-centered. Capability is effectively static, so compute once.
+  const [isTouch] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    const mm = window.matchMedia;
+    const coarse =
+      (mm?.("(pointer: coarse)").matches ?? false) ||
+      (mm?.("(any-pointer: coarse)").matches ?? false);
+    const hasTouchPoints =
+      typeof navigator !== "undefined" && navigator.maxTouchPoints > 0;
+    return coarse || hasTouchPoints;
+  });
   // Which adjuster popover is open (only one at a time); null = none open.
   const [openAdjuster, setOpenAdjuster] = useState<AdjusterKey | null>(null);
 
@@ -682,6 +696,10 @@ export default function RecordingStudio({
   // container's top (1.5rem) + bottom (2rem) padding.
   const prompterHeight = Math.round(linesVisible * fontSize * lineHeight + 56);
   const portrait = viewportPortrait;
+  // Teleprompter placement: top-centered everywhere (portrait, and laptop/desktop)
+  // EXCEPT a touch device held sideways (landscape + touch), where the text moves
+  // to the far left and centers top-to-bottom. Camera stays fullscreen in all cases.
+  const textLeftCentered = !portrait && isTouch;
   const meterColor =
     clipping || level >= 0.85
       ? "#dc2626"
@@ -943,18 +961,44 @@ export default function RecordingStudio({
           ref={prompterRef}
           style={{
             position: "absolute",
-            top: portrait ? "3.3rem" : "1.4rem",
-            left: portrait ? 0 : "1.5rem",
-            right: portrait ? 0 : "auto",
-            width: portrait ? "auto" : `${promptWidth}%`,
-            maxWidth: portrait ? "100%" : "62%",
             height: `${prompterHeight}px`,
             maxHeight: portrait ? "50%" : "72%",
             overflow: "hidden",
-            padding: portrait ? "0 1.1rem" : 0,
-            transform: mirrorText ? "scaleX(-1)" : "none",
             pointerEvents: "none",
             zIndex: 8,
+            // Three placements (camera stays fullscreen in all):
+            //  • sideways touch device → far left, vertically centered
+            //  • portrait → top, full width, centered text
+            //  • laptop/desktop → top, promptWidth-wide, horizontally centered
+            ...(textLeftCentered
+              ? {
+                  top: "50%",
+                  left: "1.5rem",
+                  right: "auto",
+                  width: `${promptWidth}%`,
+                  maxWidth: "62%",
+                  padding: 0,
+                  transform: `translateY(-50%)${mirrorText ? " scaleX(-1)" : ""}`,
+                }
+              : portrait
+                ? {
+                    top: "3.3rem",
+                    left: 0,
+                    right: 0,
+                    width: "auto",
+                    maxWidth: "100%",
+                    padding: "0 1.1rem",
+                    transform: mirrorText ? "scaleX(-1)" : "none",
+                  }
+                : {
+                    top: "3.3rem",
+                    left: "50%",
+                    right: "auto",
+                    width: `${promptWidth}%`,
+                    maxWidth: "100%",
+                    padding: 0,
+                    transform: `translateX(-50%)${mirrorText ? " scaleX(-1)" : ""}`,
+                  }),
           }}
         >
           <div
@@ -963,7 +1007,7 @@ export default function RecordingStudio({
               fontSize: `${fontSize}px`,
               lineHeight,
               fontWeight: 700,
-              textAlign: "left",
+              textAlign: textLeftCentered ? "left" : "center",
               whiteSpace: "pre-wrap",
               color: "#fff",
               textShadow: "0 2px 12px rgba(0,0,0,0.95), 0 0 3px rgba(0,0,0,0.85)",

@@ -140,12 +140,12 @@ const tabBtnStyle = (active: boolean): CSSProperties => ({
   cursor: "pointer",
 });
 
-async function downloadPdf(url: string, fallbackName: string) {
-  // Authed PDFs can't open in the preview iframe (session cookie blocked;
+async function downloadFile(url: string, fallbackName: string) {
+  // Authed PDFs/CSVs can't open in the preview iframe (session cookie blocked;
   // window.open(blob) renders blank). Download to disk — see replit.md Gotchas.
   const res = await authFetch(url);
   if (!res.ok) {
-    alert(`Could not generate PDF (${res.status})`);
+    alert(`Could not generate download (${res.status})`);
     return;
   }
   const blob = await res.blob();
@@ -236,7 +236,9 @@ function RostersTab() {
       const r = await authFetch("/api/eligibility/activities");
       const d = r.ok ? ((await r.json()) as Activity[]) : [];
       setActivities(d);
-      setSelectedId((prev) => prev ?? (d[0]?.id ?? null));
+      setSelectedId((prev) =>
+        prev && d.some((a) => a.id === prev) ? prev : (d[0]?.id ?? null),
+      );
     } finally {
       setLoading(false);
     }
@@ -297,7 +299,23 @@ function RostersTab() {
                   cursor: "pointer",
                 }}
               >
-                <div style={{ fontWeight: 600 }}>{a.name}</div>
+                <div style={{ fontWeight: 600, opacity: a.active ? 1 : 0.6 }}>
+                  {a.name}
+                  {!a.active && (
+                    <span
+                      style={{
+                        marginLeft: 6,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.04em",
+                        color: "var(--muted, #6b7280)",
+                      }}
+                    >
+                      · Archived
+                    </span>
+                  )}
+                </div>
                 <div style={{ fontSize: 12, color: "var(--muted, #6b7280)" }}>
                   {a.category} · {a.memberCount} member
                   {a.memberCount === 1 ? "" : "s"}
@@ -344,6 +362,7 @@ function RostersTab() {
       <div style={{ flex: "1 1 420px", minWidth: 360 }}>
         {selected ? (
           <ActivityDetail
+            key={selected.id}
             activity={selected}
             onChanged={loadActivities}
           />
@@ -365,6 +384,7 @@ function ActivityDetail({
   onChanged: () => Promise<void> | void;
 }) {
   const [roster, setRoster] = useState<RosterEntry[]>([]);
+  const [asOfLabel, setAsOfLabel] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [addSis, setAddSis] = useState("");
   const [addJersey, setAddJersey] = useState("");
@@ -372,6 +392,14 @@ function ActivityDetail({
   const [bulkMsg, setBulkMsg] = useState<string | null>(null);
   const [directory, setDirectory] = useState<DirectoryStaff[]>([]);
   const [coachStaffId, setCoachStaffId] = useState("");
+  // Activity-level management (rename / archive / delete). Component is
+  // keyed by activity.id in the parent, so these initialize fresh per
+  // activity — no stale-edit carryover when switching selection.
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(activity.name);
+  const [editCategory, setEditCategory] = useState(activity.category);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
 
   const loadRoster = useCallback(async () => {
     setLoading(true);
@@ -380,10 +408,15 @@ function ActivityDetail({
         `/api/eligibility/activities/${activity.id}/roster`,
       );
       if (r.ok) {
-        const d = (await r.json()) as { roster: RosterEntry[] };
+        const d = (await r.json()) as {
+          roster: RosterEntry[];
+          asOfLabel?: string | null;
+        };
         setRoster(d.roster ?? []);
+        setAsOfLabel(d.asOfLabel ?? null);
       } else {
         setRoster([]);
+        setAsOfLabel(null);
       }
     } finally {
       setLoading(false);
@@ -540,9 +573,233 @@ function ActivityDetail({
     await onChanged();
   };
 
+  const saveEdit = async () => {
+    const name = editName.trim();
+    if (!name) return;
+    setBusy(true);
+    setActionMsg(null);
+    try {
+      const r = await authFetch(`/api/eligibility/activities/${activity.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, category: editCategory }),
+      });
+      if (r.ok) {
+        setEditing(false);
+        await onChanged();
+      } else {
+        setActionMsg(`Could not save changes (${r.status})`);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleArchive = async () => {
+    setBusy(true);
+    setActionMsg(null);
+    try {
+      const r = await authFetch(`/api/eligibility/activities/${activity.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: !activity.active }),
+      });
+      if (r.ok) {
+        await onChanged();
+      } else {
+        setActionMsg(`Could not update (${r.status})`);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doDelete = async () => {
+    setBusy(true);
+    setActionMsg(null);
+    try {
+      const r = await authFetch(`/api/eligibility/activities/${activity.id}`, {
+        method: "DELETE",
+      });
+      if (r.ok) {
+        setConfirmDelete(false);
+        await onChanged();
+      } else {
+        setActionMsg(`Could not delete (${r.status})`);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const secondaryBtnStyle: CSSProperties = {
+    padding: "6px 12px",
+    borderRadius: 8,
+    border: "1px solid var(--border, #d1d5db)",
+    background: "transparent",
+    color: "var(--text, #111827)",
+    cursor: "pointer",
+    fontSize: 13,
+  };
+  const dangerBtnStyle: CSSProperties = {
+    padding: "6px 12px",
+    borderRadius: 8,
+    border: "1px solid #dc2626",
+    background: "#dc2626",
+    color: "#fff",
+    cursor: "pointer",
+    fontSize: 13,
+  };
+
   return (
     <div>
-      <h3 style={{ marginTop: 0 }}>{activity.name}</h3>
+      {editing ? (
+        <div
+          style={{
+            marginBottom: 16,
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            alignItems: "center",
+          }}
+        >
+          <input
+            type="text"
+            value={editName}
+            onChange={(e) => setEditName(e.target.value)}
+            placeholder="Activity name"
+            style={{ flex: "1 1 200px", minWidth: 160 }}
+          />
+          <select
+            value={editCategory}
+            onChange={(e) => setEditCategory(e.target.value)}
+          >
+            <option value="athletics">Athletics</option>
+            <option value="club">Club</option>
+            <option value="activity">Activity</option>
+          </select>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy || !editName.trim()}
+            onClick={saveEdit}
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            style={secondaryBtnStyle}
+            disabled={busy}
+            onClick={() => {
+              setEditing(false);
+              setEditName(activity.name);
+              setEditCategory(activity.category);
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <div
+          style={{
+            marginBottom: 16,
+            display: "flex",
+            gap: 10,
+            flexWrap: "wrap",
+            alignItems: "center",
+          }}
+        >
+          <h3 style={{ margin: 0 }}>{activity.name}</h3>
+          <span
+            className="badge badge-neutral"
+            style={{ textTransform: "capitalize" }}
+          >
+            {activity.category}
+          </span>
+          {!activity.active && (
+            <span className="badge badge-warning">Archived</span>
+          )}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            <button
+              type="button"
+              style={secondaryBtnStyle}
+              disabled={busy}
+              onClick={() => setEditing(true)}
+            >
+              Rename
+            </button>
+            <button
+              type="button"
+              style={secondaryBtnStyle}
+              disabled={busy}
+              onClick={toggleArchive}
+            >
+              {activity.active ? "Archive" : "Unarchive"}
+            </button>
+            <button
+              type="button"
+              style={dangerBtnStyle}
+              disabled={busy}
+              onClick={() => setConfirmDelete(true)}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      )}
+
+      {confirmDelete && (
+        <div
+          style={{
+            marginBottom: 16,
+            padding: 12,
+            border: "1px solid #dc2626",
+            borderRadius: 8,
+            background: "rgba(220,38,38,0.06)",
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>
+            Delete “{activity.name}”?
+          </div>
+          <div
+            style={{
+              fontSize: 13,
+              color: "var(--muted, #6b7280)",
+              marginBottom: 10,
+            }}
+          >
+            This permanently removes the activity along with its{" "}
+            {activity.memberCount} member
+            {activity.memberCount === 1 ? "" : "s"} and all assigned coaches.
+            This can’t be undone. To keep the roster, use{" "}
+            <strong>Archive</strong> instead.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              style={dangerBtnStyle}
+              disabled={busy}
+              onClick={doDelete}
+            >
+              Yes, delete permanently
+            </button>
+            <button
+              type="button"
+              style={secondaryBtnStyle}
+              disabled={busy}
+              onClick={() => setConfirmDelete(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {actionMsg && (
+        <div style={{ marginBottom: 12, color: "#dc2626", fontSize: 13 }}>
+          {actionMsg}
+        </div>
+      )}
 
       {/* Coaches */}
       <div style={{ marginBottom: 16 }}>
@@ -695,6 +952,51 @@ function ActivityDetail({
         </div>
       </div>
 
+      {/* Download toolbar — export this activity's eligibility status */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <span style={{ fontSize: 13, color: "var(--muted, #6b7280)" }}>
+          {asOfLabel
+            ? `Attendance eligibility as of ${asOfLabel}`
+            : "No attendance upload yet"}
+        </span>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            className="btn"
+            disabled={roster.length === 0}
+            onClick={() =>
+              downloadFile(
+                `/api/eligibility/activities/${activity.id}/roster.csv`,
+                `eligibility-${activity.name}.csv`,
+              )
+            }
+          >
+            Download CSV
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={roster.length === 0}
+            onClick={() =>
+              downloadFile(
+                `/api/eligibility/activities/${activity.id}/roster.pdf`,
+                `eligibility-${activity.name}.pdf`,
+              )
+            }
+          >
+            Download PDF
+          </button>
+        </div>
+      </div>
+
       {/* Roster table */}
       {loading ? (
         <p>Loading roster…</p>
@@ -797,7 +1099,7 @@ function AtRiskTab() {
           type="button"
           className="btn"
           onClick={() =>
-            downloadPdf(
+            downloadFile(
               "/api/eligibility/at-risk.pdf",
               "at-risk-eligibility.pdf",
             )
@@ -1129,7 +1431,7 @@ function ParentNotesTab() {
 // Tab: Upload
 // ---------------------------------------------------------------------------
 
-function UploadTab({ onUploaded }: { onUploaded: () => void }) {
+export function UploadTab({ onUploaded }: { onUploaded: () => void }) {
   const [uploads, setUploads] = useState<UploadAudit[]>([]);
   const [result, setResult] = useState<{
     matched: number;
@@ -1150,6 +1452,27 @@ function UploadTab({ onUploaded }: { onUploaded: () => void }) {
   useEffect(() => {
     void loadUploads();
   }, [loadUploads]);
+
+  // Client-generated CSV template matching the columns onFile() looks for
+  // (SIS ID required, absence total + days tardy optional). Triggered as an
+  // `a.download` from the current document so it works in the preview iframe.
+  const downloadSampleAttendance = () => {
+    const csv = [
+      "SIS ID,Absence Total,Days Tardy",
+      "534762,3,1",
+      "670337,0,4",
+      "983480,7,0",
+    ].join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "eligibility-attendance-template.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   const onFile = async (file: File) => {
     setStatus("Parsing…");
@@ -1200,8 +1523,28 @@ function UploadTab({ onUploaded }: { onUploaded: () => void }) {
         tardy totals — header names can vary by district export.
       </p>
 
-      <label className="btn" style={{ cursor: "pointer", display: "inline-block" }}>
-        Choose file (.xlsx/.csv)
+      <label className="upload-dropzone">
+        <svg
+          width="22"
+          height="22"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <polyline points="17 8 12 3 7 8" />
+          <line x1="12" y1="3" x2="12" y2="15" />
+        </svg>
+        <span className="upload-dropzone-text">
+          Upload attendance file
+          <span className="upload-dropzone-sub">
+            Click to choose an .xlsx or .csv file
+          </span>
+        </span>
         <input
           type="file"
           accept=".xlsx,.xls,.csv"
@@ -1213,6 +1556,27 @@ function UploadTab({ onUploaded }: { onUploaded: () => void }) {
           }}
         />
       </label>
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          flexWrap: "wrap",
+          marginTop: 8,
+        }}
+      >
+        <button
+          type="button"
+          className="btn"
+          onClick={downloadSampleAttendance}
+        >
+          Download sample
+        </button>
+        <span style={{ fontSize: 12, color: "var(--muted, #6b7280)" }}>
+          File needs a <strong>SIS ID</strong> column (required) plus optional{" "}
+          <strong>Absence Total</strong> and <strong>Days Tardy</strong> columns.
+        </span>
+      </div>
 
       {status && <p style={{ fontSize: 14 }}>{status}</p>}
 

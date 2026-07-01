@@ -144,6 +144,18 @@ interface Snapshot {
     priorYearScore: number | null;
     priorYearBq: boolean;
   }>;
+  // Current grades per course (Gradebook importer) + unweighted 4.0 GPA.
+  // Optional for older-API-server compatibility; `gpa` is null when the
+  // school's GPA toggle is off.
+  currentGrades?: Array<{
+    courseCode: string;
+    courseDesc: string | null;
+    teacherName: string | null;
+    gradeLevel: string | null;
+    grade: number | null;
+    quarter: string;
+  }>;
+  gpa?: number | null;
   interventions?: Array<{
     interventionType: string;
     note: string | null;
@@ -1271,6 +1283,7 @@ function AcademicsTab({ snapshot }: { snapshot: Snapshot }) {
   const [learningAtHomeCount, setLearningAtHomeCount] = useState(0);
   const hasAny =
     (sec.fastScores && (snapshot.fastScores ?? []).length > 0) ||
+    (sec.currentGrades && (snapshot.currentGrades ?? []).length > 0) ||
     sec.mtss ||
     (sec.reteach && (snapshot.reteach?.items ?? []).length > 0) ||
     (sec.interventions && (snapshot.interventions ?? []).length > 0) ||
@@ -1305,6 +1318,51 @@ function AcademicsTab({ snapshot }: { snapshot: Snapshot }) {
             {(snapshot.fastScores ?? []).map((s) => (
               <FastScoreCard key={s.subject} score={s} />
             ))}
+          </div>
+        </Section>
+      )}
+
+      {/* Current Grades — per-course grades from the Gradebook importer,
+          plus an unweighted 4.0 GPA when the school enables it. Shares the
+          academics-section gate with FAST; hidden when there are no rows. */}
+      {sec.currentGrades && (snapshot.currentGrades ?? []).length > 0 && (
+        <Section
+          title="Current Grades"
+          icon={<BookOpen className="h-4 w-4 text-blue-600" />}
+        >
+          {snapshot.gpa != null && (
+            <div className="mb-3 text-sm font-semibold text-gray-800">
+              GPA: {snapshot.gpa.toFixed(2)}{" "}
+              <span className="font-normal text-gray-500">
+                (unweighted 4.0)
+              </span>
+            </div>
+          )}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-gray-500">
+                  <th className="py-1 pr-3 font-medium">Course</th>
+                  <th className="py-1 pr-3 font-medium">Teacher</th>
+                  <th className="py-1 font-medium">Grade</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(snapshot.currentGrades ?? []).map((g, i) => (
+                  <tr key={`${g.courseCode}-${i}`} className="border-t border-gray-100">
+                    <td className="py-1 pr-3">
+                      {g.courseDesc || g.courseCode}
+                    </td>
+                    <td className="py-1 pr-3 text-gray-600">
+                      {g.teacherName || "—"}
+                    </td>
+                    <td className="py-1 font-medium text-gray-800">
+                      {g.grade == null ? "—" : `${g.grade} (${g.quarter})`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </Section>
       )}

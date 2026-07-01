@@ -198,6 +198,20 @@ export const schoolSettingsTable = pgTable(
     .default(true),
   notifyParentEsign: boolean("notify_parent_esign").notNull().default(true),
   // -----------------------------------------------------------------
+  // Request Pullout dispatch notifications.
+  //   pulloutSmsEnabled             → also TEXT dispatch recipients (off by
+  //     default; email always sends regardless).
+  //   pulloutExtraRecipientStaffIds → additional staff (by id) who receive the
+  //     dispatch email/text REGARDLESS of role (e.g. a reading coach who helps
+  //     with pullouts but is not Admin/Dean/MTSS/ISS). Role-based recipients
+  //     always get it; this list is purely additive.
+  // -----------------------------------------------------------------
+  pulloutSmsEnabled: boolean("pullout_sms_enabled").notNull().default(false),
+  pulloutExtraRecipientStaffIds: jsonb("pullout_extra_recipient_staff_ids")
+    .$type<number[]>()
+    .notNull()
+    .default([]),
+  // -----------------------------------------------------------------
   // Per-school feature flags (two-tier model).
   //
   //   super_feature_*  → SuperUser-controlled "is this feature available
@@ -568,6 +582,14 @@ export const schoolSettingsTable = pgTable(
   onTimeSimClockSetAt: timestamp("on_time_sim_clock_set_at", {
     withTimezone: true,
   }),
+  // -----------------------------------------------------------------
+  // Gradebook GPA. When true, the Student Profile / Snapshot surface a
+  // computed unweighted GPA (4.0 scale) from the imported gradebook
+  // current grades. OFF by default — not every school grades on a GPA
+  // scale, and exposing one where it's not used would be misleading.
+  // Core Team / admin controlled (gated in the PUT handler).
+  // -----------------------------------------------------------------
+  gpaEnabled: boolean("gpa_enabled").notNull().default(false),
   },
   (t) => ({
     schoolIdUnique: uniqueIndex("school_settings_school_id_unique").on(

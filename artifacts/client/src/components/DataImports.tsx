@@ -18,13 +18,14 @@ import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowTo
 // dictionary.
 // ---------------------------------------------------------------------------
 
-type Kind =
+export type Kind =
   | "assessments"
   | "rosters"
   | "behavior"
   | "fast_scores"
   | "fast_prior_year"
   | "fast_florida"
+  | "gradebook"
   | "points_migration";
 type Scope = "school" | "district";
 
@@ -584,6 +585,25 @@ const KIND_DEFS: Record<Kind, KindDef> = {
       "12 MB file limit. Split by grade if the state export exceeds it.",
     ],
   },
+  gradebook: {
+    label: "Gradebook (current grades — Live Grade Report xlsx)",
+    // Fixed-layout xlsx, like fast_florida — no column-mapping step.
+    targetsFor: () => [],
+    supportsDistrict: false,
+    helpText:
+      "Per-student current course grades from your SIS 'Live Grade Report' xlsx. One row per student×course with Q1-Q4 + final. Pick which quarter the grades represent. Each upload fully replaces the school's current grades.",
+    description:
+      "Drop in the SIS 'Live Grade Report' xlsx — one row per student per course, with columns for Grade level, Other ID (the student's local SIS id), the course code, Section, Course Desc, Teacher, Length, Start/Stop Term, the four quarter grades (Q1-Q4) and a Final (FIN). No column mapping needed — the layout is fixed and auto-detected. On the upload step you pick which quarter these grades currently represent (Q1-Q4) and an effective date (defaults to today). Students are matched by Other ID against your roster's local SIS id; rows that don't match a student are skipped and listed on the preview. Each upload FULLY REPLACES the school's stored current grades, so always upload the complete report. Reversible from History → Roll back (which clears the grades; re-upload to restore).",
+    columns: [],
+    sampleCsv: "",
+    notes: [
+      "School-scope only. Matched by Other ID == local SIS id — import rosters first. Unmatched / ambiguous ids are reported and skipped, never guessed.",
+      "Pick the quarter (Q1-Q4) these grades represent on the upload step. The current grade shown per course is that quarter's value, falling back to the latest populated quarter.",
+      "Each upload FULLY REPLACES the school's current grades. Roll back deletes this upload's rows (the prior upload is already gone — re-upload the previous file to restore).",
+      "GPA (when enabled in Settings) is an unweighted 4.0 average over the current semester's graded courses: 90-100=4, 80-89=3, 70-79=2, 60-69=1, below 60=0.",
+      "12 MB file limit. .xlsx or .xls.",
+    ],
+  },
   points_migration: {
     label: "PBIS point balances (migrate from another app)",
     targetsFor: () => POINTS_MIGRATION_TARGETS,
@@ -636,6 +656,73 @@ const KIND_DEFS: Record<Kind, KindDef> = {
       "Redeeming migrated points in the School Store never reduces house totals — spending and the house race are independent.",
     ],
   },
+};
+
+// Grouping for the "Choose data" step. Ordered by how often a school
+// actually reaches for each importer (most-used first) — that is the
+// order shown in the UI. FAST is bundled into ONE group so its three
+// paths read as a single choice with a clear default, instead of three
+// co-equal options that look like duplicates.
+type KindGroup = {
+  title: string;
+  caption: string;
+  kinds: Kind[];
+  // The row shown by default; any others sit behind a "more ways"
+  // disclosure. Only meaningful when the group has >1 visible kind.
+  primary?: Kind;
+};
+
+const KIND_GROUPS: KindGroup[] = [
+  {
+    title: "Grades",
+    caption: "Course grades from your SIS. The one you'll use most often.",
+    kinds: ["gradebook"],
+  },
+  {
+    title: "FAST scores",
+    caption:
+      "Florida FAST, imported after each PM window (about 4× a year). Most schools use the state portal file — the other two are fallbacks for schools that build their own CSVs.",
+    kinds: ["fast_florida", "fast_scores", "fast_prior_year"],
+    primary: "fast_florida",
+  },
+  {
+    title: "Other test scores",
+    caption: "iReady, SCI Benchmark, MAP, STAR, and any other vendor test.",
+    kinds: ["assessments"],
+  },
+  {
+    title: "Students",
+    caption: "Add new students to your roster.",
+    kinds: ["rosters"],
+  },
+  {
+    title: "Behavior",
+    caption:
+      "A one-time backfill of behavior / counselor logs from a prior system.",
+    kinds: ["behavior"],
+  },
+  {
+    title: "Switching from another PBIS app",
+    caption:
+      "Least used — a one-time point-balance transfer when you move to PulseEDU.",
+    kinds: ["points_migration"],
+  },
+];
+
+// Inside the FAST group the heading already says "FAST", so each row
+// shows just its METHOD (clearer than three near-identical "FAST…"
+// labels). Elsewhere the row title falls back to the canonical label
+// with any trailing parenthetical stripped.
+const KIND_ROW_TITLE: Partial<Record<Kind, string>> = {
+  fast_florida: "From the state portal file (.xlsx)",
+  fast_scores: "Manual entry — build a CSV of scale scores",
+  fast_prior_year: "Prior-year final scores only",
+};
+
+// Small badge on the recommended/most-common row within a group.
+const KIND_ROW_BADGE: Partial<Record<Kind, string>> = {
+  gradebook: "Most used",
+  fast_florida: "Recommended",
 };
 
 // Headers list "ignore" as a sentinel — when a CSV column isn't in the
@@ -1057,13 +1144,35 @@ type DataImportsProps = {
   // When false, the scope toggle is hidden and every request goes to the
   // school-scope endpoints.
   canActAsDistrict?: boolean;
+  // When provided, restricts the wizard to just these import kinds — used
+  // by delegated importers (staff granted only capImportGrades / Fast /
+  // Iready) so they see ONLY the importer(s) they can run. Undefined = full
+  // access (admins). The server enforces the same per-kind cap, so this is a
+  // UX filter, not the security boundary.
+  allowedKinds?: Kind[];
 };
 
 export default function DataImports({
   canActAsDistrict = false,
+  allowedKinds,
 }: DataImportsProps) {
+  const visibleKinds = useMemo<Kind[]>(
+    () =>
+      (Object.keys(KIND_DEFS) as Kind[]).filter(
+        (k) => !allowedKinds || allowedKinds.includes(k),
+      ),
+    [allowedKinds],
+  );
   const [tab, setTab] = useState<"upload" | "history">("upload");
-  const [kind, setKind] = useState<Kind>("assessments");
+  const [kind, setKind] = useState<Kind>(
+    () =>
+      (visibleKinds.includes("gradebook") ? "gradebook" : visibleKinds[0]) ??
+      "assessments",
+  );
+  // Whether the FAST group's secondary (CSV) importers are revealed. The
+  // primary state-portal option is always shown; the two fallbacks sit
+  // behind a "more ways" disclosure to keep the picker uncluttered.
+  const [showFastAlt, setShowFastAlt] = useState(false);
   const [scope, setScope] = useState<Scope>("school");
   // points_migration only — how migrated points behave. Default false =
   // "Store balance only" (spendable, excluded from houses/leaderboards).
@@ -1097,6 +1206,15 @@ export default function DataImports({
   const [selectedSchoolYear, setSelectedSchoolYear] = useState<string>(
     () => floridaSchoolYearOptions()[0] ?? "",
   );
+  // Gradebook xlsx flow — which quarter the uploaded grades represent and
+  // the effective date (defaults to today, school-local enough for a date).
+  const [gradebookQuarter, setGradebookQuarter] = useState<
+    "Q1" | "Q2" | "Q3" | "Q4"
+  >("Q1");
+  const [gradebookDate, setGradebookDate] = useState<string>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  });
   const [dragActive, setDragActive] = useState(false);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [mapping, setMapping] = useState<Record<string, string>>({});
@@ -1141,6 +1259,15 @@ export default function DataImports({
   // server enforces the same toggle on /rosters/preview and /commit, so
   // this is purely a UX hint — a stale value can't cause a bad commit.
   const [rosterEnabled, setRosterEnabled] = useState<boolean | null>(null);
+  // Defense-in-depth: if allowedKinds narrows at runtime (e.g. caps revoked
+  // on re-auth) and the selected kind is no longer visible, clamp back to
+  // the first allowed kind so the wizard never operates on a hidden kind.
+  useEffect(() => {
+    if (!visibleKinds.includes(kind) && visibleKinds.length > 0) {
+      setKind(visibleKinds[0]);
+    }
+  }, [visibleKinds, kind]);
+
   useEffect(() => {
     let alive = true;
     void (async () => {
@@ -1172,6 +1299,7 @@ export default function DataImports({
     fast_scores: "FAST",
     fast_prior_year: "FAST",
     fast_florida: "FLORIDA",
+    gradebook: "GRADEBOOK",
     points_migration: "POINTS",
   };
   const echoWord = KIND_ECHO_WORDS[kind];
@@ -1323,10 +1451,12 @@ export default function DataImports({
     const isXlsx = /\.xlsx$/i.test(file.name);
     const isXls = /\.xls$/i.test(file.name);
     const isCsv = /\.csv$/i.test(file.name);
-    if (kind === "fast_florida") {
+    if (kind === "fast_florida" || kind === "gradebook") {
       if (!isXlsx && !isXls) {
         setError(
-          "Please choose a .xlsx or .xls file exported from the Florida FAST portal.",
+          kind === "gradebook"
+            ? "Please choose a .xlsx or .xls Live Grade Report file."
+            : "Please choose a .xlsx or .xls file exported from the Florida FAST portal.",
         );
         return;
       }
@@ -1414,7 +1544,12 @@ export default function DataImports({
   const runPreview = async (
     text: string,
     overrideMapping: Record<string, string>,
-    floridaOverride?: { xlsxBase64?: string; schoolYear?: string },
+    floridaOverride?: {
+      xlsxBase64?: string;
+      schoolYear?: string;
+      quarter?: "Q1" | "Q2" | "Q3" | "Q4";
+      effectiveDate?: string;
+    },
   ) => {
     // Callers that have just called setXlsxBase64 / setSelectedSchoolYear
     // can pass the fresh values via `floridaOverride` to avoid a stale-
@@ -1422,6 +1557,8 @@ export default function DataImports({
     // returns the *previous* value).
     const floridaXlsx = floridaOverride?.xlsxBase64 ?? xlsxBase64;
     const floridaYear = floridaOverride?.schoolYear ?? selectedSchoolYear;
+    const gbQuarter = floridaOverride?.quarter ?? gradebookQuarter;
+    const gbDate = floridaOverride?.effectiveDate ?? gradebookDate;
     // Snapshot the token + scope at call time. After the network round
     // trip we only commit state if (a) no newer preview has been kicked
     // off and (b) the scope hasn't been toggled in flight — otherwise a
@@ -1500,6 +1637,86 @@ export default function DataImports({
         setMapping({});
         return;
       }
+      // Gradebook xlsx path — dedicated endpoint, matched-by-local-SIS-id
+      // response. Adapt onto PreviewResponse so step 3 renders counts +
+      // sample courses, and surface unmatched/ambiguous ids as "errors".
+      if (kind === "gradebook") {
+        const r = await authFetch(endpoints.preview, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            xlsxBase64: floridaXlsx,
+            quarter: gbQuarter,
+            effectiveDate: gbDate,
+            filename,
+          }),
+        });
+        if (previewTokenRef.current !== myToken || callScope !== scope) return;
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          setError(j.error ?? `Preview failed (HTTP ${r.status})`);
+          setPreview(null);
+          return;
+        }
+        const data = await r.json();
+        const qKey = (gbQuarter.toLowerCase() as "q1" | "q2" | "q3" | "q4");
+        const adapted: PreviewResponse = {
+          headers: ["local_sis_id", "course", "teacher", "grade"],
+          autoMapping: {},
+          suggestedMapping: {},
+          unmappedCsvColumns: [],
+          totalRows: data.totalRows ?? 0,
+          validRows: data.matchedRows ?? 0,
+          errorRows: data.unmatchedRows ?? 0,
+          sampleRows: (data.sampleRows ?? []).map(
+            (s: {
+              localSisId: string;
+              courseCode: string;
+              courseDesc: string | null;
+              teacherName: string | null;
+              q1: number | null;
+              q2: number | null;
+              q3: number | null;
+              q4: number | null;
+              fin: number | null;
+            }) => {
+              const cur =
+                s[qKey] ?? s.q4 ?? s.q3 ?? s.q2 ?? s.q1 ?? null;
+              return {
+                studentId: s.localSisId,
+                assessmentName:
+                  `${s.courseCode}` +
+                  (s.courseDesc ? ` · ${s.courseDesc}` : "") +
+                  (s.teacherName ? ` · ${s.teacherName}` : ""),
+                score: cur,
+                scoreLevel: gradebookQuarter,
+                administeredAt: "",
+                source: "Gradebook",
+              };
+            },
+          ),
+          errors: [
+            ...(data.warnings ?? []).map(
+              (w: { row: number; message: string }) => ({
+                row: w.row,
+                message: w.message,
+              }),
+            ),
+            ...(data.unmatchedSisIds ?? []).map((id: string) => ({
+              row: 0,
+              message: `No student matched Other ID "${id}" — skipped.`,
+            })),
+            ...(data.ambiguousSisIds ?? []).map((id: string) => ({
+              row: 0,
+              message: `Other ID "${id}" matched more than one student — skipped.`,
+            })),
+          ],
+          readyToCommit: !!data.readyToCommit,
+        };
+        setPreview(adapted);
+        setMapping({});
+        return;
+      }
       const r = await authFetch(endpoints.preview, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1549,8 +1766,9 @@ export default function DataImports({
 
   const handleCommit = async () => {
     if (!preview) return;
-    if (kind !== "fast_florida" && !csvText) return;
-    if (kind === "fast_florida" && !xlsxBase64) return;
+    if (kind !== "fast_florida" && kind !== "gradebook" && !csvText) return;
+    if ((kind === "fast_florida" || kind === "gradebook") && !xlsxBase64)
+      return;
     // For fast_florida, intercept the first click and require an
     // explicit current-vs-historical pick. doCommit() below is what
     // actually performs the upload after the modal resolves.
@@ -1578,6 +1796,13 @@ export default function DataImports({
                 schoolYear: selectedSchoolYear || undefined,
                 filename,
                 isHistorical: historical,
+              })
+            : kind === "gradebook"
+            ? JSON.stringify({
+                xlsxBase64,
+                quarter: gradebookQuarter,
+                effectiveDate: gradebookDate,
+                filename,
               })
             : kind === "points_migration"
               ? JSON.stringify({
@@ -1682,11 +1907,14 @@ export default function DataImports({
         // Need both a parsed preview and a chosen school year.
         return preview !== null && !!selectedSchoolYear;
       }
+      if (kind === "gradebook") {
+        return preview !== null && !!gradebookQuarter && !!gradebookDate;
+      }
       return preview !== null;
     }
     if (step === 2) {
-      // Florida xlsx skips column mapping entirely.
-      if (kind === "fast_florida") return true;
+      // Florida / gradebook xlsx skip column mapping entirely.
+      if (kind === "fast_florida" || kind === "gradebook") return true;
       if (!preview) return false;
       if (missingRequired.length > 0) return false;
       // Defense against an all-Ignore mapping — at least one column
@@ -1701,15 +1929,17 @@ export default function DataImports({
   const goNext = () => {
     if (!canAdvance()) return;
     setStep((s) => {
-      // FAST Florida skips the mapping step (1 → 3 directly).
-      if (kind === "fast_florida" && s === 1) return 3;
+      // FAST Florida / gradebook skip the mapping step (1 → 3 directly).
+      if ((kind === "fast_florida" || kind === "gradebook") && s === 1)
+        return 3;
       return (Math.min(4, s + 1) as 0 | 1 | 2 | 3 | 4);
     });
   };
   const goBack = () => {
     setStep((s) => {
-      // Mirror goNext: FAST Florida back from preview goes to upload.
-      if (kind === "fast_florida" && s === 3) return 1;
+      // Mirror goNext: FAST Florida / gradebook back from preview → upload.
+      if ((kind === "fast_florida" || kind === "gradebook") && s === 3)
+        return 1;
       return (Math.max(0, s - 1) as 0 | 1 | 2 | 3 | 4);
     });
   };
@@ -1721,6 +1951,131 @@ export default function DataImports({
     "Preview",
     "Confirm",
   ];
+
+  // One selectable row in the step-0 "Choose data" picker. Shared by the
+  // primary group rows and the FAST fallback rows so styling can't drift.
+  const renderKindRow = (k: Kind, opts?: { indented?: boolean }) => {
+    const def = KIND_DEFS[k];
+    const isRoster = k === "rosters";
+    const disabled = isRoster && rosterEnabled === false;
+    const selected = kind === k;
+    const title =
+      KIND_ROW_TITLE[k] ?? def.label.replace(/\s*\(.*?\)\s*$/, "").trim();
+    const badge = KIND_ROW_BADGE[k];
+    return (
+      <button
+        key={k}
+        type="button"
+        onClick={() => {
+          if (disabled) return;
+          handleKindChange(k);
+        }}
+        disabled={disabled}
+        role="radio"
+        aria-checked={selected}
+        style={{
+          textAlign: "left",
+          width: "100%",
+          display: "block",
+          padding: "0.7rem 0.85rem",
+          borderRadius: 8,
+          border: selected
+            ? "2px solid var(--accent, #3b82f6)"
+            : "1px solid var(--border, #2a3447)",
+          background: selected
+            ? "rgba(59, 130, 246, 0.08)"
+            : "var(--card-bg, #0f172a)",
+          color: "inherit",
+          font: "inherit",
+          cursor: disabled ? "not-allowed" : "pointer",
+          opacity: disabled ? 0.45 : 1,
+          marginLeft: opts?.indented ? 18 : 0,
+        }}
+        title={
+          disabled
+            ? "Manual roster uploads are disabled for this school."
+            : undefined
+        }
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span
+            aria-hidden="true"
+            style={{
+              width: 15,
+              height: 15,
+              borderRadius: "50%",
+              flexShrink: 0,
+              boxSizing: "border-box",
+              border: selected
+                ? "5px solid var(--accent, #3b82f6)"
+                : "2px solid var(--text-subtle, #64748b)",
+            }}
+          />
+          <span style={{ fontWeight: 700, fontSize: 14 }}>{title}</span>
+          {badge && !disabled && (
+            <span
+              style={{
+                marginLeft: 2,
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: "0.05em",
+                textTransform: "uppercase",
+                padding: "0.05rem 0.4rem",
+                borderRadius: 999,
+                background: "rgba(59, 130, 246, 0.16)",
+                color: "var(--accent, #3b82f6)",
+              }}
+            >
+              {badge}
+            </span>
+          )}
+          {disabled && (
+            <span
+              style={{
+                marginLeft: 2,
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: "0.05em",
+                textTransform: "uppercase",
+                padding: "0.05rem 0.4rem",
+                borderRadius: 999,
+                background: "rgba(148, 163, 184, 0.2)",
+                color: "var(--text-subtle)",
+              }}
+            >
+              Off
+            </span>
+          )}
+        </div>
+        <div
+          style={{
+            fontSize: 12,
+            color: "var(--text-subtle)",
+            lineHeight: 1.4,
+            marginTop: 4,
+            marginLeft: 23,
+          }}
+        >
+          {def.helpText}
+        </div>
+        {selected && !disabled && (
+          <div
+            style={{
+              marginTop: "0.55rem",
+              marginLeft: 23,
+              paddingTop: "0.55rem",
+              borderTop: "1px solid var(--border, #2a3447)",
+              fontSize: 12.5,
+              color: "var(--text)",
+              lineHeight: 1.5,
+            }}
+          >
+            {def.description}
+          </div>
+        )}
+      </button>
+    );
+  };
 
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
@@ -1752,65 +2107,6 @@ export default function DataImports({
           import is always cleaner than a manual patch.
         </RoleSection>
       </HowToUseHelp>
-
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "0.75rem",
-          marginTop: "0.75rem",
-          padding: "0.6rem 0.75rem",
-          background: "rgba(34, 197, 94, 0.06)",
-          border: "1px solid var(--border, #2a3447)",
-          borderRadius: 8,
-          flexWrap: "wrap",
-        }}
-      >
-        <span style={{ fontSize: 13, fontWeight: 600 }}>Data type:</span>
-        {(Object.keys(KIND_DEFS) as Kind[]).map((k) => {
-          // Roster card is opt-in per school. Server enforces the same
-          // gate on /rosters/preview + /commit, so the disabled state
-          // here is purely a UX hint — a stale tab can't bypass it.
-          const isRoster = k === "rosters";
-          const disabled = isRoster && rosterEnabled === false;
-          return (
-            <label
-              key={k}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                fontSize: 13,
-                cursor: disabled ? "not-allowed" : "pointer",
-                opacity: disabled ? 0.5 : 1,
-              }}
-              title={
-                disabled
-                  ? "Manual roster uploads are disabled for this school. Most schools sync from Classlink or Clever (OneRoster). An admin can enable manual uploads in School Settings → Data & Integrations."
-                  : undefined
-              }
-            >
-              <input
-                type="radio"
-                name="data-imports-kind"
-                checked={kind === k}
-                disabled={disabled}
-                onChange={() => handleKindChange(k)}
-              />
-              {KIND_DEFS[k].label}
-            </label>
-          );
-        })}
-        <span
-          style={{
-            color: "var(--text-subtle)",
-            fontSize: 12,
-            marginLeft: "auto",
-          }}
-        >
-          {kindDef.helpText}
-        </span>
-      </div>
 
       {canActAsDistrict && kindDef.supportsDistrict && (
         <div
@@ -1902,7 +2198,11 @@ export default function DataImports({
 
       {tab === "upload" && (
         <div style={{ marginTop: "1rem" }}>
-          <DirectionsPanel kind={kind} kindDef={kindDef} />
+          {/* File directions are kind-specific, so only show them once a
+              data type has been chosen (step > 0). On the "Choose data"
+              step they'd appear ABOVE the picker and users start reading
+              upload instructions for a type they haven't selected yet. */}
+          {step > 0 && <DirectionsPanel kind={kind} kindDef={kindDef} />}
           {commitResult ? (
             <div
               style={{
@@ -2074,92 +2374,101 @@ export default function DataImports({
                 })}
               </div>
 
-              {/* Step 0 — Choose data type. Cards instead of radios so the
-                  Roster card can show a clear disabled affordance + an
-                  inline explainer when the per-school toggle is OFF. */}
+              {/* Step 0 — Choose data type. A single-column list: each row
+                  is name + one-line summary; the selected row expands to
+                  show the full definition inline. One picker only (the old
+                  persistent "Data type" row above the wizard was removed)
+                  so the choice is never made twice. The Roster row shows a
+                  disabled "Off" affordance when the per-school toggle is
+                  OFF, with an inline explainer below. */}
               {step === 0 && (
                 <div>
                   <div
+                    role="radiogroup"
+                    aria-label="Data type"
                     style={{
-                      display: "grid",
-                      gridTemplateColumns:
-                        "repeat(auto-fill, minmax(220px, 1fr))",
-                      gap: "0.6rem",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "1.15rem",
                       marginBottom: "0.85rem",
                     }}
                   >
-                    {(Object.keys(KIND_DEFS) as Kind[]).map((k) => {
-                      const def = KIND_DEFS[k];
-                      const isRoster = k === "rosters";
-                      const disabled =
-                        isRoster && rosterEnabled === false;
-                      const selected = kind === k;
+                    {KIND_GROUPS.map((group) => {
+                      const groupKinds = group.kinds.filter((k) =>
+                        visibleKinds.includes(k),
+                      );
+                      if (groupKinds.length === 0) return null;
+                      const primary =
+                        group.primary && groupKinds.includes(group.primary)
+                          ? group.primary
+                          : groupKinds[0];
+                      const rest = groupKinds.filter((k) => k !== primary);
+                      // A fallback being selected forces the disclosure open
+                      // so the current choice is always visible.
+                      const restSelected = rest.includes(kind);
+                      const altOpen = restSelected || showFastAlt;
                       return (
-                        <button
-                          key={k}
-                          type="button"
-                          onClick={() => {
-                            if (disabled) return;
-                            handleKindChange(k);
-                          }}
-                          disabled={disabled}
-                          style={{
-                            textAlign: "left",
-                            padding: "0.85rem",
-                            borderRadius: 8,
-                            border: selected
-                              ? "2px solid var(--accent, #3b82f6)"
-                              : "1px solid var(--border, #2a3447)",
-                            background: selected
-                              ? "rgba(59, 130, 246, 0.08)"
-                              : "var(--card-bg, #0f172a)",
-                            color: "inherit",
-                            font: "inherit",
-                            cursor: disabled ? "not-allowed" : "pointer",
-                            opacity: disabled ? 0.45 : 1,
-                          }}
-                          title={
-                            disabled
-                              ? "Manual roster uploads are disabled for this school."
-                              : undefined
-                          }
-                        >
+                        <div key={group.title}>
                           <div
                             style={{
+                              fontSize: 11,
                               fontWeight: 700,
-                              fontSize: 14,
-                              marginBottom: 4,
+                              letterSpacing: "0.05em",
+                              textTransform: "uppercase",
+                              color: "var(--text-subtle)",
+                              marginBottom: 2,
                             }}
                           >
-                            {def.label}
-                            {disabled && (
-                              <span
-                                style={{
-                                  marginLeft: 6,
-                                  fontSize: 10,
-                                  fontWeight: 700,
-                                  letterSpacing: "0.05em",
-                                  textTransform: "uppercase",
-                                  padding: "0.05rem 0.4rem",
-                                  borderRadius: 999,
-                                  background: "rgba(148, 163, 184, 0.2)",
-                                  color: "var(--text-subtle)",
-                                }}
-                              >
-                                Off
-                              </span>
-                            )}
+                            {group.title}
                           </div>
                           <div
                             style={{
                               fontSize: 12,
                               color: "var(--text-subtle)",
                               lineHeight: 1.4,
+                              marginBottom: 8,
+                              opacity: 0.9,
                             }}
                           >
-                            {def.helpText}
+                            {group.caption}
                           </div>
-                        </button>
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: "0.5rem",
+                            }}
+                          >
+                            {renderKindRow(primary)}
+                            {rest.length > 0 && altOpen &&
+                              rest.map((k) =>
+                                renderKindRow(k, { indented: true }),
+                              )}
+                            {rest.length > 0 && !restSelected && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setShowFastAlt((v) => !v)
+                                }
+                                style={{
+                                  alignSelf: "flex-start",
+                                  marginLeft: 18,
+                                  background: "transparent",
+                                  border: "none",
+                                  padding: "0.15rem 0",
+                                  fontSize: 12.5,
+                                  fontWeight: 600,
+                                  color: "var(--accent, #3b82f6)",
+                                  cursor: "pointer",
+                                }}
+                              >
+                                {showFastAlt
+                                  ? "Show fewer options"
+                                  : `Other ways to import FAST (${rest.length}) ▾`}
+                              </button>
+                            )}
+                          </div>
+                        </div>
                       );
                     })}
                   </div>
@@ -2293,6 +2602,13 @@ export default function DataImports({
                         file: string;
                         label: string;
                       },
+                      // Gradebook is a fixed-layout SIS xlsx export —
+                      // admins supply their own Live Grade Report, so
+                      // there is no sample to ship.
+                      gradebook: null as unknown as {
+                        file: string;
+                        label: string;
+                      },
                     };
                     const sample = SAMPLES[kind];
                     if (!sample) return null;
@@ -2413,7 +2729,7 @@ export default function DataImports({
                     ref={fileInputRef}
                     type="file"
                     accept={
-                      kind === "fast_florida"
+                      kind === "fast_florida" || kind === "gradebook"
                         ? ".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                         : ".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                     }
@@ -2507,6 +2823,98 @@ export default function DataImports({
                         />
                         Import as historical (PM3-only back-fill)
                       </label>
+                    </div>
+                  )}
+                  {/* Gradebook xlsx — quarter + effective-date pickers.
+                      Mirrors the Florida year picker: sits below the drop
+                      zone, re-previews on change so counts stay honest. */}
+                  {kind === "gradebook" && (
+                    <div
+                      style={{
+                        marginTop: "0.75rem",
+                        padding: "0.75rem",
+                        border: "1px solid var(--border, #2a3447)",
+                        borderRadius: 8,
+                        display: "flex",
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        gap: "0.75rem",
+                        fontSize: 13,
+                      }}
+                    >
+                      <label
+                        htmlFor="gradebook-quarter"
+                        style={{ fontWeight: 600 }}
+                      >
+                        Quarter:
+                      </label>
+                      <select
+                        id="gradebook-quarter"
+                        value={gradebookQuarter}
+                        onChange={(e) => {
+                          const q = e.target.value as
+                            | "Q1"
+                            | "Q2"
+                            | "Q3"
+                            | "Q4";
+                          setGradebookQuarter(q);
+                          if (xlsxBase64)
+                            void runPreview("", {}, {
+                              xlsxBase64,
+                              quarter: q,
+                              effectiveDate: gradebookDate,
+                            });
+                        }}
+                        style={{
+                          padding: "0.4rem 0.6rem",
+                          border: "1px solid var(--border, #2a3447)",
+                          borderRadius: 6,
+                          background: "var(--surface)",
+                          color: "inherit",
+                          font: "inherit",
+                          fontSize: 13,
+                        }}
+                      >
+                        <option value="Q1">Q1</option>
+                        <option value="Q2">Q2</option>
+                        <option value="Q3">Q3</option>
+                        <option value="Q4">Q4</option>
+                      </select>
+                      <label
+                        htmlFor="gradebook-date"
+                        style={{ fontWeight: 600 }}
+                      >
+                        Effective date:
+                      </label>
+                      <input
+                        id="gradebook-date"
+                        type="date"
+                        value={gradebookDate}
+                        onChange={(e) => {
+                          const d = e.target.value;
+                          setGradebookDate(d);
+                          if (xlsxBase64)
+                            void runPreview("", {}, {
+                              xlsxBase64,
+                              quarter: gradebookQuarter,
+                              effectiveDate: d,
+                            });
+                        }}
+                        style={{
+                          padding: "0.4rem 0.6rem",
+                          border: "1px solid var(--border, #2a3447)",
+                          borderRadius: 6,
+                          background: "var(--surface)",
+                          color: "inherit",
+                          font: "inherit",
+                          fontSize: 13,
+                        }}
+                      />
+                      <span style={{ color: "var(--text-subtle)" }}>
+                        Which quarter these grades currently represent. The
+                        current grade per course uses this quarter, falling
+                        back to the latest populated quarter.
+                      </span>
                     </div>
                   )}
                 </div>
@@ -3554,6 +3962,22 @@ export default function DataImports({
                               <span>
                                 {" "}· {j.mapping.windows_seen.toUpperCase()}
                               </span>
+                            )}
+                          </div>
+                        )}
+                        {j.kind === "gradebook" && j.mapping && (
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: "var(--text-subtle)",
+                              marginTop: 2,
+                            }}
+                          >
+                            {j.mapping.quarter && (
+                              <span>{j.mapping.quarter}</span>
+                            )}
+                            {j.mapping.effective_date && (
+                              <span> · as of {j.mapping.effective_date}</span>
                             )}
                           </div>
                         )}

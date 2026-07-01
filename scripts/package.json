@@ -16,7 +16,8 @@
     "seed-teacher-locations": "tsx ./src/seedTeacherLocations.ts",
     "seed-mtss": "tsx ./src/seedMtssProgress.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "brochure-pdf": "tsx ./src/generateBrochurePdf.ts"
+    "brochure-pdf": "tsx ./src/generateBrochurePdf.ts",
+    "migration-doc": "tsx ./src/generateMigrationDoc.ts"
   },
   "devDependencies": {
     "@types/node": "catalog:",

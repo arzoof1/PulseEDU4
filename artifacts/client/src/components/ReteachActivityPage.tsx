@@ -12,6 +12,7 @@ import {
   type ReactElement,
 } from "react";
 import { authFetch } from "../lib/authToken";
+import { TeacherPicker } from "./TeacherPicker";
 import {
   HowToUseHelp,
   HowToSection,
@@ -406,17 +407,17 @@ export default function ReteachActivityPage({ onBack }: Props): ReactElement {
           />
         </FilterField>
         <FilterField label="Teacher">
-          <select
-            value={teacherFilter}
-            onChange={(e) => setTeacherFilter(e.target.value)}
-          >
-            <option value="">All</option>
-            {teacherOptions.map((t) => (
-              <option key={t.id} value={String(t.id)}>
-                {t.name}
-              </option>
-            ))}
-          </select>
+          <TeacherPicker
+            teachers={teacherOptions.map((t) => ({
+              id: t.id,
+              displayName: t.name,
+            }))}
+            value={teacherFilter ? Number(teacherFilter) : null}
+            allowEmpty
+            emptyLabel="All"
+            ariaLabel="Teacher"
+            onChange={(id) => setTeacherFilter(id ? String(id) : "")}
+          />
         </FilterField>
         <FilterField label="Grade">
           <select

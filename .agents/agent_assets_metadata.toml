@@ -444,3 +444,39 @@ id = "06aP-xjweorZoU_7b1WZ7"
 uri = "file://exports/PulseEDU-Migration-Handoff-2026-06-29.zip"
 type = "unspecified"
 title = "PulseEDU Migration Handoff — PDF + code patch + report (zip)"
+
+[[outputs]]
+id = "gwrHF4HsiCzZWuONgG47W"
+uri = "file://exports/Pullout-Notifications-Dev-Guide.pdf"
+type = "pdf"
+title = "Pullout Notifications — Developer's Guide"
+
+[[outputs]]
+id = "irJFPi2YuAK4qV0qfyeOT"
+uri = "file://docs/teleprompter-position-migration.md"
+type = "text"
+title = "Teleprompter Positioning — Dev Migration Guide"
+
+[[outputs]]
+id = "o0gNyrzFpDH-kTa6P4QM7"
+uri = "file://docs/teleprompter-position-migration.pdf"
+type = "pdf"
+title = "Teleprompter Positioning — Dev Migration Guide (PDF)"
+
+[[outputs]]
+id = "-GYGUASFIROFPExuUQ9KK"
+uri = "file://attached_assets/FAKE_Student_LIVE_Grade_Report-SAMPLE-with-teachers.xlsx"
+type = "table"
+title = "Sample grade report (teacher names filled in)"
+
+[[outputs]]
+id = "K9AgQTm9MEGzjZAM992-u"
+uri = "file://exports/Attendance_25-26_Parrott_Seeded.xlsx"
+type = "table"
+title = "Attendance 25-26 — Parrott Seeded (454 students)"
+
+[[outputs]]
+id = "rElA9nRt6313JHdznyd1z"
+uri = "file://exports/PulseEDU_Migration_2026-07-01.pdf"
+type = "pdf"
+title = "PulseEDU — Production Migration (2026-07-01)"

@@ -1,4 +1,5 @@
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
+import { TeacherPicker } from "./TeacherPicker";
 // MTSS Reports — trends + charts page for the Core Team.
 //
 // Two modes, same component:
@@ -852,25 +853,16 @@ export default function MtssReportsPage({
                 <label style={labelStyle} htmlFor="rep-teacher">
                   Teacher
                 </label>
-                <select
+                <TeacherPicker
                   id="rep-teacher"
-                  value={teacherStaffId}
-                  onChange={(e) =>
-                    setTeacherStaffId(
-                      e.target.value === ""
-                        ? ""
-                        : Number(e.target.value),
-                    )
-                  }
-                  style={{ ...inputStyle, minWidth: 200 }}
-                >
-                  <option value="">All teachers</option>
-                  {staffOpts.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.displayName}
-                    </option>
-                  ))}
-                </select>
+                  teachers={staffOpts}
+                  value={teacherStaffId === "" ? null : teacherStaffId}
+                  allowEmpty
+                  emptyLabel="All teachers"
+                  ariaLabel="Teacher"
+                  selectStyle={{ ...inputStyle, minWidth: 200 }}
+                  onChange={(id) => setTeacherStaffId(id ?? "")}
+                />
               </div>
             </>
           )}
