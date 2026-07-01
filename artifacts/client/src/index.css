@@ -425,7 +425,7 @@ strong {
 .account-menu-kebab {
   font-size: 16px;
   line-height: 1;
-  color: var(--text-muted);
+  color: var(--brand-primary, #7c3aed);
   padding-left: 0.1rem;
 }
 .account-menu-panel {
