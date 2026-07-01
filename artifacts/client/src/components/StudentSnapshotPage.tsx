@@ -846,18 +846,6 @@ function PmTrajectory({ row }: { row: FastRow }) {
     );
   };
 
-  const captionParts: string[] = [];
-  if (row.ptsToNextLevel != null && row.ptsToNextLevel > 0) {
-    captionParts.push(`${row.ptsToNextLevel} pts to next level`);
-  }
-  if (row.ptsToProficient != null) {
-    captionParts.push(
-      row.ptsToProficient <= 0
-        ? "Proficient (L3+)"
-        : `${row.ptsToProficient} pts to proficiency`,
-    );
-  }
-
   const arrow: React.CSSProperties = {
     color: "var(--muted)",
     alignSelf: "center",
@@ -903,9 +891,6 @@ function PmTrajectory({ row }: { row: FastRow }) {
         {col("PM2", row.pm2, row.levels.pm2, { from: row.pm1, label: "PM1" })}
         <span style={arrow}>→</span>
         {col("PM3", row.pm3, row.levels.pm3, { from: row.pm2, label: "PM2" })}
-      </div>
-      <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>
-        {captionParts.length ? captionParts.join(" · ") : "—"}
       </div>
     </div>
   );
