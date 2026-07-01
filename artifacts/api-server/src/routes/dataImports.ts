@@ -28,6 +28,8 @@ import {
   importJobsTable,
   importTemplatesTable,
   assessmentsTable,
+  classSectionsTable,
+  sectionRosterTable,
   studentsTable,
   supportNotesTable,
   studentFastScoresTable,
@@ -1172,6 +1174,20 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
             .filter(Boolean),
         )
       : null;
+  // teacherStaffId / period: restrict the export to students enrolled in a
+  // specific teacher's class and/or a specific class period. Both optional
+  // and independent (teacher alone, period alone, or both). Applies to every
+  // kind — each export is student-centric, so we intersect its student set
+  // with the section_roster ⨝ class_sections enrollment set below.
+  const teacherStaffId =
+    typeof req.query.teacherStaffId === "string" &&
+    /^\d+$/.test(req.query.teacherStaffId)
+      ? Number(req.query.teacherStaffId)
+      : null;
+  const periodFilter =
+    typeof req.query.period === "string" && /^\d+$/.test(req.query.period)
+      ? Number(req.query.period)
+      : null;
 
   let schoolIds: number[] = [];
   if (scope === "district") {
@@ -1195,6 +1211,39 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
     if (!schoolId) return;
     schoolIds = [schoolId];
   }
+  // Section-enrollment subselect: the set of student_ids enrolled in a
+  // section matching the teacher and/or period filters. Null when neither
+  // filter is set. class_sections is school-scoped (teacher/period unique
+  // per school) so this naturally narrows even a district-scope export to
+  // the relevant school(s). Planning periods are excluded — they hold no
+  // real roster. Reused at most once per request (one kind runs).
+  const sectionStudentSub =
+    teacherStaffId != null || periodFilter != null
+      ? db
+          .select({ sid: sectionRosterTable.studentId })
+          .from(sectionRosterTable)
+          .innerJoin(
+            classSectionsTable,
+            eq(sectionRosterTable.sectionId, classSectionsTable.id),
+          )
+          .where(
+            and(
+              // Explicit tenant predicates on BOTH joined tables — the
+              // codebase invariant (student_id text is not globally unique)
+              // requires school-scoping every tenant table, even though the
+              // sectionId→class_sections PK join already narrows the section.
+              inArray(sectionRosterTable.schoolId, schoolIds),
+              inArray(classSectionsTable.schoolId, schoolIds),
+              eq(classSectionsTable.isPlanning, false),
+              ...(teacherStaffId != null
+                ? [eq(classSectionsTable.teacherStaffId, teacherStaffId)]
+                : []),
+              ...(periodFilter != null
+                ? [eq(classSectionsTable.period, periodFilter)]
+                : []),
+            )!,
+          )
+      : null;
   // Build (header, rows) per kind. Rows are arrays of strings/numbers
   // in the same order as the headers; Papa.unparse handles quoting and
   // newlines.
@@ -1202,13 +1251,12 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
   let rows: (string | number | null)[][] = [];
 
   if (kindRaw === "rosters") {
-    // Roster filter: grade only.
-    const rosterWhere = grades
-      ? and(
-          inArray(studentsTable.schoolId, schoolIds),
-          inArray(studentsTable.grade, grades),
-        )!
-      : inArray(studentsTable.schoolId, schoolIds);
+    // Roster filter: grade + optional teacher/period (via section enrollment).
+    const rosterConds = [inArray(studentsTable.schoolId, schoolIds)];
+    if (grades) rosterConds.push(inArray(studentsTable.grade, grades));
+    if (sectionStudentSub)
+      rosterConds.push(inArray(studentsTable.studentId, sectionStudentSub));
+    const rosterWhere = and(...rosterConds)!;
     const list = await db
       .select({
         studentId: studentsTable.studentId,
@@ -1292,6 +1340,8 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
     const conds = [inArray(supportNotesTable.schoolId, schoolIds)];
     if (gradeSubselect)
       conds.push(inArray(supportNotesTable.studentId, gradeSubselect));
+    if (sectionStudentSub)
+      conds.push(inArray(supportNotesTable.studentId, sectionStudentSub));
     if (fromYmd)
       conds.push(gte(supportNotesTable.createdAt, fromYmd));
     if (toYmd)
@@ -1339,6 +1389,8 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
     const fsConds = [inArray(studentFastScoresTable.schoolId, schoolIds)];
     if (fsGradeSub)
       fsConds.push(inArray(studentFastScoresTable.studentId, fsGradeSub));
+    if (sectionStudentSub)
+      fsConds.push(inArray(studentFastScoresTable.studentId, sectionStudentSub));
     if (subjectFilter)
       fsConds.push(eq(studentFastScoresTable.subject, subjectFilter));
     const list = await db
@@ -1392,6 +1444,8 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
     const fpyConds = [inArray(studentFastScoresTable.schoolId, schoolIds)];
     if (fpyGradeSub)
       fpyConds.push(inArray(studentFastScoresTable.studentId, fpyGradeSub));
+    if (sectionStudentSub)
+      fpyConds.push(inArray(studentFastScoresTable.studentId, sectionStudentSub));
     if (subjectFilter)
       fpyConds.push(eq(studentFastScoresTable.subject, subjectFilter));
     const list = await db
@@ -1433,6 +1487,8 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
     const aConds = [inArray(assessmentsTable.schoolId, schoolIds)];
     if (aGradeSub)
       aConds.push(inArray(assessmentsTable.studentId, aGradeSub));
+    if (sectionStudentSub)
+      aConds.push(inArray(assessmentsTable.studentId, sectionStudentSub));
     if (fromYmd)
       aConds.push(gte(assessmentsTable.administeredAt, new Date(fromYmd)));
     if (toYmd)
@@ -1517,6 +1573,62 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
   }
   sendCsv(res, kindRaw, [headers, ...rows]);
 });
+
+// ---------------------------------------------------------------------------
+// GET /api/data-imports/export/section-filters
+//   Populates the export panel's Teacher + Period pickers with exactly the
+//   teachers and periods that have a real (non-planning) section this school
+//   year, so a chosen filter never yields a surprise-empty export. School
+//   scope only — teacher/period are school concepts. Gated by requireImporter
+//   (same actors as the export itself). Distinct path from /export so no
+//   route shadowing.
+// ---------------------------------------------------------------------------
+router.get(
+  "/data-imports/export/section-filters",
+  requireImporter(),
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const secs = await db
+      .select({
+        teacherStaffId: classSectionsTable.teacherStaffId,
+        period: classSectionsTable.period,
+      })
+      .from(classSectionsTable)
+      .where(
+        and(
+          eq(classSectionsTable.schoolId, schoolId),
+          eq(classSectionsTable.isPlanning, false),
+        )!,
+      );
+    const teacherIds = Array.from(new Set(secs.map((s) => s.teacherStaffId)));
+    const periods = Array.from(new Set(secs.map((s) => s.period))).sort(
+      (a, b) => a - b,
+    );
+    const staffRows = teacherIds.length
+      ? await db
+          .select({
+            id: staffTable.id,
+            displayName: staffTable.displayName,
+          })
+          .from(staffTable)
+          .where(
+            and(
+              eq(staffTable.schoolId, schoolId),
+              inArray(staffTable.id, teacherIds),
+            )!,
+          )
+      : [];
+    const nameById = new Map(staffRows.map((s) => [s.id, s.displayName]));
+    const teachers = teacherIds
+      .map((id) => ({ id, displayName: nameById.get(id) ?? null }))
+      .filter((t) => t.displayName)
+      .sort((a, b) =>
+        (a.displayName ?? "").localeCompare(b.displayName ?? ""),
+      );
+    res.json({ teachers, periods });
+  },
+);
 
 // CSV writer used by the export endpoint above. Pulled out so each
 // kind branch stays focused on its query shape.

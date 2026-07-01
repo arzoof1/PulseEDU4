@@ -1,5 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
+import { authFetch } from "../lib/authToken";
+import { TeacherPicker } from "./TeacherPicker";
+import type { TeacherOpt } from "./teacherDepartments";
 
 // Export-only kinds (mirror of the importer kinds the server's
 // /api/data-imports/export endpoint supports). Keeping this list
@@ -137,9 +140,35 @@ export default function DataExportPanel({
   const [subject, setSubject] = useState<"" | "ela" | "math">("");
   const [noteType, setNoteType] = useState("");
   const [assessmentName, setAssessmentName] = useState("");
+  // Teacher + period filters apply to EVERY kind (all exports are
+  // student-centric; the server intersects with section enrollment), so
+  // they live outside the kind-specific cfg.filters gating.
+  const [teacherId, setTeacherId] = useState<number | null>(null);
+  const [period, setPeriod] = useState<number | "">("");
+  const [teachers, setTeachers] = useState<TeacherOpt[]>([]);
+  const [periods, setPeriods] = useState<number[]>([]);
   const [includedCols, setIncludedCols] = useState<Set<string>>(
     () => new Set(cfg.cols),
   );
+
+  // Load the teachers + periods that actually have sections so the pickers
+  // never offer a filter that yields zero rows.
+  useEffect(() => {
+    let cancelled = false;
+    authFetch("/api/data-imports/export/section-filters")
+      .then((r) => (r.ok ? r.json() : { teachers: [], periods: [] }))
+      .then((d: { teachers?: TeacherOpt[]; periods?: number[] }) => {
+        if (cancelled) return;
+        setTeachers(d.teachers ?? []);
+        setPeriods(d.periods ?? []);
+      })
+      .catch(() => {
+        /* pickers stay empty; teacher/period filtering is optional */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // When kind changes, reset the column set to "all of the new kind's
   // columns" — column names don't transfer across kinds, so carrying
@@ -189,6 +218,13 @@ export default function DataExportPanel({
     }
     if (cfg.filters.includes("assessmentName") && assessmentName.trim()) {
       params.set("assessmentName", assessmentName.trim());
+    }
+    // Teacher / period apply to every kind — send whenever selected.
+    if (teacherId !== null) {
+      params.set("teacherStaffId", String(teacherId));
+    }
+    if (period !== "") {
+      params.set("period", String(period));
     }
     // Only send the columns param if the user actually narrowed the set
     // — saves a query-string round-trip and keeps the URL short for the
@@ -286,6 +322,74 @@ export default function DataExportPanel({
           </div>
         </div>
       )}
+
+      <div style={{ marginTop: "1rem" }}>
+        <div style={sectionLabel}>Teacher &amp; period (optional)</div>
+        <div
+          style={{
+            display: "flex",
+            gap: 12,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          <TeacherPicker
+            teachers={teachers}
+            value={teacherId}
+            onChange={setTeacherId}
+            allowEmpty
+            emptyLabel="All teachers"
+            showDeptFilter
+            searchPlaceholder="Search teacher…"
+            selectStyle={{ ...inputStyle, minWidth: 220 }}
+          />
+          <input
+            list="export-period-list"
+            value={period === "" ? "" : String(period)}
+            onChange={(e) => {
+              const v = e.target.value.trim();
+              if (v === "") {
+                setPeriod("");
+                return;
+              }
+              const n = Number(v);
+              setPeriod(Number.isInteger(n) && n >= 0 ? n : "");
+            }}
+            placeholder="All periods (type to search)"
+            aria-label="Period"
+            style={{ ...inputStyle, minWidth: 180 }}
+          />
+          <datalist id="export-period-list">
+            {periods.map((p) => (
+              <option key={p} value={String(p)}>
+                {`Period ${p}`}
+              </option>
+            ))}
+          </datalist>
+          {(teacherId !== null || period !== "") && (
+            <button
+              type="button"
+              onClick={() => {
+                setTeacherId(null);
+                setPeriod("");
+              }}
+              style={{
+                ...chip(false),
+                borderStyle: "dashed",
+                color: "var(--text-subtle)",
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        <div
+          style={{ marginTop: 6, fontSize: 12, color: "var(--text-subtle)" }}
+        >
+          Restrict the export to students enrolled in a specific teacher's
+          class and/or a specific period. Leave both empty for all students.
+        </div>
+      </div>
 
       {cfg.filters.includes("grade") && (
         <div style={{ marginTop: "1rem" }}>
