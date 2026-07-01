@@ -70,7 +70,7 @@ import {
   pickHistory,
   type FastHistoryEntry,
 } from "../lib/fastHistory.js";
-import { decideLearningGain } from "../lib/learningGains.js";
+import { computeRowLearningGain } from "../lib/learningGains.js";
 import {
   parseInsightsFilters,
   applyInsightsFilters,
@@ -160,38 +160,8 @@ async function loadDrilldownContext(
   return { ellByStudent, safetyPlanByStudent };
 }
 
-// FAST learning-gain green-check for one drill-down row. Uses the SAME
-// strict PM3-to-PM3 rule as the Teacher Roster — prior-year evidence comes
-// from loadFastHistory historical PM3 (NEVER priorYearScore), placed on the
-// test-administration grade chart (grade-1), and compared against the
-// current PM3 placement already carried on the row's `levels`.
-function computeRowLearningGain(args: {
-  subject: Subject;
-  grade: number | null;
-  currentLevels: PmPlacementSet | undefined;
-  currentPm3: number | null;
-  history: FastHistoryEntry[];
-}): boolean | null {
-  const { subject, grade, currentLevels, currentPm3, history } = args;
-  if (grade == null) return null;
-  const top = history[0];
-  const priorGrade = grade - 1;
-  const canPlace =
-    !!top &&
-    priorGrade >= 1 &&
-    (subject === "ela" || subject === "math") &&
-    hasChart(subject, priorGrade);
-  const priorPlacement =
-    canPlace && top ? placeOnChart(top.pm3, subject, priorGrade) : null;
-  return decideLearningGain({
-    priorLevel: priorPlacement?.level ?? null,
-    currentLevel: currentLevels?.pm3?.level ?? null,
-    priorScore: top?.pm3 ?? null,
-    currentScore: currentPm3,
-    priorSubLevel: priorPlacement?.subLevel ?? null,
-    currentSubLevel: currentLevels?.pm3?.subLevel ?? null,
-  });
-}
+// computeRowLearningGain is single-sourced in lib/learningGains.ts so the
+// roster, insights drill-downs, Student Snapshot, and HeartBEAT PDF all agree.
 
 // ---------------------------------------------------------------------------
 // Auth + visibility helpers

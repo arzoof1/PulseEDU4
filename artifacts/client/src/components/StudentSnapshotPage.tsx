@@ -20,6 +20,13 @@ import { useCallback, useEffect, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import StudentPicker from "./StudentPicker";
 import {
+  FastScorePill,
+  PillViewContext,
+  PillViewToggle,
+  type PillView,
+  type PillMarker,
+} from "./FastScorePill";
+import {
   Radar,
   RadarChart,
   PolarGrid,
@@ -88,6 +95,27 @@ interface RawMetrics {
   gpaEnabled: boolean;
 }
 
+type FastPlacement = { level: 1 | 2 | 3 | 4 | 5; subLevel: string } | null;
+
+// Teacher-Roster-parity FAST view for one subject (server: lib/fastParity.ts).
+interface FastRow {
+  subject: "ela" | "math";
+  pm1: number | null;
+  pm2: number | null;
+  pm3: number | null;
+  priorYearScore: number | null;
+  priorYearBq: boolean;
+  levels: {
+    priorYearScore: FastPlacement;
+    pm1: FastPlacement;
+    pm2: FastPlacement;
+    pm3: FastPlacement;
+  };
+  learningGain: boolean | null;
+  ptsToNextLevel: number | null;
+  ptsToProficient: number | null;
+}
+
 interface Snapshot {
   student: {
     localSisId: string | null;
@@ -110,6 +138,7 @@ interface Snapshot {
   metrics: MetricCmp[];
   radar: { pillar: Pillar; label: string; studentScore: number | null; suppressed: boolean }[];
   rawMetrics: RawMetrics;
+  fast: FastRow[];
 }
 
 interface Props {
@@ -159,6 +188,7 @@ export default function StudentSnapshotPage({
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fastPillView, setFastPillView] = useState<PillView>("level");
 
   const fetchHits = async (q: string): Promise<SearchHit[]> => {
     const r = await authFetch(
@@ -533,26 +563,31 @@ export default function StudentSnapshotPage({
             </div>
           )}
 
-          {/* Academics — FAST PM trajectory */}
+          {/* Academics — FAST progress monitoring (Teacher-Roster parity) */}
           <div className="card">
-            <h3 style={{ marginTop: 0 }}>FAST Progress Monitoring</h3>
-            <p style={{ marginTop: 0, color: "var(--muted)", fontSize: 13 }}>
-              Scale-score trajectory across the PM windows (current year).
-            </p>
-            <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-              <PmTrajectory
-                subject="ELA"
-                pm1={snapshot.rawMetrics.fastElaPm1}
-                pm2={snapshot.rawMetrics.fastElaPm2}
-                pm3={snapshot.rawMetrics.fastElaPm3}
-              />
-              <PmTrajectory
-                subject="Math"
-                pm1={snapshot.rawMetrics.fastMathPm1}
-                pm2={snapshot.rawMetrics.fastMathPm2}
-                pm3={snapshot.rawMetrics.fastMathPm3}
-              />
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 12,
+                flexWrap: "wrap",
+              }}
+            >
+              <h3 style={{ margin: 0 }}>FAST Progress Monitoring</h3>
+              <PillViewToggle value={fastPillView} onChange={setFastPillView} />
             </div>
+            <p style={{ margin: "6px 0 0", color: "var(--muted)", fontSize: 13 }}>
+              Achievement-level trajectory across the PM windows (current year).
+              Click any pill to flip level ↔ scale score.
+            </p>
+            <PillViewContext.Provider value={fastPillView}>
+              <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginTop: 12 }}>
+                {snapshot.fast.map((row) => (
+                  <PmTrajectory key={row.subject} row={row} />
+                ))}
+              </div>
+            </PillViewContext.Provider>
           </div>
         </>
       )}
@@ -750,32 +785,100 @@ function DistributionStrip({
   );
 }
 
-function PmTrajectory({
-  subject,
-  pm1,
-  pm2,
-  pm3,
-}: {
-  subject: string;
-  pm1: number | null;
-  pm2: number | null;
-  pm3: number | null;
-}) {
-  const cell = (label: string, v: number | null) => (
-    <div style={{ textAlign: "center", minWidth: 56 }}>
-      <div style={{ fontSize: 12, color: "var(--muted)" }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 700 }}>{v == null ? "—" : v}</div>
+// Teacher-Roster-parity FAST trajectory for one subject: level pills (prior →
+// PM1 → PM2 → PM3) with scale-score momentum markers, a learning-gain check,
+// and a points-to-next-level / points-to-proficiency caption. The pills, the
+// level palette, and the placements are single-sourced with the roster
+// (FastScorePill + server placePmSet), so the numbers cannot diverge.
+function PmTrajectory({ row }: { row: FastRow }) {
+  const subjectLabel = row.subject === "ela" ? "ELA" : "Math";
+
+  const marker = (cur: number | null, prev: number | null): PillMarker =>
+    cur != null && prev != null
+      ? cur > prev
+        ? "up"
+        : cur < prev
+          ? "down"
+          : null
+      : null;
+
+  const col = (
+    label: string,
+    score: number | null,
+    placement: FastPlacement,
+    m: PillMarker,
+    bq?: boolean,
+  ) => (
+    <div style={{ textAlign: "center" }}>
+      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 2 }}>
+        {label}
+        {bq ? " · BQ" : ""}
+      </div>
+      <FastScorePill
+        score={score}
+        level={placement?.level ?? null}
+        subLevel={placement?.subLevel ?? null}
+        pmLabel={`${subjectLabel} ${label}`}
+        marker={m}
+      />
     </div>
   );
+
+  const captionParts: string[] = [];
+  if (row.ptsToNextLevel != null && row.ptsToNextLevel > 0) {
+    captionParts.push(`${row.ptsToNextLevel} pts to next level`);
+  }
+  if (row.ptsToProficient != null) {
+    captionParts.push(
+      row.ptsToProficient <= 0
+        ? "Proficient (L3+)"
+        : `${row.ptsToProficient} pts to proficiency`,
+    );
+  }
+
+  const arrow: React.CSSProperties = {
+    color: "var(--muted)",
+    alignSelf: "center",
+    marginTop: 14,
+  };
+  const hasPrior = row.priorYearScore != null;
+
   return (
-    <div>
-      <div style={{ fontWeight: 600, marginBottom: 6 }}>{subject}</div>
-      <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-        {cell("PM1", pm1)}
-        <span style={{ color: "var(--muted)" }}>→</span>
-        {cell("PM2", pm2)}
-        <span style={{ color: "var(--muted)" }}>→</span>
-        {cell("PM3", pm3)}
+    <div style={{ minWidth: 240 }}>
+      <div
+        style={{
+          fontWeight: 700,
+          marginBottom: 6,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
+        <span>{subjectLabel}</span>
+        {row.learningGain === true && (
+          <span
+            title="Learning gain met (PM3 vs prior year)"
+            style={{ color: "#16a34a", fontWeight: 700, fontSize: 13 }}
+          >
+            ✓ LG
+          </span>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 6, alignItems: "flex-start", flexWrap: "wrap" }}>
+        {hasPrior && (
+          <>
+            {col("Prior", row.priorYearScore, row.levels.priorYearScore, null, row.priorYearBq)}
+            <span style={arrow}>→</span>
+          </>
+        )}
+        {col("PM1", row.pm1, row.levels.pm1, null)}
+        <span style={arrow}>→</span>
+        {col("PM2", row.pm2, row.levels.pm2, marker(row.pm2, row.pm1))}
+        <span style={arrow}>→</span>
+        {col("PM3", row.pm3, row.levels.pm3, marker(row.pm3, row.pm2))}
+      </div>
+      <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>
+        {captionParts.length ? captionParts.join(" · ") : "—"}
       </div>
     </div>
   );

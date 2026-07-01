@@ -20,7 +20,6 @@ import {
   schoolHeartbeatSettingsTable,
   schoolSettingsTable,
   parentHeartbeatPrefsTable,
-  studentFastScoresTable,
   interventionEntriesTable,
   studentMtssPlansTable,
   ossLogsTable,
@@ -34,11 +33,11 @@ import {
   attendanceCheckinsTable,
 } from "@workspace/db";
 import { and, eq, desc, isNull, sql, gte, lt } from "drizzle-orm";
+import { getSchoolTimezone } from "./schoolYear.js";
 import {
-  schoolYearLabelFor,
-  DEFAULT_SCHOOL_TZ,
-  getSchoolTimezone,
-} from "./schoolYear.js";
+  loadStudentFastParity,
+  type FastParityRow,
+} from "./fastParity.js";
 import { loadRestroomDestinationNames } from "./oneWayPass.js";
 import {
   loadDefaultPeriodWindows,
@@ -206,14 +205,10 @@ export interface ParentSnapshot {
     staffName: string;
     createdAt: string;
   }>;
-  fastScores: Array<{
-    subject: string;
-    pm1: number | null;
-    pm2: number | null;
-    pm3: number | null;
-    priorYearScore: number | null;
-    priorYearBq: boolean;
-  }>;
+  // Teacher-Roster-parity FAST view (level placements, points-to-next-level,
+  // points-to-proficiency, learning-gain check) — single-sourced via
+  // loadStudentFastParity so the HeartBEAT PDF matches every staff surface.
+  fastScores: FastParityRow[];
   // Current grades per course (Gradebook importer) + unweighted 4.0 GPA.
   // `gpa` is null when the school's GPA toggle is off.
   currentGrades: Array<{
@@ -890,31 +885,27 @@ export async function buildParentSnapshot(
         .limit(20)
     : [];
 
-  // ----- FAST scores -----
+  // ----- FAST scores (Teacher-Roster parity) -----
+  // Single-sourced via loadStudentFastParity so the HeartBEAT PDF renders the
+  // same level placements / points-to-next / learning-gain the staff surfaces
+  // show. The loader resolves "current year" from the DATA (not the wall
+  // clock), which also fixes the prior July school-year drift. It always
+  // returns both subjects null-filled; drop the empty ones so the PDF keeps
+  // its "No FAST results yet" empty state when nothing has been recorded.
   const fastScoresRows = sectionsAvailable.fastScores
-    ? await db
-        .select({
-          subject: studentFastScoresTable.subject,
-          pm1: studentFastScoresTable.pm1,
-          pm2: studentFastScoresTable.pm2,
-          pm3: studentFastScoresTable.pm3,
-          priorYearScore: studentFastScoresTable.priorYearScore,
-          priorYearBq: studentFastScoresTable.priorYearBq,
+    ? (
+        await loadStudentFastParity({
+          schoolId: student.schoolId,
+          studentId: student.studentId,
+          grade: student.grade,
         })
-        .from(studentFastScoresTable)
-        .where(
-          and(
-            eq(studentFastScoresTable.schoolId, student.schoolId),
-            eq(studentFastScoresTable.studentId, student.studentId),
-            // FAST Phase 1: filter to current SY — parent snapshot
-            // is intended for current-year data; prior-year backfill
-            // rows should not surface in the parent portal.
-            eq(
-              studentFastScoresTable.schoolYear,
-              schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
-            ),
-          ),
-        )
+      ).filter(
+        (r) =>
+          r.pm1 != null ||
+          r.pm2 != null ||
+          r.pm3 != null ||
+          r.priorYearScore != null,
+      )
     : [];
 
   // ----- Current grades + GPA -----

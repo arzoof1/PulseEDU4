@@ -3,6 +3,36 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Teacher-Roster FAST parity on Student Snapshot + Family HeartBEAT PDF.**
+  Replaced the raw scale-score "FAST Progress Monitoring" views with the same
+  achievement-level presentation the Teacher Roster / Insights drill-downs use,
+  so the numbers agree on every surface.
+  - **Shared loader.** `lib/fastParity.ts` `loadStudentFastParity({schoolId,
+    studentId, grade})` builds one row per subject (ela, math — always both,
+    null-filled) from the exact roster helpers: `placePmSet` (level
+    placements), `bucketFor` (points-to-next sub-level), `proficiencyGap`
+    (points-to-Level-3), `computeRowLearningGain` (strict PM3-to-PM3 LG via
+    `loadFastHistory`). "Current year" resolves from DATA
+    (`resolveCurrentFastYear`), not the wall clock.
+  - **LG single-sourced.** `computeRowLearningGain` moved into
+    `lib/learningGains.ts` (was route-local in `insights.ts`) so Snapshot / PDF
+    / roster all import one implementation.
+  - **Student Snapshot (core team/admin).** `StudentSnapshotPage.tsx`
+    `PmTrajectory` now renders shared `FastScorePill`s (prior → PM1 → PM2 →
+    PM3) with a surface-wide "Show: Level | Scale score" toggle + click-to-flip,
+    scale-score momentum markers, an LG check, and a points-to-next-level ·
+    points-to-proficiency caption. Endpoint: `routes/exports.ts` snapshot
+    returns `fast`.
+  - **Family HeartBEAT PDF.** `parentSnapshotPdf.ts` `drawFastScoresBlock`
+    renders colored achievement sub-levels (e.g. "1.2") per window with
+    points-to-next-level beneath PM3 and an LG check drawn as a vector stroke
+    (WinAnsi built-ins can't render ✓). STATIC — no scale-score flip (staff
+    only). `parentSnapshot.ts` swapped its inline wall-clock FAST query for the
+    shared loader (also fixing the July school-year drift), filtered to non-null
+    rows so the "No FAST results yet" empty state is preserved. Gated by the
+    existing `showFastScores`; no FAST HTML/email block (PDF-only). `localSisId`
+    only — never FLEID.
+
 - **Historical FAST (multi-year) table on Student Profile.** Admin/Core-Team
   "Historical FAST" section on the Student Profile (Student Lookup / Snapshot
   only — deliberately NOT teacher roster, parent portal, or HeartBEAT). Renders

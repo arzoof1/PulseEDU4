@@ -43,6 +43,7 @@ import {
   type StudentMetrics,
 } from "../lib/studentMetrics.js";
 import { getVisibleStudentIds } from "./insights.js";
+import { loadStudentFastParity } from "../lib/fastParity.js";
 
 const router: IRouter = Router();
 
@@ -375,6 +376,14 @@ router.get("/exports/snapshot/:studentId", async (req, res) => {
     to: q.data.to ?? null,
   });
 
+  // Roster-parity FAST view for this student (both subjects, null-filled when
+  // absent). Same shared helpers as the roster / insights, so numbers agree.
+  const fast = await loadStudentFastParity({
+    schoolId,
+    studentId,
+    grade: student.grade,
+  });
+
   // Cohort = every student in the same grade at this school.
   const cohortRows =
     student.grade == null
@@ -485,6 +494,10 @@ router.get("/exports/snapshot/:studentId", async (req, res) => {
     metrics,
     radar,
     rawMetrics,
+    // Teacher-Roster-parity FAST view (level pills, points-to-next-level,
+    // points-to-proficiency, learning-gain check) — single-sourced so the
+    // Snapshot's numbers match the roster / insights drill-downs exactly.
+    fast,
   });
 });
 

@@ -9,6 +9,7 @@
 - [Prod deployment identity](prod-deployment-identity.md) — live pulseedu.pulsekinetics.us is a SEPARATE nginx/Helmet host with its own DB; this workspace + executeSql(production) don't reach it. Verify before assuming prod==workspace.
 - [Deployment secret propagation](deployment-secret-propagation.md) — updating a workspace secret value may not reach the published deployment; secret-gated boot one-shots can stay dormant in prod. Bake a one-way value (e.g. bcrypt hash) instead.
 - [School Grade LG parity](school-grade-lg-parity.md) — learning-gain prior evidence must come from `loadFastHistory` historical PM3 (like Teacher Roster), never `priorYearScore`.
+- [FAST parity loader](fast-parity-loader.md) — loadStudentFastParity is the single source for roster-style FAST on Snapshot + HeartBEAT PDF; current year from DATA; PDF LG = vector (WinAnsi).
 - [FAST Benchmarks PDF headers](fast-benchmarks-pdf-headers.md) — diagonal code headers: anchor at column LEFT edge + translate/rotate rising up-right; verify by rendering the real PDF, don't eyeball.
 - [pdfkit absolute-text pagination](pdfkit-absolute-text-pagination.md) — center-aligned bottom-edge .text() wraps + adds a blank page even with lineBreak:false; auto-fit font to one line, don't truncate.
 - [pdfkit WinAnsi glyph limit](pdfkit-winansi-glyphs.md) — built-in fonts can't render ★/✓/emoji (WinAnsi only); draw them as save/restore-wrapped vectors and manually advance doc.y.
