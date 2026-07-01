@@ -444,6 +444,37 @@ function buildBucketTrajectory(
 }
 
 // (retention indicator data is loaded per request below — not at module scope.)
+// Lightweight per-student attendance read for surfaces (e.g. Family
+// Communication daily summary) that need absences without loading the whole
+// whole-child profile. Reuses the shared Eligibility source of truth so the
+// numbers agree with Insights / Teacher Roster / Early Warning / Profile.
+router.get("/insights/students/:studentId/attendance", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId == null) return;
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+
+  const studentId = String(req.params.studentId ?? "").trim();
+  if (!studentId) {
+    res.status(400).json({ error: "Missing studentId" });
+    return;
+  }
+
+  const visibility = await getVisibleStudentIds(staff, schoolId);
+  if (!visibility.full && !visibility.ids.has(studentId)) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+
+  const map = await loadAttendanceMetrics(schoolId, [studentId]);
+  const m = map.get(studentId) ?? null;
+  res.json({
+    daysAbsent: m?.daysAbsent ?? null,
+    attendancePct: m?.attendancePct ?? null,
+    daysTardy: m?.daysTardy ?? null,
+  });
+});
+
 router.get("/insights/students/:studentId/profile", async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (schoolId == null) return;

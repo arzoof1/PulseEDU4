@@ -5999,6 +5999,46 @@ function App() {
   const [activityStudentId, setActivityStudentId] = useState("");
   const [activityStudentSearch, setActivityStudentSearch] = useState("");
   const [summaryChecks, setSummaryChecks] = useState<Record<string, boolean>>({});
+  // Family Communication attendance (absences) — read from the shared
+  // Eligibility source of truth so it agrees with Insights / Roster / Profile.
+  const [familyCommAttendance, setFamilyCommAttendance] = useState<{
+    daysAbsent: number | null;
+    attendancePct: number | null;
+    daysTardy: number | null;
+  } | null>(null);
+  useEffect(() => {
+    if (!activityStudentId) {
+      setFamilyCommAttendance(null);
+      return;
+    }
+    let cancelled = false;
+    setFamilyCommAttendance(null);
+    (async () => {
+      try {
+        const r = await authFetch(
+          `/api/insights/students/${encodeURIComponent(
+            activityStudentId,
+          )}/attendance`,
+        );
+        if (!r.ok) {
+          if (!cancelled) setFamilyCommAttendance(null);
+          return;
+        }
+        const data = await r.json();
+        if (!cancelled)
+          setFamilyCommAttendance({
+            daysAbsent: data?.daysAbsent ?? null,
+            attendancePct: data?.attendancePct ?? null,
+            daysTardy: data?.daysTardy ?? null,
+          });
+      } catch {
+        if (!cancelled) setFamilyCommAttendance(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activityStudentId]);
   type MtssTemplate = { id: string; name: string; subject: string; body: string };
   const MTSS_TEMPLATES_KEY = "pulseed.mtssTemplates.v1";
   const defaultMtssTemplates: MtssTemplate[] = [
@@ -15149,6 +15189,16 @@ function App() {
                     </h3>
                     <ul style={{ margin: 0 }}>
                       <li>Student Name: {studentName}</li>
+                      <li>
+                        Absences (This semester):{" "}
+                        {familyCommAttendance?.daysAbsent != null
+                          ? `${familyCommAttendance.daysAbsent}${
+                              familyCommAttendance.attendancePct != null
+                                ? ` (~${familyCommAttendance.attendancePct}% attendance)`
+                                : ""
+                            }`
+                          : "—"}
+                      </li>
                       <li>Hall Passes {label}: {sPasses.length}</li>
                       <li>Tardies {label}: {tardyCount}</li>
                       <li>Check-Ins {label}: {checkInCount}</li>

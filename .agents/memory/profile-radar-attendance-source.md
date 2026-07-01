@@ -26,3 +26,12 @@ section is wrong, check whether the handler actually calls `loadAttendanceMetric
 and feeds `daysAbsent`/`attendancePct` into the score + rationale + payload.
 Note the timeframe mix: absences are semester-cumulative; tardy/ISS/hall-pass
 counts are windowed — label this in the UI to avoid confusion.
+
+Other surfaces have the same gap: the staff **Family Communication** "Student
+Daily Summary" (App.tsx) is fully client-computed from already-loaded school-wide
+collections (hallPasses/tardies/pbisEntries) and had NO absence data. It now
+fetches the lightweight `GET /api/insights/students/:studentId/attendance`
+endpoint (visibility-gated, reuses `loadAttendanceMetrics`). Pattern for any new
+per-student staff surface that needs absences without the full profile: call that
+endpoint rather than re-deriving from client collections (which never include
+eligibility_absences).
