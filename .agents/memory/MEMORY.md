@@ -1,3 +1,4 @@
+- [One radiogroup per single selection](radiogroup-single-selection.md) — visually grouping a single-choice radio list must keep ONE role="radiogroup"; per-group radiogroups are contradictory a11y for one global value.
 - [api-server stale bundle](api-server-stale-bundle.md) — api-server dev is `build && start` (no watch); restart to pick up merged/edited server code before suspecting an app bug.
 - [External-comms feature default OFF](external-comms-feature-default-off.md) — flags that email families must default FALSE on BOTH dual-gate halves (opt-in), unlike the usual default(true) convention.
 - [Confidential Secretary role](confidential-secretary-role.md) — a "full Core Team access" flag must track the assignable isCoreTeam flag everywhere (canonical helper + narrow selects fed to it + client mirrors); route-local isCoreTeam reimpls are pre-existing drift, leave them.

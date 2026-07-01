@@ -658,6 +658,73 @@ const KIND_DEFS: Record<Kind, KindDef> = {
   },
 };
 
+// Grouping for the "Choose data" step. Ordered by how often a school
+// actually reaches for each importer (most-used first) — that is the
+// order shown in the UI. FAST is bundled into ONE group so its three
+// paths read as a single choice with a clear default, instead of three
+// co-equal options that look like duplicates.
+type KindGroup = {
+  title: string;
+  caption: string;
+  kinds: Kind[];
+  // The row shown by default; any others sit behind a "more ways"
+  // disclosure. Only meaningful when the group has >1 visible kind.
+  primary?: Kind;
+};
+
+const KIND_GROUPS: KindGroup[] = [
+  {
+    title: "Grades",
+    caption: "Course grades from your SIS. The one you'll use most often.",
+    kinds: ["gradebook"],
+  },
+  {
+    title: "FAST scores",
+    caption:
+      "Florida FAST, imported after each PM window (about 4× a year). Most schools use the state portal file — the other two are fallbacks for schools that build their own CSVs.",
+    kinds: ["fast_florida", "fast_scores", "fast_prior_year"],
+    primary: "fast_florida",
+  },
+  {
+    title: "Other test scores",
+    caption: "iReady, SCI Benchmark, MAP, STAR, and any other vendor test.",
+    kinds: ["assessments"],
+  },
+  {
+    title: "Students",
+    caption: "Add new students to your roster.",
+    kinds: ["rosters"],
+  },
+  {
+    title: "Behavior",
+    caption:
+      "A one-time backfill of behavior / counselor logs from a prior system.",
+    kinds: ["behavior"],
+  },
+  {
+    title: "Switching from another PBIS app",
+    caption:
+      "Least used — a one-time point-balance transfer when you move to PulseEDU.",
+    kinds: ["points_migration"],
+  },
+];
+
+// Inside the FAST group the heading already says "FAST", so each row
+// shows just its METHOD (clearer than three near-identical "FAST…"
+// labels). Elsewhere the row title falls back to the canonical label
+// with any trailing parenthetical stripped.
+const KIND_ROW_TITLE: Partial<Record<Kind, string>> = {
+  fast_florida: "From the state portal file (.xlsx)",
+  fast_scores: "Manual entry — build a CSV of scale scores",
+  fast_prior_year: "Prior-year final scores only",
+};
+
+// Small badge on the recommended/most-common row within a group.
+const KIND_ROW_BADGE: Partial<Record<Kind, string>> = {
+  gradebook: "Most used",
+  fast_florida: "Recommended",
+};
+
 // Headers list "ignore" as a sentinel — when a CSV column isn't in the
 // mapping at all, it's effectively ignored. We surface "ignore" as a
 // menu option so the admin can explicitly drop a noisy column.
@@ -1098,8 +1165,14 @@ export default function DataImports({
   );
   const [tab, setTab] = useState<"upload" | "history">("upload");
   const [kind, setKind] = useState<Kind>(
-    () => visibleKinds[0] ?? "assessments",
+    () =>
+      (visibleKinds.includes("gradebook") ? "gradebook" : visibleKinds[0]) ??
+      "assessments",
   );
+  // Whether the FAST group's secondary (CSV) importers are revealed. The
+  // primary state-portal option is always shown; the two fallbacks sit
+  // behind a "more ways" disclosure to keep the picker uncluttered.
+  const [showFastAlt, setShowFastAlt] = useState(false);
   const [scope, setScope] = useState<Scope>("school");
   // points_migration only — how migrated points behave. Default false =
   // "Store balance only" (spendable, excluded from houses/leaderboards).
@@ -1879,6 +1952,131 @@ export default function DataImports({
     "Confirm",
   ];
 
+  // One selectable row in the step-0 "Choose data" picker. Shared by the
+  // primary group rows and the FAST fallback rows so styling can't drift.
+  const renderKindRow = (k: Kind, opts?: { indented?: boolean }) => {
+    const def = KIND_DEFS[k];
+    const isRoster = k === "rosters";
+    const disabled = isRoster && rosterEnabled === false;
+    const selected = kind === k;
+    const title =
+      KIND_ROW_TITLE[k] ?? def.label.replace(/\s*\(.*?\)\s*$/, "").trim();
+    const badge = KIND_ROW_BADGE[k];
+    return (
+      <button
+        key={k}
+        type="button"
+        onClick={() => {
+          if (disabled) return;
+          handleKindChange(k);
+        }}
+        disabled={disabled}
+        role="radio"
+        aria-checked={selected}
+        style={{
+          textAlign: "left",
+          width: "100%",
+          display: "block",
+          padding: "0.7rem 0.85rem",
+          borderRadius: 8,
+          border: selected
+            ? "2px solid var(--accent, #3b82f6)"
+            : "1px solid var(--border, #2a3447)",
+          background: selected
+            ? "rgba(59, 130, 246, 0.08)"
+            : "var(--card-bg, #0f172a)",
+          color: "inherit",
+          font: "inherit",
+          cursor: disabled ? "not-allowed" : "pointer",
+          opacity: disabled ? 0.45 : 1,
+          marginLeft: opts?.indented ? 18 : 0,
+        }}
+        title={
+          disabled
+            ? "Manual roster uploads are disabled for this school."
+            : undefined
+        }
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span
+            aria-hidden="true"
+            style={{
+              width: 15,
+              height: 15,
+              borderRadius: "50%",
+              flexShrink: 0,
+              boxSizing: "border-box",
+              border: selected
+                ? "5px solid var(--accent, #3b82f6)"
+                : "2px solid var(--text-subtle, #64748b)",
+            }}
+          />
+          <span style={{ fontWeight: 700, fontSize: 14 }}>{title}</span>
+          {badge && !disabled && (
+            <span
+              style={{
+                marginLeft: 2,
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: "0.05em",
+                textTransform: "uppercase",
+                padding: "0.05rem 0.4rem",
+                borderRadius: 999,
+                background: "rgba(59, 130, 246, 0.16)",
+                color: "var(--accent, #3b82f6)",
+              }}
+            >
+              {badge}
+            </span>
+          )}
+          {disabled && (
+            <span
+              style={{
+                marginLeft: 2,
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: "0.05em",
+                textTransform: "uppercase",
+                padding: "0.05rem 0.4rem",
+                borderRadius: 999,
+                background: "rgba(148, 163, 184, 0.2)",
+                color: "var(--text-subtle)",
+              }}
+            >
+              Off
+            </span>
+          )}
+        </div>
+        <div
+          style={{
+            fontSize: 12,
+            color: "var(--text-subtle)",
+            lineHeight: 1.4,
+            marginTop: 4,
+            marginLeft: 23,
+          }}
+        >
+          {def.helpText}
+        </div>
+        {selected && !disabled && (
+          <div
+            style={{
+              marginTop: "0.55rem",
+              marginLeft: 23,
+              paddingTop: "0.55rem",
+              borderTop: "1px solid var(--border, #2a3447)",
+              fontSize: 12.5,
+              color: "var(--text)",
+              lineHeight: 1.5,
+            }}
+          >
+            {def.description}
+          </div>
+        )}
+      </button>
+    );
+  };
+
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
       <h2 style={{ marginTop: 0 }}>Data Imports</h2>
@@ -2191,128 +2389,86 @@ export default function DataImports({
                     style={{
                       display: "flex",
                       flexDirection: "column",
-                      gap: "0.5rem",
+                      gap: "1.15rem",
                       marginBottom: "0.85rem",
                     }}
                   >
-                    {visibleKinds.map((k) => {
-                      const def = KIND_DEFS[k];
-                      const isRoster = k === "rosters";
-                      const disabled =
-                        isRoster && rosterEnabled === false;
-                      const selected = kind === k;
-                      // Short name for the row title — strip any trailing
-                      // parenthetical (e.g. "Gradebook (current grades …)"
-                      // → "Gradebook"); the full detail lives in the
-                      // expanded definition below the selected row.
-                      const shortName = def.label
-                        .replace(/\s*\(.*?\)\s*$/, "")
-                        .trim();
+                    {KIND_GROUPS.map((group) => {
+                      const groupKinds = group.kinds.filter((k) =>
+                        visibleKinds.includes(k),
+                      );
+                      if (groupKinds.length === 0) return null;
+                      const primary =
+                        group.primary && groupKinds.includes(group.primary)
+                          ? group.primary
+                          : groupKinds[0];
+                      const rest = groupKinds.filter((k) => k !== primary);
+                      // A fallback being selected forces the disclosure open
+                      // so the current choice is always visible.
+                      const restSelected = rest.includes(kind);
+                      const altOpen = restSelected || showFastAlt;
                       return (
-                        <button
-                          key={k}
-                          type="button"
-                          onClick={() => {
-                            if (disabled) return;
-                            handleKindChange(k);
-                          }}
-                          disabled={disabled}
-                          role="radio"
-                          aria-checked={selected}
-                          style={{
-                            textAlign: "left",
-                            width: "100%",
-                            display: "block",
-                            padding: "0.7rem 0.85rem",
-                            borderRadius: 8,
-                            border: selected
-                              ? "2px solid var(--accent, #3b82f6)"
-                              : "1px solid var(--border, #2a3447)",
-                            background: selected
-                              ? "rgba(59, 130, 246, 0.08)"
-                              : "var(--card-bg, #0f172a)",
-                            color: "inherit",
-                            font: "inherit",
-                            cursor: disabled ? "not-allowed" : "pointer",
-                            opacity: disabled ? 0.45 : 1,
-                          }}
-                          title={
-                            disabled
-                              ? "Manual roster uploads are disabled for this school."
-                              : undefined
-                          }
-                        >
+                        <div key={group.title}>
                           <div
                             style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 8,
+                              fontSize: 11,
+                              fontWeight: 700,
+                              letterSpacing: "0.05em",
+                              textTransform: "uppercase",
+                              color: "var(--text-subtle)",
+                              marginBottom: 2,
                             }}
                           >
-                            <span
-                              aria-hidden="true"
-                              style={{
-                                width: 15,
-                                height: 15,
-                                borderRadius: "50%",
-                                flexShrink: 0,
-                                boxSizing: "border-box",
-                                border: selected
-                                  ? "5px solid var(--accent, #3b82f6)"
-                                  : "2px solid var(--text-subtle, #64748b)",
-                              }}
-                            />
-                            <span
-                              style={{ fontWeight: 700, fontSize: 14 }}
-                            >
-                              {shortName}
-                            </span>
-                            {disabled && (
-                              <span
-                                style={{
-                                  marginLeft: 2,
-                                  fontSize: 10,
-                                  fontWeight: 700,
-                                  letterSpacing: "0.05em",
-                                  textTransform: "uppercase",
-                                  padding: "0.05rem 0.4rem",
-                                  borderRadius: 999,
-                                  background: "rgba(148, 163, 184, 0.2)",
-                                  color: "var(--text-subtle)",
-                                }}
-                              >
-                                Off
-                              </span>
-                            )}
+                            {group.title}
                           </div>
                           <div
                             style={{
                               fontSize: 12,
                               color: "var(--text-subtle)",
                               lineHeight: 1.4,
-                              marginTop: 4,
-                              marginLeft: 23,
+                              marginBottom: 8,
+                              opacity: 0.9,
                             }}
                           >
-                            {def.helpText}
+                            {group.caption}
                           </div>
-                          {selected && !disabled && (
-                            <div
-                              style={{
-                                marginTop: "0.55rem",
-                                marginLeft: 23,
-                                paddingTop: "0.55rem",
-                                borderTop:
-                                  "1px solid var(--border, #2a3447)",
-                                fontSize: 12.5,
-                                color: "var(--text)",
-                                lineHeight: 1.5,
-                              }}
-                            >
-                              {def.description}
-                            </div>
-                          )}
-                        </button>
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: "0.5rem",
+                            }}
+                          >
+                            {renderKindRow(primary)}
+                            {rest.length > 0 && altOpen &&
+                              rest.map((k) =>
+                                renderKindRow(k, { indented: true }),
+                              )}
+                            {rest.length > 0 && !restSelected && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setShowFastAlt((v) => !v)
+                                }
+                                style={{
+                                  alignSelf: "flex-start",
+                                  marginLeft: 18,
+                                  background: "transparent",
+                                  border: "none",
+                                  padding: "0.15rem 0",
+                                  fontSize: 12.5,
+                                  fontWeight: 600,
+                                  color: "var(--accent, #3b82f6)",
+                                  cursor: "pointer",
+                                }}
+                              >
+                                {showFastAlt
+                                  ? "Show fewer options"
+                                  : `Other ways to import FAST (${rest.length}) ▾`}
+                              </button>
+                            )}
+                          </div>
+                        </div>
                       );
                     })}
                   </div>
