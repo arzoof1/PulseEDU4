@@ -5528,6 +5528,10 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [staffUsers, setStaffUsers] = useState<string[]>([]);
   const [settingsTile, setSettingsTile] = useState<SettingsTileId | null>(null);
+  // Bumped every time a sidebar nav item is clicked while ALREADY on that
+  // section. Used as the <main> remount key so re-clicking a section returns
+  // it to its home view (resets any child-held sub-navigation / drill-down).
+  const [navHomeTick, setNavHomeTick] = useState(0);
   const [callWorklistOpen, setCallWorklistOpen] = useState(false);
   // True after the user clicked "Open" on a row in the Onboarding
   // Checklist. Drives the floating "← Back to Onboarding" banner that
@@ -10524,6 +10528,16 @@ function App() {
     }
     return null;
   };
+  // Sidebar navigation click. Clicking a section you are ALREADY on returns
+  // it to its home view: we bump `navHomeTick` (the <main> remount key) so
+  // any child-held sub-navigation / drill-down resets, and clear the
+  // App-level Settings hub tile. Switching to a different section behaves as
+  // before (no forced remount — the outgoing section unmounts naturally).
+  const handleNavClick = (key: typeof activeSection) => {
+    if (key === activeSection) setNavHomeTick((t) => t + 1);
+    setSettingsTile(null);
+    setActiveSection(key);
+  };
   const renderNavItem = (s: NavSection) => {
     // Centralized role gate. Applied here (not at each call site) so
     // every sidebar surface — Quick Access, themed accordions, admin
@@ -10540,7 +10554,7 @@ function App() {
         key={s.key}
         type="button"
         className={"nav-item" + (activeSection === s.key ? " active" : "")}
-        onClick={() => setActiveSection(s.key)}
+        onClick={() => handleNavClick(s.key)}
       >
         <span className="nav-icon">{s.icon}</span>
         {s.label}
@@ -11693,7 +11707,7 @@ function App() {
                 .nav-item) — gradient + rotating label invites a tap. */}
             <SpotlightLaunchButton
               active={activeSection === "spotlight"}
-              onClick={() => setActiveSection("spotlight")}
+              onClick={() => handleNavClick("spotlight")}
             />
             {/* Active Kiosks moved out of Quick Access into School Admin
                 (admin-only operational monitoring lives with the other
@@ -12169,7 +12183,7 @@ function App() {
         );
       })()}
 
-      <main className="app-main">
+      <main className="app-main" key={navHomeTick}>
 
       {/* "Kiosk active on this device" banner — surfaces the still-live
           kiosk token (if any) so a teacher who flipped to the staff app
