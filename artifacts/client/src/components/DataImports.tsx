@@ -1913,14 +1913,14 @@ export default function DataImports({
       <div
         style={{
           display: "flex",
-          alignItems: "center",
-          gap: "0.75rem",
+          flexDirection: "column",
+          alignItems: "stretch",
+          gap: "0.4rem",
           marginTop: "0.75rem",
           padding: "0.6rem 0.75rem",
           background: "rgba(34, 197, 94, 0.06)",
           border: "1px solid var(--border, #2a3447)",
           borderRadius: 8,
-          flexWrap: "wrap",
         }}
       >
         <span style={{ fontSize: 13, fontWeight: 600 }}>Data type:</span>
@@ -1962,7 +1962,9 @@ export default function DataImports({
           style={{
             color: "var(--text-subtle)",
             fontSize: 12,
-            marginLeft: "auto",
+            marginTop: "0.35rem",
+            paddingTop: "0.4rem",
+            borderTop: "1px solid var(--border, #2a3447)",
           }}
         >
           {kindDef.helpText}
