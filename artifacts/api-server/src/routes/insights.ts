@@ -668,6 +668,18 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
       ),
     );
   const hallPassCount = studentHallPasses.length;
+
+  // Absences come from the Eligibility Hub upload (eligibility_absences) —
+  // the school-wide source of truth for cumulative semester attendance, and
+  // the SAME reader used by the Insights lists, Teacher Roster, and Early
+  // Warning. Loading it here keeps the Attendance axis in agreement with
+  // those surfaces. NOTE: daysAbsent / attendancePct are SEMESTER-cumulative
+  // (not windowed like the tardy / ISS counts above).
+  const attendanceMap = await loadAttendanceMetrics(schoolId, [studentId]);
+  const attendanceMetrics = attendanceMap.get(studentId);
+  const daysAbsent = attendanceMetrics?.daysAbsent ?? null;
+  const attendancePct = attendanceMetrics?.attendancePct ?? null;
+
   const [hallPassAvgRow] = await db
     .select({
       total: sql<number>`COUNT(*)::int`,
@@ -1117,17 +1129,42 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
   // Flow (attendance & transitions): tardies + ISS days + over-average
   // hall-pass usage drag from a 100 baseline. Hall-pass excess only
   // counts when the student is materially above their grade peers.
-  let flowScore = 100;
+  // Absences (semester source of truth) drive the baseline: when we know the
+  // attendance %, that IS the starting score; otherwise fall back to a
+  // per-absence drag, and finally to the old 100 baseline when the student
+  // has no absence data at all. In-window frictions (tardies, ISS days,
+  // excess hall passes) then subtract on top.
+  let flowScore: number;
+  if (attendancePct != null) {
+    flowScore = attendancePct;
+  } else if (daysAbsent != null) {
+    flowScore = 100 - Math.min(daysAbsent * 4, 60);
+  } else {
+    flowScore = 100;
+  }
   flowScore -= tardyRows.length * 5;
   flowScore -= issRows.length * 15;
   const hallPassExcess =
     hallPassSchoolAvg > 0 ? Math.max(0, hallPassCount - hallPassSchoolAvg * 2) : 0;
   flowScore -= Math.min(hallPassExcess * 5, 25);
   flowScore = Math.max(0, Math.min(100, Math.round(flowScore)));
+  const flowParts: string[] = [];
+  if (daysAbsent != null) {
+    flowParts.push(
+      `${daysAbsent} day${daysAbsent === 1 ? "" : "s"} absent${
+        attendancePct != null ? ` (~${attendancePct}%)` : ""
+      } this semester`,
+    );
+  }
+  if (tardyRows.length > 0 || issRows.length > 0 || hallPassCount > 0) {
+    flowParts.push(
+      `${tardyRows.length} tardies, ${issRows.length} ISS days, ${hallPassCount} hall passes (${window.label.toLowerCase()})`,
+    );
+  }
   const flowRationale =
-    tardyRows.length === 0 && issRows.length === 0
-      ? `No tardies or ISS days (${window.label.toLowerCase()})`
-      : `${tardyRows.length} tardies, ${issRows.length} ISS days, ${hallPassCount} hall passes`;
+    flowParts.length > 0
+      ? flowParts.join(" · ")
+      : "No absences, tardies, or ISS days on record";
 
   // Supports in place: this axis is intentionally a "scaffolding meter"
   // rather than a wellness signal. A high score means the student is
@@ -1428,6 +1465,9 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
           })),
       },
       flow: {
+        // Semester absences from the Eligibility Hub (source of truth).
+        daysAbsent,
+        attendancePct,
         tardyCount: tardyRows.length,
         recentTardies: tardyRows.slice(0, 10),
         issDayCount: issRows.length,

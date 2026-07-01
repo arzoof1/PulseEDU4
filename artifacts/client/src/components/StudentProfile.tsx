@@ -153,6 +153,9 @@ interface ProfilePayload {
       }>;
     };
     flow: {
+      // Semester absences from the Eligibility Hub (source of truth).
+      daysAbsent: number | null;
+      attendancePct: number | null;
       tardyCount: number;
       recentTardies: Array<{
         period: string;
@@ -3750,6 +3753,7 @@ export default function StudentProfile({
         <Card
           title="Attendance & Flow"
           empty={
+            (pillars.flow.daysAbsent ?? 0) === 0 &&
             pillars.flow.tardyCount === 0 &&
             pillars.flow.issDayCount === 0 &&
             pillars.flow.hallPassCount === 0 &&
@@ -3759,6 +3763,16 @@ export default function StudentProfile({
           }
         >
           <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.5rem", flexWrap: "wrap" }}>
+            {pillars.flow.daysAbsent != null && pillars.flow.daysAbsent > 0 && (
+              <Chip
+                label={`${pillars.flow.daysAbsent} days absent${
+                  pillars.flow.attendancePct != null
+                    ? ` (~${pillars.flow.attendancePct}%)`
+                    : ""
+                }`}
+                sev={pillars.flow.daysAbsent >= 10 ? "high" : "watch"}
+              />
+            )}
             {pillars.flow.tardyCount > 0 && (
               <Chip label={`${pillars.flow.tardyCount} tardies`} sev={pillars.flow.tardyCount >= 5 ? "high" : "watch"} />
             )}
@@ -3793,6 +3807,12 @@ export default function StudentProfile({
               />
             )}
           </div>
+          {pillars.flow.daysAbsent != null && pillars.flow.daysAbsent > 0 && (
+            <div style={{ fontSize: "0.7rem", color: "#9ca3af", marginBottom: "0.6rem" }}>
+              Absences are semester-cumulative (Eligibility Hub); tardy / ISS /
+              hall-pass counts are for the selected window.
+            </div>
+          )}
           {data.trends.tardiesDaily.length > 0 && (
             <div
               style={{
