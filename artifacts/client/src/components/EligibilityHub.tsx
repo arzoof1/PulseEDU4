@@ -232,7 +232,9 @@ function RostersTab() {
       const r = await authFetch("/api/eligibility/activities");
       const d = r.ok ? ((await r.json()) as Activity[]) : [];
       setActivities(d);
-      setSelectedId((prev) => prev ?? (d[0]?.id ?? null));
+      setSelectedId((prev) =>
+        prev && d.some((a) => a.id === prev) ? prev : (d[0]?.id ?? null),
+      );
     } finally {
       setLoading(false);
     }
@@ -293,7 +295,23 @@ function RostersTab() {
                   cursor: "pointer",
                 }}
               >
-                <div style={{ fontWeight: 600 }}>{a.name}</div>
+                <div style={{ fontWeight: 600, opacity: a.active ? 1 : 0.6 }}>
+                  {a.name}
+                  {!a.active && (
+                    <span
+                      style={{
+                        marginLeft: 6,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.04em",
+                        color: "var(--muted, #6b7280)",
+                      }}
+                    >
+                      · Archived
+                    </span>
+                  )}
+                </div>
                 <div style={{ fontSize: 12, color: "var(--muted, #6b7280)" }}>
                   {a.category} · {a.memberCount} member
                   {a.memberCount === 1 ? "" : "s"}
@@ -340,6 +358,7 @@ function RostersTab() {
       <div style={{ flex: "1 1 420px", minWidth: 360 }}>
         {selected ? (
           <ActivityDetail
+            key={selected.id}
             activity={selected}
             onChanged={loadActivities}
           />
@@ -368,6 +387,14 @@ function ActivityDetail({
   const [bulkMsg, setBulkMsg] = useState<string | null>(null);
   const [directory, setDirectory] = useState<DirectoryStaff[]>([]);
   const [coachStaffId, setCoachStaffId] = useState("");
+  // Activity-level management (rename / archive / delete). Component is
+  // keyed by activity.id in the parent, so these initialize fresh per
+  // activity — no stale-edit carryover when switching selection.
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(activity.name);
+  const [editCategory, setEditCategory] = useState(activity.category);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
 
   const loadRoster = useCallback(async () => {
     setLoading(true);
@@ -556,9 +583,233 @@ function ActivityDetail({
     await onChanged();
   };
 
+  const saveEdit = async () => {
+    const name = editName.trim();
+    if (!name) return;
+    setBusy(true);
+    setActionMsg(null);
+    try {
+      const r = await authFetch(`/api/eligibility/activities/${activity.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, category: editCategory }),
+      });
+      if (r.ok) {
+        setEditing(false);
+        await onChanged();
+      } else {
+        setActionMsg(`Could not save changes (${r.status})`);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleArchive = async () => {
+    setBusy(true);
+    setActionMsg(null);
+    try {
+      const r = await authFetch(`/api/eligibility/activities/${activity.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: !activity.active }),
+      });
+      if (r.ok) {
+        await onChanged();
+      } else {
+        setActionMsg(`Could not update (${r.status})`);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doDelete = async () => {
+    setBusy(true);
+    setActionMsg(null);
+    try {
+      const r = await authFetch(`/api/eligibility/activities/${activity.id}`, {
+        method: "DELETE",
+      });
+      if (r.ok) {
+        setConfirmDelete(false);
+        await onChanged();
+      } else {
+        setActionMsg(`Could not delete (${r.status})`);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const secondaryBtnStyle: CSSProperties = {
+    padding: "6px 12px",
+    borderRadius: 8,
+    border: "1px solid var(--border, #d1d5db)",
+    background: "transparent",
+    color: "var(--text, #111827)",
+    cursor: "pointer",
+    fontSize: 13,
+  };
+  const dangerBtnStyle: CSSProperties = {
+    padding: "6px 12px",
+    borderRadius: 8,
+    border: "1px solid #dc2626",
+    background: "#dc2626",
+    color: "#fff",
+    cursor: "pointer",
+    fontSize: 13,
+  };
+
   return (
     <div>
-      <h3 style={{ marginTop: 0 }}>{activity.name}</h3>
+      {editing ? (
+        <div
+          style={{
+            marginBottom: 16,
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            alignItems: "center",
+          }}
+        >
+          <input
+            type="text"
+            value={editName}
+            onChange={(e) => setEditName(e.target.value)}
+            placeholder="Activity name"
+            style={{ flex: "1 1 200px", minWidth: 160 }}
+          />
+          <select
+            value={editCategory}
+            onChange={(e) => setEditCategory(e.target.value)}
+          >
+            <option value="athletics">Athletics</option>
+            <option value="club">Club</option>
+            <option value="activity">Activity</option>
+          </select>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy || !editName.trim()}
+            onClick={saveEdit}
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            style={secondaryBtnStyle}
+            disabled={busy}
+            onClick={() => {
+              setEditing(false);
+              setEditName(activity.name);
+              setEditCategory(activity.category);
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <div
+          style={{
+            marginBottom: 16,
+            display: "flex",
+            gap: 10,
+            flexWrap: "wrap",
+            alignItems: "center",
+          }}
+        >
+          <h3 style={{ margin: 0 }}>{activity.name}</h3>
+          <span
+            className="badge badge-neutral"
+            style={{ textTransform: "capitalize" }}
+          >
+            {activity.category}
+          </span>
+          {!activity.active && (
+            <span className="badge badge-warning">Archived</span>
+          )}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            <button
+              type="button"
+              style={secondaryBtnStyle}
+              disabled={busy}
+              onClick={() => setEditing(true)}
+            >
+              Rename
+            </button>
+            <button
+              type="button"
+              style={secondaryBtnStyle}
+              disabled={busy}
+              onClick={toggleArchive}
+            >
+              {activity.active ? "Archive" : "Unarchive"}
+            </button>
+            <button
+              type="button"
+              style={dangerBtnStyle}
+              disabled={busy}
+              onClick={() => setConfirmDelete(true)}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      )}
+
+      {confirmDelete && (
+        <div
+          style={{
+            marginBottom: 16,
+            padding: 12,
+            border: "1px solid #dc2626",
+            borderRadius: 8,
+            background: "rgba(220,38,38,0.06)",
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>
+            Delete “{activity.name}”?
+          </div>
+          <div
+            style={{
+              fontSize: 13,
+              color: "var(--muted, #6b7280)",
+              marginBottom: 10,
+            }}
+          >
+            This permanently removes the activity along with its{" "}
+            {activity.memberCount} member
+            {activity.memberCount === 1 ? "" : "s"} and all assigned coaches.
+            This can’t be undone. To keep the roster, use{" "}
+            <strong>Archive</strong> instead.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              style={dangerBtnStyle}
+              disabled={busy}
+              onClick={doDelete}
+            >
+              Yes, delete permanently
+            </button>
+            <button
+              type="button"
+              style={secondaryBtnStyle}
+              disabled={busy}
+              onClick={() => setConfirmDelete(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {actionMsg && (
+        <div style={{ marginBottom: 12, color: "#dc2626", fontSize: 13 }}>
+          {actionMsg}
+        </div>
+      )}
 
       {/* Coaches */}
       <div style={{ marginBottom: 16 }}>
