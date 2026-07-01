@@ -1432,6 +1432,27 @@ export function UploadTab({ onUploaded }: { onUploaded: () => void }) {
     void loadUploads();
   }, [loadUploads]);
 
+  // Client-generated CSV template matching the columns onFile() looks for
+  // (SIS ID required, absence total + days tardy optional). Triggered as an
+  // `a.download` from the current document so it works in the preview iframe.
+  const downloadSampleAttendance = () => {
+    const csv = [
+      "SIS ID,Absence Total,Days Tardy",
+      "534762,3,1",
+      "670337,0,4",
+      "983480,7,0",
+    ].join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "eligibility-attendance-template.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const onFile = async (file: File) => {
     setStatus("Parsing…");
     setResult(null);
@@ -1515,8 +1536,28 @@ export function UploadTab({ onUploaded }: { onUploaded: () => void }) {
         absence total, days tardy.
       </p>
 
-      <label className="btn" style={{ cursor: "pointer", display: "inline-block" }}>
-        Choose file (.xlsx/.csv)
+      <label className="upload-dropzone">
+        <svg
+          width="22"
+          height="22"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <polyline points="17 8 12 3 7 8" />
+          <line x1="12" y1="3" x2="12" y2="15" />
+        </svg>
+        <span className="upload-dropzone-text">
+          Upload attendance file
+          <span className="upload-dropzone-sub">
+            Click to choose an .xlsx or .csv file
+          </span>
+        </span>
         <input
           type="file"
           accept=".xlsx,.xls,.csv"
@@ -1528,6 +1569,27 @@ export function UploadTab({ onUploaded }: { onUploaded: () => void }) {
           }}
         />
       </label>
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          flexWrap: "wrap",
+          marginTop: 8,
+        }}
+      >
+        <button
+          type="button"
+          className="btn"
+          onClick={downloadSampleAttendance}
+        >
+          Download sample
+        </button>
+        <span style={{ fontSize: 12, color: "var(--muted, #6b7280)" }}>
+          File needs a <strong>SIS ID</strong> column (required) plus optional{" "}
+          <strong>Absence Total</strong> and <strong>Days Tardy</strong> columns.
+        </span>
+      </div>
 
       {status && <p style={{ fontSize: 14 }}>{status}</p>}
 
