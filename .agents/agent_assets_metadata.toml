@@ -468,3 +468,9 @@ id = "-GYGUASFIROFPExuUQ9KK"
 uri = "file://attached_assets/FAKE_Student_LIVE_Grade_Report-SAMPLE-with-teachers.xlsx"
 type = "table"
 title = "Sample grade report (teacher names filled in)"
+
+[[outputs]]
+id = "K9AgQTm9MEGzjZAM992-u"
+uri = "file://exports/Attendance_25-26_Parrott_Seeded.xlsx"
+type = "table"
+title = "Attendance 25-26 — Parrott Seeded (454 students)"
