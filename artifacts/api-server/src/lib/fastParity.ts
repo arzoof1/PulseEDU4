@@ -20,7 +20,8 @@ import {
   placePmSet,
   bucketFor,
   proficiencyGap,
-  type PmPlacementSet,
+  withGap,
+  type PmPlacementSetWithGap,
   type Subject,
 } from "./fastCutScores.js";
 import { computeRowLearningGain } from "./learningGains.js";
@@ -38,8 +39,11 @@ export interface FastParityRow {
   priorYearScore: number | null;
   priorYearBq: boolean;
   // Achievement-level placements for prior/PM1/PM2/PM3 (single-sourced via
-  // placePmSet). Drives the level pills; null members render neutral.
-  levels: PmPlacementSet;
+  // placePmSet), each enriched with the per-window "+N → next stop" caption
+  // (withGap) so the Student Snapshot renders the exact same per-pill caption
+  // the Teacher Roster does. Drives the level pills; null members render
+  // neutral.
+  levels: PmPlacementSetWithGap;
   // Strict PM3-to-PM3 learning-gain flag (null = not enough evidence).
   learningGain: boolean | null;
   // PM3-only, matching the Teacher Roster / drill-down metric columns.
@@ -47,7 +51,7 @@ export interface FastParityRow {
   ptsToProficient: number | null;
 }
 
-const EMPTY_LEVELS: PmPlacementSet = {
+const EMPTY_LEVELS: PmPlacementSetWithGap = {
   priorYearScore: null,
   pm1: null,
   pm2: null,
@@ -104,14 +108,30 @@ export async function loadStudentFastParity(args: {
     const pm3 = r?.pm3 ?? null;
     const priorYearScore = r?.priorYearScore ?? null;
 
-    const levels: PmPlacementSet =
+    const levels: PmPlacementSetWithGap =
       grade != null
-        ? placePmSet(subject as Subject, grade, {
-            priorYearScore,
-            pm1,
-            pm2,
-            pm3,
-          })
+        ? (() => {
+            const base = placePmSet(subject as Subject, grade, {
+              priorYearScore,
+              pm1,
+              pm2,
+              pm3,
+            });
+            // Enrich each window with its "+N → next stop" caption using the
+            // same shared helper the Teacher Roster uses (current-grade chart),
+            // so the Snapshot's per-pill captions match the Roster exactly.
+            return {
+              priorYearScore: withGap(
+                base.priorYearScore,
+                priorYearScore,
+                subject as Subject,
+                grade,
+              ),
+              pm1: withGap(base.pm1, pm1, subject as Subject, grade),
+              pm2: withGap(base.pm2, pm2, subject as Subject, grade),
+              pm3: withGap(base.pm3, pm3, subject as Subject, grade),
+            };
+          })()
         : EMPTY_LEVELS;
 
     const learningGain = computeRowLearningGain({

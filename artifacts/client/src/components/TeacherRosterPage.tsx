@@ -30,7 +30,7 @@ import GroupInsightsTab from "./GroupInsightsTab";
 import TeacherInstructionLogTab from "./TeacherInstructionLogTab";
 import Tier3WeeklyForm from "./Tier3WeeklyForm";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
-import { LEVEL_BG, LEVEL_FG } from "./FastScorePill";
+import { LEVEL_BG, LEVEL_FG, PmDelta, nextStopCaption } from "./FastScorePill";
 import { TeacherPicker } from "./TeacherPicker";
 import { type TeacherOpt } from "./teacherDepartments";
 
@@ -458,15 +458,7 @@ function ScorePill({
   // still climb available, "At {next}" once the student has met the next
   // sub-level, nothing when they're at L5 / no chart. Renders just below
   // the pill; adds ~12px of vertical space per row.
-  const gap = placement.gap;
-  const nextStop = placement.nextStopLabel;
-  let caption: { text: string; color: string } | null = null;
-  if (gap != null && nextStop) {
-    caption =
-      gap <= 0
-        ? { text: `At ${nextStop}`, color: "#14532d" }
-        : { text: `+${gap} → ${nextStop}`, color: "#3730a3" };
-  }
+  const caption = nextStopCaption(placement.gap, placement.nextStopLabel);
   return (
     <span
       style={{
@@ -869,44 +861,8 @@ const GROUP_DIVIDER: React.CSSProperties = {
   borderLeft: "1px solid #e5e7eb",
 };
 
-// Small "+12 from PM2" / "−8 from PM1" indicator under a PM pill, so
-// teachers don't have to do the subtraction in their head while scanning
-// the roster. Green for growth, red for decline, neutral gray for flat.
-// Renders nothing when either side is missing (most common case: a
-// student who didn't sit one of the windows) — better empty than wrong.
-function PmDelta({
-  from,
-  to,
-  fromLabel,
-}: {
-  from: number | null;
-  to: number | null;
-  fromLabel: string;
-}) {
-  if (from == null || to == null) return null;
-  const delta = to - from;
-  const sign = delta > 0 ? "+" : delta < 0 ? "−" : "±";
-  const color = delta > 0 ? "#15803d" : delta < 0 ? "#b91c1c" : "#6b7280";
-  return (
-    <div
-      title={`${sign}${Math.abs(delta)} scale-score points vs ${fromLabel}`}
-      style={{
-        marginTop: 2,
-        fontSize: 10,
-        lineHeight: 1.2,
-        color,
-        fontWeight: 600,
-        whiteSpace: "nowrap",
-      }}
-    >
-      {sign}
-      {Math.abs(delta)}{" "}
-      <span style={{ color: "#9ca3af", fontWeight: 400 }}>
-        from {fromLabel}
-      </span>
-    </div>
-  );
-}
+// PmDelta ("+12 from PM1") is single-sourced in FastScorePill.tsx and imported
+// above, so the Roster / Snapshot / band-drawer deltas can never diverge.
 
 // Multi-year PM3 growth chip. Compact trigger showing the most-recent
 // year-over-year delta; on click it expands an absolutely-positioned

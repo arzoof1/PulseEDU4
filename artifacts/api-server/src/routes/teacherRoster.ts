@@ -48,47 +48,21 @@ import {
 } from "../lib/fastHistory.js";
 import {
   bucketFor,
-  bucketTarget,
   hasChart,
   placeOnChart,
   placePm3,
-  SUB_LEVEL_LABEL,
+  withGap,
   type Subject,
-  type Placement,
+  type PlacementWithGap,
   type BucketInfo,
 } from "../lib/fastCutScores.js";
 import { decideLearningGain } from "../lib/learningGains.js";
 import { loadAttendanceMetrics } from "../lib/attendanceMetrics.js";
 
-// Per-PM placement enriched with the gap-to-next-sublevel caption used
-// by the roster pills. Gap is computed on the CURRENT-grade chart (same
-// approach the FAST Benchmarks tab uses) so the number is "points to
-// clear our chart's next stop" — what teachers expect to see.
-interface PlacementWithGap extends Placement {
-  gap: number | null;
-  nextStopLabel: string | null;
-}
-
-function withGap(
-  placement: Placement | null,
-  pmScore: number | null,
-  subject: Subject,
-  grade: number,
-): PlacementWithGap | null {
-  if (!placement) return null;
-  if (pmScore == null) {
-    return { ...placement, gap: null, nextStopLabel: null };
-  }
-  const target = bucketTarget(subject, grade, placement.subLevel);
-  if (!target) {
-    return { ...placement, gap: null, nextStopLabel: null };
-  }
-  return {
-    ...placement,
-    gap: target.score - pmScore,
-    nextStopLabel: SUB_LEVEL_LABEL[target.nextStop],
-  };
-}
+// Per-PM placement enriched with the gap-to-next-sublevel caption is now
+// single-sourced in fastCutScores.ts (`withGap` / `PlacementWithGap`) so the
+// Roster, Student Snapshot, and Insights band drawer captions can never
+// silently diverge.
 
 const router: IRouter = Router();
 

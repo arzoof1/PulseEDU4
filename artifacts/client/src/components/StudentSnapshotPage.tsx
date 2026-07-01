@@ -23,8 +23,9 @@ import {
   FastScorePill,
   PillViewContext,
   PillViewToggle,
+  PmDelta,
+  nextStopCaption,
   type PillView,
-  type PillMarker,
 } from "./FastScorePill";
 import {
   Radar,
@@ -95,7 +96,14 @@ interface RawMetrics {
   gpaEnabled: boolean;
 }
 
-type FastPlacement = { level: 1 | 2 | 3 | 4 | 5; subLevel: string } | null;
+type FastPlacement = {
+  level: 1 | 2 | 3 | 4 | 5;
+  subLevel: string;
+  // Per-window "+N → next stop" caption inputs (single-sourced with the roster
+  // via the server `withGap`). Optional so older/partial payloads stay safe.
+  gap?: number | null;
+  nextStopLabel?: string | null;
+} | null;
 
 // Teacher-Roster-parity FAST view for one subject (server: lib/fastParity.ts).
 interface FastRow {
@@ -786,43 +794,57 @@ function DistributionStrip({
 }
 
 // Teacher-Roster-parity FAST trajectory for one subject: level pills (prior →
-// PM1 → PM2 → PM3) with scale-score momentum markers, a learning-gain check,
-// and a points-to-next-level / points-to-proficiency caption. The pills, the
-// level palette, and the placements are single-sourced with the roster
-// (FastScorePill + server placePmSet), so the numbers cannot diverge.
+// PM1 → PM2 → PM3), each with the roster's per-window "+N → next stop" caption
+// and a "+N from <prev>" scale-score delta, plus a learning-gain check and a
+// subject-level points-to-next-level / points-to-proficiency summary. The
+// pills, the level palette, the placements, the captions, and the deltas are
+// all single-sourced with the roster (FastScorePill / nextStopCaption / PmDelta
+// + server placePmSet + withGap), so the two surfaces cannot diverge.
 function PmTrajectory({ row }: { row: FastRow }) {
   const subjectLabel = row.subject === "ela" ? "ELA" : "Math";
 
-  const marker = (cur: number | null, prev: number | null): PillMarker =>
-    cur != null && prev != null
-      ? cur > prev
-        ? "up"
-        : cur < prev
-          ? "down"
-          : null
-      : null;
-
+  // One trajectory cell: level pill + the roster's "+N → next stop" caption +
+  // a "+N from <prev>" delta (when a comparison window exists), matching the
+  // Teacher Roster's per-PM stack exactly.
   const col = (
     label: string,
     score: number | null,
     placement: FastPlacement,
-    m: PillMarker,
+    delta: { from: number | null; label: string } | null,
     bq?: boolean,
-  ) => (
-    <div style={{ textAlign: "center" }}>
-      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 2 }}>
-        {label}
-        {bq ? " · BQ" : ""}
+  ) => {
+    const caption = nextStopCaption(placement?.gap, placement?.nextStopLabel);
+    return (
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 2 }}>
+          {label}
+          {bq ? " · BQ" : ""}
+        </div>
+        <FastScorePill
+          score={score}
+          level={placement?.level ?? null}
+          subLevel={placement?.subLevel ?? null}
+          pmLabel={`${subjectLabel} ${label}`}
+        />
+        <div
+          style={{
+            minHeight: 12,
+            marginTop: 2,
+            fontSize: 9,
+            fontWeight: 600,
+            color: caption?.color ?? "transparent",
+            lineHeight: 1.1,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {caption?.text ?? "\u00A0"}
+        </div>
+        {delta && (
+          <PmDelta from={delta.from} to={score} fromLabel={delta.label} />
+        )}
       </div>
-      <FastScorePill
-        score={score}
-        level={placement?.level ?? null}
-        subLevel={placement?.subLevel ?? null}
-        pmLabel={`${subjectLabel} ${label}`}
-        marker={m}
-      />
-    </div>
-  );
+    );
+  };
 
   const captionParts: string[] = [];
   if (row.ptsToNextLevel != null && row.ptsToNextLevel > 0) {
@@ -871,11 +893,16 @@ function PmTrajectory({ row }: { row: FastRow }) {
             <span style={arrow}>→</span>
           </>
         )}
-        {col("PM1", row.pm1, row.levels.pm1, null)}
+        {col(
+          "PM1",
+          row.pm1,
+          row.levels.pm1,
+          hasPrior ? { from: row.priorYearScore, label: "Prior" } : null,
+        )}
         <span style={arrow}>→</span>
-        {col("PM2", row.pm2, row.levels.pm2, marker(row.pm2, row.pm1))}
+        {col("PM2", row.pm2, row.levels.pm2, { from: row.pm1, label: "PM1" })}
         <span style={arrow}>→</span>
-        {col("PM3", row.pm3, row.levels.pm3, marker(row.pm3, row.pm2))}
+        {col("PM3", row.pm3, row.levels.pm3, { from: row.pm2, label: "PM2" })}
       </div>
       <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>
         {captionParts.length ? captionParts.join(" · ") : "—"}
