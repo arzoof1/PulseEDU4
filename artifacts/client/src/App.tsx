@@ -5545,19 +5545,54 @@ function App() {
   >(null);
   const currentStaffUser = authUser?.displayName ?? "";
   const [showChangePw, setShowChangePw] = useState(false);
-  // Header layout mode. On narrower laptop/PC widths the secondary top-bar
-  // controls (school switcher, filters, Tile Home, Help) collapse into a
-  // single "More" dropdown so the header stays one clean row instead of
-  // wrapping onto a second line. Below the mobile breakpoint the same
-  // collapse applies. Driven by matchMedia so it updates live on resize.
+  // Header layout mode. When the top-bar would wrap onto a second line, the
+  // secondary controls (school switcher, filters, Tile Home, Help) collapse
+  // into a single "More" dropdown so the header stays one clean row. We
+  // detect the wrap directly (rather than a fixed pixel breakpoint) so it
+  // adapts to any window width, zoom level, or content length.
+  const headerRef = useRef<HTMLElement>(null);
+  const headerCollapseWidthRef = useRef<number>(0);
   const [headerCompact, setHeaderCompact] = useState(false);
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 1200px)");
-    const update = () => setHeaderCompact(mq.matches);
-    update();
-    mq.addEventListener("change", update);
-    return () => mq.removeEventListener("change", update);
-  }, []);
+    const header = headerRef.current;
+    if (!header) return;
+    let raf = 0;
+    const measure = () => {
+      const brand = header.querySelector<HTMLElement>(".brand");
+      const controls = header.querySelector<HTMLElement>(".header-controls");
+      if (!brand || !controls) return;
+      if (!headerCompact) {
+        // Inline: collapse if the row wrapped (controls dropped below the
+        // brand) OR the controls got pushed off the right edge of the
+        // viewport (horizontal overflow). Remember the viewport width at
+        // which it happened for the expand hysteresis below.
+        const wrapped = controls.offsetTop > brand.offsetTop + 4;
+        const clipped =
+          controls.getBoundingClientRect().right > window.innerWidth + 1;
+        if (wrapped || clipped) {
+          headerCollapseWidthRef.current = window.innerWidth;
+          setHeaderCompact(true);
+        }
+      } else if (window.innerWidth > headerCollapseWidthRef.current + 80) {
+        // Compact: only expand back once we have comfortably more room than
+        // when we collapsed (hysteresis prevents flicker at the boundary).
+        setHeaderCompact(false);
+      }
+    };
+    const schedule = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(measure);
+    };
+    const ro = new ResizeObserver(schedule);
+    ro.observe(header);
+    window.addEventListener("resize", schedule);
+    measure();
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", schedule);
+      cancelAnimationFrame(raf);
+    };
+  }, [headerCompact]);
   // Student Finder state. `null` = closed. Otherwise a discriminated
   // open-state: either { kind: "search", query } for the top-bar entry
   // point (search field shown) or { kind: "student", studentId,
@@ -11096,7 +11131,7 @@ function App() {
           </button>
         </div>
       )}
-      <header className="app-header">
+      <header className="app-header" ref={headerRef}>
         <div className="brand" aria-label="PulseED">
           <svg
             className="ekg-layer ekg-bg"
