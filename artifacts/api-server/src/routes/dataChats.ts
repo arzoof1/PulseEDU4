@@ -780,7 +780,14 @@ router.post("/data-chats/campaigns", requireStaff, async (req, res) => {
   let selectedTeacherIds: number[] = [];
   let responsiblePeriod = 1;
 
-  if (tpl.kind === "fast_data") {
+  // FAST templates default to ELA/Math teacher-of-record routing, but the
+  // admin may instead hand-pick ANY teachers (science, CTE, electives…)
+  // via assignment: "selected" — so data chats can be spread across all
+  // staff, not just the tested subjects. The campaign keeps kind=fast_data
+  // (FAST pills + checklist still render in the teacher modal).
+  const wantsSelected =
+    String(req.body?.assignment ?? "").toLowerCase() === "selected";
+  if (tpl.kind === "fast_data" && !wantsSelected) {
     assignmentMode = "subject_teachers";
     const s = String(req.body?.subject ?? "both").toLowerCase();
     if (!["ela", "math", "both"].includes(s)) {
@@ -960,7 +967,11 @@ router.post(
     let assignmentMode: string;
     let selectedTeacherIds: number[] = [];
     let responsiblePeriod = 1;
-    if (tpl.kind === "fast_data") {
+    // Mirrors the launch route: FAST + assignment:"selected" routes to
+    // hand-picked teachers (any department) instead of subject teachers.
+    const wantsSelected =
+      String(req.body?.assignment ?? "").toLowerCase() === "selected";
+    if (tpl.kind === "fast_data" && !wantsSelected) {
       assignmentMode = "subject_teachers";
       const s = String(req.body?.subject ?? "both").toLowerCase();
       subject = ["ela", "math", "both"].includes(s) ? s : "both";

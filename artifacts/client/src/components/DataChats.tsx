@@ -1591,6 +1591,11 @@ function LaunchForm({
   const [name, setName] = useState("");
   const [deadline, setDeadline] = useState("");
   const [subject, setSubject] = useState<"ela" | "math" | "both">("both");
+  // FAST templates: route to subject teachers-of-record (default) or to a
+  // hand-picked teacher set (any department — science, CTE, electives…).
+  const [fastAssign, setFastAssign] = useState<"subject" | "selected">(
+    "subject",
+  );
   const [teacherIds, setTeacherIds] = useState<Set<number>>(new Set());
   const [period, setPeriod] = useState(1);
   const [checked, setChecked] = useState<Set<string> | null>(null); // null = all
@@ -1646,7 +1651,7 @@ function LaunchForm({
   // Any input change invalidates a previous preview.
   useEffect(() => {
     setPreview(null);
-  }, [templateId, subject, teacherIds, period, scopeType, scopeFlags, picked]);
+  }, [templateId, subject, fastAssign, teacherIds, period, scopeType, scopeFlags, picked]);
 
   const buildScopeBody = (): Record<string, unknown> | null => {
     if (scopeType === "all") return null;
@@ -1674,10 +1679,12 @@ function LaunchForm({
     setErr(null);
     try {
       const body: Record<string, unknown> = { templateId: tpl.id };
-      if (tpl.kind === "fast_data") body.subject = subject;
-      else {
+      if (tpl.kind === "fast_data" && fastAssign === "subject") {
+        body.subject = subject;
+      } else {
         body.teacherIds = [...teacherIds];
         body.responsiblePeriod = period;
+        if (tpl.kind === "fast_data") body.assignment = "selected";
       }
       const scope = buildScopeBody();
       if (scope) body.scope = scope;
@@ -1722,7 +1729,10 @@ function LaunchForm({
       setErr("Pick a deadline.");
       return;
     }
-    if (tpl.kind !== "fast_data" && teacherIds.size === 0) {
+    if (
+      (tpl.kind !== "fast_data" || fastAssign === "selected") &&
+      teacherIds.size === 0
+    ) {
       setErr("Pick at least one teacher.");
       return;
     }
@@ -1739,10 +1749,12 @@ function LaunchForm({
         name: name.trim(),
         deadline,
       };
-      if (tpl.kind === "fast_data") body.subject = subject;
-      else {
+      if (tpl.kind === "fast_data" && fastAssign === "subject") {
+        body.subject = subject;
+      } else {
         body.teacherIds = [...teacherIds];
         body.responsiblePeriod = period;
+        if (tpl.kind === "fast_data") body.assignment = "selected";
       }
       if (checked !== null) body.checklistItemIds = [...checked];
       if (share !== null) body.shareWithFamilies = share;
@@ -1851,17 +1863,19 @@ function LaunchForm({
         />
       </label>
 
-      {tpl?.kind === "fast_data" ? (
+      {tpl?.kind === "fast_data" && (
         <div style={{ marginBottom: "0.7rem" }}>
           <div style={{ fontWeight: 700, fontSize: "0.85rem", marginBottom: 4 }}>
-            Subject — which teachers run the chats?
+            Who runs the chats?
           </div>
-          <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {(
               [
-                ["both", "ELA + Math"],
-                ["ela", "ELA only"],
-                ["math", "Math only"],
+                ["subject", "ELA / Math teachers of record"],
+                [
+                  "selected",
+                  "Pick any teachers (science, electives, CTE…) + period",
+                ],
               ] as const
             ).map(([v, label]) => (
               <label
@@ -1876,25 +1890,67 @@ function LaunchForm({
               >
                 <input
                   type="radio"
-                  name="dc-subject"
-                  checked={subject === v}
-                  onChange={() => setSubject(v)}
+                  name="dc-fast-assign"
+                  checked={fastAssign === v}
+                  onChange={() => setFastAssign(v)}
                 />
                 {label}
               </label>
             ))}
           </div>
-          <div
-            style={{
-              fontSize: "0.75rem",
-              color: "var(--text-subtle, #94a3b8)",
-              marginTop: 4,
-            }}
-          >
-            Each student is assigned to their ELA / Math teacher of record.
-          </div>
+          {fastAssign === "subject" && (
+            <>
+              <div
+                style={{
+                  fontWeight: 700,
+                  fontSize: "0.85rem",
+                  margin: "10px 0 4px",
+                }}
+              >
+                Subject
+              </div>
+              <div style={{ display: "flex", gap: 12 }}>
+                {(
+                  [
+                    ["both", "ELA + Math"],
+                    ["ela", "ELA only"],
+                    ["math", "Math only"],
+                  ] as const
+                ).map(([v, label]) => (
+                  <label
+                    key={v}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontSize: "0.88rem",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="dc-subject"
+                      checked={subject === v}
+                      onChange={() => setSubject(v)}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+              <div
+                style={{
+                  fontSize: "0.75rem",
+                  color: "var(--text-subtle, #94a3b8)",
+                  marginTop: 4,
+                }}
+              >
+                Each student is assigned to their ELA / Math teacher of record.
+              </div>
+            </>
+          )}
         </div>
-      ) : tpl ? (
+      )}
+      {tpl && (tpl.kind !== "fast_data" || fastAssign === "selected") ? (
         <div style={{ marginBottom: "0.7rem" }}>
           <div style={{ fontWeight: 700, fontSize: "0.85rem", marginBottom: 4 }}>
             Teachers ({teacherIds.size} selected)
@@ -2710,7 +2766,9 @@ export default function DataChatsAdminPage() {
               }}
             >
               {c.kind === "fast_data"
-                ? `FAST ${c.subject === "both" ? "ELA+Math" : (c.subject ?? "")}`
+                ? c.subject === null
+                  ? `FAST · picked teachers · P${c.responsiblePeriod}`
+                  : `FAST ${c.subject === "both" ? "ELA+Math" : c.subject}`
                 : `custom · P${c.responsiblePeriod}`}
             </span>
             {c.shareWithFamilies && (

@@ -3,6 +3,21 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **FAST data chats runnable by any teacher.** The New Campaign launcher's
+  FAST templates gained a "Who runs the chats?" choice: ELA/Math
+  teachers-of-record (default, unchanged) or **pick any teachers** (science,
+  electives, CTE…) + responsible period — so data-chat workload can be spread
+  across all staff. Server: launch + preview routes accept optional
+  `assignment:"selected"` for `fast_data` templates and reuse the existing
+  selected-mode branch (teacherIds validated active-in-school, period 1-10,
+  `subject=null`); kind stays `fast_data`, so the teacher queue still renders
+  FAST mini pills (my-queue gates `loadQueueFast` on kind, and `subject:null`
+  pairs load BOTH ELA+Math). D-or-F scope with `subject:null` falls back to
+  failing-any (already supported). Campaign list badge shows
+  "FAST · picked teachers · P#" for these. Smoke-verified: launched a
+  fast+selected campaign, a Math teacher's queue returned 24 students all
+  with dual-subject FAST payloads incl level placements.
+
 - **Data Chat scopes + roster chat icon.** (1) New Campaign launcher gained a
   student scope selector — All / support flags (ESE·504·ELL) / D-or-F in class
   (current grade <70 from the latest committed gradebook via
