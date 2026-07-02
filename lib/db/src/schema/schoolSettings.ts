@@ -590,6 +590,44 @@ export const schoolSettingsTable = pgTable(
   // Core Team / admin controlled (gated in the PUT handler).
   // -----------------------------------------------------------------
   gpaEnabled: boolean("gpa_enabled").notNull().default(false),
+  // -----------------------------------------------------------------
+  // Feature-checklist completion (two-tier, like the others above).
+  // These modules shipped without licensing switches and were always-on;
+  // both halves default TRUE so adding the switches changes nothing
+  // until someone flips them.
+  // -----------------------------------------------------------------
+  featureDataChats: boolean("feature_data_chats").notNull().default(true),
+  superFeatureDataChats: boolean("super_feature_data_chats")
+    .notNull()
+    .default(true),
+  featurePickup: boolean("feature_pickup").notNull().default(true),
+  superFeaturePickup: boolean("super_feature_pickup")
+    .notNull()
+    .default(true),
+  featureTicketing: boolean("feature_ticketing").notNull().default(true),
+  superFeatureTicketing: boolean("super_feature_ticketing")
+    .notNull()
+    .default(true),
+  featureTours: boolean("feature_tours").notNull().default(true),
+  superFeatureTours: boolean("super_feature_tours").notNull().default(true),
+  featureEsign: boolean("feature_esign").notNull().default(true),
+  superFeatureEsign: boolean("super_feature_esign").notNull().default(true),
+  featureBrainLab: boolean("feature_brain_lab").notNull().default(true),
+  superFeatureBrainLab: boolean("super_feature_brain_lab")
+    .notNull()
+    .default(true),
+  featureGradebook: boolean("feature_gradebook").notNull().default(true),
+  superFeatureGradebook: boolean("super_feature_gradebook")
+    .notNull()
+    .default(true),
+  featureSchoolGrade: boolean("feature_school_grade").notNull().default(true),
+  superFeatureSchoolGrade: boolean("super_feature_school_grade")
+    .notNull()
+    .default(true),
+  featureSafetyPlans: boolean("feature_safety_plans").notNull().default(true),
+  superFeatureSafetyPlans: boolean("super_feature_safety_plans")
+    .notNull()
+    .default(true),
   },
   (t) => ({
     schoolIdUnique: uniqueIndex("school_settings_school_id_unique").on(

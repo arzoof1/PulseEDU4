@@ -10,6 +10,7 @@ import {
   ensureClassComposerPlansSchema,
   ensureClassComposerSkillClusterSchema,
   ensureCommunicationSchema,
+  ensureDataChatSchema,
   ensureDataExportSchema,
   ensureDataImporterRollbackSchema,
   ensureDistrictIntegrationsSchema,
@@ -52,6 +53,7 @@ import {
   seedEngagementEventsIfEmpty,
   seedEligibilityForSchool1,
   seedFastScoresIfEmpty,
+  seedHistoricalFastIfEmpty,
   seedHousesIfEmpty,
   seedIfEmpty,
   seedIreadyAndSciIfEmpty,
@@ -84,6 +86,7 @@ export async function runSeed(): Promise<void> {
   await seedTieredInterventionsIfEmpty();
   await seedAcademicMinutesDemoIfEmpty();
   await seedFastScoresIfEmpty();
+  await seedHistoricalFastIfEmpty();
   await seedIreadyAndSciIfEmpty();
   await seedHousesIfEmpty();
   await seedEngagementEventsIfEmpty();
@@ -133,6 +136,7 @@ export async function runSeed(): Promise<void> {
   await ensureOnTimeTestModeColumns();
   await ensureParentMessagesSchema();
   await ensureCommunicationSchema();
+  await ensureDataChatSchema();
   await ensureDataExportSchema();
   await ensurePulseDnaVideosSchema();
   await ensureStudentLocalSisIdBackfill();

@@ -44,6 +44,7 @@ import {
   pbisMilestoneEmailsTable,
 } from "@workspace/db";
 import { recommendNextHouse } from "./houses.js";
+import { requireFeature, isFeatureEnabled } from "../lib/featureLicensing.js";
 import { eq, and, or, desc, sql, isNull, inArray, gte, lte, ilike, ne, not } from "drizzle-orm";
 import {
   requireSchool,
@@ -1047,9 +1048,31 @@ router.get("/data-imports/jobs", requireImporter(), async (req, res) => {
       kindPredicate = inArray(importJobsTable.kind, allowed);
     }
   }
-  const where = kindPredicate
-    ? and(scopePredicate, kindPredicate)
-    : scopePredicate;
+  // Feature gate — when the gradebook module is off for this school, its
+  // job history goes dark like the rest of the module (preview/commit and
+  // rollback are gated the same way). Explicit ?kind=gradebook requests
+  // 404 (looks-like-not-exist); unfiltered listings just omit the rows.
+  let excludeGradebook = false;
+  if (scope === "school") {
+    const schoolIdForGate = req.schoolId;
+    if (
+      schoolIdForGate &&
+      !(await isFeatureEnabled(req, schoolIdForGate, "gradebook"))
+    ) {
+      if (kind === "gradebook") {
+        res.status(404).json({ error: "not_found" });
+        return;
+      }
+      excludeGradebook = true;
+    }
+  }
+  const predicates = [scopePredicate, kindPredicate];
+  if (excludeGradebook) {
+    predicates.push(ne(importJobsTable.kind, "gradebook"));
+  }
+  const where = and(
+    ...predicates.filter((p): p is NonNullable<typeof p> => p != null),
+  );
   const rows = await db
     .select()
     .from(importJobsTable)
@@ -1715,6 +1738,17 @@ router.post(
         .status(409)
         .json({ error: `Cannot roll back a ${job.status} job` });
       return;
+    }
+    // Feature gate — gradebook is a licensed module. When the feature is
+    // off for the school, its rollback path must go dark too (matching
+    // the requireFeature("gradebook") guard on preview/commit), or the
+    // module could still mutate grade data while "disabled".
+    if (job.kind === "gradebook" && job.schoolId != null) {
+      const enabled = await isFeatureEnabled(req, job.schoolId, "gradebook");
+      if (!enabled) {
+        res.status(404).json({ error: "not_found" });
+        return;
+      }
     }
     // Gradebook uses job-chaining with a TWO-generation retention window, so
     // only a SINGLE-STEP undo is restorable: rolling back the latest committed
@@ -3821,8 +3855,16 @@ function decodeXlsxBody(body: unknown): Buffer | string {
   return buf;
 }
 
+// FL FAST launched in the 22-23 school year (two-digit start "22").
+// Nothing older is a comparable FAST score, so it is never offered or
+// accepted for a historical import.
+const FAST_LAUNCH_START_YY = 22;
+
 // Validate the admin-supplied school-year label. Allow the current
-// year plus three previous (matches the dropdown the client renders).
+// year plus up to five previous (matches the dropdown the client
+// renders), clamped to the FAST launch year (22-23). Five is the cap
+// because the roster's multi-year history window
+// (school_settings.fast_history_years_visible) tops out at 5.
 function validateSchoolYearLabel(
   raw: unknown,
   current: string,
@@ -3833,13 +3875,16 @@ function validateSchoolYearLabel(
   const start = Number(m[1]);
   const end = Number(m[2]);
   if (end !== (start + 1) % 100) return null;
-  // Build the allowed set: current + 3 previous.
+  // Build the allowed set: current + up to 5 previous, clamped to the
+  // FAST launch year (22-23). FL FAST began in 22-23; older years are
+  // FSA on a non-comparable scale, so we never offer/accept them.
   const cm = /^(\d{2})-(\d{2})$/.exec(current);
   if (!cm) return raw.trim(); // fail open — current isn't well-formed
   const curStart = Number(cm[1]);
   const allowed = new Set<string>();
-  for (let off = 0; off <= 3; off++) {
+  for (let off = 0; off <= 5; off++) {
     const s = (curStart - off + 100) % 100;
+    if (s < FAST_LAUNCH_START_YY) continue; // don't offer pre-FAST years
     const e = (s + 1) % 100;
     const pad = (n: number) => String(n).padStart(2, "0");
     allowed.add(`${pad(s)}-${pad(e)}`);
@@ -3866,7 +3911,7 @@ router.post(
     );
     if (!schoolYear) {
       res.status(400).json({
-        error: `Invalid or out-of-range school year. Pick from the current year (${current}) or one of the three preceding years.`,
+        error: `Invalid or out-of-range school year. Pick from the current year (${current}) or one of the preceding school years back to 22-23 (when FAST launched).`,
       });
       return;
     }
@@ -3919,7 +3964,7 @@ router.post(
     );
     if (!schoolYear) {
       res.status(400).json({
-        error: `Invalid or out-of-range school year. Pick from the current year (${current}) or one of the three preceding years.`,
+        error: `Invalid or out-of-range school year. Pick from the current year (${current}) or one of the preceding school years back to 22-23 (when FAST launched).`,
       });
       return;
     }
@@ -4152,6 +4197,7 @@ router.post(
 // ---------------------------------------------------------------------------
 router.post(
   "/data-imports/gradebook/preview",
+  requireFeature("gradebook"),
   requireImporter(),
   requireImportKind("gradebook"),
   async (req: Request, res: Response) => {
@@ -4224,6 +4270,7 @@ router.post(
 
 router.post(
   "/data-imports/gradebook/commit",
+  requireFeature("gradebook"),
   requireImporter(),
   requireImportKind("gradebook"),
   async (req: Request, res: Response) => {

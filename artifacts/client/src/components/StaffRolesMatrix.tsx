@@ -104,6 +104,7 @@ const PAGES: { key: BoolKey; label: string; group: string }[] = [
   { group: "Admin", key: "capTourGuide", label: "Tour Guide" },
   { group: "Admin", key: "capManageEsign", label: "e-Sign Documents" },
   { group: "Admin", key: "capManageContactInfo", label: "Contact Info Fixes" },
+  { group: "Admin", key: "capViewFastHistory", label: "Historical FAST" },
   { group: "Data Import", key: "capImportGrades", label: "Import Grades" },
   { group: "Data Import", key: "capImportAttendance", label: "Import Attendance" },
   { group: "Data Import", key: "capImportFast", label: "Import FAST" },

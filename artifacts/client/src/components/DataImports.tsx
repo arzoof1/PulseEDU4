@@ -580,7 +580,7 @@ const KIND_DEFS: Record<Kind, KindDef> = {
     sampleCsv: "",
     notes: [
       "School-scope only. Supports ELA Reading and Mathematics (one subject per file, auto-detected from the scale-score column).",
-      "Pick the school year on the upload step — the current year plus the three preceding years are allowed (for prior-year back-fill).",
+      "Pick the school year on the upload step — the current year plus up to the five preceding years (back to 22-23, when FAST launched) are allowed for prior-year back-fill.",
       "Rollback DELETEs every benchmark response stamped with this import job, plus any scale-score row the same job created. PM values written by an earlier job survive.",
       "12 MB file limit. Split by grade if the state export exceeds it.",
     ],
@@ -730,9 +730,16 @@ const KIND_ROW_BADGE: Partial<Record<Kind, string>> = {
 // menu option so the admin can explicitly drop a noisy column.
 const IGNORE_VALUE = "__ignore__";
 
+// FL FAST launched in the 22-23 school year (full start year 2022).
+// Nothing older is a comparable FAST score, so it is never offered.
+const FAST_LAUNCH_START_YEAR = 2022;
+
 // Build the school-year dropdown options for the Florida xlsx
-// importer: current year plus the three preceding years. Returns
-// "YY-YY" strings (e.g. ["25-26", "24-25", "23-24", "22-23"]).
+// importer: current year plus up to the five preceding years, clamped
+// to the FAST launch year (22-23). Returns "YY-YY" strings (e.g.
+// ["26-27", "25-26", "24-25", "23-24", "22-23"]). Five is the cap
+// because the roster's multi-year history window
+// (fast_history_years_visible) tops out at 5.
 // School year transitions on Jul 1 to match schoolYearLabelFor on
 // the server (Eastern timezone is acceptable for the client-side
 // fallback — the server re-validates the picked year on submit).
@@ -744,8 +751,9 @@ function floridaSchoolYearOptions(): string[] {
   const startYear = month >= 6 ? year : year - 1;
   const pad = (n: number) => String(n % 100).padStart(2, "0");
   const out: string[] = [];
-  for (let off = 0; off <= 3; off++) {
+  for (let off = 0; off <= 5; off++) {
     const s = startYear - off;
+    if (s < FAST_LAUNCH_START_YEAR) break; // don't offer pre-FAST years
     out.push(`${pad(s)}-${pad(s + 1)}`);
   }
   return out;

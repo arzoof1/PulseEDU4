@@ -3,6 +3,256 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Feature Enablement + Staff Pilots.** Completed `FEATURE_KEYS` so 9
+  formerly always-on modules (dataChats, pickup, ticketing, tours, esign,
+  brainLab, gradebook, schoolGrade, safetyPlans) carry district
+  `super_feature_*` + school `feature_*` switches (18 new
+  `school_settings` boolean cols, default TRUE; seed `ALTER IF NOT
+  EXISTS` + plans JSONB backfill only-if-absent). Server-enforced:
+  `requireFeature` mounts in `routes/index.ts` (public surfaces stay
+  open — `/ticketing/scan`, `/esign/sign/:token`, `/tours/public/*`,
+  `/tours/walk/*`; parent routes use `requireFeatureForParent`);
+  `schoolSettings` PUT accepts the 9 CamelCase keys via the generic
+  FEATURE_KEYS loop. Staff pilots: new `staff_feature_pilots` table
+  (unique school+featureKey+staffId); `loadEffectiveFeatures` unions the
+  actor's pilot rows when the school toggle is off AND the district
+  super toggle is on (district license always wins); family-facing keys
+  (parentPortal, familyComm, schoolStoreNotify, ticketing) are
+  `pilotable:false` and the pilot PUT 400s them. Admin APIs
+  `GET /api/school-features/pilots` + `PUT .../pilots/:key` (admin/SU at
+  acting school; staffIds validated active same-school; tx
+  delete+insert). Client: School Features grid +9 rows,
+  `FeaturePilotsPanel` (per-feature staff picker, full-replace PUT),
+  App.tsx nav/quick-tile/settings-card/section gating via hoisted
+  `useFeatureVisible`. Gradebook goes dark end-to-end when off:
+  preview/commit (`requireFeature`), rollback 404s gradebook jobs,
+  `/data-imports/jobs` 404s `?kind=gradebook` + omits gradebook rows,
+  and embedded reads (`loadCurrentGrades`) return nothing unless both
+  school-level switches are on (pilots deliberately do NOT re-enable
+  embedded reads — the shared loader has no staff context and feeds
+  parent surfaces). Verified by curl E2E: defaults preserve behavior;
+  school off → 404; pilot member → 200; super off → pilot inert;
+  cross-school staffIds rejected; unknown key 404.
+
+- **Data Chat Follow-Ups.** From `SelfDataChatModal` a teacher can schedule
+  ONE pending follow-up per teacher+student (`data_chat_followups`, backed
+  by a partial unique index on pending rows + `onConflictDoUpdate` so
+  concurrent schedules can't stack; reschedule replaces the row in place
+  and resets the snooze counter;
+  weekend dates roll forward to the next school day, past/today dates are
+  rejected). The modal also pins the teacher's OWN last two private notes
+  for the student (🔒 block; `ne(privateNote,'')`, never another teacher's
+  notes, never parent-facing). Saving a chat does NOT close the modal:
+  it switches to a post-save step ("✓ Chat logged" + the follow-up
+  scheduler + Done) so the scheduler can't be missed — it shows
+  immediately and refetches self-context in the background (the keyed
+  scheduler remounts) to reflect whether logging auto-completed or
+  preserved the pending follow-up; scheduling from this step auto-closes
+  via the scheduler's `onScheduled`. Roster reminders (`FollowupReminders`,
+  polls `GET /data-chats/followups/mine` every 60s above the Teacher
+  Roster summary): quiet strip the school day BEFORE (`phase:"tomorrow"`)
+  and on due-day mornings before the student's period; LOUD pulsing
+  banner from the start of the earliest non-planning period the teacher
+  has that student (default bell schedule `startTime`; loud all day when
+  no schedule/period resolves; overdue is always loud) with **Chat now /
+  Snooze 1 or 3 school days / Cancel** — a "snoozed 3×" nudge appears at
+  `snoozeCount ≥ 3`. Logging ANY chat (campaign queue or roster self-log)
+  auto-completes the pending follow-up via `completePendingFollowup` in
+  both log POSTs — EXCEPT a row scheduled/rescheduled today for a future
+  date (schedule-next-then-log flow), discriminated by `snoozeCount === 0`
+  so a same-day SNOOZE still completes. Admin **Follow-ups** tab in
+  Family → Data Chats (Core Team, `GET /followups/admin-stats`):
+  recognition-framed per-teacher table (scheduled/pending/done +
+  follow-through %). Follow-ups never touch HeartBEAT, the parent portal,
+  support records, or exports. Server: `routes/dataChats.ts`
+  (`isoAddDays`/`rollToSchoolDay`/`addSchoolDays`); schema:
+  `lib/db/src/schema/dataChats.ts` + `seed.ts ensureDataChatSchema`.
+- **Launcher teacher multi-select matches the shared TeacherPicker
+  convention.** The "pick any teachers" checkbox list in the Data Chats
+  campaign launcher now groups by department (canonical order, tinted
+  headers, alpha within group) like every other teacher chooser. Server:
+  `inferDepartment` extracted from `teacherRoster.ts` into the shared
+  `api-server/src/lib/teacherDepartments.ts` and wired into
+  `GET /api/staff-directory` (infer from non-planning course names; the
+  mostly-NULL/free-text `staff.department` column is only a clamped
+  fallback — non-canonical labels map to "Other" so no teacher is
+  silently dropped by the client group filter).
+- **FAST data chats runnable by any teacher.** The New Campaign launcher's
+  FAST templates gained a "Who runs the chats?" choice: ELA/Math
+  teachers-of-record (default, unchanged) or **pick any teachers** (science,
+  electives, CTE…) + responsible period — so data-chat workload can be spread
+  across all staff. Server: launch + preview routes accept optional
+  `assignment:"selected"` for `fast_data` templates and reuse the existing
+  selected-mode branch (teacherIds validated active-in-school, period 1-10,
+  `subject=null`); kind stays `fast_data`, so the teacher queue still renders
+  FAST mini pills (my-queue gates `loadQueueFast` on kind, and `subject:null`
+  pairs load BOTH ELA+Math). D-or-F scope with `subject:null` falls back to
+  failing-any (already supported). Campaign list badge shows
+  "FAST · picked teachers · P#" for these. Smoke-verified: launched a
+  fast+selected campaign, a Math teacher's queue returned 24 students all
+  with dual-subject FAST payloads incl level placements.
+
+- **Data Chat scopes + roster chat icon.** (1) New Campaign launcher gained a
+  student scope selector — All / support flags (ESE·504·ELL) / D-or-F in class
+  (current grade <70 from the latest committed gradebook via
+  `loadStudentGrades`; on FAST campaigns the failing course must infer to the
+  pair's subject) / hand-picked (typeahead via `/api/student-lookup/search`,
+  max 500) — with a "Preview who's included" count endpoint
+  (`POST /data-chats/campaigns/preview`). Narrower scopes are SNAPSHOTTED at
+  launch into `data_chat_campaign_students`; `resolvePairs` applies the
+  snapshot on every downstream surface (queue, reminder, pending, compliance)
+  so mid-campaign roster/flag/grade changes never shift the assignment. Scope
+  badge on campaign list rows + detail banner. `inferFastSubject` broadened to
+  cover the gradebook import's 15-char truncated `course_desc` ("LANG ARTS",
+  trailing "MAT"). (2) Teacher Roster rows gained an inline 💬 Chat button —
+  purple "Chat!" tint when the student is pending in one of the teacher's
+  active campaigns (`GET /data-chats/pending-students`); clicking opens
+  `SelfDataChatModal` which fetches `GET /data-chats/self-context/:studentId`
+  (mode `campaign` → logging counts toward the campaign via `POST /logs`;
+  mode `self` → logs to a lazily created per-school hidden `self_serve`
+  campaign reusing the built-in FAST template via `POST /self-log`,
+  `entry_seq` allows repeat chats). Self-serve campaigns are excluded (`ne()`)
+  from my-queue/reminder/pending/campaign lists. Both paths are gated
+  server-side: campaign logs re-derive queue membership; self routes require
+  `teacherHasStudent` (own roster only), school-scoped.
+
+- **Data Chat Campaigns (admin-pushed teacher↔student check-ins).** Templates
+  (Core Team CRUD; built-in non-deletable "FAST Data Chat" lazily seeded per
+  school on first templates GET — name/kind locked, checklist/chips/share flag
+  editable; DELETE archives, built-in 400s) vs Campaigns (launched at a
+  teacher set + deadline; checklist/goal-chips/`shareWithFamilies` SNAPSHOTTED
+  into the campaign row at launch so later template edits don't rewrite live
+  campaigns). FAST campaigns (`kind fast_data`, subject ela|math|both) assign
+  each student to their ELA/Math teacher-of-record via `section_roster`;
+  custom campaigns assign selected teachers' rosters for a chosen responsible
+  period. Teacher flow: animated top-bar reminder icon (polls
+  `/api/data-chats/reminder` every 60s) + persistent deadline banner at ≤7
+  days → queue modal (`my-queue`) with per-student log form: snapshot
+  checklist topics, goal chips or custom goal, private teacher note
+  (staff-only, never in any parent payload), FAST mini context pills (shared
+  `FastScorePill`), and past goals from earlier campaigns. Admin page (Family
+  nav group, `activeSection: dataChats`, Core Team): Campaigns + Templates
+  tabs, launch form with staff-directory multi-select + period, campaign
+  detail with per-teacher compliance table, topic-coverage bars, CSV export
+  (`csvCell` neutralizes formula injection), and two-step end confirm. Parent
+  surfacing: when `shareWithFamilies`, logged chats (topics + goal ONLY)
+  render on the parent HeartBEAT dashboard + family PDF
+  (`assembleSnapshot` → `drawDataChatsBlock`; `winAnsiSafe` swaps →/✓ for
+  ASCII since built-in pdfkit fonts are WinAnsi-only). Server:
+  `routes/dataChats.ts` (all queries school-scoped; `loadStaff` tenant guard
+  403s a non-SuperUser actor whose `staff.schoolId` ≠ `req.schoolId`; teacher
+  log POST re-derives queue membership server-side via `computePairs` — a
+  teacher can only log their own assigned students). Schema
+  `lib/db/src/schema/dataChats.ts` + `ensureDataChatSchema` boot migration
+  (`data_chat_templates`/`data_chat_campaigns`/`data_chat_logs`).
+- **HeartBEAT official absences + omit-when-unused attendance metrics.** The
+  parent HeartBEAT surfaces (parent dashboard, family PDF used by the weekly
+  email + staff print) dropped the kiosk-derived absence ESTIMATE: the "Lost
+  Instructional Time" total is now hall passes + tardies only, and the
+  "Absences are estimated from class periods with no door-kiosk check-in…"
+  disclaimer is gone. Official days-absent (latest Eligibility Hub
+  `eligibility_absences` upload for the current semester, via
+  `lib/attendanceMetrics.ts` `loadAttendanceMetrics` — same source as the
+  Teacher Roster / Insights "Days Absent" columns) surfaces as
+  `attendance.official` on the snapshot and renders as a "Days absent"
+  tile/stat. Every attendance metric now OMITS cleanly when its source system
+  isn't in use: no Eligibility upload → no official tile (`official` null,
+  never a fabricated 0), no attendance-day data → % rows omitted (previously
+  "—" dashes), on-time streak tiles additionally gated on
+  `countedPeriods > 0`, kiosk arrivals already gated on `checkinCount > 0`.
+  The official approximate % is NOT used — the `student_attendance_day` %
+  stays the only attendance-% source. Files: `lib/parentSnapshot.ts`,
+  `lib/parentSnapshotPdf.ts`, client `parent/Dashboard.tsx`.
+- **Staff "Print HeartBEAT" on Parent Access.** A staff-facing button next to
+  "Preview as parent" (Parent Access page, Admin/Core Team) downloads the SAME
+  family HeartBEAT PDF a parent receives — for data chats / family meetings, no
+  email sent, no parent account required.
+  - **Server.** New `GET /api/staff/heartbeat.pdf?studentId=<numeric db id>`
+    (`routes/staffHeartbeatPdf.ts`): inline `requireStaff`, `requireSchool`,
+    then a visibility gate via the shared `getVisibleStudentIds` (teachers →
+    own roster + trusted-adult; core team / admin / counselor → school-wide).
+    Out-of-scope OR non-existent students both return an **indistinguishable
+    404** so staff can't probe existence. Renders via the existing
+    `renderSnapshotPdf`.
+  - **Snapshot reuse.** `lib/parentSnapshot.ts` split into a thin
+    `buildParentSnapshot` wrapper + shared private `assembleSnapshot(studentId,
+    ctx)` core + new exported `buildStaffSnapshot(studentId, schoolId)`. Staff
+    mode has no parent account (parent identity blank) and no per-parent prefs,
+    so section visibility falls back to the school's HeartBEAT defaults; it also
+    re-checks `student.schoolId === schoolId` (404 otherwise). Parent-mode data
+    path is byte-for-byte unchanged. `localSisId` only — never FLEID.
+  - **Client.** `ParentAccess.tsx` gained a `btnGhost` "Print HeartBEAT" button
+    (per-student busy state, double-click guard) that `authFetch`es the route
+    and downloads the blob as `HeartBEAT-<Last>-<First>.pdf`.
+
+- **Teacher-Roster FAST parity on Student Snapshot + Family HeartBEAT PDF.**
+  Replaced the raw scale-score "FAST Progress Monitoring" views with the same
+  achievement-level presentation the Teacher Roster / Insights drill-downs use,
+  so the numbers agree on every surface.
+  - **Shared loader.** `lib/fastParity.ts` `loadStudentFastParity({schoolId,
+    studentId, grade})` builds one row per subject (ela, math — always both,
+    null-filled) from the exact roster helpers: `placePmSet` (level
+    placements), `bucketFor` (points-to-next sub-level), `proficiencyGap`
+    (points-to-Level-3), `computeRowLearningGain` (strict PM3-to-PM3 LG via
+    `loadFastHistory`). "Current year" resolves from DATA
+    (`resolveCurrentFastYear`), not the wall clock.
+  - **LG single-sourced.** `computeRowLearningGain` moved into
+    `lib/learningGains.ts` (was route-local in `insights.ts`) so Snapshot / PDF
+    / roster all import one implementation.
+  - **Student Snapshot (core team/admin).** `StudentSnapshotPage.tsx`
+    `PmTrajectory` now renders shared `FastScorePill`s (prior → PM1 → PM2 →
+    PM3) with a surface-wide "Show: Level | Scale score" toggle + click-to-flip,
+    scale-score momentum markers, an LG check, and a points-to-next-level ·
+    points-to-proficiency caption. Endpoint: `routes/exports.ts` snapshot
+    returns `fast`.
+  - **Family HeartBEAT PDF.** `parentSnapshotPdf.ts` `drawFastScoresBlock`
+    renders colored achievement sub-levels (e.g. "1.2") per window with
+    points-to-next-level beneath PM3 and an LG check drawn as a vector stroke
+    (WinAnsi built-ins can't render ✓). STATIC — no scale-score flip (staff
+    only). `parentSnapshot.ts` swapped its inline wall-clock FAST query for the
+    shared loader (also fixing the July school-year drift), filtered to non-null
+    rows so the "No FAST results yet" empty state is preserved. Gated by the
+    existing `showFastScores`; no FAST HTML/email block (PDF-only). `localSisId`
+    only — never FLEID.
+
+- **Historical FAST (multi-year) table on Student Profile.** Admin/Core-Team
+  "Historical FAST" section on the Student Profile (Student Lookup / Snapshot
+  only — deliberately NOT teacher roster, parent portal, or HeartBEAT). Renders
+  the **current year as the top anchor row** then comparable prior years, with
+  full PM1/PM2/PM3 as FAST level pills, **within-year growth** (PM1→latest
+  same-year PM) and a per-year learning-gain flag; **no cross-grade summed
+  total** (grade bands differ year to year, so a running total would be
+  meaningless). Comparable years only — FAST launched in FL in 22-23, so older
+  FSA (a non-comparable scale) is excluded, grade-permitting.
+  - **Loader/route.** `lib/fastHistory.ts` `loadFastFullHistory` +
+    `resolveCurrentFastYear`; endpoint in `routes/studentLookup.ts`,
+    visibility-scoped via `getVisibleStudentIds`, returns `localSisId` only
+    (**never FLEID**). Client table lives in `StudentProfile.tsx`
+    (`HistoricalFastSection`).
+  - **Admin-only cap.** Assignment is gated by `capViewFastHistory`, grantable
+    **only by Admin/SuperUser** — Core Team (including `capStaffRoles` holders,
+    who otherwise pass `hasFullRoleAuthority` and keep the full PATCH field set)
+    **cannot delegate it**. Enforced by an explicit admin-only gate in the
+    `adminStaff.ts` PATCH alongside the existing role-management-cap gate; the
+    client `StaffRolesMatrix` toggle (Admin group, auto-locked in import-only
+    mode) is UX only.
+  - **Data-derived current year (key invariant).** Both the seed and the read
+    route resolve "current school year" from the DATA
+    (`resolveCurrentFastYear` = `MAX(school_year) WHERE is_historical=false`,
+    school-scoped), **not the wall clock** (`schoolYearLabelFor`). The demo
+    dataset is frozen at the year it was seeded, so once the wall clock crosses
+    the July school-year boundary it drifts ahead of the data — a wall-clock
+    "current" would (a) make the seed treat the real current-year rows as a
+    prior year and mint phantom historical rows, and (b) make the loader drop
+    the real current-year anchor and shift grade-in-year math by a year.
+    Falls back to the wall clock only when the school has no current-year FAST.
+  - **Dev seed.** `seedHistoricalFastIfEmpty` backfills PM1/PM2/PM3 for all
+    students in the demo school. Demo-school-scoped + idempotent (keyed to its
+    own sentinel import job `[seed] Historical FAST Backfill.xlsx`) and skips
+    any `(student, subject, year)` combo that already exists, so it never
+    duplicates or clobbers real current-year or legitimately-imported
+    historical rows.
+
 - **Student metrics engine + Student Summary export + Student Snapshot report.**
   A shared per-student metrics engine (`lib/studentMetrics.ts`,
   `loadStudentMetrics(schoolId, ids, range)`) computes whole-child aggregates

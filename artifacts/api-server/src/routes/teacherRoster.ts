@@ -48,47 +48,22 @@ import {
 } from "../lib/fastHistory.js";
 import {
   bucketFor,
-  bucketTarget,
   hasChart,
   placeOnChart,
   placePm3,
-  SUB_LEVEL_LABEL,
+  withGap,
   type Subject,
-  type Placement,
+  type PlacementWithGap,
   type BucketInfo,
 } from "../lib/fastCutScores.js";
 import { decideLearningGain } from "../lib/learningGains.js";
+import { inferDepartment } from "../lib/teacherDepartments.js";
 import { loadAttendanceMetrics } from "../lib/attendanceMetrics.js";
 
-// Per-PM placement enriched with the gap-to-next-sublevel caption used
-// by the roster pills. Gap is computed on the CURRENT-grade chart (same
-// approach the FAST Benchmarks tab uses) so the number is "points to
-// clear our chart's next stop" — what teachers expect to see.
-interface PlacementWithGap extends Placement {
-  gap: number | null;
-  nextStopLabel: string | null;
-}
-
-function withGap(
-  placement: Placement | null,
-  pmScore: number | null,
-  subject: Subject,
-  grade: number,
-): PlacementWithGap | null {
-  if (!placement) return null;
-  if (pmScore == null) {
-    return { ...placement, gap: null, nextStopLabel: null };
-  }
-  const target = bucketTarget(subject, grade, placement.subLevel);
-  if (!target) {
-    return { ...placement, gap: null, nextStopLabel: null };
-  }
-  return {
-    ...placement,
-    gap: target.score - pmScore,
-    nextStopLabel: SUB_LEVEL_LABEL[target.nextStop],
-  };
-}
+// Per-PM placement enriched with the gap-to-next-sublevel caption is now
+// single-sourced in fastCutScores.ts (`withGap` / `PlacementWithGap`) so the
+// Roster, Student Snapshot, and Insights band drawer captions can never
+// silently diverge.
 
 const router: IRouter = Router();
 
@@ -159,6 +134,15 @@ interface SubjectBlock {
   // subject) yet. Only one prior year is surfaced on the roster;
   // multi-year history still lives on the student profile FAST card.
   priorPm3: PriorPm3 | null;
+  // Multi-year PM3 growth series (PM3-only) for the roster growth chip.
+  // Prior-year historical PM3 rows within the school's visible window,
+  // ordered NEWEST-FIRST. `delta` is the year-over-year change vs. the
+  // immediately-older year (this entry's pm3 − next-older entry's pm3);
+  // null on the oldest entry (nothing older to compare against). NOTE:
+  // FAST scale scores are per-grade re-referenced, so year-over-year
+  // deltas are directional signal only — never sum them into a total.
+  // Empty when no historical rows exist for this (student, subject).
+  pm3History: Array<{ schoolYear: string; pm3: number; delta: number | null }>;
   // FAST Learning Gain (FLDOE rule, Phase 1 subset).
   //   true  — student demonstrated a learning gain this year. Either
   //           moved up a performance level vs. prior-year PM3, or
@@ -238,6 +222,18 @@ function buildSubjectBlock(
         : null,
     };
   })();
+  // Multi-year PM3 growth series (newest-first, PM3-only). `delta` for
+  // each entry compares against the immediately-older year; the oldest
+  // year has no comparison so its delta is null. Do NOT sum these —
+  // FAST scale scores are re-referenced per grade year to year.
+  const pm3History = history.map((h, i) => {
+    const older = history[i + 1];
+    return {
+      schoolYear: h.schoolYear,
+      pm3: h.pm3,
+      delta: older ? h.pm3 - older.pm3 : null,
+    };
+  });
   if (!row) {
     return {
       pm1: null,
@@ -256,6 +252,7 @@ function buildSubjectBlock(
       priorYearScore: null,
       priorYearBq: false,
       priorPm3,
+      pm3History,
       learningGain: null,
       noChart,
     };
@@ -331,6 +328,7 @@ function buildSubjectBlock(
     priorYearScore: row.priorYearScore,
     priorYearBq: row.priorYearBq,
     priorPm3,
+    pm3History,
     learningGain,
     noChart,
   };
@@ -958,50 +956,8 @@ router.get("/teacher-roster/teachers", async (req: Request, res: Response) => {
   res.json({ teachers: out });
 });
 
-// Map a teacher's course names to a coarse department label for the
-// picker. Keyword-based — anything unmatched lands in "Other" and an
-// admin can clean up a course name (or we add keywords) to reclassify.
-// Order matters: more specific tokens (Algebra, Geometry) check before
-// the generic Math match.
-function inferDepartment(courseNames: string[]): string {
-  if (courseNames.length === 0) return "Other";
-  const tally = new Map<string, number>();
-  for (const raw of courseNames) {
-    const name = raw.toLowerCase();
-    let dept = "Other";
-    if (/(algebra|geometry|\bmath|pre-?calc|calculus|statistics)/.test(name)) {
-      dept = "Math";
-    } else if (/(\bela\b|english|language arts|reading|literature|writing)/.test(name)) {
-      dept = "ELA";
-    } else if (/(science|biology|chemistry|physics|earth|environmental)/.test(name)) {
-      dept = "Science";
-    } else if (/(social studies|history|civics|geography|economics|government|us history|world history)/.test(name)) {
-      dept = "Social Studies";
-    } else if (/(spanish|french|german|chinese|latin|world language)/.test(name)) {
-      dept = "World Languages";
-    } else if (/(\bpe\b|physical education|health|wellness)/.test(name)) {
-      dept = "PE / Health";
-    } else if (/(art|music|band|chorus|drama|theater|theatre|dance|media|tv|journalism|yearbook)/.test(name)) {
-      dept = "Electives";
-    } else if (/(ese|esol|ell|intensive|resource|support|skills)/.test(name)) {
-      dept = "Support";
-    } else if (/(technology|computer|coding|stem|engineering|robotics)/.test(name)) {
-      dept = "CTE / STEM";
-    }
-    tally.set(dept, (tally.get(dept) ?? 0) + 1);
-  }
-  // Pick the department this teacher teaches most often; ties broken
-  // by the keyword check order above via insertion order.
-  let bestDept = "Other";
-  let bestCount = -1;
-  for (const [dept, count] of tally) {
-    if (count > bestCount) {
-      bestCount = count;
-      bestDept = dept;
-    }
-  }
-  return bestDept;
-}
+// inferDepartment now lives in ../lib/teacherDepartments.js (shared with
+// the staff-directory route so every teacher picker groups identically).
 
 // Teacher acknowledgement of an ISS-day soft reminder. The teacher clicks
 // "Posted in Canvas" or "Sent hard copy" on the roster banner. We record

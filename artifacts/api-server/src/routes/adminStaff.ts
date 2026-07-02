@@ -141,6 +141,10 @@ const CAP_FLAGS = [
   "capImportAttendance",
   "capImportFast",
   "capImportIready",
+  // Admin-only assignable: NOT added to IMPORT_CAP_FLAGS below, so a
+  // Core-Team-but-not-admin actor cannot delegate it (it gets stripped
+  // from their PATCH). Only full role authority can set it.
+  "capViewFastHistory",
 ] as const;
 type CapFlag = (typeof CAP_FLAGS)[number];
 
@@ -227,6 +231,7 @@ const STAFF_SELECT = {
   capImportAttendance: staffTable.capImportAttendance,
   capImportFast: staffTable.capImportFast,
   capImportIready: staffTable.capImportIready,
+  capViewFastHistory: staffTable.capViewFastHistory,
   defaultRoom: staffTable.defaultRoom,
   houseId: staffTable.houseId,
   department: staffTable.department,
@@ -638,6 +643,20 @@ router.patch(
       res
         .status(403)
         .json({ error: "Only Admin/SuperUser can change role-management capabilities." });
+      return;
+    }
+    // Historical FAST access is Admin/SuperUser-only to assign — Core Team
+    // (incl. cap_staff_roles holders, who otherwise pass hasFullRoleAuthority
+    // and keep the full field set) CANNOT delegate it. Without this explicit
+    // gate a cap_staff_roles actor could grant capViewFastHistory to anyone.
+    if (
+      "capViewFastHistory" in updates &&
+      !actor.isSuperUser &&
+      !actor.isAdmin
+    ) {
+      res
+        .status(403)
+        .json({ error: "Only Admin/SuperUser can assign Historical FAST access." });
       return;
     }
 

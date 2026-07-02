@@ -14,7 +14,9 @@
 //     on-track. This is an ESTIMATE only and is always labelled as such in
 //     the UI — never present it as an actual learning gain.
 
-import type { SubLevel } from "./fastCutScores";
+import type { SubLevel, Subject, PmPlacementSet } from "./fastCutScores";
+import { placeOnChart, hasChart } from "./fastCutScores";
+import type { FastHistoryEntry } from "./fastHistory";
 
 // STRICT rule (per district guidance, confirmed May 2026):
 //   - Moved up a performance level → MET
@@ -82,4 +84,38 @@ export function projectLearningGain(params: {
   if (currentLevel >= 3) return true;
   if (priorSubLevel == null || currentSubLevel == null) return null;
   return currentSubLevel >= priorSubLevel;
+}
+
+// FAST learning-gain green-check for a single (student, subject) row. Uses the
+// SAME strict PM3-to-PM3 rule as the Teacher Roster — prior-year evidence comes
+// from loadFastHistory historical PM3 (NEVER priorYearScore), placed on the
+// test-administration grade chart (grade-1), compared against the current PM3
+// placement carried on the row's `levels`. Single-sourced here so the roster,
+// insights drill-downs, Student Snapshot, and HeartBEAT PDF never drift.
+export function computeRowLearningGain(args: {
+  subject: Subject;
+  grade: number | null;
+  currentLevels: PmPlacementSet | undefined;
+  currentPm3: number | null;
+  history: FastHistoryEntry[];
+}): boolean | null {
+  const { subject, grade, currentLevels, currentPm3, history } = args;
+  if (grade == null) return null;
+  const top = history[0];
+  const priorGrade = grade - 1;
+  const canPlace =
+    !!top &&
+    priorGrade >= 1 &&
+    (subject === "ela" || subject === "math") &&
+    hasChart(subject, priorGrade);
+  const priorPlacement =
+    canPlace && top ? placeOnChart(top.pm3, subject, priorGrade) : null;
+  return decideLearningGain({
+    priorLevel: priorPlacement?.level ?? null,
+    currentLevel: currentLevels?.pm3?.level ?? null,
+    priorScore: top?.pm3 ?? null,
+    currentScore: currentPm3,
+    priorSubLevel: priorPlacement?.subLevel ?? null,
+    currentSubLevel: currentLevels?.pm3?.subLevel ?? null,
+  });
 }

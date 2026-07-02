@@ -565,6 +565,7 @@ function StudentInviteRow({
   const isSendingRow = busyId === sendKey;
   const [linkBusy, setLinkBusy] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
 
   const handleSend = async () => {
     const email = draftEmail.trim();
@@ -573,6 +574,38 @@ function StudentInviteRow({
     if (ok) {
       setDraftEmail("");
       setShowAddForm(false);
+    }
+  };
+
+  const handlePrintHeartbeat = async () => {
+    // Guard against rapid double-clicks — the disabled prop only applies on
+    // the next render tick, so two clicks in one frame would fire twice.
+    if (pdfBusy) return;
+    setPdfBusy(true);
+    try {
+      const res = await authFetch(
+        `/api/staff/heartbeat.pdf?studentId=${student.id}`,
+      );
+      if (!res.ok) {
+        const msg =
+          (await res.json().catch(() => null))?.error ??
+          `Could not generate PDF (${res.status})`;
+        alert("Could not print HeartBEAT: " + msg);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `HeartBEAT-${student.lastName}-${student.firstName}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (err) {
+      alert("Could not print HeartBEAT: " + (err as Error).message);
+    } finally {
+      setPdfBusy(false);
     }
   };
 
@@ -632,6 +665,15 @@ function StudentInviteRow({
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <button
+            type="button"
+            style={btnGhost}
+            title="Download a printable PDF of this student's family HeartBEAT — the same report a parent sees — for a data chat or family meeting. Respects your school's HeartBEAT visibility settings. No email sent."
+            disabled={pdfBusy}
+            onClick={() => void handlePrintHeartbeat()}
+          >
+            {pdfBusy ? "Preparing…" : "Print HeartBEAT"}
+          </button>
           <button
             type="button"
             style={btnGhost}

@@ -38,6 +38,7 @@ import IssSettingsPage from "./components/IssSettingsPage";
 import PickupSettingsPage from "./components/PickupSettingsPage";
 import TourAdminPage, { TourLeadBanner } from "./components/TourAdminPage";
 import TicketingAdminPage from "./components/TicketingAdminPage";
+import FeaturePilotsPanel from "./components/FeaturePilotsPanel";
 import EligibilityHub, {
   EligibilitySettingsPanel,
   UploadTab as AttendanceUploadTab,
@@ -74,6 +75,11 @@ import AstNotificationBell from "./components/AstNotificationBell";
 import StoreFulfillmentBell from "./components/StoreFulfillmentBell";
 import SchoolStoreFulfillmentView from "./components/SchoolStoreFulfillmentView";
 import AstSidebarBadge from "./components/AstSidebarBadge";
+import DataChatsAdminPage, {
+  DataChatReminderIcon,
+  DataChatDeadlineBanner,
+  DataChatQueueModal,
+} from "./components/DataChats";
 import FeatureLicensingAdminPage from "./components/featureLicensing/FeatureLicensingAdminPage";
 import SuperUserHomeRollups from "./components/districtOverview/SuperUserHomeRollups";
 import DistrictOverviewRollups from "./components/districtOverview/DistrictOverviewRollups";
@@ -4009,7 +4015,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "behaviorReview",
   ],
   specialPrograms: ["accommodations", "ese"],
-  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess", "callCampaign", "parentNotifications", "pulloutNotifications"],
+  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess", "callCampaign", "dataChats", "parentNotifications", "pulloutNotifications"],
   people: ["teacherRoster", "staffRoles"],
   // hallPassMgmt is reached via the Hall Passes admin tools; it has no
   // dedicated nav item so we anchor it to School Admin so the sidebar
@@ -5628,6 +5634,9 @@ function App() {
     capImportIready?: boolean;
     capManageDisplays?: boolean;
     capManageDismissal?: boolean;
+    // Admin-only-assignable: Historical FAST multi-year table on the Student
+    // Profile. Core Team cannot delegate this (only Admin can grant it).
+    capViewFastHistory?: boolean;
     capTourNotify?: boolean;
     capManageEsign?: boolean;
     capManageContactInfo?: boolean;
@@ -5650,6 +5659,9 @@ function App() {
   // it to its home view (resets any child-held sub-navigation / drill-down).
   const [navHomeTick, setNavHomeTick] = useState(0);
   const [callWorklistOpen, setCallWorklistOpen] = useState(false);
+  // Data Chats — teacher queue modal, opened from the top-bar reminder
+  // icon or the ≤7-days deadline banner.
+  const [dataChatQueueOpen, setDataChatQueueOpen] = useState(false);
   // True after the user clicked "Open" on a row in the Onboarding
   // Checklist. Drives the floating "← Back to Onboarding" banner that
   // overlays every page until the admin returns to the checklist (or
@@ -5874,6 +5886,7 @@ function App() {
     | "pbisWallets"
     | "pbisUsage"
     | "callCampaign"
+    | "dataChats"
   >("hallPasses");
   // Tile Home is a full-screen launcher that takes over the viewport.
   // When the user enters it from the top-right header button we stash
@@ -9785,6 +9798,16 @@ function App() {
     authUser?.isConfidentialSecretary === true ||
     authUser?.isAthleticDirector === true ||
     authUser?.capManageDismissal === true;
+  // Historical FAST table gate — mirrors server canViewFastHistory()
+  // (isCoreTeam OR the admin-only-assignable capViewFastHistory). Admin/SU
+  // are already core team; capViewFastHistory is grantable ONLY by an admin
+  // (Core Team cannot delegate it). Server enforces the same gate — this
+  // just hides the section for everyone else.
+  const canViewFastHistory =
+    isAdmin ||
+    authUser?.isSuperUser === true ||
+    authUser?.isCoreTeam === true ||
+    authUser?.capViewFastHistory === true;
   // Contact Info Fixes gate — front-office staff (capManageContactInfo) plus
   // admin tier. Mirrors canManageContactInfo() server-side.
   const canManageContactInfo =
@@ -10690,6 +10713,18 @@ function App() {
   const mtssPlansVis = useFeatureVisible("mtssPlans");
   const issDashboardVis = useFeatureVisible("issDashboard");
   const displaysVis = useFeatureVisible("displays");
+  // Feature-checklist completion (July 2026) — modules that shipped
+  // always-on now have real switches. These read /api/me/features, which
+  // includes per-staff pilot grants, so a pilot teacher keeps seeing the
+  // nav entry even while the school-wide toggle is off.
+  const dataChatsVis = useFeatureVisible("dataChats");
+  const pickupVis = useFeatureVisible("pickup");
+  const ticketingVis = useFeatureVisible("ticketing");
+  const toursVis = useFeatureVisible("tours");
+  const esignVis = useFeatureVisible("esign");
+  const brainLabVis = useFeatureVisible("brainLab");
+  const schoolGradeVis = useFeatureVisible("schoolGrade");
+  const safetyPlansVis = useFeatureVisible("safetyPlans");
   const renderGatedNavItem = (
     s: NavSection,
     vis: { visible: boolean; locked: boolean },
@@ -10935,7 +10970,7 @@ function App() {
       emoji: "🧭",
       group: "support",
     });
-    add(isAdmin || isBehaviorSpec || canManageBehaviorLists, {
+    add((isAdmin || isBehaviorSpec || canManageBehaviorLists) && safetyPlansVis.visible, {
       key: "safetyPlans",
       label: "Safety Plans",
       description: "Per-student behavioral & physical safety checklists.",
@@ -11028,7 +11063,7 @@ function App() {
       emoji: "🖥️",
       group: "admin",
     });
-    add(canManagePickupTags, {
+    add(canManagePickupTags && pickupVis.visible, {
       key: "pickupTags",
       label: "Pickup Tags",
       description: "Print car-rider and walker dismissal tags.",
@@ -11298,6 +11333,12 @@ function App() {
           refreshKey={interventionRefreshKey}
           canApproveAst={canApproveAst}
           onOpenAdmin={() => setActiveSection("staffTime")}
+        />
+        {/* Data Chats — purple pill for teachers with campaign chats still
+            to log. Opens the personal queue modal. */}
+        <DataChatReminderIcon
+          visible={Boolean(authUser)}
+          onOpen={() => setDataChatQueueOpen(true)}
         />
         {/* School Store cart — pulses amber for the fulfillment crew when
             there are orders awaiting approval or prep. Clicks into the
@@ -11814,11 +11855,14 @@ function App() {
                 shell (not /pickup/admin) so non-admins don't need to
                 bookmark a separate URL. */}
             {canManagePickupTags &&
-              renderNavItem({
-                key: "pickupTags",
-                label: "Pickup Tags",
-                icon: "🖨️",
-              })}
+              renderGatedNavItem(
+                {
+                  key: "pickupTags",
+                  label: "Pickup Tags",
+                  icon: "🖨️",
+                },
+                pickupVis,
+              )}
             {/* Spotlight — anchored at the bottom of Quick Access by user
                 request so it reads as the "fun bonus" tool sitting under
                 the workhorse items. Custom standout button (not a regular
@@ -12025,11 +12069,14 @@ function App() {
                     mtssPlansVis,
                   )}
                 {canEditSafetyPlanClient &&
-                  renderNavItem({
-                    key: "safetyPlans",
-                    label: "Safety Plans",
-                    icon: IconClipboard,
-                  })}
+                  renderGatedNavItem(
+                    {
+                      key: "safetyPlans",
+                      label: "Safety Plans",
+                      icon: IconClipboard,
+                    },
+                    safetyPlansVis,
+                  )}
                 {canManageMtssPlans &&
                   renderNavItem({
                     key: "interventionReports",
@@ -12065,7 +12112,9 @@ function App() {
                 {isBehaviorSpec &&
                   behaviorSpecNavSections.map(renderNavItem)}
                 {isBehaviorSpec &&
-                  pulseBrainLabNavSections.map(renderNavItem)}
+                  pulseBrainLabNavSections.map((s) =>
+                    renderGatedNavItem(s, brainLabVis),
+                  )}
                 {(isAdmin ||
                   Boolean(authUser?.isSuperUser) ||
                   Boolean(authUser?.isDistrictAdmin) ||
@@ -12188,6 +12237,18 @@ function App() {
                     label: "Call Campaign",
                     icon: IconUser,
                   })}
+                {/* Data Chats — Core Team pushes template-based one-on-one
+                    check-in campaigns to teachers; families can see topics +
+                    goals via the HeartBEAT when the campaign shares. */}
+                {isCoreTeamMember &&
+                  renderGatedNavItem(
+                    {
+                      key: "dataChats",
+                      label: "Data Chats",
+                      icon: IconUser,
+                    },
+                    dataChatsVis,
+                  )}
                 {canManageSettings && (
                   <FeatureGate
                     feature="parentPortal"
@@ -12310,7 +12371,7 @@ function App() {
 
       {/* New tour-request alert — links straight into the pipeline. */}
       <TourLeadBanner
-        visible={canManageTours}
+        visible={canManageTours && toursVis.visible}
         onOpen={() => {
           setActiveSection("settings");
           setSettingsTile("school-tours");
@@ -12327,6 +12388,16 @@ function App() {
         <CallInitiativeWorklistModal
           onClose={() => setCallWorklistOpen(false)}
         />
+      )}
+
+      {/* Data Chats — persistent deadline banner once a campaign the
+          teacher owes chats on is ≤7 days out. */}
+      <DataChatDeadlineBanner
+        visible={Boolean(authUser)}
+        onOpen={() => setDataChatQueueOpen(true)}
+      />
+      {dataChatQueueOpen && (
+        <DataChatQueueModal onClose={() => setDataChatQueueOpen(false)} />
       )}
 
       {activeSection === "spotlight" && (
@@ -17734,7 +17805,12 @@ function App() {
       {activeSection === "callCampaign" &&
         effectiveFeatures.FamilyComm &&
         isCoreTeamMember && <CallInitiativeAdminPanel />}
-      {activeSection === "pulseBrainLab" && isBehaviorSpec && <PulseBrainLabHub />}
+      {/* Data Chats — Core Team admin: templates + campaign launch,
+          compliance, topic coverage, CSV export. */}
+      {activeSection === "dataChats" && isCoreTeamMember && dataChatsVis.visible && (
+        <DataChatsAdminPage />
+      )}
+      {activeSection === "pulseBrainLab" && isBehaviorSpec && brainLabVis.visible && <PulseBrainLabHub />}
       {activeSection === "partneringWithParents" &&
         !isNonExemptOnly &&
         effectiveFeatures.AcademicEvidence && <PartneringWithParentsHub />}
@@ -19923,7 +19999,7 @@ function App() {
         </FeatureGate>
       )}
 
-      {activeSection === "safetyPlans" && canEditSafetyPlanClient && (
+      {activeSection === "safetyPlans" && canEditSafetyPlanClient && safetyPlansVis.visible && (
         <>
           <HowToUseHelp title="How to use Safety Plans">
             <HowToSection title="What this page is">
@@ -20023,6 +20099,7 @@ function App() {
                 authUser?.isGuidanceCounselor ||
                 authUser?.capManageDismissal,
             )}
+            canViewFastHistory={canViewFastHistory}
             onOpenSnapshot={
               isCoreTeamMember
                 ? (sid, label) => {
@@ -22646,7 +22723,7 @@ function App() {
         />
       )}
 
-      {activeSection === "pickupTags" && canManagePickupTags && (
+      {activeSection === "pickupTags" && canManagePickupTags && pickupVis.visible && (
         <PickupTagsPanel />
       )}
 
@@ -22678,23 +22755,23 @@ function App() {
         <RollCallPanel />
       )}
 
-      {activeSection === "settings" && canManageSettings && settingsTile === "pickup" && (
+      {activeSection === "settings" && canManageSettings && settingsTile === "pickup" && pickupVis.visible && (
         <PickupSettingsPage />
       )}
 
-      {activeSection === "settings" && canManageTours && settingsTile === "school-tours" && (
+      {activeSection === "settings" && canManageTours && settingsTile === "school-tours" && toursVis.visible && (
         <TourAdminPage />
       )}
 
-      {activeSection === "settings" && canManageTickets && settingsTile === "event-tickets" && (
+      {activeSection === "settings" && canManageTickets && settingsTile === "event-tickets" && ticketingVis.visible && (
         <TicketingAdminPage />
       )}
 
-      {activeSection === "settings" && canManageEsign && settingsTile === "e-sign" && (
+      {activeSection === "settings" && canManageEsign && settingsTile === "e-sign" && esignVis.visible && (
         <EsignManagerPage />
       )}
 
-      {activeSection === "settings" && canManageSchoolGrade && settingsTile === "school-grade" && (
+      {activeSection === "settings" && canManageSchoolGrade && settingsTile === "school-grade" && schoolGradeVis.visible && (
         <SchoolGradeCalculatorPage />
       )}
 
@@ -22853,6 +22930,15 @@ function App() {
               "Accommodations",
               "LogIntervention",
               "RequestPullout",
+              "DataChats",
+              "Pickup",
+              "Ticketing",
+              "Tours",
+              "Esign",
+              "BrainLab",
+              "Gradebook",
+              "SchoolGrade",
+              "SafetyPlans",
             ] as const;
             const liveCount = featureKeys.reduce((n, k) => {
               const ssRec = schoolSettings as Record<string, unknown>;
@@ -22951,18 +23037,20 @@ function App() {
             // Parent Pick-Up — cutoff time, teacher release scope, and
             // copy-to-clipboard kiosk URLs (curb / walker / teacher /
             // hallway TVs). Visible to anyone who can manage settings.
-            tiles.push({
-              id: "pickup",
-              icon: "🚗",
-              title: "Parent Pick-Up",
-              subtitle:
-                "Reconciliation cutoff, teacher release scope, kiosk URLs.",
-              group: "family-signage",
-            });
+            if (pickupVis.visible) {
+              tiles.push({
+                id: "pickup",
+                icon: "🚗",
+                title: "Parent Pick-Up",
+                subtitle:
+                  "Reconciliation cutoff, teacher release scope, kiosk URLs.",
+                group: "family-signage",
+              });
+            }
             // School Tours — enrollment lead pipeline + public brag-page
             // editor. Visible to tour-notify staff (admin / Core Team /
             // counselors / confidential secretary / capTourNotify).
-            if (canManageTours) {
+            if (canManageTours && toursVis.visible) {
               tiles.push({
                 id: "school-tours",
                 icon: "🎒",
@@ -22975,7 +23063,7 @@ function App() {
             // Event Tickets — free-ticket events (8th-grade promotion,
             // graduation): allocate a per-student quota by grade, email
             // guardians QR tickets, and scan at the gate. Office-side gate.
-            if (canManageTickets) {
+            if (canManageTickets && ticketingVis.visible) {
               tiles.push({
                 id: "event-tickets",
                 icon: "🎟️",
@@ -22988,7 +23076,7 @@ function App() {
             // Document e-Sign — upload a PDF/image, share a signing link
             // (copy or email), collect the signed copy back. Documents are
             // private to the creator. Office-side gate.
-            if (canManageEsign) {
+            if (canManageEsign && esignVis.visible) {
               tiles.push({
                 id: "e-sign",
                 icon: "✍️",
@@ -23014,7 +23102,7 @@ function App() {
             // School Grade Estimated Calculator — admin/Core-Team tool that
             // estimates the Florida MS school grade from FAST + manual
             // components per PM window. Phase 1 (PM1/PM2 estimate).
-            if (canManageSchoolGrade) {
+            if (canManageSchoolGrade && schoolGradeVis.visible) {
               tiles.push({
                 id: "school-grade",
                 icon: "🏫",
@@ -23604,6 +23692,7 @@ function App() {
               authUser?.isGuidanceCounselor ||
               authUser?.capManageDismissal,
           )}
+          canViewFastHistory={canViewFastHistory}
           isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
           // Change-house affordance: mirrors the server-side
           // PATCH /students/:id/house gate (isCoreTeam). Wider than
@@ -24629,9 +24718,21 @@ function App() {
             | "Accommodations"
             | "LogIntervention"
             | "RequestPullout"
-            | "AcademicEvidence";
+            | "AcademicEvidence"
+            | "DataChats"
+            | "Pickup"
+            | "Ticketing"
+            | "Tours"
+            | "Esign"
+            | "BrainLab"
+            | "Gradebook"
+            | "SchoolGrade"
+            | "SafetyPlans";
           label: string;
           help: string;
+          // lib/featureLicensing.ts key — present only for rows that
+          // support per-staff pilots (family-facing rows never do).
+          pilotKey?: string;
         }> = [
           {
             key: "AcademicEvidence",
@@ -24667,6 +24768,59 @@ function App() {
             key: "RequestPullout",
             label: "Request Pullouts",
             help: "Teachers request behavior pullouts from class.",
+          },
+          {
+            key: "SafetyPlans",
+            label: "Safety Plans",
+            help: "Per-student behavioral & physical safety checklists.",
+            pilotKey: "safetyPlans",
+          },
+          {
+            key: "DataChats",
+            label: "Data Chats",
+            help: "Template-based teacher↔student check-in campaigns, follow-ups, and the roster Chat button.",
+            pilotKey: "dataChats",
+          },
+          {
+            key: "Pickup",
+            label: "Parent Pick-Up",
+            help: "Curb keypad, walker gate, pickup tags, and dismissal reconciliation.",
+            pilotKey: "pickup",
+          },
+          {
+            key: "Ticketing",
+            label: "Event Tickets",
+            help: "Free-ticket events with QR tickets emailed to families and gate scanning. Family-facing — no per-staff pilot.",
+          },
+          {
+            key: "Tours",
+            label: "School Tours",
+            help: "Enrollment lead pipeline, public brag page, and live tour capture.",
+            pilotKey: "tours",
+          },
+          {
+            key: "Esign",
+            label: "Document e-Sign",
+            help: "Upload a PDF/image, share a signing link, collect the signed copy.",
+            pilotKey: "esign",
+          },
+          {
+            key: "BrainLab",
+            label: "PulseBrainLab",
+            help: "Brain-based intervention curriculum for behavior-specialist groups.",
+            pilotKey: "brainLab",
+          },
+          {
+            key: "Gradebook",
+            label: "Gradebook Import",
+            help: "Current-grades importer (quarterly gradebook upload) and GPA support.",
+            pilotKey: "gradebook",
+          },
+          {
+            key: "SchoolGrade",
+            label: "School Grade Calculator",
+            help: "Estimated Florida school grade per PM window.",
+            pilotKey: "schoolGrade",
           },
         ];
         const ssRec = schoolSettings as Record<string, unknown>;
@@ -24794,6 +24948,22 @@ function App() {
                 <span style={{ color: "#b91c1c" }}>{settingsError}</span>
               )}
             </div>
+            {/* Off / Pilot / On — per-staff pilots for the rows that
+                support them. Server-enforced in loadEffectiveFeatures;
+                this panel is the management surface. */}
+            <FeaturePilotsPanel
+              features={features
+                .filter(
+                  (f): f is (typeof features)[number] & { pilotKey: string } =>
+                    typeof f.pilotKey === "string",
+                )
+                .map((f) => ({
+                  key: f.pilotKey,
+                  label: f.label,
+                  schoolWideOn: adminVal(f.key) && superVal(f.key),
+                  superOn: superVal(f.key),
+                }))}
+            />
           </div>
         );
       })()}

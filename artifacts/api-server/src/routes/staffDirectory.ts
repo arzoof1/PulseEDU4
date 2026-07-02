@@ -1,8 +1,17 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, staffTable, schoolSettingsTable } from "@workspace/db";
+import {
+  db,
+  staffTable,
+  schoolSettingsTable,
+  classSectionsTable,
+} from "@workspace/db";
 import { and, asc, eq } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
+import {
+  clampDepartment,
+  inferDepartment,
+} from "../lib/teacherDepartments.js";
 
 const router: IRouter = Router();
 
@@ -73,6 +82,7 @@ router.get("/staff-directory", async (req: Request, res: Response) => {
       id: staffTable.id,
       displayName: staffTable.displayName,
       email: staffTable.email,
+      department: staffTable.department,
       defaultRoom: staffTable.defaultRoom,
       externalId: staffTable.externalId,
       workExtension: staffTable.workExtension,
@@ -97,15 +107,42 @@ router.get("/staff-directory", async (req: Request, res: Response) => {
     )
     .orderBy(asc(staffTable.displayName));
 
+  // Infer each teacher's department from their non-planning course names
+  // (same helper the Teacher Roster picker uses) so every teacher chooser
+  // groups identically. Falls back to the SIS staff.department column for
+  // staff without sections; "Other" when neither is available.
+  const sections = await db
+    .select({
+      teacherStaffId: classSectionsTable.teacherStaffId,
+      courseName: classSectionsTable.courseName,
+      isPlanning: classSectionsTable.isPlanning,
+    })
+    .from(classSectionsTable)
+    .where(eq(classSectionsTable.schoolId, schoolId));
+  const coursesByTeacher = new Map<number, string[]>();
+  for (const s of sections) {
+    if (s.isPlanning) continue;
+    const list = coursesByTeacher.get(s.teacherStaffId) ?? [];
+    list.push(s.courseName);
+    coursesByTeacher.set(s.teacherStaffId, list);
+  }
+
   res.json({
     canEdit: ctx.isCoreTeamCaller,
     showCellPhone: ctx.showCellPhone,
-    staff: rows.map((r) => ({
-      ...r,
-      // Hard-redact server-side when caller isn't entitled. Client never
-      // receives the value it isn't allowed to see.
-      cellPhone: ctx.showCellPhone ? r.cellPhone : null,
-    })),
+    staff: rows.map((r) => {
+      const courses = coursesByTeacher.get(r.id) ?? [];
+      return {
+        ...r,
+        department:
+          courses.length > 0
+            ? inferDepartment(courses)
+            : clampDepartment(r.department),
+        // Hard-redact server-side when caller isn't entitled. Client never
+        // receives the value it isn't allowed to see.
+        cellPhone: ctx.showCellPhone ? r.cellPhone : null,
+      };
+    }),
   });
 });
 

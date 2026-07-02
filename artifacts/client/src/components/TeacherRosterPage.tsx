@@ -30,8 +30,9 @@ import GroupInsightsTab from "./GroupInsightsTab";
 import TeacherInstructionLogTab from "./TeacherInstructionLogTab";
 import Tier3WeeklyForm from "./Tier3WeeklyForm";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
-import { LEVEL_BG, LEVEL_FG } from "./FastScorePill";
+import { LEVEL_BG, LEVEL_FG, PmDelta, nextStopCaption } from "./FastScorePill";
 import { TeacherPicker } from "./TeacherPicker";
+import { SelfDataChatModal, FollowupReminders } from "./DataChats";
 import { type TeacherOpt } from "./teacherDepartments";
 
 // Top-level tab in this page. "roster" is the original FAST PM
@@ -82,6 +83,16 @@ interface SubjectBlock {
     pm3: number;
     placement: Placement | null;
   } | null;
+  // Multi-year PM3 growth series (PM3-only), newest-first. `delta` is
+  // the year-over-year change vs. the immediately-older year; null on
+  // the oldest entry. Powers the expandable growth chip. FAST scale
+  // scores are re-referenced per grade, so deltas are directional
+  // signal only — never summed into a total.
+  pm3History: Array<{
+    schoolYear: string;
+    pm3: number;
+    delta: number | null;
+  }>;
   // FAST Learning Gain (server-computed). When true the LG column
   // renders a green check instead of the bucket icon — the student
   // either moved up a performance level vs. prior-year PM3 or
@@ -448,15 +459,7 @@ function ScorePill({
   // still climb available, "At {next}" once the student has met the next
   // sub-level, nothing when they're at L5 / no chart. Renders just below
   // the pill; adds ~12px of vertical space per row.
-  const gap = placement.gap;
-  const nextStop = placement.nextStopLabel;
-  let caption: { text: string; color: string } | null = null;
-  if (gap != null && nextStop) {
-    caption =
-      gap <= 0
-        ? { text: `At ${nextStop}`, color: "#14532d" }
-        : { text: `+${gap} → ${nextStop}`, color: "#3730a3" };
-  }
+  const caption = nextStopCaption(placement.gap, placement.nextStopLabel);
   return (
     <span
       style={{
@@ -859,41 +862,157 @@ const GROUP_DIVIDER: React.CSSProperties = {
   borderLeft: "1px solid #e5e7eb",
 };
 
-// Small "+12 from PM2" / "−8 from PM1" indicator under a PM pill, so
-// teachers don't have to do the subtraction in their head while scanning
-// the roster. Green for growth, red for decline, neutral gray for flat.
-// Renders nothing when either side is missing (most common case: a
-// student who didn't sit one of the windows) — better empty than wrong.
-function PmDelta({
-  from,
-  to,
-  fromLabel,
+// PmDelta ("+12 from PM1") is single-sourced in FastScorePill.tsx and imported
+// above, so the Roster / Snapshot / band-drawer deltas can never diverge.
+
+// Multi-year PM3 growth chip. Compact trigger showing the most-recent
+// year-over-year delta; on click it expands an absolutely-positioned
+// card listing each year's PM3 and its "+pts" change (newest-first).
+// PM3-only, no summed total (FAST scale scores are re-referenced per
+// grade year to year, so a running sum is meaningless). Renders nothing
+// unless there are at least two historical years (one delta to show).
+function Pm3GrowthChip({
+  history,
+  subjectLabel,
 }: {
-  from: number | null;
-  to: number | null;
-  fromLabel: string;
+  history: Array<{ schoolYear: string; pm3: number; delta: number | null }>;
+  subjectLabel: string;
 }) {
-  if (from == null || to == null) return null;
-  const delta = to - from;
-  const sign = delta > 0 ? "+" : delta < 0 ? "−" : "±";
-  const color = delta > 0 ? "#15803d" : delta < 0 ? "#b91c1c" : "#6b7280";
+  const [open, setOpen] = useState(false);
+  // Need ≥2 years for a year-over-year delta to exist.
+  if (history.length < 2) return null;
+  const latest = history[0];
+  const deltaColor = (d: number | null): string =>
+    d == null || d === 0 ? "#6b7280" : d > 0 ? "#15803d" : "#b91c1c";
+  const deltaText = (d: number | null): string => {
+    if (d == null) return "—";
+    const sign = d > 0 ? "+" : d < 0 ? "−" : "±";
+    return `${sign}${Math.abs(d)}`;
+  };
   return (
-    <div
-      title={`${sign}${Math.abs(delta)} scale-score points vs ${fromLabel}`}
-      style={{
-        marginTop: 2,
-        fontSize: 10,
-        lineHeight: 1.2,
-        color,
-        fontWeight: 600,
-        whiteSpace: "nowrap",
-      }}
-    >
-      {sign}
-      {Math.abs(delta)}{" "}
-      <span style={{ color: "#9ca3af", fontWeight: 400 }}>
-        from {fromLabel}
-      </span>
+    <div style={{ position: "relative", marginTop: 3 }}>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        title={`${subjectLabel} multi-year PM3 growth — click for year-by-year detail`}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 3,
+          padding: "1px 6px",
+          border: "1px solid var(--border, #d1d5db)",
+          borderRadius: 999,
+          background: open ? "var(--surface, #f3f4f6)" : "transparent",
+          color: deltaColor(latest.delta),
+          font: "inherit",
+          fontSize: 10,
+          fontWeight: 700,
+          lineHeight: 1.4,
+          cursor: "pointer",
+          whiteSpace: "nowrap",
+        }}
+      >
+        <span aria-hidden style={{ fontSize: 9 }}>
+          {latest.delta != null && latest.delta > 0
+            ? "▲"
+            : latest.delta != null && latest.delta < 0
+              ? "▼"
+              : "•"}
+        </span>
+        {deltaText(latest.delta)}
+        <span style={{ color: "#9ca3af", fontWeight: 500 }}>growth</span>
+      </button>
+      {open && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 30,
+            minWidth: 150,
+            padding: "8px 10px",
+            background: "var(--surface, #ffffff)",
+            border: "1px solid var(--border, #d1d5db)",
+            borderRadius: 8,
+            boxShadow: "0 6px 20px rgba(0,0,0,0.18)",
+            textAlign: "left",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              color: "var(--text-muted, #6b7280)",
+              textTransform: "uppercase",
+              letterSpacing: 0.4,
+              marginBottom: 4,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {subjectLabel} PM3 growth
+          </div>
+          <table
+            style={{
+              borderCollapse: "collapse",
+              fontSize: 12,
+              width: "100%",
+            }}
+          >
+            <tbody>
+              {history.map((h) => (
+                <tr key={h.schoolYear}>
+                  <td
+                    style={{
+                      padding: "2px 8px 2px 0",
+                      color: "var(--text, #374151)",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {h.schoolYear}
+                  </td>
+                  <td
+                    style={{
+                      padding: "2px 8px 2px 0",
+                      fontWeight: 600,
+                      color: "var(--text, #374151)",
+                      textAlign: "right",
+                    }}
+                  >
+                    {h.pm3}
+                  </td>
+                  <td
+                    style={{
+                      padding: "2px 0",
+                      fontWeight: 700,
+                      color: deltaColor(h.delta),
+                      textAlign: "right",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {deltaText(h.delta)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div
+            style={{
+              marginTop: 5,
+              fontSize: 9,
+              lineHeight: 1.3,
+              color: "#9ca3af",
+            }}
+          >
+            Year-over-year PM3 change. Scale scores re-reference each
+            grade, so changes are directional — not a running total.
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -985,6 +1104,10 @@ function SubjectCells({
               >
                 {prior.schoolYear}
               </div>
+              <Pm3GrowthChip
+                history={block.pm3History}
+                subjectLabel={subjectLabel}
+              />
             </>
           ) : (
             <span style={{ color: "#d1d5db", fontSize: 12 }}>—</span>
@@ -2002,6 +2125,28 @@ export default function TeacherRosterPage({
     studentName: string;
     localSisId?: string | null;
   } | null>(null);
+  // Inline data-chat icon: which student is being chatted with, plus the
+  // set of students still PENDING in one of this teacher's active
+  // campaigns (tints the icon purple + logging counts toward the campaign).
+  const [chatModal, setChatModal] = useState<string | null>(null);
+  const [pendingChatIds, setPendingChatIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [chatTick, setChatTick] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    authFetch("/api/data-chats/pending-students", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { studentIds?: string[] } | null) => {
+        if (!cancelled && Array.isArray(d?.studentIds)) {
+          setPendingChatIds(new Set(d.studentIds));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [chatTick]);
   const [negBehaviors, setNegBehaviors] = useState<NegBehavior[]>([]);
   const [ivTypes, setIvTypes] = useState<IvType[]>([]);
   useEffect(() => {
@@ -2713,6 +2858,8 @@ export default function TeacherRosterPage({
         </label>
       </div>
 
+      <FollowupReminders onOpenChat={(sid) => setChatModal(sid)} />
+
       {summary && (
         <div style={{ fontSize: 13, color: "#374151", marginBottom: 12 }}>
           {summary.total} student{summary.total === 1 ? "" : "s"} •{" "}
@@ -3011,6 +3158,41 @@ export default function TeacherRosterPage({
                         <span aria-hidden="true">📝</span>
                         <span>Log</span>
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => setChatModal(row.studentId)}
+                        title={
+                          pendingChatIds.has(row.studentId)
+                            ? `Data chat pending for ${row.firstName} ${row.lastName} — log it now`
+                            : `Log a data chat with ${row.firstName} ${row.lastName}`
+                        }
+                        aria-label={`Log a data chat with ${row.firstName} ${row.lastName}`}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          border: pendingChatIds.has(row.studentId)
+                            ? "1px solid #c4b5fd"
+                            : "1px solid #e2e8f0",
+                          background: pendingChatIds.has(row.studentId)
+                            ? "#f5f3ff"
+                            : "#f8fafc",
+                          color: pendingChatIds.has(row.studentId)
+                            ? "#6d28d9"
+                            : "#475569",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          lineHeight: 1.2,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span aria-hidden="true">💬</span>
+                        <span>
+                          {pendingChatIds.has(row.studentId) ? "Chat!" : "Chat"}
+                        </span>
+                      </button>
                       {sepSectionId != null && (() => {
                         const n = sepCountByStudent.get(row.studentId) ?? 0;
                         // Two-state icon per the product spec:
@@ -3284,6 +3466,14 @@ export default function TeacherRosterPage({
             />
           </div>
         </div>
+      )}
+      {chatModal && (
+        <SelfDataChatModal
+          key={chatModal}
+          studentId={chatModal}
+          onClose={() => setChatModal(null)}
+          onLogged={() => setChatTick((n) => n + 1)}
+        />
       )}
     </div>
   );

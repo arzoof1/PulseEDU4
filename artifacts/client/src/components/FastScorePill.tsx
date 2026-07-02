@@ -155,6 +155,59 @@ export function PillViewToggle({
   );
 }
 
+// Shared "+12 → High 1" / "At Level 3" caption for a PM pill, single-sourced
+// so the Teacher Roster, Student Snapshot, and Insights band drawer render the
+// identical wording/colors. `gap` > 0 → still climbing (indigo); `gap` <= 0 →
+// met the next stop (green); null when no chart / already at L5.
+export function nextStopCaption(
+  gap: number | null | undefined,
+  nextStopLabel: string | null | undefined,
+): { text: string; color: string } | null {
+  if (gap != null && nextStopLabel) {
+    return gap <= 0
+      ? { text: `At ${nextStopLabel}`, color: "#14532d" }
+      : { text: `+${gap} → ${nextStopLabel}`, color: "#3730a3" };
+  }
+  return null;
+}
+
+// Small "+12 from PM1" / "−8 from PM2" scale-score delta rendered under a PM
+// pill, so staff don't have to do the subtraction in their head. Green for
+// growth, red for decline, neutral gray for flat. Renders nothing when either
+// side is missing — better empty than wrong. Single-sourced across the Roster,
+// Snapshot, and band drawer.
+export function PmDelta({
+  from,
+  to,
+  fromLabel,
+}: {
+  from: number | null | undefined;
+  to: number | null | undefined;
+  fromLabel: string;
+}) {
+  if (from == null || to == null) return null;
+  const delta = to - from;
+  const sign = delta > 0 ? "+" : delta < 0 ? "−" : "±";
+  const color = delta > 0 ? "#15803d" : delta < 0 ? "#b91c1c" : "#6b7280";
+  return (
+    <div
+      title={`${sign}${Math.abs(delta)} scale-score points vs ${fromLabel}`}
+      style={{
+        marginTop: 2,
+        fontSize: 10,
+        lineHeight: 1.2,
+        color,
+        fontWeight: 600,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {sign}
+      {Math.abs(delta)}{" "}
+      <span style={{ color: "#9ca3af", fontWeight: 400 }}>from {fromLabel}</span>
+    </div>
+  );
+}
+
 const wrapStyle: React.CSSProperties = {
   display: "inline-flex",
   flexDirection: "column",

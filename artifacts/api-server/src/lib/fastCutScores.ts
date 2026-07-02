@@ -578,3 +578,42 @@ export function placePmSet(
     pm3: prior(scores.pm3),
   };
 }
+
+// A placement enriched with the "points to the next sub-band" caption used by
+// the Teacher Roster / Student Snapshot pills ("+12 → High 1"). Gap is computed
+// against the CURRENT-grade chart (same convention as the FAST Benchmarks tab)
+// so the number reads as "points to clear our chart's next stop" — what staff
+// expect to see. Kept here (not in a route) so every surface shares one
+// implementation and the captions can never silently diverge.
+export interface PlacementWithGap extends Placement {
+  gap: number | null;
+  nextStopLabel: string | null;
+}
+
+export function withGap(
+  placement: Placement | null,
+  pmScore: number | null,
+  subject: Subject,
+  grade: number,
+): PlacementWithGap | null {
+  if (!placement) return null;
+  if (pmScore == null) {
+    return { ...placement, gap: null, nextStopLabel: null };
+  }
+  const target = bucketTarget(subject, grade, placement.subLevel);
+  if (!target) {
+    return { ...placement, gap: null, nextStopLabel: null };
+  }
+  return {
+    ...placement,
+    gap: target.score - pmScore,
+    nextStopLabel: SUB_LEVEL_LABEL[target.nextStop],
+  };
+}
+
+export interface PmPlacementSetWithGap {
+  priorYearScore: PlacementWithGap | null;
+  pm1: PlacementWithGap | null;
+  pm2: PlacementWithGap | null;
+  pm3: PlacementWithGap | null;
+}

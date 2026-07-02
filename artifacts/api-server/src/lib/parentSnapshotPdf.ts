@@ -102,6 +102,7 @@ function drawDocument(
   if (sec.mtss) drawMtssBlock(doc, s);
   if (sec.interventions) drawInterventionsBlock(doc, s);
   if (sec.staffNotes) drawStaffNotesBlock(doc, s);
+  if (sec.dataChats) drawDataChatsBlock(doc, s);
   if (sec.oss) drawOssBlock(doc, s);
   if (sec.reteach) drawReteachBlock(doc, s);
   // Accommodations pinned to the bottom of the stack (matches the dashboard).
@@ -357,24 +358,8 @@ function drawLostInstructionBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
       value: `${li.tardies.minutes} min`,
       color: COLORS.muted,
     });
-    stats.push({
-      label: `Absences · ${li.absences.count}`,
-      value: `${li.absences.minutes} min`,
-      color: COLORS.muted,
-    });
   }
   drawStatRow(doc, stats);
-  if (s.sectionsAvailable.attendance) {
-    doc.moveDown(0.2);
-    doc
-      .fontSize(8)
-      .font("Helvetica")
-      .fillColor(COLORS.muted)
-      .text(
-        "Absences are estimated from class periods with no door-kiosk check-in, not official daily attendance.",
-      );
-    doc.fillColor(COLORS.text);
-  }
 }
 
 // ---------- Attendance / Hall passes ----------
@@ -392,23 +377,40 @@ function drawAttendanceBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
       value: String(s.attendance.checkInsThisWeek),
       color: COLORS.muted,
     });
+    // Official absences from the Eligibility Hub upload — omitted entirely
+    // when the school isn't using the Eligibility Hub (`official` null).
+    if (s.attendance.official) {
+      stats.push({
+        label: "Days absent (official)",
+        value: String(s.attendance.official.daysAbsent),
+        color:
+          s.attendance.official.daysAbsent === 0
+            ? COLORS.positive
+            : COLORS.warn,
+      });
+    }
     // Aggregate attendance metrics mirroring the parent Dashboard.
-    // Render dashes when the school hasn't loaded any attendance-day
-    // data yet so the PDF doesn't pretend to know a 0% rate.
-    stats.push({
-      label: "Attendance (YTD)",
-      value: s.attendance.pct.ytd ? `${s.attendance.pct.ytd.pct}%` : "—",
-      color: COLORS.accent,
-    });
-    stats.push({
-      label: "Attendance (30d)",
-      value: s.attendance.pct.last30 ? `${s.attendance.pct.last30.pct}%` : "—",
-      color: COLORS.accent,
-    });
+    // Omitted entirely when the school hasn't loaded any attendance-day
+    // data (null buckets) so the PDF never shows placeholder dashes.
+    if (s.attendance.pct.ytd) {
+      stats.push({
+        label: "Attendance (YTD)",
+        value: `${s.attendance.pct.ytd.pct}%`,
+        color: COLORS.accent,
+      });
+    }
+    if (s.attendance.pct.last30) {
+      stats.push({
+        label: "Attendance (30d)",
+        value: `${s.attendance.pct.last30.pct}%`,
+        color: COLORS.accent,
+      });
+    }
     // Period-level on-time streak — only when the school has a default
-    // bell schedule configured (otherwise `onTimeStreak` is null and we
-    // skip the streak tiles entirely, matching the parent dashboard).
-    if (s.attendance.onTimeStreak) {
+    // bell schedule configured AND attendance data actually produced
+    // counted periods (otherwise the school isn't using this system and
+    // the tiles are omitted, matching the parent dashboard).
+    if (s.attendance.onTimeStreak && s.attendance.onTimeStreak.countedPeriods > 0) {
       stats.push({
         label: "On-time streak",
         value: `${s.attendance.onTimeStreak.current} pds`,
@@ -519,21 +521,56 @@ function drawAccommodationsBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
 }
 
 // ---------- FAST scores ----------
+// Achievement-level colors, single-sourced in intent with the client
+// FastScorePill palette (L1 red, L2 orange, L3 green, L4 blue, L5 purple).
+// Redefined here because the server cannot import client code.
+const FAST_LEVEL_COLOR: Record<1 | 2 | 3 | 4 | 5, string> = {
+  1: "#dc2626",
+  2: "#f59e0b",
+  3: "#16a34a",
+  4: "#2563eb",
+  5: "#7c3aed",
+};
+
+// WinAnsi built-in fonts cannot render ✓, so the learning-gain check is drawn
+// as a small vector stroke (save/restore-wrapped, per the pdfkit glyph limit).
+function drawFastCheck(
+  doc: PDFKit.PDFDocument,
+  x: number,
+  y: number,
+  size: number,
+  color: string,
+) {
+  doc.save();
+  doc
+    .lineWidth(1.4)
+    .strokeColor(color)
+    .moveTo(x, y + size * 0.55)
+    .lineTo(x + size * 0.38, y + size * 0.92)
+    .lineTo(x + size, y + size * 0.05)
+    .stroke();
+  doc.restore();
+}
+
 function drawFastScoresBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
   sectionTitle(doc, "FAST Progress Monitoring");
   if (s.fastScores.length === 0) {
     drawEmpty(doc, "No FAST results yet.");
     return;
   }
-  // Mini table: Subject | PM1 | PM2 | PM3 | Prior year
+  // Family view: colored achievement sub-level per window (e.g. "1.2") with
+  // points-to-next-level beneath PM3 and a learning-gain check. Static — no
+  // scale-score flip (that interactive affordance is staff-only). Numbers are
+  // single-sourced with the Teacher Roster via loadStudentFastParity.
   const left = doc.page.margins.left;
   const right = doc.page.width - doc.page.margins.right;
   const colW = (right - left) / 5;
   const rowY = doc.y;
-  ensureSpace(doc, 16 + 16 * (s.fastScores.length + 1));
+  // Each subject needs a level row + a caption row (pts-to-next / LG).
+  ensureSpace(doc, 20 + 34 * (s.fastScores.length + 1));
 
   doc.fontSize(10).font("Helvetica-Bold").fillColor(COLORS.muted);
-  ["Subject", "PM1", "PM2", "PM3", "Prior yr"].forEach((h, i) => {
+  ["Subject", "Prior yr", "PM1", "PM2", "PM3"].forEach((h, i) => {
     doc.text(h, left + colW * i, rowY, { width: colW - 8 });
   });
   let y = rowY + 16;
@@ -544,23 +581,66 @@ function drawFastScoresBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
     .strokeColor(COLORS.border)
     .stroke();
 
-  doc.font("Helvetica").fillColor(COLORS.text);
+  const levelCell = (
+    placement: { level: 1 | 2 | 3 | 4 | 5; subLevel: string } | null,
+    score: number | null,
+    colIdx: number,
+    rowYy: number,
+    bq: boolean,
+  ) => {
+    const x = left + colW * colIdx;
+    if (placement == null || score == null) {
+      doc
+        .font("Helvetica")
+        .fontSize(11)
+        .fillColor(COLORS.muted)
+        .text("—", x, rowYy, { width: colW - 8 });
+      return;
+    }
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(12)
+      .fillColor(FAST_LEVEL_COLOR[placement.level])
+      .text(`${placement.subLevel}${bq ? " · BQ" : ""}`, x, rowYy, {
+        width: colW - 8,
+      });
+  };
+
   for (const r of s.fastScores) {
-    const subj = r.subject.toUpperCase();
-    const cells = [
-      subj,
-      r.pm1 == null ? "—" : String(r.pm1),
-      r.pm2 == null ? "—" : String(r.pm2),
-      r.pm3 == null ? "—" : String(r.pm3),
-      r.priorYearScore == null
-        ? "—"
-        : `${r.priorYearScore}${r.priorYearBq ? " · BQ" : ""}`,
-    ];
-    cells.forEach((c, i) => {
-      doc.text(c, left + colW * i, y, { width: colW - 8 });
-    });
-    y += 16;
+    // Subject label
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(11)
+      .fillColor(COLORS.text)
+      .text(r.subject.toUpperCase(), left, y, { width: colW - 8 });
+    // Colored sub-level per window
+    levelCell(r.levels.priorYearScore, r.priorYearScore, 1, y, r.priorYearBq);
+    levelCell(r.levels.pm1, r.pm1, 2, y, false);
+    levelCell(r.levels.pm2, r.pm2, 3, y, false);
+    levelCell(r.levels.pm3, r.pm3, 4, y, false);
+
+    // Caption row: LG under the subject, points-to-next-level under PM3.
+    const capY = y + 15;
+    if (r.learningGain === true) {
+      drawFastCheck(doc, left, capY + 1, 8, FAST_LEVEL_COLOR[3]);
+      doc
+        .font("Helvetica")
+        .fontSize(8)
+        .fillColor(FAST_LEVEL_COLOR[3])
+        .text("Learning gain", left + 12, capY, { width: colW - 12 });
+    }
+    if (r.ptsToNextLevel != null && r.ptsToNextLevel > 0) {
+      doc
+        .font("Helvetica")
+        .fontSize(8)
+        .fillColor(COLORS.muted)
+        .text(`${r.ptsToNextLevel} pts to next level`, left + colW * 4, capY, {
+          width: colW - 4,
+        });
+    }
+    y = capY + 16;
   }
+  doc.fillColor(COLORS.text);
   doc.y = y + 4;
 }
 
@@ -693,6 +773,57 @@ function drawStaffNotesBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
       .text(`   · ${n.staffName} · ${fmtDateTime(n.createdAt)}`);
     doc.fillColor(COLORS.text).fontSize(10).text(n.noteText, { indent: 0 });
     doc.moveDown(0.3);
+  }
+}
+
+// ---------- Data Chats (teacher check-ins) ----------
+// Shareable rows only: topics discussed + the student's goal. The
+// teacher's private note is never in the snapshot payload, so it can
+// never render here.
+// pdfkit's built-in Helvetica is WinAnsi-only — arrows/checkmarks/emoji in
+// user-authored text (checklist labels, goals) render as garbage bytes.
+// Swap the common offenders for ASCII equivalents before drawing.
+function winAnsiSafe(t: string): string {
+  return t
+    .replace(/\u2192/g, "->")
+    .replace(/\u2190/g, "<-")
+    .replace(/[\u2713\u2714]/g, "*")
+    .replace(/[^\x20-\x7E\u00A0-\u00FF\u2018\u2019\u201C\u201D\u2013\u2014\u00B7]/g, "");
+}
+
+function drawDataChatsBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
+  sectionTitle(doc, "Data Chats — Teacher Check-Ins");
+  if (s.dataChats.length === 0) {
+    drawEmpty(doc, "No data chats logged yet.");
+    return;
+  }
+  for (const c of s.dataChats.slice(0, 5)) {
+    ensureSpace(doc, 40);
+    doc
+      .fontSize(10)
+      .font("Helvetica-Bold")
+      .fillColor(COLORS.accent)
+      .text(winAnsiSafe(c.campaignName), { continued: true })
+      .fillColor(COLORS.muted)
+      .font("Helvetica")
+      .text(`   · ${winAnsiSafe(c.teacherName)} · ${fmtDate(c.date)}`);
+    if (c.discussedTopics.length > 0) {
+      doc
+        .fillColor(COLORS.text)
+        .fontSize(10)
+        .text(`We talked about: ${c.discussedTopics.map(winAnsiSafe).join(" · ")}`);
+    }
+    if (c.goal) {
+      doc
+        .fillColor(COLORS.text)
+        .fontSize(10)
+        .font("Helvetica-Bold")
+        .text("Goal: ", { continued: true })
+        .font("Helvetica")
+        .text(winAnsiSafe(c.goal));
+    }
+    doc.fillColor(COLORS.text);
+    doc.moveDown(0.35);
   }
 }
 

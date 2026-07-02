@@ -10,6 +10,7 @@ import {
   schoolFeatureOverridesTable,
   schoolsTable,
   schoolSettingsTable,
+  staffFeaturePilotsTable,
   staffTable,
 } from "@workspace/db";
 import { verifyParentAuthToken } from "./authToken.js";
@@ -77,8 +78,23 @@ export type FeatureSpec = {
     | "superFeatureCompTime"
     | "superFeatureEligibility"
     | "superFeatureSchoolStoreNotify"
+    | "superFeatureDataChats"
+    | "superFeaturePickup"
+    | "superFeatureTicketing"
+    | "superFeatureTours"
+    | "superFeatureEsign"
+    | "superFeatureBrainLab"
+    | "superFeatureGradebook"
+    | "superFeatureSchoolGrade"
+    | "superFeatureSafetyPlans"
     | null;
   quotas: QuotaSpec[];
+  // Staff-pilot eligibility. Default (undefined) = pilotable. Set FALSE
+  // for family-facing features where a half-piloted rollout would look
+  // broken/inconsistent to parents (only pilot teachers' actions would
+  // reach families). Enforced in the pilot-management API, mirrored in
+  // the School Features UI.
+  pilotable?: boolean;
   // Dependency metadata consumed by the plan + per-school override editors to
   // highlight (and, for `requires`, hard-block) incoherent feature combos.
   //   requires:   HARD deps — this feature is non-functional without the
@@ -116,6 +132,7 @@ export const FEATURE_KEYS: FeatureSpec[] = [
     label: "Family Communication",
     description: "Two-way parent messaging, contact log.",
     schoolSettingsKey: "superFeatureFamilyComm",
+    pilotable: false,
     quotas: [],
   },
   {
@@ -142,6 +159,7 @@ export const FEATURE_KEYS: FeatureSpec[] = [
     schoolSettingsKey: "superFeatureSchoolStoreNotify",
     requires: ["schoolStore"],
     recommends: ["familyComm"],
+    pilotable: false,
     quotas: [],
   },
   {
@@ -248,6 +266,7 @@ export const FEATURE_KEYS: FeatureSpec[] = [
       "Secure parent-facing portal with HeartBEAT data + PDF reports.",
     schoolSettingsKey: "superFeatureParentPortal",
     recommends: ["familyComm"],
+    pilotable: false,
     quotas: [
       {
         name: "maxParentAccounts",
@@ -280,6 +299,86 @@ export const FEATURE_KEYS: FeatureSpec[] = [
     description:
       "Attendance-based participation eligibility for athletics, clubs, and activities: rosters, at-risk report, parent notes, daily upload, notifications.",
     schoolSettingsKey: "superFeatureEligibility",
+    quotas: [],
+  },
+  // ---------------------------------------------------------------------------
+  // Feature-checklist completion (July 2026): modules that shipped always-on
+  // now have real switches. Runtime columns default TRUE (see seed.ts) so
+  // existing schools see no change.
+  // ---------------------------------------------------------------------------
+  {
+    key: "dataChats",
+    label: "Data Chat Campaigns",
+    description:
+      "Admin-pushed teacher↔student check-in campaigns, queue, follow-ups, compliance reports.",
+    schoolSettingsKey: "superFeatureDataChats",
+    recommends: ["academics"],
+    quotas: [],
+  },
+  {
+    key: "pickup",
+    label: "Parent Pick-Up",
+    description:
+      "Curb keypad, walker gate, car-tag authorizations, dismissal reconciliation.",
+    schoolSettingsKey: "superFeaturePickup",
+    quotas: [],
+  },
+  {
+    key: "ticketing",
+    label: "Event Ticketing",
+    description:
+      "Free-ticket events with per-grade quotas, QR tickets, volunteer scanning.",
+    schoolSettingsKey: "superFeatureTicketing",
+    pilotable: false,
+    quotas: [],
+  },
+  {
+    key: "tours",
+    label: "School Tours",
+    description:
+      "Public brag page, tour-request lead pipeline, live tour capture, conversion reports.",
+    schoolSettingsKey: "superFeatureTours",
+    quotas: [],
+  },
+  {
+    key: "esign",
+    label: "E-Sign",
+    description: "Staff-created e-signature documents with public sign links.",
+    schoolSettingsKey: "superFeatureEsign",
+    quotas: [],
+  },
+  {
+    key: "brainLab",
+    label: "PulseBrainLab",
+    description:
+      "Brain-based intervention curriculum: groups, sessions, scan routing, family mirror.",
+    schoolSettingsKey: "superFeatureBrainLab",
+    quotas: [],
+  },
+  {
+    key: "gradebook",
+    label: "Gradebook / Current Grades",
+    description:
+      "Gradebook xlsx importer, current-grade surfaces, optional GPA.",
+    schoolSettingsKey: "superFeatureGradebook",
+    requires: ["dataImports"],
+    quotas: [],
+  },
+  {
+    key: "schoolGrade",
+    label: "School Grade Calculator",
+    description:
+      "Florida MS school-grade estimate per PM window (admin / Core Team).",
+    schoolSettingsKey: "superFeatureSchoolGrade",
+    recommends: ["academics"],
+    quotas: [],
+  },
+  {
+    key: "safetyPlans",
+    label: "Safety Plans",
+    description:
+      "Per-student behavioral/physical safety checklists with audit logs.",
+    schoolSettingsKey: "superFeatureSafetyPlans",
     quotas: [],
   },
 ];
@@ -344,6 +443,25 @@ export async function loadEffectiveFeatures(
       )[0]
     : null;
 
+  // Staff-pilot grants for the acting staff member (if this is a staff
+  // session). A pilot row lets a specific staffer use a feature whose
+  // school-wide admin toggle is OFF — but only when the district half
+  // (super_feature_*) is licensed. District license always wins.
+  const actorStaffId = req.staffId ?? null;
+  const pilotKeys = new Set<string>();
+  if (actorStaffId) {
+    const pilotRows = await db
+      .select({ featureKey: staffFeaturePilotsTable.featureKey })
+      .from(staffFeaturePilotsTable)
+      .where(
+        and(
+          eq(staffFeaturePilotsTable.schoolId, schoolId),
+          eq(staffFeaturePilotsTable.staffId, actorStaffId),
+        ),
+      );
+    for (const r of pilotRows) pilotKeys.add(r.featureKey);
+  }
+
   const overrides = await db
     .select()
     .from(schoolFeatureOverridesTable)
@@ -385,6 +503,17 @@ export async function loadEffectiveFeatures(
       // to turn it off."
       const adminOn = adminKey in row ? Boolean(row[adminKey]) : true;
       enabled = superOn && adminOn;
+      // Staff pilot: school toggle OFF, but this staffer has a pilot
+      // grant AND the district licenses the feature AND the feature is
+      // pilotable. Never widens past the district gate.
+      if (
+        !enabled &&
+        superOn &&
+        spec.pilotable !== false &&
+        pilotKeys.has(spec.key)
+      ) {
+        enabled = true;
+      }
     } else if (planRow?.features?.[spec.key]) {
       enabled = true;
     }

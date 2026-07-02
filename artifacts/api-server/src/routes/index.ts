@@ -80,6 +80,7 @@ import myWatchlistRouter from "./myWatchlist";
 import heartbeatSettingsRouter from "./heartbeatSettings";
 import parentHeartbeatPrefsRouter from "./parentHeartbeatPrefs";
 import parentSnapshotPdfRouter from "./parentSnapshotPdf";
+import staffHeartbeatPdfRouter from "./staffHeartbeatPdf";
 import displaysRouter from "./displays";
 import displayOverridesRouter from "./displayOverrides";
 import uiPrefsRouter from "./uiPrefs";
@@ -121,6 +122,7 @@ import academicEvidenceParentRouter from "./academicEvidenceParent";
 import sisSyncRouter from "./sisSync";
 import { eligibilityRouter } from "./eligibility";
 import communicationsRouter from "./communications";
+import dataChatsRouter from "./dataChats";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -135,6 +137,7 @@ router.use(healthRouter);
 // otherwise shadow `GET /students/id-badges.pdf`.
 router.use(studentIdBadgesRouter);
 router.use(studentLookupRouter);
+router.use(staffHeartbeatPdfRouter);
 router.use(studentsRouter);
 router.use(hallPassesRouter);
 router.use(coverageRouter);
@@ -229,6 +232,39 @@ router.use("/parent/messages", requireFeatureForParent("familyComm"));
 // Family Communication license. Core-Team gate is enforced inside the router.
 router.use("/pulse-dna", requireFeature("familyComm"));
 
+// -----------------------------------------------------------------------------
+// Feature-checklist completion gates (July 2026). These modules shipped
+// always-on and now have real two-tier switches (defaults TRUE — see
+// seed.ts). Sub-path mounts leave adjacent public/token surfaces alone:
+//   - /ticketing/scan stays open — volunteer scanning is token-based and
+//     already-issued tickets must remain scannable at the gate.
+//   - /esign/sign/:token stays open — public signer links are token-gated.
+//   - /tours/public/* (family brag page + request form) and /tours/walk/*
+//     (token-gated live tour capture) stay open; staff pipeline is gated.
+// -----------------------------------------------------------------------------
+router.use("/data-chats", requireFeature("dataChats"));
+router.use("/pickup", requireFeature("pickup"));
+router.use("/safety-plans", requireFeature("safetyPlans"));
+router.use("/school-grade", requireFeature("schoolGrade"));
+router.use("/ticketing/events", requireFeature("ticketing"));
+router.use("/ticketing/grants", requireFeature("ticketing"));
+router.use("/ticketing/tickets", requireFeature("ticketing"));
+router.use("/ticketing/scanner-links", requireFeature("ticketing"));
+router.use("/parent/tickets", requireFeatureForParent("ticketing"));
+router.use("/esign/documents", requireFeature("esign"));
+router.use("/pulse-brain-lab", requireFeature("brainLab"));
+router.use("/parent/brain-lab", requireFeatureForParent("brainLab"));
+router.use("/tours", (req, res, next) => {
+  // Public brag page + token-gated live-walk capture bypass the license
+  // gate (families and mid-tour guides shouldn't be cut off); everything
+  // else under /tours is the staff pipeline.
+  if (req.path.startsWith("/public/") || req.path.startsWith("/walk/")) {
+    next();
+    return;
+  }
+  requireFeature("tours")(req, res, next);
+});
+
 router.use(parentEmailRouter);
 router.use(pulloutReasonsRouter);
 router.use(pulloutNoteTemplatesRouter);
@@ -315,5 +351,6 @@ router.use(academicEvidenceParentRouter);
 router.use(sisSyncRouter);
 router.use(eligibilityRouter);
 router.use(communicationsRouter);
+router.use(dataChatsRouter);
 
 export default router;

@@ -21,6 +21,12 @@ import {
 import { authFetch } from "../lib/authToken";
 import ChangeHouseModal from "./ChangeHouseModal";
 import StudentHomeCards from "./pulseBrainLab/StudentHomeCards";
+import {
+  FastScorePill,
+  PillViewContext,
+  PillViewToggle,
+  type PillView,
+} from "./FastScorePill";
 
 type WindowKey = "3" | "7" | "15" | "30" | "custom";
 
@@ -668,6 +674,285 @@ function ScheduleSection({ studentId }: { studentId: string }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Historical FAST — admin / Core-Team (or admin-delegated capViewFastHistory)
+// multi-year PM1/PM2/PM3 table. Lazy-loaded on open, keyed by studentId so it
+// remounts when the reader switches students. Backed by the visibility- and
+// capability-gated GET /api/student-lookup/:studentId/fast-history.
+//
+// Deliberately NOT rendered on the teacher roster, parent portal, or
+// HeartBEAT. Pills are single-sourced via FastScorePill so levels/colors match
+// the roster + Insights exactly. Growth is WITHIN-year only (same grade/scale);
+// there is intentionally no cross-grade summed total.
+// ---------------------------------------------------------------------------
+type FastHistPill = {
+  score: number;
+  level: 1 | 2 | 3 | 4 | 5;
+  subLevel: string;
+} | null;
+
+interface FastHistRow {
+  schoolYear: string;
+  gradeInYear: number | null;
+  isCurrent: boolean;
+  pm1: FastHistPill;
+  pm2: FastHistPill;
+  pm3: FastHistPill;
+  withinYearGrowth: number | null;
+  learningGain: boolean | null;
+}
+
+interface FastHistSubject {
+  subject: string;
+  rows: FastHistRow[];
+}
+
+interface FastHistResponse {
+  localSisId: string | null;
+  currentGrade: number | null;
+  currentSchoolYear: string;
+  subjects: FastHistSubject[];
+}
+
+const SUBJECT_LABEL: Record<string, string> = {
+  ela: "ELA",
+  math: "Math",
+};
+
+function gradeInYearLabel(grade: number | null): string {
+  if (grade == null) return "—";
+  if (grade <= 0) return "K";
+  return String(grade);
+}
+
+function HistoricalFastSection({ studentId }: { studentId: string }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [data, setData] = useState<FastHistResponse | null>(null);
+  const [view, setView] = useState<PillView>("level");
+
+  useEffect(() => {
+    if (!open || loaded) return;
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    (async () => {
+      try {
+        const r = await authFetch(
+          `/api/student-lookup/${encodeURIComponent(studentId)}/fast-history`,
+        );
+        if (!r.ok) {
+          const b = await r.json().catch(() => ({}));
+          throw new Error(b?.error || "Could not load FAST history");
+        }
+        const body = (await r.json()) as FastHistResponse;
+        if (cancelled) return;
+        setData(body);
+        setLoaded(true);
+      } catch (e) {
+        if (!cancelled)
+          setError(e instanceof Error ? e.message : "Load failed");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, loaded, studentId]);
+
+  const subjects = data?.subjects ?? [];
+  const hasAnyRows = subjects.some((s) => s.rows.length > 0);
+
+  return (
+    <div className="card" style={{ marginBottom: 0 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "0.75rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <h3 style={{ margin: 0, fontSize: "1rem" }}>Historical FAST</h3>
+          <div style={{ color: "var(--muted)", fontSize: "0.8rem", marginTop: 2 }}>
+            Multi-year PM1 / PM2 / PM3 progression. Each year is placed on the
+            grade the student was in that year; growth is within-year only.
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {open && hasAnyRows && (
+            <PillViewToggle value={view} onChange={setView} />
+          )}
+          <button className="btn-secondary" onClick={() => setOpen((v) => !v)}>
+            {open ? "Hide history" : "View history"}
+          </button>
+        </div>
+      </div>
+
+      {open && (
+        <div style={{ marginTop: "0.75rem" }}>
+          {loading && <div style={{ color: "var(--muted)" }}>Loading…</div>}
+          {error && (
+            <div style={{ color: "#b91c1c", fontSize: "0.85rem" }}>{error}</div>
+          )}
+          {!loading && !error && !hasAnyRows && (
+            <div style={{ color: "#9ca3af", fontSize: "0.9rem" }}>
+              No FAST history on record for this student.
+            </div>
+          )}
+          {!loading && !error && hasAnyRows && (
+            <PillViewContext.Provider value={view}>
+              <div
+                style={{
+                  display: "grid",
+                  gap: "1rem",
+                  gridTemplateColumns:
+                    "repeat(auto-fit, minmax(320px, 1fr))",
+                }}
+              >
+                {subjects
+                  .filter((s) => s.rows.length > 0)
+                  .map((s) => (
+                    <div key={s.subject}>
+                      <div
+                        style={{
+                          fontWeight: 700,
+                          fontSize: "0.95rem",
+                          marginBottom: "0.4rem",
+                        }}
+                      >
+                        {SUBJECT_LABEL[s.subject] ?? s.subject.toUpperCase()}
+                      </div>
+                      <table
+                        className="pulse-table"
+                        style={{ width: "100%", fontSize: "0.8rem" }}
+                      >
+                        <thead>
+                          <tr style={{ color: "#6b7280", textAlign: "left" }}>
+                            <th>Year</th>
+                            <th>Gr</th>
+                            <th style={{ textAlign: "center" }}>PM1</th>
+                            <th style={{ textAlign: "center" }}>PM2</th>
+                            <th style={{ textAlign: "center" }}>PM3</th>
+                            <th
+                              title="PM1 → latest PM this year (same grade, same scale)"
+                              style={{ textAlign: "center" }}
+                            >
+                              Growth
+                            </th>
+                            <th
+                              title="Learning gain met within this year (PM1 → PM3)"
+                              style={{ textAlign: "center" }}
+                            >
+                              LG
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {s.rows.map((row) => (
+                            <tr
+                              key={row.schoolYear}
+                              style={
+                                row.isCurrent
+                                  ? {
+                                      background: "#eff6ff",
+                                      fontWeight: 600,
+                                    }
+                                  : undefined
+                              }
+                            >
+                              <td style={{ whiteSpace: "nowrap" }}>
+                                {row.schoolYear}
+                                {row.isCurrent && (
+                                  <span
+                                    style={{
+                                      marginLeft: 4,
+                                      fontSize: "0.65rem",
+                                      color: "#1d4ed8",
+                                      fontWeight: 700,
+                                    }}
+                                  >
+                                    now
+                                  </span>
+                                )}
+                              </td>
+                              <td>{gradeInYearLabel(row.gradeInYear)}</td>
+                              <td style={{ textAlign: "center" }}>
+                                <FastScorePill
+                                  score={row.pm1?.score ?? null}
+                                  level={row.pm1?.level ?? null}
+                                  subLevel={row.pm1?.subLevel ?? null}
+                                  pmLabel={`${s.subject.toUpperCase()} PM1 ${row.schoolYear}`}
+                                />
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <FastScorePill
+                                  score={row.pm2?.score ?? null}
+                                  level={row.pm2?.level ?? null}
+                                  subLevel={row.pm2?.subLevel ?? null}
+                                  pmLabel={`${s.subject.toUpperCase()} PM2 ${row.schoolYear}`}
+                                />
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <FastScorePill
+                                  score={row.pm3?.score ?? null}
+                                  level={row.pm3?.level ?? null}
+                                  subLevel={row.pm3?.subLevel ?? null}
+                                  pmLabel={`${s.subject.toUpperCase()} PM3 ${row.schoolYear}`}
+                                />
+                              </td>
+                              <td
+                                style={{
+                                  textAlign: "center",
+                                  color:
+                                    row.withinYearGrowth == null
+                                      ? "#9ca3af"
+                                      : row.withinYearGrowth > 0
+                                        ? "#16a34a"
+                                        : row.withinYearGrowth < 0
+                                          ? "#dc2626"
+                                          : "#6b7280",
+                                  fontWeight: 700,
+                                }}
+                              >
+                                {row.withinYearGrowth == null
+                                  ? "—"
+                                  : `${row.withinYearGrowth > 0 ? "+" : ""}${row.withinYearGrowth}`}
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                {row.learningGain == null ? (
+                                  <span style={{ color: "#9ca3af" }}>—</span>
+                                ) : row.learningGain ? (
+                                  <span
+                                    title="Learning gain met"
+                                    style={{ color: "#16a34a", fontWeight: 700 }}
+                                  >
+                                    ✓
+                                  </span>
+                                ) : (
+                                  <span style={{ color: "#9ca3af" }}>–</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+              </div>
+            </PillViewContext.Provider>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function scoreColor(score: number): string {
   if (score >= 75) return "#16a34a"; // green
   if (score >= 50) return "#ca8a04"; // amber
@@ -1075,6 +1360,11 @@ interface Props {
   // see whether a kid is a walker, but the change-mode picker is
   // hidden.
   canManageDismissal?: boolean;
+  // Historical FAST multi-year table gate. Admin / Core Team implicitly, or
+  // an admin-delegated `capViewFastHistory` holder. Mirrors the server
+  // canViewFastHistory() gate on GET /student-lookup/:id/fast-history; the
+  // server enforces it too — this only hides the section for everyone else.
+  canViewFastHistory?: boolean;
 }
 
 // Single-entry student-photo manager — upload OR camera capture. Shown
@@ -2489,6 +2779,7 @@ export default function StudentProfile({
   canChangeHouse = false,
   canManagePhoto = false,
   canManageDismissal = false,
+  canViewFastHistory = false,
   onOpenSafetyPlan,
   canPrintOverallReport = false,
 }: Props) {
@@ -3257,6 +3548,15 @@ export default function StudentProfile({
         <div style={{ order: 1 }}>
           <ScheduleSection key={studentId} studentId={studentId} />
         </div>
+
+        {/* Historical FAST — admin / Core-Team / capViewFastHistory only.
+            Anchored below FAST Analysis (order 11) so the trajectory reads
+            top-down: current-year deep-dive, then the multi-year table. */}
+        {canViewFastHistory && (
+          <div style={{ order: 11 }}>
+            <HistoricalFastSection key={studentId} studentId={studentId} />
+          </div>
+        )}
 
         {/* Risk callout rail */}
         {riskFlags.length > 0 && (

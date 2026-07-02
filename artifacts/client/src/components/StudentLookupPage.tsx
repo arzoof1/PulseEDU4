@@ -31,6 +31,9 @@ interface Props {
   // Gated to pickup/dismissal managers — when true the StudentProfile's
   // car-rider/dismissal status becomes editable; otherwise read-only.
   canManageDismissal?: boolean;
+  // Admin / Core-Team / admin-delegated capViewFastHistory — surfaces the
+  // multi-year Historical FAST table on the embedded StudentProfile.
+  canViewFastHistory?: boolean;
   // Core-Team-only: when provided, the snapshot view shows an "Open Snapshot"
   // button that hands the selected student to the visual Student Snapshot page.
   onOpenSnapshot?: (studentId: string, label: string) => void;
@@ -46,6 +49,7 @@ function gradeLabel(grade: number): string {
 export default function StudentLookupPage({
   onBack,
   canManageDismissal = false,
+  canViewFastHistory = false,
   onOpenSnapshot,
 }: Props) {
   const [selected, setSelected] = useState<SearchHit | null>(null);
@@ -70,6 +74,7 @@ export default function StudentLookupPage({
           hit={selected}
           onBackToSearch={() => setSelected(null)}
           canManageDismissal={canManageDismissal}
+          canViewFastHistory={canViewFastHistory}
           onOpenSnapshot={onOpenSnapshot}
         />
       </div>
@@ -133,11 +138,13 @@ function SnapshotView({
   hit,
   onBackToSearch,
   canManageDismissal,
+  canViewFastHistory,
   onOpenSnapshot,
 }: {
   hit: SearchHit;
   onBackToSearch: () => void;
   canManageDismissal: boolean;
+  canViewFastHistory: boolean;
   onOpenSnapshot?: (studentId: string, label: string) => void;
 }) {
   // HeartBEAT note editor is collapsed by default — staff open it only when
@@ -174,6 +181,7 @@ function SnapshotView({
         onBack={onBackToSearch}
         backLabel="← Back to search"
         canManageDismissal={canManageDismissal}
+        canViewFastHistory={canViewFastHistory}
       />
     </div>
   );

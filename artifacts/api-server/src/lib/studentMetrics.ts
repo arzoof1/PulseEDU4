@@ -237,6 +237,24 @@ async function loadCurrentGrades(
   ids: string[],
   gpaEnabled: boolean,
 ) {
+  // Feature gate — Gradebook is a licensed module. When the school-level
+  // license is off (district super switch AND school switch must both be on),
+  // every embedded read surface (Student Profile, Snapshot, parent academics,
+  // insights drill-downs, exports, data-chat D/F scope) goes dark together by
+  // returning no grades. NOTE: this is the SCHOOL-level license only — staff
+  // pilots intentionally do NOT re-enable embedded reads (pilots unlock the
+  // importer flow; this shared loader has no staff context and also feeds
+  // parent-facing surfaces).
+  const [license] = await db
+    .select({
+      featureOn: schoolSettingsTable.featureGradebook,
+      superOn: schoolSettingsTable.superFeatureGradebook,
+    })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId))
+    .limit(1);
+  if (license && !(license.featureOn && license.superOn)) return;
+
   // Gradebook uses JOB-CHAINING for restorable rollback: every upload's rows
   // are kept (tagged with their import_job_id); the "current" snapshot is the
   // rows of the LATEST committed gradebook job. Rolling that job back flips it

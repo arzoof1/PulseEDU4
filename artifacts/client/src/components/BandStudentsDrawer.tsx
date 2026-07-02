@@ -12,6 +12,7 @@ import {
   FastScorePill,
   PillViewContext,
   PillViewToggle,
+  PmDelta,
   type PillView,
 } from "./FastScorePill";
 
@@ -85,43 +86,8 @@ export interface ScoreColumn {
   render?: (s: Student) => React.ReactNode;
 }
 
-// Numeric scale-score delta shown directly under a PM pill — full parity
-// with the Teacher Roster ("+12 from PM2" / "−8 from PM1") so staff don't
-// have to do the subtraction in their head while scanning. Green for
-// growth, red for decline, neutral gray for flat. Renders nothing when
-// either side is missing (most common case: a window the student didn't
-// sit) — better empty than wrong.
-function PmDelta({
-  from,
-  to,
-  fromLabel,
-}: {
-  from: number | null | undefined;
-  to: number | null | undefined;
-  fromLabel: string;
-}) {
-  if (from == null || to == null) return null;
-  const delta = to - from;
-  const sign = delta > 0 ? "+" : delta < 0 ? "−" : "±";
-  const color = delta > 0 ? "#15803d" : delta < 0 ? "#b91c1c" : "#6b7280";
-  return (
-    <div
-      title={`${sign}${Math.abs(delta)} scale-score points vs ${fromLabel}`}
-      style={{
-        marginTop: 2,
-        fontSize: 10,
-        lineHeight: 1.2,
-        color,
-        fontWeight: 600,
-        whiteSpace: "nowrap",
-      }}
-    >
-      {sign}
-      {Math.abs(delta)}{" "}
-      <span style={{ color: "#9ca3af", fontWeight: 400 }}>from {fromLabel}</span>
-    </div>
-  );
-}
+// PmDelta ("+12 from PM1") is single-sourced in FastScorePill.tsx and imported
+// above, so the Roster / Snapshot / band-drawer deltas can never diverge.
 
 // Shared PM progression columns for the Insights drill-downs: prior-year
 // PM3 baseline, then PM1 -> PM2 -> PM3, each rendered as a roster-style

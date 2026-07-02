@@ -20,7 +20,6 @@ import {
   schoolHeartbeatSettingsTable,
   schoolSettingsTable,
   parentHeartbeatPrefsTable,
-  studentFastScoresTable,
   interventionEntriesTable,
   studentMtssPlansTable,
   ossLogsTable,
@@ -32,21 +31,24 @@ import {
   benchmarkReteachLogTable,
   housesTable,
   attendanceCheckinsTable,
+  dataChatLogsTable,
+  dataChatCampaignsTable,
+  staffTable,
 } from "@workspace/db";
 import { and, eq, desc, isNull, sql, gte, lt } from "drizzle-orm";
+import { getSchoolTimezone } from "./schoolYear.js";
 import {
-  schoolYearLabelFor,
-  DEFAULT_SCHOOL_TZ,
-  getSchoolTimezone,
-} from "./schoolYear.js";
+  loadStudentFastParity,
+  type FastParityRow,
+} from "./fastParity.js";
 import { loadRestroomDestinationNames } from "./oneWayPass.js";
 import {
   loadDefaultPeriodWindows,
   tardyLostMinutes,
   hallPassLostMinutes,
-  periodLengthMinutes,
 } from "./lostInstruction.js";
 import { loadStudentGrades } from "./studentMetrics.js";
+import { loadAttendanceMetrics } from "./attendanceMetrics.js";
 
 // Returns the YYYY-MM-DD bounds of the current school year. The cutover
 // is Aug 1 — anything before that rolls back to the previous Aug 1 so a
@@ -102,6 +104,12 @@ export interface ParentSnapshot {
     // strategy are never included in the payload — only counts +
     // benchmark codes.
     reteach: boolean;
+    // Data Chats — teacher/student check-in campaigns. Available whenever
+    // shareable rows exist (campaign launched with "share with families");
+    // the per-campaign share flag is the gate, no extra settings column.
+    // Only the discussed topics + goal ever leave the staff side — the
+    // teacher's private note is never included.
+    dataChats: boolean;
   };
   pbis: {
     total: number;
@@ -136,20 +144,27 @@ export interface ParentSnapshot {
     }>;
   };
   // School-year-to-date "Lost Instructional Time" summary, surfaced at the
-  // TOP of the parent portal. Three contributors, each with a count and the
-  // minutes of instruction lost, plus a grand total. Pieces whose parent
-  // section is hidden are zeroed (and excluded from `totalMinutes`). See the
-  // computation block for the definitions — note ABSENCES are kiosk-derived
-  // (class periods with no door-kiosk check-in), not official SIS attendance.
+  // TOP of the parent portal. Two MEASURED contributors (hall passes +
+  // tardies), each with a count and the minutes of instruction lost, plus a
+  // grand total. Pieces whose parent section is hidden are zeroed (and
+  // excluded from `totalMinutes`). The old kiosk-derived absence ESTIMATE
+  // was removed — official absences now surface in `attendance.official`
+  // from the Eligibility Hub upload instead.
   lostInstruction: {
     hallPasses: { count: number; minutes: number };
     tardies: { count: number; minutes: number };
-    absences: { count: number; minutes: number };
     totalMinutes: number;
   };
   attendance: {
     tardiesThisWeek: number;
     checkInsThisWeek: number;
+    // OFFICIAL absence/tardy counts from the latest Eligibility Hub upload
+    // for the current semester (lib/attendanceMetrics.ts — same source of
+    // truth as the Teacher Roster / Insights "Days Absent" columns). `null`
+    // when the school isn't using the Eligibility Hub (no upload row for
+    // this student) so the surfaces omit the tiles entirely rather than
+    // fabricating a 0.
+    official: { daysAbsent: number; daysTardy: number } | null;
     // Aggregated attendance %. `null` when the window has zero logged
     // school days for the student (avoids showing a meaningless "0%").
     // `present` counts attendance_day rows with status='present' OR
@@ -206,14 +221,10 @@ export interface ParentSnapshot {
     staffName: string;
     createdAt: string;
   }>;
-  fastScores: Array<{
-    subject: string;
-    pm1: number | null;
-    pm2: number | null;
-    pm3: number | null;
-    priorYearScore: number | null;
-    priorYearBq: boolean;
-  }>;
+  // Teacher-Roster-parity FAST view (level placements, points-to-next-level,
+  // points-to-proficiency, learning-gain check) — single-sourced via
+  // loadStudentFastParity so the HeartBEAT PDF matches every staff surface.
+  fastScores: FastParityRow[];
   // Current grades per course (Gradebook importer) + unweighted 4.0 GPA.
   // `gpa` is null when the school's GPA toggle is off.
   currentGrades: Array<{
@@ -241,6 +252,14 @@ export interface ParentSnapshot {
       goals: string | null;
     }>;
   };
+  // Shareable data-chat check-ins (topics + goal only; no private note).
+  dataChats: Array<{
+    campaignName: string;
+    teacherName: string;
+    discussedTopics: string[];
+    goal: string | null;
+    date: string; // YYYY-MM-DD
+  }>;
   // OSS (out-of-school suspension) — `daysThisYear` is always populated
   // when sectionsAvailable.oss is true; `recent` lists the most recent
   // assigned days. Reason text is included only when the school enabled
@@ -320,12 +339,41 @@ export async function buildParentSnapshot(
       ),
     );
   if (!link) return { ok: false, status: 403, error: "Not your student" };
+  return assembleSnapshot(studentId, { mode: "parent", parentId });
+}
 
+// Staff-facing variant. Renders the SAME family HeartBEAT a parent would see so
+// staff can print it during a data chat (e.g. when a family hasn't been invited
+// to the portal). The caller (route) MUST already have verified staff auth +
+// visibility via getVisibleStudentIds; we re-check the school boundary here as
+// defense-in-depth. There is no parent account, so section visibility uses the
+// school defaults only (no per-parent prefs) — i.e. exactly what the school
+// permits families to see.
+export async function buildStaffSnapshot(
+  studentId: number,
+  schoolId: number,
+): Promise<SnapshotResult> {
+  return assembleSnapshot(studentId, { mode: "staff", schoolId });
+}
+
+type SnapshotContext =
+  | { mode: "parent"; parentId: number }
+  | { mode: "staff"; schoolId: number };
+
+async function assembleSnapshot(
+  studentId: number,
+  ctx: SnapshotContext,
+): Promise<SnapshotResult> {
   const [student] = await db
     .select()
     .from(studentsTable)
     .where(eq(studentsTable.id, studentId));
   if (!student)
+    return { ok: false, status: 404, error: "Student not found" };
+  // Staff school boundary — never render another school's student even if the
+  // upstream visibility check was somehow skipped. 404 (not 403) so we don't
+  // leak the existence of an out-of-school id.
+  if (ctx.mode === "staff" && student.schoolId !== ctx.schoolId)
     return { ok: false, status: 404, error: "Student not found" };
 
   // Retention indicator (R-in-circle on the parent portal student card).
@@ -343,28 +391,31 @@ export async function buildParentSnapshot(
     .map((r) => r.gradeLevel)
     .sort((a, b) => a - b);
 
-  const [parent] = await db
-    .select({ displayName: parentsTable.displayName, email: parentsTable.email })
-    .from(parentsTable)
-    .where(eq(parentsTable.id, parentId));
+  // Parent identity only exists on the parent-facing surface. For the staff
+  // print there is no parent account, so leave it blank — the return path
+  // already null-coalesces displayName/email to "".
+  const parent =
+    ctx.mode === "parent"
+      ? (
+          await db
+            .select({
+              displayName: parentsTable.displayName,
+              email: parentsTable.email,
+            })
+            .from(parentsTable)
+            .where(eq(parentsTable.id, ctx.parentId))
+        )[0]
+      : undefined;
 
-  // School + parent visibility prefs in parallel; gate() enforces the
-  // contract: schoolEnabled AND parentPref !== false.
-  const [settingsRow, prefsRow, featureRow] = await Promise.all([
+  // School visibility settings + academic-evidence feature always load. The
+  // per-parent prefs row only exists in parent mode; staff print falls back to
+  // the school defaults. gate() enforces the contract: schoolEnabled AND
+  // parentPref !== false (undefined prefs => school default wins).
+  const [settingsRow, featureRow] = await Promise.all([
     db
       .select()
       .from(schoolHeartbeatSettingsTable)
       .where(eq(schoolHeartbeatSettingsTable.schoolId, student.schoolId))
-      .then((rows) => rows[0]),
-    db
-      .select()
-      .from(parentHeartbeatPrefsTable)
-      .where(
-        and(
-          eq(parentHeartbeatPrefsTable.parentId, parentId),
-          eq(parentHeartbeatPrefsTable.studentId, studentId),
-        ),
-      )
       .then((rows) => rows[0]),
     db
       .select({
@@ -375,6 +426,19 @@ export async function buildParentSnapshot(
       .where(eq(schoolSettingsTable.schoolId, student.schoolId))
       .then((rows) => rows[0]),
   ]);
+  const prefsRow =
+    ctx.mode === "parent"
+      ? await db
+          .select()
+          .from(parentHeartbeatPrefsTable)
+          .where(
+            and(
+              eq(parentHeartbeatPrefsTable.parentId, ctx.parentId),
+              eq(parentHeartbeatPrefsTable.studentId, studentId),
+            ),
+          )
+          .then((rows) => rows[0])
+      : undefined;
   const gate = (
     schoolFlag: boolean | null | undefined,
     schoolDefault: boolean,
@@ -410,6 +474,8 @@ export async function buildParentSnapshot(
     reteach:
       gate(settingsRow?.showReteach, false, prefsRow?.showReteach) &&
       Boolean(student.reteachLogsParentVisible),
+    // Set below once shareable data-chat rows are loaded.
+    dataChats: false,
   };
 
   // ----- PBIS -----
@@ -727,17 +793,14 @@ export async function buildParentSnapshot(
   }
 
   // ----- Lost Instructional Time (top-of-portal SY-to-date summary) -----
-  // Three contributors, all school-year-to-date, per child. Each piece is
-  // gated on its parent section toggle so a hidden section never leaks a
-  // count/minutes into this summary or its grand total.
+  // Two MEASURED contributors, both school-year-to-date, per child. Each
+  // piece is gated on its parent section toggle so a hidden section never
+  // leaks a count/minutes into this summary or its grand total.
   //  • Hall passes — minutes out of class (return − checkout, capped).
   //  • Tardies     — lateness minutes (check-in − scheduled period start).
-  //  • Absences    — KIOSK-DERIVED: class periods the student never scanned
-  //    into at a door kiosk. "Expected" periods are the (day, period) slots
-  //    where the attendance module actually ran for the school (some student
-  //    checked in) AND the period is on the default bell schedule; each is
-  //    valued by that period's length. This is an estimate, NOT official SIS
-  //    attendance — it over-counts when kiosks aren't run every period.
+  // The old kiosk-derived absence ESTIMATE (periods with no door-kiosk
+  // check-in) was removed from this summary — official absences come from
+  // the Eligibility Hub upload and surface in `attendance.official`.
   let hpLostCount = 0;
   let hpLostMinutes = 0;
   if (sectionsAvailable.hallPasses) {
@@ -764,8 +827,6 @@ export async function buildParentSnapshot(
 
   let tardiesYtd = 0;
   let lostInstructionMinutesYtd = 0;
-  let absenceCount = 0;
-  let absenceMinutes = 0;
   if (sectionsAvailable.attendance) {
     const windows = await loadDefaultPeriodWindows(student.schoolId);
 
@@ -794,59 +855,28 @@ export async function buildParentSnapshot(
       }
     }
 
-    // Absences — only computable once a bell schedule exists (to value the
-    // missed minutes) AND the attendance module has actually run this SY.
-    if (windows.size > 0) {
-      const operatingSlots = await db
-        .selectDistinct({
-          day: attendanceCheckinsTable.day,
-          periodNumber: attendanceCheckinsTable.periodNumber,
-        })
-        .from(attendanceCheckinsTable)
-        .where(
-          and(
-            eq(attendanceCheckinsTable.schoolId, student.schoolId),
-            eq(attendanceCheckinsTable.kind, "checkin"),
-            gte(attendanceCheckinsTable.day, syStartIso),
-            lt(attendanceCheckinsTable.day, syEndIso),
-          ),
-        );
-      if (operatingSlots.length > 0) {
-        const studentSlots = await db
-          .selectDistinct({
-            day: attendanceCheckinsTable.day,
-            periodNumber: attendanceCheckinsTable.periodNumber,
-          })
-          .from(attendanceCheckinsTable)
-          .where(
-            and(
-              eq(attendanceCheckinsTable.schoolId, student.schoolId),
-              eq(attendanceCheckinsTable.studentId, student.studentId),
-              eq(attendanceCheckinsTable.kind, "checkin"),
-              gte(attendanceCheckinsTable.day, syStartIso),
-              lt(attendanceCheckinsTable.day, syEndIso),
-            ),
-          );
-        const present = new Set(
-          studentSlots.map((r) => `${r.day}|${r.periodNumber}`),
-        );
-        for (const slot of operatingSlots) {
-          const w = windows.get(slot.periodNumber);
-          if (!w) continue; // off-schedule / non-instructional period
-          if (present.has(`${slot.day}|${slot.periodNumber}`)) continue;
-          absenceCount += 1;
-          absenceMinutes += periodLengthMinutes(w);
-        }
-      }
-    }
   }
 
   const lostInstruction = {
     hallPasses: { count: hpLostCount, minutes: hpLostMinutes },
     tardies: { count: tardiesYtd, minutes: lostInstructionMinutesYtd },
-    absences: { count: absenceCount, minutes: absenceMinutes },
-    totalMinutes: hpLostMinutes + lostInstructionMinutesYtd + absenceMinutes,
+    totalMinutes: hpLostMinutes + lostInstructionMinutesYtd,
   };
+
+  // ----- Official absences (Eligibility Hub upload) -----
+  // Same source of truth as the Teacher Roster / Insights "Days Absent"
+  // columns. `null` (omitted on every surface) when the school isn't using
+  // the Eligibility Hub — no upload row exists for this student.
+  let officialAttendance: ParentSnapshot["attendance"]["official"] = null;
+  if (sectionsAvailable.attendance) {
+    const metrics = await loadAttendanceMetrics(student.schoolId, [
+      student.studentId,
+    ]);
+    const m = metrics.get(student.studentId);
+    if (m) {
+      officialAttendance = { daysAbsent: m.daysAbsent, daysTardy: m.daysTardy };
+    }
+  }
 
   // ----- Accommodations -----
   let accommodations: Array<{ id: number; name: string; category: string }> = [];
@@ -890,31 +920,96 @@ export async function buildParentSnapshot(
         .limit(20)
     : [];
 
-  // ----- FAST scores -----
+  // ----- Data Chats (shareable check-in logs) -----
+  // Only campaigns launched with the "share with families" flag. The
+  // teacher's private note stays staff-side — it is never selected here.
+  const dataChatRows = await db
+    .select({
+      id: dataChatLogsTable.id,
+      discussedJson: dataChatLogsTable.discussedJson,
+      goal: dataChatLogsTable.goal,
+      updatedAt: dataChatLogsTable.updatedAt,
+      campaignName: dataChatCampaignsTable.name,
+      checklistJson: dataChatCampaignsTable.checklistJson,
+      teacherName: staffTable.displayName,
+    })
+    .from(dataChatLogsTable)
+    .innerJoin(
+      dataChatCampaignsTable,
+      and(
+        eq(dataChatLogsTable.campaignId, dataChatCampaignsTable.id),
+        eq(dataChatCampaignsTable.schoolId, student.schoolId),
+        eq(dataChatCampaignsTable.shareWithFamilies, true),
+      ),
+    )
+    .leftJoin(
+      staffTable,
+      and(
+        eq(dataChatLogsTable.teacherStaffId, staffTable.id),
+        eq(staffTable.schoolId, student.schoolId),
+      ),
+    )
+    .where(
+      and(
+        eq(dataChatLogsTable.schoolId, student.schoolId),
+        eq(dataChatLogsTable.studentId, student.studentId),
+      ),
+    )
+    .orderBy(desc(dataChatLogsTable.updatedAt))
+    .limit(5);
+  const dataChats: ParentSnapshot["dataChats"] = dataChatRows.map((r) => {
+    let labels: string[] = [];
+    try {
+      const checklist = JSON.parse(r.checklistJson) as Array<{
+        id?: unknown;
+        label?: unknown;
+      }>;
+      const byId = new Map(
+        (Array.isArray(checklist) ? checklist : [])
+          .filter((c) => typeof c?.id === "string" && typeof c?.label === "string")
+          .map((c) => [c.id as string, c.label as string]),
+      );
+      const discussed = JSON.parse(r.discussedJson);
+      labels = (Array.isArray(discussed) ? discussed : [])
+        .map((id) => byId.get(String(id)))
+        .filter((l): l is string => Boolean(l));
+    } catch {
+      labels = [];
+    }
+    return {
+      campaignName: r.campaignName,
+      teacherName: r.teacherName ?? "School staff",
+      discussedTopics: labels,
+      goal: r.goal.trim() ? r.goal : null,
+      date:
+        r.updatedAt instanceof Date
+          ? r.updatedAt.toISOString().slice(0, 10)
+          : String(r.updatedAt).slice(0, 10),
+    };
+  });
+  sectionsAvailable.dataChats = dataChats.length > 0;
+
+  // ----- FAST scores (Teacher-Roster parity) -----
+  // Single-sourced via loadStudentFastParity so the HeartBEAT PDF renders the
+  // same level placements / points-to-next / learning-gain the staff surfaces
+  // show. The loader resolves "current year" from the DATA (not the wall
+  // clock), which also fixes the prior July school-year drift. It always
+  // returns both subjects null-filled; drop the empty ones so the PDF keeps
+  // its "No FAST results yet" empty state when nothing has been recorded.
   const fastScoresRows = sectionsAvailable.fastScores
-    ? await db
-        .select({
-          subject: studentFastScoresTable.subject,
-          pm1: studentFastScoresTable.pm1,
-          pm2: studentFastScoresTable.pm2,
-          pm3: studentFastScoresTable.pm3,
-          priorYearScore: studentFastScoresTable.priorYearScore,
-          priorYearBq: studentFastScoresTable.priorYearBq,
+    ? (
+        await loadStudentFastParity({
+          schoolId: student.schoolId,
+          studentId: student.studentId,
+          grade: student.grade,
         })
-        .from(studentFastScoresTable)
-        .where(
-          and(
-            eq(studentFastScoresTable.schoolId, student.schoolId),
-            eq(studentFastScoresTable.studentId, student.studentId),
-            // FAST Phase 1: filter to current SY — parent snapshot
-            // is intended for current-year data; prior-year backfill
-            // rows should not surface in the parent portal.
-            eq(
-              studentFastScoresTable.schoolYear,
-              schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
-            ),
-          ),
-        )
+      ).filter(
+        (r) =>
+          r.pm1 != null ||
+          r.pm2 != null ||
+          r.pm3 != null ||
+          r.priorYearScore != null,
+      )
     : [];
 
   // ----- Current grades + GPA -----
@@ -1185,6 +1280,7 @@ export async function buildParentSnapshot(
       attendance: {
         tardiesThisWeek: tardyThisWeek,
         checkInsThisWeek: checkInThisWeek,
+        official: officialAttendance,
         pct: attendancePct,
         onTimeStreak,
         onTimeArrivals,
@@ -1224,6 +1320,7 @@ export async function buildParentSnapshot(
       },
       oss: { daysThisYear: ossDaysThisYear, recent: ossRecent },
       reteach: { items: reteachItems },
+      dataChats,
       house: housePayload,
     },
   };

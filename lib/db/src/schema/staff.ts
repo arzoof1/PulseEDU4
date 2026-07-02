@@ -250,6 +250,15 @@ export const staffTable = pgTable("staff", {
   capImportFast: boolean("cap_import_fast").notNull().default(false),
   capImportIready: boolean("cap_import_iready").notNull().default(false),
 
+  // Assignable read access to a student's multi-year historical FAST
+  // (PM1/PM2/PM3) table on the Student Profile / Snapshot. Core Team +
+  // admins get this implicitly; this cap lets an ADMIN delegate the
+  // view to a specific non-Core-Team staffer without granting a role.
+  // Admin-only to assign (NOT in the Core-Team-delegable import-cap set).
+  capViewFastHistory: boolean("cap_view_fast_history")
+    .notNull()
+    .default(false),
+
   // Comp Time (FLSA compensatory time) per-staff capabilities. Mirrors
   // the AST gate above so the role-management UI can sit them side by
   // side under "Time Tracking."
