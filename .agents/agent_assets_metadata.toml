@@ -498,3 +498,9 @@ id = "LpGcDY-xsrO9K5yPHwc0v"
 uri = "file://exports/PulseEDU-Migration-July1-2-2026.pdf"
 type = "pdf"
 title = "Migration Guide — Everything Shipped July 1–2, 2026"
+
+[[outputs]]
+id = "U5VdnmaO7NcthxdM8qbpQ"
+uri = "file://exports/PulseEDU-Feature-Dependency-Warnings-2026-07-02.pdf"
+type = "pdf"
+title = "Feature Dependency Warnings — Change Summary"
