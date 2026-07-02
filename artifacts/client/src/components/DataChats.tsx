@@ -27,6 +27,11 @@ import {
   nextStopCaption,
   type PillView,
 } from "./FastScorePill";
+import {
+  DEPARTMENT_ORDER,
+  deptOf,
+  tintFor,
+} from "./teacherDepartments";
 
 // ---------------------------------------------------------------------------
 // Shared types (mirror routes/dataChats.ts response shapes)
@@ -174,7 +179,12 @@ type CampaignDetail = {
   scope?: ScopeInfo | null;
 };
 
-type DirectoryStaff = { id: number; displayName: string; email: string | null };
+type DirectoryStaff = {
+  id: number;
+  displayName: string;
+  email: string | null;
+  department?: string | null;
+};
 
 // ---------------------------------------------------------------------------
 // Reminder polling hook (icon + banner share the shape; each self-polls the
@@ -1785,6 +1795,27 @@ function LaunchForm({
     s.displayName.toLowerCase().includes(teacherFilter.toLowerCase()),
   );
 
+  // Department-grouped view of the filtered directory, canonical order +
+  // alpha inside each group — same convention as the shared TeacherPicker
+  // so every teacher chooser in the app sorts identically.
+  const groupedDirectory = useMemo(() => {
+    const g = new Map<string, DirectoryStaff[]>();
+    for (const s of filteredDirectory) {
+      const d = deptOf(s);
+      const arr = g.get(d);
+      if (arr) arr.push(s);
+      else g.set(d, [s]);
+    }
+    for (const arr of g.values()) {
+      arr.sort((a, b) => a.displayName.localeCompare(b.displayName));
+    }
+    return DEPARTMENT_ORDER.filter((d) => g.has(d)).map((d) => ({
+      dept: d,
+      teachers: g.get(d)!,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [directory, teacherFilter]);
+
   const effShare = share ?? tpl?.shareWithFamilies ?? true;
 
   return (
@@ -1978,32 +2009,51 @@ function LaunchForm({
               padding: "0.4rem 0.6rem",
             }}
           >
-            {filteredDirectory.map((s) => (
-              <label
-                key={s.id}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  fontSize: "0.85rem",
-                  padding: "0.15rem 0",
-                  cursor: "pointer",
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={teacherIds.has(s.id)}
-                  onChange={() =>
-                    setTeacherIds((prev) => {
-                      const next = new Set(prev);
-                      if (next.has(s.id)) next.delete(s.id);
-                      else next.add(s.id);
-                      return next;
-                    })
-                  }
-                />
-                {s.displayName}
-              </label>
+            {groupedDirectory.map(({ dept, teachers }) => (
+              <div key={dept}>
+                <div
+                  style={{
+                    fontSize: "0.72rem",
+                    fontWeight: 700,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                    color: "#334155",
+                    backgroundColor: tintFor(dept),
+                    borderRadius: 6,
+                    padding: "0.15rem 0.5rem",
+                    margin: "0.35rem 0 0.15rem",
+                  }}
+                >
+                  {dept}
+                </div>
+                {teachers.map((s) => (
+                  <label
+                    key={s.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      fontSize: "0.85rem",
+                      padding: "0.15rem 0",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={teacherIds.has(s.id)}
+                      onChange={() =>
+                        setTeacherIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(s.id)) next.delete(s.id);
+                          else next.add(s.id);
+                          return next;
+                        })
+                      }
+                    />
+                    {s.displayName}
+                  </label>
+                ))}
+              </div>
             ))}
             {filteredDirectory.length === 0 && (
               <div

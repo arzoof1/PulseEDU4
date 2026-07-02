@@ -57,6 +57,7 @@ import {
   type BucketInfo,
 } from "../lib/fastCutScores.js";
 import { decideLearningGain } from "../lib/learningGains.js";
+import { inferDepartment } from "../lib/teacherDepartments.js";
 import { loadAttendanceMetrics } from "../lib/attendanceMetrics.js";
 
 // Per-PM placement enriched with the gap-to-next-sublevel caption is now
@@ -955,50 +956,8 @@ router.get("/teacher-roster/teachers", async (req: Request, res: Response) => {
   res.json({ teachers: out });
 });
 
-// Map a teacher's course names to a coarse department label for the
-// picker. Keyword-based — anything unmatched lands in "Other" and an
-// admin can clean up a course name (or we add keywords) to reclassify.
-// Order matters: more specific tokens (Algebra, Geometry) check before
-// the generic Math match.
-function inferDepartment(courseNames: string[]): string {
-  if (courseNames.length === 0) return "Other";
-  const tally = new Map<string, number>();
-  for (const raw of courseNames) {
-    const name = raw.toLowerCase();
-    let dept = "Other";
-    if (/(algebra|geometry|\bmath|pre-?calc|calculus|statistics)/.test(name)) {
-      dept = "Math";
-    } else if (/(\bela\b|english|language arts|reading|literature|writing)/.test(name)) {
-      dept = "ELA";
-    } else if (/(science|biology|chemistry|physics|earth|environmental)/.test(name)) {
-      dept = "Science";
-    } else if (/(social studies|history|civics|geography|economics|government|us history|world history)/.test(name)) {
-      dept = "Social Studies";
-    } else if (/(spanish|french|german|chinese|latin|world language)/.test(name)) {
-      dept = "World Languages";
-    } else if (/(\bpe\b|physical education|health|wellness)/.test(name)) {
-      dept = "PE / Health";
-    } else if (/(art|music|band|chorus|drama|theater|theatre|dance|media|tv|journalism|yearbook)/.test(name)) {
-      dept = "Electives";
-    } else if (/(ese|esol|ell|intensive|resource|support|skills)/.test(name)) {
-      dept = "Support";
-    } else if (/(technology|computer|coding|stem|engineering|robotics)/.test(name)) {
-      dept = "CTE / STEM";
-    }
-    tally.set(dept, (tally.get(dept) ?? 0) + 1);
-  }
-  // Pick the department this teacher teaches most often; ties broken
-  // by the keyword check order above via insertion order.
-  let bestDept = "Other";
-  let bestCount = -1;
-  for (const [dept, count] of tally) {
-    if (count > bestCount) {
-      bestCount = count;
-      bestDept = dept;
-    }
-  }
-  return bestDept;
-}
+// inferDepartment now lives in ../lib/teacherDepartments.js (shared with
+// the staff-directory route so every teacher picker groups identically).
 
 // Teacher acknowledgement of an ISS-day soft reminder. The teacher clicks
 // "Posted in Canvas" or "Sent hard copy" on the roster banner. We record

@@ -3,6 +3,16 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Launcher teacher multi-select matches the shared TeacherPicker
+  convention.** The "pick any teachers" checkbox list in the Data Chats
+  campaign launcher now groups by department (canonical order, tinted
+  headers, alpha within group) like every other teacher chooser. Server:
+  `inferDepartment` extracted from `teacherRoster.ts` into the shared
+  `api-server/src/lib/teacherDepartments.ts` and wired into
+  `GET /api/staff-directory` (infer from non-planning course names; the
+  mostly-NULL/free-text `staff.department` column is only a clamped
+  fallback — non-canonical labels map to "Other" so no teacher is
+  silently dropped by the client group filter).
 - **FAST data chats runnable by any teacher.** The New Campaign launcher's
   FAST templates gained a "Who runs the chats?" choice: ELA/Math
   teachers-of-record (default, unchanged) or **pick any teachers** (science,
