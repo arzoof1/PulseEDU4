@@ -305,6 +305,27 @@ export default function StaffCompPage() {
     }).catch(() => {});
   }, [load]);
 
+  // Must run on EVERY render (before the early returns below) so the hook
+  // order stays stable — `me` is null on first render, so a useMemo placed
+  // after the early returns would be skipped and then added, crashing with
+  // "Rendered more hooks than during the previous render."
+  const grouped = useMemo(() => {
+    const list = me?.requests ?? [];
+    const open = list.filter(
+      (r) =>
+        r.state === "pending_preapproval" ||
+        r.state === "preapproved" ||
+        r.state === "pending_confirm",
+    );
+    const closed = list.filter(
+      (r) =>
+        r.state === "confirmed" ||
+        r.state === "denied" ||
+        r.state === "cancelled",
+    );
+    return { open, closed };
+  }, [me]);
+
   // ---------- not eligible splash ----------
   if (me && !me.eligible) {
     return (
@@ -463,23 +484,6 @@ export default function StaffCompPage() {
       setBusy(false);
     }
   };
-
-  const grouped = useMemo(() => {
-    const list = me.requests;
-    const open = list.filter(
-      (r) =>
-        r.state === "pending_preapproval" ||
-        r.state === "preapproved" ||
-        r.state === "pending_confirm",
-    );
-    const closed = list.filter(
-      (r) =>
-        r.state === "confirmed" ||
-        r.state === "denied" ||
-        r.state === "cancelled",
-    );
-    return { open, closed };
-  }, [me.requests]);
 
   const SectionBand = ({
     color,
