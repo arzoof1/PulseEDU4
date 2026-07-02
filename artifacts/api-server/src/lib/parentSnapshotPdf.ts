@@ -102,6 +102,7 @@ function drawDocument(
   if (sec.mtss) drawMtssBlock(doc, s);
   if (sec.interventions) drawInterventionsBlock(doc, s);
   if (sec.staffNotes) drawStaffNotesBlock(doc, s);
+  if (sec.dataChats) drawDataChatsBlock(doc, s);
   if (sec.oss) drawOssBlock(doc, s);
   if (sec.reteach) drawReteachBlock(doc, s);
   // Accommodations pinned to the bottom of the stack (matches the dashboard).
@@ -772,6 +773,57 @@ function drawStaffNotesBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
       .text(`   · ${n.staffName} · ${fmtDateTime(n.createdAt)}`);
     doc.fillColor(COLORS.text).fontSize(10).text(n.noteText, { indent: 0 });
     doc.moveDown(0.3);
+  }
+}
+
+// ---------- Data Chats (teacher check-ins) ----------
+// Shareable rows only: topics discussed + the student's goal. The
+// teacher's private note is never in the snapshot payload, so it can
+// never render here.
+// pdfkit's built-in Helvetica is WinAnsi-only — arrows/checkmarks/emoji in
+// user-authored text (checklist labels, goals) render as garbage bytes.
+// Swap the common offenders for ASCII equivalents before drawing.
+function winAnsiSafe(t: string): string {
+  return t
+    .replace(/\u2192/g, "->")
+    .replace(/\u2190/g, "<-")
+    .replace(/[\u2713\u2714]/g, "*")
+    .replace(/[^\x20-\x7E\u00A0-\u00FF\u2018\u2019\u201C\u201D\u2013\u2014\u00B7]/g, "");
+}
+
+function drawDataChatsBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
+  sectionTitle(doc, "Data Chats — Teacher Check-Ins");
+  if (s.dataChats.length === 0) {
+    drawEmpty(doc, "No data chats logged yet.");
+    return;
+  }
+  for (const c of s.dataChats.slice(0, 5)) {
+    ensureSpace(doc, 40);
+    doc
+      .fontSize(10)
+      .font("Helvetica-Bold")
+      .fillColor(COLORS.accent)
+      .text(winAnsiSafe(c.campaignName), { continued: true })
+      .fillColor(COLORS.muted)
+      .font("Helvetica")
+      .text(`   · ${winAnsiSafe(c.teacherName)} · ${fmtDate(c.date)}`);
+    if (c.discussedTopics.length > 0) {
+      doc
+        .fillColor(COLORS.text)
+        .fontSize(10)
+        .text(`We talked about: ${c.discussedTopics.map(winAnsiSafe).join(" · ")}`);
+    }
+    if (c.goal) {
+      doc
+        .fillColor(COLORS.text)
+        .fontSize(10)
+        .font("Helvetica-Bold")
+        .text("Goal: ", { continued: true })
+        .font("Helvetica")
+        .text(winAnsiSafe(c.goal));
+    }
+    doc.fillColor(COLORS.text);
+    doc.moveDown(0.35);
   }
 }
 

@@ -185,6 +185,16 @@ interface Snapshot {
       notes: string | null;
     }>;
   };
+  // Data chats — shareable teacher check-ins (topics discussed + goal
+  // only; the teacher's private note never leaves the staff side).
+  // Optional so older API servers without the field still type-check.
+  dataChats?: Array<{
+    campaignName: string;
+    teacherName: string;
+    discussedTopics: string[];
+    goal: string | null;
+    date: string;
+  }>;
   // Reteach activity — gated by sec.reteach. Counts-only rollup; no
   // teacher notes or strategy ever leave the server. Optional so
   // older API servers without the field still type-check.
@@ -1179,6 +1189,57 @@ function BehaviorTab({ snapshot }: { snapshot: Snapshot }) {
                 </div>
                 <div className="text-sm text-slate-600 mt-1">{n.noteText}</div>
                 <div className="text-xs text-slate-400 mt-1">{n.staffName}</div>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
+      {/* Data Chats — shareable teacher check-ins. Rendered only when the
+          campaign was launched with "share with families" AND a log
+          exists for this student. Topics + goal only — the teacher's
+          private note is never in the payload. */}
+      {sec.dataChats && (snapshot.dataChats ?? []).length > 0 && (
+        <Section
+          title="Data Chats"
+          icon={<Target className="h-4 w-4 text-indigo-600" />}
+        >
+          <p className="text-xs text-slate-500 mb-3">
+            One-on-one check-ins where your student and their teacher looked
+            at progress together and set a goal.
+          </p>
+          <ul className="divide-y divide-slate-100">
+            {(snapshot.dataChats ?? []).map((c, i) => (
+              <li key={i} className="py-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="text-sm font-medium text-slate-800">
+                    {c.campaignName}
+                  </div>
+                  <div className="text-xs text-slate-500 shrink-0">
+                    {fmtDate(c.date)}
+                  </div>
+                </div>
+                <div className="text-xs text-slate-400 mt-0.5">
+                  {c.teacherName}
+                </div>
+                {c.discussedTopics.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {c.discussedTopics.map((t) => (
+                      <span
+                        key={t}
+                        className="inline-flex items-center rounded-full bg-indigo-50 border border-indigo-100 px-2 py-0.5 text-xs text-indigo-700"
+                      >
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {c.goal && (
+                  <div className="mt-2 text-sm text-slate-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                    <span className="font-medium text-amber-800">Goal: </span>
+                    {c.goal}
+                  </div>
+                )}
               </li>
             ))}
           </ul>

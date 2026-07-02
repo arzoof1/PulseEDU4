@@ -121,6 +121,7 @@ import academicEvidenceRouter from "./academicEvidence";
 import academicEvidenceParentRouter from "./academicEvidenceParent";
 import { eligibilityRouter } from "./eligibility";
 import communicationsRouter from "./communications";
+import dataChatsRouter from "./dataChats";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -315,5 +316,6 @@ router.use(academicEvidenceRouter);
 router.use(academicEvidenceParentRouter);
 router.use(eligibilityRouter);
 router.use(communicationsRouter);
+router.use(dataChatsRouter);
 
 export default router;

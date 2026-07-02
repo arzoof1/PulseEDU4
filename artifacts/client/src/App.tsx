@@ -74,6 +74,11 @@ import AstNotificationBell from "./components/AstNotificationBell";
 import StoreFulfillmentBell from "./components/StoreFulfillmentBell";
 import SchoolStoreFulfillmentView from "./components/SchoolStoreFulfillmentView";
 import AstSidebarBadge from "./components/AstSidebarBadge";
+import DataChatsAdminPage, {
+  DataChatReminderIcon,
+  DataChatDeadlineBanner,
+  DataChatQueueModal,
+} from "./components/DataChats";
 import FeatureLicensingAdminPage from "./components/featureLicensing/FeatureLicensingAdminPage";
 import SuperUserHomeRollups from "./components/districtOverview/SuperUserHomeRollups";
 import DistrictOverviewRollups from "./components/districtOverview/DistrictOverviewRollups";
@@ -4008,7 +4013,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "behaviorReview",
   ],
   specialPrograms: ["accommodations", "ese"],
-  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess", "callCampaign", "parentNotifications", "pulloutNotifications"],
+  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess", "callCampaign", "dataChats", "parentNotifications", "pulloutNotifications"],
   people: ["teacherRoster", "staffRoles"],
   // hallPassMgmt is reached via the Hall Passes admin tools; it has no
   // dedicated nav item so we anchor it to School Admin so the sidebar
@@ -5536,6 +5541,9 @@ function App() {
   // it to its home view (resets any child-held sub-navigation / drill-down).
   const [navHomeTick, setNavHomeTick] = useState(0);
   const [callWorklistOpen, setCallWorklistOpen] = useState(false);
+  // Data Chats — teacher queue modal, opened from the top-bar reminder
+  // icon or the ≤7-days deadline banner.
+  const [dataChatQueueOpen, setDataChatQueueOpen] = useState(false);
   // True after the user clicked "Open" on a row in the Onboarding
   // Checklist. Drives the floating "← Back to Onboarding" banner that
   // overlays every page until the admin returns to the checklist (or
@@ -5760,6 +5768,7 @@ function App() {
     | "pbisWallets"
     | "pbisUsage"
     | "callCampaign"
+    | "dataChats"
   >("hallPasses");
   // Tile Home is a full-screen launcher that takes over the viewport.
   // When the user enters it from the top-right header button we stash
@@ -11194,6 +11203,12 @@ function App() {
           canApproveAst={canApproveAst}
           onOpenAdmin={() => setActiveSection("staffTime")}
         />
+        {/* Data Chats — purple pill for teachers with campaign chats still
+            to log. Opens the personal queue modal. */}
+        <DataChatReminderIcon
+          visible={Boolean(authUser)}
+          onOpen={() => setDataChatQueueOpen(true)}
+        />
         {/* School Store cart — pulses amber for the fulfillment crew when
             there are orders awaiting approval or prep. Clicks into the
             fulfillment dashboard. */}
@@ -12083,6 +12098,15 @@ function App() {
                     label: "Call Campaign",
                     icon: IconUser,
                   })}
+                {/* Data Chats — Core Team pushes template-based one-on-one
+                    check-in campaigns to teachers; families can see topics +
+                    goals via the HeartBEAT when the campaign shares. */}
+                {isCoreTeamMember &&
+                  renderNavItem({
+                    key: "dataChats",
+                    label: "Data Chats",
+                    icon: IconUser,
+                  })}
                 {canManageSettings && (
                   <FeatureGate
                     feature="parentPortal"
@@ -12222,6 +12246,16 @@ function App() {
         <CallInitiativeWorklistModal
           onClose={() => setCallWorklistOpen(false)}
         />
+      )}
+
+      {/* Data Chats — persistent deadline banner once a campaign the
+          teacher owes chats on is ≤7 days out. */}
+      <DataChatDeadlineBanner
+        visible={Boolean(authUser)}
+        onOpen={() => setDataChatQueueOpen(true)}
+      />
+      {dataChatQueueOpen && (
+        <DataChatQueueModal onClose={() => setDataChatQueueOpen(false)} />
       )}
 
       {activeSection === "spotlight" && (
@@ -17736,6 +17770,11 @@ function App() {
       {activeSection === "callCampaign" &&
         effectiveFeatures.FamilyComm &&
         isCoreTeamMember && <CallInitiativeAdminPanel />}
+      {/* Data Chats — Core Team admin: templates + campaign launch,
+          compliance, topic coverage, CSV export. */}
+      {activeSection === "dataChats" && isCoreTeamMember && (
+        <DataChatsAdminPage />
+      )}
       {activeSection === "pulseBrainLab" && isBehaviorSpec && <PulseBrainLabHub />}
       {activeSection === "partneringWithParents" &&
         !isNonExemptOnly &&

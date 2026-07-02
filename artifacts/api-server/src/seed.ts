@@ -441,6 +441,80 @@ export async function ensureCommunicationSchema() {
   );
 }
 
+// Data Chat / Check-In campaign engine (templates + campaigns + logs).
+// Idempotent CREATE TABLE IF NOT EXISTS at boot mirrors the communication
+// schema pattern. The built-in "FAST Data Chat" template is ensured lazily
+// per school by the templates route (first Core Team visit), not here — no
+// school enumeration needed at boot.
+export async function ensureDataChatSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS data_chat_templates (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'custom',
+      built_in BOOLEAN NOT NULL DEFAULT FALSE,
+      checklist_json TEXT NOT NULL DEFAULT '[]',
+      goal_chips_json TEXT NOT NULL DEFAULT '[]',
+      share_with_families BOOLEAN NOT NULL DEFAULT TRUE,
+      archived BOOLEAN NOT NULL DEFAULT FALSE,
+      created_by_staff_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS data_chat_templates_school_idx ON data_chat_templates (school_id, archived)`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS data_chat_campaigns (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      template_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'custom',
+      subject TEXT,
+      assignment_mode TEXT NOT NULL DEFAULT 'selected',
+      selected_teacher_ids_json TEXT NOT NULL DEFAULT '[]',
+      responsible_period INTEGER NOT NULL DEFAULT 1,
+      checklist_json TEXT NOT NULL DEFAULT '[]',
+      goal_chips_json TEXT NOT NULL DEFAULT '[]',
+      share_with_families BOOLEAN NOT NULL DEFAULT TRUE,
+      start_date TEXT NOT NULL,
+      deadline TEXT NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      ended_at TIMESTAMPTZ,
+      created_by_staff_id INTEGER,
+      created_by_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS data_chat_campaigns_school_active_idx ON data_chat_campaigns (school_id, active)`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS data_chat_logs (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      campaign_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      teacher_staff_id INTEGER NOT NULL,
+      subject TEXT,
+      discussed_json TEXT NOT NULL DEFAULT '[]',
+      goal TEXT NOT NULL DEFAULT '',
+      private_note TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS data_chat_logs_pair_unique ON data_chat_logs (campaign_id, teacher_staff_id, student_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS data_chat_logs_school_student_idx ON data_chat_logs (school_id, student_id)`,
+  );
+}
+
 export async function ensureHousesSchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS houses (

@@ -31,6 +31,9 @@ import {
   benchmarkReteachLogTable,
   housesTable,
   attendanceCheckinsTable,
+  dataChatLogsTable,
+  dataChatCampaignsTable,
+  staffTable,
 } from "@workspace/db";
 import { and, eq, desc, isNull, sql, gte, lt } from "drizzle-orm";
 import { getSchoolTimezone } from "./schoolYear.js";
@@ -101,6 +104,12 @@ export interface ParentSnapshot {
     // strategy are never included in the payload — only counts +
     // benchmark codes.
     reteach: boolean;
+    // Data Chats — teacher/student check-in campaigns. Available whenever
+    // shareable rows exist (campaign launched with "share with families");
+    // the per-campaign share flag is the gate, no extra settings column.
+    // Only the discussed topics + goal ever leave the staff side — the
+    // teacher's private note is never included.
+    dataChats: boolean;
   };
   pbis: {
     total: number;
@@ -243,6 +252,14 @@ export interface ParentSnapshot {
       goals: string | null;
     }>;
   };
+  // Shareable data-chat check-ins (topics + goal only; no private note).
+  dataChats: Array<{
+    campaignName: string;
+    teacherName: string;
+    discussedTopics: string[];
+    goal: string | null;
+    date: string; // YYYY-MM-DD
+  }>;
   // OSS (out-of-school suspension) — `daysThisYear` is always populated
   // when sectionsAvailable.oss is true; `recent` lists the most recent
   // assigned days. Reason text is included only when the school enabled
@@ -457,6 +474,8 @@ async function assembleSnapshot(
     reteach:
       gate(settingsRow?.showReteach, false, prefsRow?.showReteach) &&
       Boolean(student.reteachLogsParentVisible),
+    // Set below once shareable data-chat rows are loaded.
+    dataChats: false,
   };
 
   // ----- PBIS -----
@@ -901,6 +920,75 @@ async function assembleSnapshot(
         .limit(20)
     : [];
 
+  // ----- Data Chats (shareable check-in logs) -----
+  // Only campaigns launched with the "share with families" flag. The
+  // teacher's private note stays staff-side — it is never selected here.
+  const dataChatRows = await db
+    .select({
+      id: dataChatLogsTable.id,
+      discussedJson: dataChatLogsTable.discussedJson,
+      goal: dataChatLogsTable.goal,
+      updatedAt: dataChatLogsTable.updatedAt,
+      campaignName: dataChatCampaignsTable.name,
+      checklistJson: dataChatCampaignsTable.checklistJson,
+      teacherName: staffTable.displayName,
+    })
+    .from(dataChatLogsTable)
+    .innerJoin(
+      dataChatCampaignsTable,
+      and(
+        eq(dataChatLogsTable.campaignId, dataChatCampaignsTable.id),
+        eq(dataChatCampaignsTable.schoolId, student.schoolId),
+        eq(dataChatCampaignsTable.shareWithFamilies, true),
+      ),
+    )
+    .leftJoin(
+      staffTable,
+      and(
+        eq(dataChatLogsTable.teacherStaffId, staffTable.id),
+        eq(staffTable.schoolId, student.schoolId),
+      ),
+    )
+    .where(
+      and(
+        eq(dataChatLogsTable.schoolId, student.schoolId),
+        eq(dataChatLogsTable.studentId, student.studentId),
+      ),
+    )
+    .orderBy(desc(dataChatLogsTable.updatedAt))
+    .limit(5);
+  const dataChats: ParentSnapshot["dataChats"] = dataChatRows.map((r) => {
+    let labels: string[] = [];
+    try {
+      const checklist = JSON.parse(r.checklistJson) as Array<{
+        id?: unknown;
+        label?: unknown;
+      }>;
+      const byId = new Map(
+        (Array.isArray(checklist) ? checklist : [])
+          .filter((c) => typeof c?.id === "string" && typeof c?.label === "string")
+          .map((c) => [c.id as string, c.label as string]),
+      );
+      const discussed = JSON.parse(r.discussedJson);
+      labels = (Array.isArray(discussed) ? discussed : [])
+        .map((id) => byId.get(String(id)))
+        .filter((l): l is string => Boolean(l));
+    } catch {
+      labels = [];
+    }
+    return {
+      campaignName: r.campaignName,
+      teacherName: r.teacherName ?? "School staff",
+      discussedTopics: labels,
+      goal: r.goal.trim() ? r.goal : null,
+      date:
+        r.updatedAt instanceof Date
+          ? r.updatedAt.toISOString().slice(0, 10)
+          : String(r.updatedAt).slice(0, 10),
+    };
+  });
+  sectionsAvailable.dataChats = dataChats.length > 0;
+
   // ----- FAST scores (Teacher-Roster parity) -----
   // Single-sourced via loadStudentFastParity so the HeartBEAT PDF renders the
   // same level placements / points-to-next / learning-gain the staff surfaces
@@ -1232,6 +1320,7 @@ async function assembleSnapshot(
       },
       oss: { daysThisYear: ossDaysThisYear, recent: ossRecent },
       reteach: { items: reteachItems },
+      dataChats,
       house: housePayload,
     },
   };

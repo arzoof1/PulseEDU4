@@ -3,6 +3,35 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Data Chat Campaigns (admin-pushed teacher↔student check-ins).** Templates
+  (Core Team CRUD; built-in non-deletable "FAST Data Chat" lazily seeded per
+  school on first templates GET — name/kind locked, checklist/chips/share flag
+  editable; DELETE archives, built-in 400s) vs Campaigns (launched at a
+  teacher set + deadline; checklist/goal-chips/`shareWithFamilies` SNAPSHOTTED
+  into the campaign row at launch so later template edits don't rewrite live
+  campaigns). FAST campaigns (`kind fast_data`, subject ela|math|both) assign
+  each student to their ELA/Math teacher-of-record via `section_roster`;
+  custom campaigns assign selected teachers' rosters for a chosen responsible
+  period. Teacher flow: animated top-bar reminder icon (polls
+  `/api/data-chats/reminder` every 60s) + persistent deadline banner at ≤7
+  days → queue modal (`my-queue`) with per-student log form: snapshot
+  checklist topics, goal chips or custom goal, private teacher note
+  (staff-only, never in any parent payload), FAST mini context pills (shared
+  `FastScorePill`), and past goals from earlier campaigns. Admin page (Family
+  nav group, `activeSection: dataChats`, Core Team): Campaigns + Templates
+  tabs, launch form with staff-directory multi-select + period, campaign
+  detail with per-teacher compliance table, topic-coverage bars, CSV export
+  (`csvCell` neutralizes formula injection), and two-step end confirm. Parent
+  surfacing: when `shareWithFamilies`, logged chats (topics + goal ONLY)
+  render on the parent HeartBEAT dashboard + family PDF
+  (`assembleSnapshot` → `drawDataChatsBlock`; `winAnsiSafe` swaps →/✓ for
+  ASCII since built-in pdfkit fonts are WinAnsi-only). Server:
+  `routes/dataChats.ts` (all queries school-scoped; `loadStaff` tenant guard
+  403s a non-SuperUser actor whose `staff.schoolId` ≠ `req.schoolId`; teacher
+  log POST re-derives queue membership server-side via `computePairs` — a
+  teacher can only log their own assigned students). Schema
+  `lib/db/src/schema/dataChats.ts` + `ensureDataChatSchema` boot migration
+  (`data_chat_templates`/`data_chat_campaigns`/`data_chat_logs`).
 - **HeartBEAT official absences + omit-when-unused attendance metrics.** The
   parent HeartBEAT surfaces (parent dashboard, family PDF used by the weekly
   email + staff print) dropped the kiosk-derived absence ESTIMATE: the "Lost
