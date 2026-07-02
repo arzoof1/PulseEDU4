@@ -44,6 +44,7 @@ import {
   pbisMilestoneEmailsTable,
 } from "@workspace/db";
 import { recommendNextHouse } from "./houses.js";
+import { requireFeature, isFeatureEnabled } from "../lib/featureLicensing.js";
 import { eq, and, or, desc, sql, isNull, inArray, gte, lte, ilike, ne, not } from "drizzle-orm";
 import {
   requireSchool,
@@ -1045,9 +1046,31 @@ router.get("/data-imports/jobs", requireImporter(), async (req, res) => {
       kindPredicate = inArray(importJobsTable.kind, allowed);
     }
   }
-  const where = kindPredicate
-    ? and(scopePredicate, kindPredicate)
-    : scopePredicate;
+  // Feature gate — when the gradebook module is off for this school, its
+  // job history goes dark like the rest of the module (preview/commit and
+  // rollback are gated the same way). Explicit ?kind=gradebook requests
+  // 404 (looks-like-not-exist); unfiltered listings just omit the rows.
+  let excludeGradebook = false;
+  if (scope === "school") {
+    const schoolIdForGate = req.schoolId;
+    if (
+      schoolIdForGate &&
+      !(await isFeatureEnabled(req, schoolIdForGate, "gradebook"))
+    ) {
+      if (kind === "gradebook") {
+        res.status(404).json({ error: "not_found" });
+        return;
+      }
+      excludeGradebook = true;
+    }
+  }
+  const predicates = [scopePredicate, kindPredicate];
+  if (excludeGradebook) {
+    predicates.push(ne(importJobsTable.kind, "gradebook"));
+  }
+  const where = and(
+    ...predicates.filter((p): p is NonNullable<typeof p> => p != null),
+  );
   const rows = await db
     .select()
     .from(importJobsTable)
@@ -1713,6 +1736,17 @@ router.post(
         .status(409)
         .json({ error: `Cannot roll back a ${job.status} job` });
       return;
+    }
+    // Feature gate — gradebook is a licensed module. When the feature is
+    // off for the school, its rollback path must go dark too (matching
+    // the requireFeature("gradebook") guard on preview/commit), or the
+    // module could still mutate grade data while "disabled".
+    if (job.kind === "gradebook" && job.schoolId != null) {
+      const enabled = await isFeatureEnabled(req, job.schoolId, "gradebook");
+      if (!enabled) {
+        res.status(404).json({ error: "not_found" });
+        return;
+      }
     }
     // Gradebook uses job-chaining with a TWO-generation retention window, so
     // only a SINGLE-STEP undo is restorable: rolling back the latest committed
@@ -4161,6 +4195,7 @@ router.post(
 // ---------------------------------------------------------------------------
 router.post(
   "/data-imports/gradebook/preview",
+  requireFeature("gradebook"),
   requireImporter(),
   requireImportKind("gradebook"),
   async (req: Request, res: Response) => {
@@ -4233,6 +4268,7 @@ router.post(
 
 router.post(
   "/data-imports/gradebook/commit",
+  requireFeature("gradebook"),
   requireImporter(),
   requireImportKind("gradebook"),
   async (req: Request, res: Response) => {

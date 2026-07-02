@@ -21,6 +21,7 @@ export * from "./staffDefaults";
 export * from "./staffReceivedLocations";
 export * from "./locationAllowedDestinations";
 export * from "./staff";
+export * from "./staffFeaturePilots";
 export * from "./staffPasswordResets";
 export * from "./kioskActivations";
 export * from "./kioskEnrollTokens";

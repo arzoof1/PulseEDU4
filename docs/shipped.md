@@ -3,6 +3,37 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Feature Enablement + Staff Pilots.** Completed `FEATURE_KEYS` so 9
+  formerly always-on modules (dataChats, pickup, ticketing, tours, esign,
+  brainLab, gradebook, schoolGrade, safetyPlans) carry district
+  `super_feature_*` + school `feature_*` switches (18 new
+  `school_settings` boolean cols, default TRUE; seed `ALTER IF NOT
+  EXISTS` + plans JSONB backfill only-if-absent). Server-enforced:
+  `requireFeature` mounts in `routes/index.ts` (public surfaces stay
+  open — `/ticketing/scan`, `/esign/sign/:token`, `/tours/public/*`,
+  `/tours/walk/*`; parent routes use `requireFeatureForParent`);
+  `schoolSettings` PUT accepts the 9 CamelCase keys via the generic
+  FEATURE_KEYS loop. Staff pilots: new `staff_feature_pilots` table
+  (unique school+featureKey+staffId); `loadEffectiveFeatures` unions the
+  actor's pilot rows when the school toggle is off AND the district
+  super toggle is on (district license always wins); family-facing keys
+  (parentPortal, familyComm, schoolStoreNotify, ticketing) are
+  `pilotable:false` and the pilot PUT 400s them. Admin APIs
+  `GET /api/school-features/pilots` + `PUT .../pilots/:key` (admin/SU at
+  acting school; staffIds validated active same-school; tx
+  delete+insert). Client: School Features grid +9 rows,
+  `FeaturePilotsPanel` (per-feature staff picker, full-replace PUT),
+  App.tsx nav/quick-tile/settings-card/section gating via hoisted
+  `useFeatureVisible`. Gradebook goes dark end-to-end when off:
+  preview/commit (`requireFeature`), rollback 404s gradebook jobs,
+  `/data-imports/jobs` 404s `?kind=gradebook` + omits gradebook rows,
+  and embedded reads (`loadCurrentGrades`) return nothing unless both
+  school-level switches are on (pilots deliberately do NOT re-enable
+  embedded reads — the shared loader has no staff context and feeds
+  parent surfaces). Verified by curl E2E: defaults preserve behavior;
+  school off → 404; pilot member → 200; super off → pilot inert;
+  cross-school staffIds rejected; unknown key 404.
+
 - **Data Chat Follow-Ups.** From `SelfDataChatModal` a teacher can schedule
   ONE pending follow-up per teacher+student (`data_chat_followups`, backed
   by a partial unique index on pending rows + `onConflictDoUpdate` so

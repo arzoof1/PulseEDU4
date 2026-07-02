@@ -6,10 +6,11 @@
 // school_settings) stays in sync.
 
 import { Router, type IRouter, type Request, type Response } from "express";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import {
   db,
   staffTable,
+  staffFeaturePilotsTable,
   plansTable,
   schoolFeatureOverridesTable,
   schoolsTable,
@@ -151,6 +152,137 @@ router.get("/me/features", async (req, res, next) => {
     }
     const map = await loadEffectiveFeatures(req, schoolId);
     res.json({ features: map });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ----------------------------------------------------------------------------
+// Staff feature pilots — school-admin managed.
+//
+// A pilot lets a school run a feature for a handful of staff while the
+// school-wide admin toggle (feature_*) stays OFF. District license
+// (super_feature_*) always wins — loadEffectiveFeatures only honors a
+// pilot row when the super half is on. Family-facing features
+// (pilotable: false in FEATURE_KEYS) are rejected here so a half-piloted
+// rollout can never look broken to parents.
+//
+// Gated on school admin (isAdmin/isSuperUser) at the ACTING school —
+// same authority that owns the paired feature_* toggle in the
+// school-settings PUT.
+// ----------------------------------------------------------------------------
+async function requireSchoolAdmin(
+  req: Request,
+  res: Response,
+): Promise<{ staff: StaffRow; schoolId: number } | null> {
+  const s = await loadStaff(req);
+  if (!s) {
+    res.status(401).json({ error: "unauthorized" });
+    return null;
+  }
+  if (!s.isAdmin && !s.isSuperUser) {
+    res.status(403).json({ error: "forbidden" });
+    return null;
+  }
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(400).json({ error: "no school context" });
+    return null;
+  }
+  return { staff: s, schoolId };
+}
+
+router.get("/school-features/pilots", async (req, res, next) => {
+  try {
+    const ctx = await requireSchoolAdmin(req, res);
+    if (!ctx) return;
+    const rows = await db
+      .select({
+        featureKey: staffFeaturePilotsTable.featureKey,
+        staffId: staffFeaturePilotsTable.staffId,
+        displayName: staffTable.displayName,
+      })
+      .from(staffFeaturePilotsTable)
+      .innerJoin(staffTable, eq(staffTable.id, staffFeaturePilotsTable.staffId))
+      .where(eq(staffFeaturePilotsTable.schoolId, ctx.schoolId));
+    const pilots: Record<string, { staffId: number; displayName: string }[]> =
+      {};
+    for (const r of rows) {
+      (pilots[r.featureKey] ??= []).push({
+        staffId: r.staffId,
+        displayName: r.displayName ?? "",
+      });
+    }
+    res.json({ pilots });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put("/school-features/pilots/:key", async (req, res, next) => {
+  try {
+    const ctx = await requireSchoolAdmin(req, res);
+    if (!ctx) return;
+    const key = String(req.params.key);
+    const spec = FEATURE_KEYS.find((f) => f.key === key);
+    if (!spec) {
+      res.status(404).json({ error: "unknown feature key" });
+      return;
+    }
+    if (spec.pilotable === false) {
+      res.status(400).json({
+        error:
+          "This feature is family-facing and cannot be piloted per-staff — turn it on for the whole school instead.",
+      });
+      return;
+    }
+    const raw = (req.body as { staffIds?: unknown })?.staffIds;
+    if (!Array.isArray(raw) || raw.some((v) => !Number.isInteger(v))) {
+      res.status(400).json({ error: "staffIds must be an integer array" });
+      return;
+    }
+    const staffIds = [...new Set(raw as number[])];
+    if (staffIds.length > 0) {
+      // Every pilot member must be ACTIVE staff at the acting school —
+      // otherwise an admin could attach ids from another tenant.
+      const valid = await db
+        .select({ id: staffTable.id })
+        .from(staffTable)
+        .where(
+          and(
+            inArray(staffTable.id, staffIds),
+            eq(staffTable.schoolId, ctx.schoolId),
+            eq(staffTable.active, true),
+          ),
+        );
+      if (valid.length !== staffIds.length) {
+        res.status(400).json({
+          error: "One or more staff are not active staff at this school",
+        });
+        return;
+      }
+    }
+    await db.transaction(async (tx) => {
+      await tx
+        .delete(staffFeaturePilotsTable)
+        .where(
+          and(
+            eq(staffFeaturePilotsTable.schoolId, ctx.schoolId),
+            eq(staffFeaturePilotsTable.featureKey, key),
+          ),
+        );
+      if (staffIds.length > 0) {
+        await tx.insert(staffFeaturePilotsTable).values(
+          staffIds.map((sid) => ({
+            schoolId: ctx.schoolId,
+            featureKey: key,
+            staffId: sid,
+            grantedByStaffId: ctx.staff.id,
+          })),
+        );
+      }
+    });
+    res.json({ ok: true, staffIds });
   } catch (err) {
     next(err);
   }

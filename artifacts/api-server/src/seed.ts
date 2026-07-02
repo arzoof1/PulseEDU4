@@ -10136,6 +10136,73 @@ export async function ensureEligibilitySchema(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS is_athletic_director BOOLEAN NOT NULL DEFAULT FALSE`,
   );
+
+  // ---------------------------------------------------------------------------
+  // Feature-checklist completion: two-tier switches for modules that shipped
+  // always-on (Data Chats, Pick-Up, Ticketing, Tours, E-Sign, Brain Lab,
+  // Gradebook, School Grade Calc, Safety Plans). Both halves default TRUE so
+  // nothing changes for existing schools until someone flips a switch.
+  // ---------------------------------------------------------------------------
+  for (const col of [
+    "data_chats",
+    "pickup",
+    "ticketing",
+    "tours",
+    "esign",
+    "brain_lab",
+    "gradebook",
+    "school_grade",
+    "safety_plans",
+  ]) {
+    await db.execute(
+      sql.raw(
+        `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS feature_${col} BOOLEAN NOT NULL DEFAULT TRUE`,
+      ),
+    );
+    await db.execute(
+      sql.raw(
+        `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS super_feature_${col} BOOLEAN NOT NULL DEFAULT TRUE`,
+      ),
+    );
+  }
+
+  // Per-staff feature pilot grants (school admin runs a feature for a few
+  // staff while the school-wide toggle stays OFF). Generic feature_key —
+  // validated against FEATURE_KEYS at the API layer.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS staff_feature_pilots (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      feature_key TEXT NOT NULL,
+      staff_id INTEGER NOT NULL,
+      granted_by_staff_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS staff_feature_pilots_unique
+      ON staff_feature_pilots (school_id, feature_key, staff_id)
+  `);
+
+  // Backfill the new feature keys into every existing plan's features JSONB
+  // (only-if-absent). Without this, the next plan reapply would flip the
+  // previously-always-on modules OFF for every school on a plan, because
+  // applyPlanFlagsToSchool writes `features[key] === true` for every key in
+  // FEATURE_KEYS. Only-if-absent keeps this idempotent AND respects a
+  // district later deliberately setting a key to false.
+  await db.execute(sql`
+    UPDATE plans SET features = features || jsonb_build_object(
+      'dataChats',   COALESCE(features->'dataChats',   'true'::jsonb),
+      'pickup',      COALESCE(features->'pickup',      'true'::jsonb),
+      'ticketing',   COALESCE(features->'ticketing',   'true'::jsonb),
+      'tours',       COALESCE(features->'tours',       'true'::jsonb),
+      'esign',       COALESCE(features->'esign',       'true'::jsonb),
+      'brainLab',    COALESCE(features->'brainLab',    'true'::jsonb),
+      'gradebook',   COALESCE(features->'gradebook',   'true'::jsonb),
+      'schoolGrade', COALESCE(features->'schoolGrade', 'true'::jsonb),
+      'safetyPlans', COALESCE(features->'safetyPlans', 'true'::jsonb)
+    )
+  `);
 }
 
 // =============================================================================
