@@ -486,3 +486,9 @@ id = "zJfko-_5fGYuuE-2sn-er"
 uri = "file://exports/FAKE_Student_LIVE_Grade_Report-School1-Full.xlsx"
 type = "table"
 title = "School-1 Full Grade Report (Skyward-style, all students)"
+
+[[outputs]]
+id = "Arn_WcsWVB_MxgwrY9CL7"
+uri = "file://exports/PulseEDU-Feature-Enablement-Migration-2026-07-02.pdf"
+type = "pdf"
+title = "Migration Guide — Feature Enablement + Staff Pilots (Jul 2, 2026)"
