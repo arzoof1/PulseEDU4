@@ -24884,10 +24884,37 @@ function App() {
             pilotKey: "schoolGrade",
           },
         ];
+        // Feature dependency map — mirrors the `requires` / `recommends`
+        // edges in lib/featureLicensing.ts FEATURE_KEYS, keyed by this
+        // panel's PascalCase keys. `requires` = HARD (the feature is
+        // non-functional without the target); `recommends` = SOFT (works
+        // but degraded). Keep in lockstep with the server registry so the
+        // school-admin panel warns about the same couplings the SuperUser
+        // licensing editor blocks on.
+        const FEATURE_DEPS: Record<
+          string,
+          { requires?: string[]; recommends?: string[] }
+        > = {
+          SchoolStore: { requires: ["Pbis"] },
+          Gradebook: { requires: ["DataImports"] },
+          DataChats: { recommends: ["Academics"] },
+          SchoolGrade: { recommends: ["Academics"] },
+        };
+        // Friendly labels for dependency targets (some, e.g. Academics /
+        // Data Imports, aren't rows in this panel — they're district-level).
+        const DEP_LABELS: Record<string, string> = {
+          Pbis: "PBIS Points",
+          DataImports: "Data Imports",
+          Academics: "Academics",
+        };
         const ssRec = schoolSettings as Record<string, unknown>;
         const adminVal = (k: string): boolean => ssRec[`feature${k}`] !== false;
         const superVal = (k: string): boolean =>
           ssRec[`superFeature${k}`] !== false;
+        // A dependency target is satisfied only when it is EFFECTIVELY on
+        // (district-allowed AND school-enabled) — the same rule the runtime
+        // gate applies.
+        const effectiveVal = (k: string): boolean => superVal(k) && adminVal(k);
         return (
           <div className="card" style={{ marginTop: "1rem" }}>
             <h2 style={{ marginTop: 0 }}>School Features</h2>
@@ -24943,6 +24970,20 @@ function App() {
                 const sup = superVal(f.key);
                 const adm = adminVal(f.key);
                 const adminLocked = !sup; // SuperUser-off forces the admin checkbox off.
+                // Dependency check — only meaningful once this feature is
+                // effectively live (both gates on). Warns about targets that
+                // are off so admins aren't surprised that a live feature is
+                // silently broken (hard) or degraded (soft).
+                const deps = FEATURE_DEPS[f.key];
+                const featureLive = sup && adm;
+                const missingRequires =
+                  featureLive && deps?.requires
+                    ? deps.requires.filter((t) => !effectiveVal(t))
+                    : [];
+                const missingRecommends =
+                  featureLive && deps?.recommends
+                    ? deps.recommends.filter((t) => !effectiveVal(t))
+                    : [];
                 return (
                   <Fragment key={f.key}>
                     <div>
@@ -24952,6 +24993,39 @@ function App() {
                       >
                         {f.help}
                       </div>
+                      {missingRequires.length > 0 && (
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: "#b91c1c",
+                            marginTop: 2,
+                            fontWeight: 500,
+                          }}
+                        >
+                          ⚠ Requires{" "}
+                          {missingRequires
+                            .map((t) => DEP_LABELS[t] ?? t)
+                            .join(", ")}{" "}
+                          — turn{" "}
+                          {missingRequires.length > 1 ? "them" : "it"} on or
+                          this feature won&rsquo;t work.
+                        </div>
+                      )}
+                      {missingRecommends.length > 0 && (
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: "#b45309",
+                            marginTop: 2,
+                          }}
+                        >
+                          Works best with{" "}
+                          {missingRecommends
+                            .map((t) => DEP_LABELS[t] ?? t)
+                            .join(", ")}{" "}
+                          enabled.
+                        </div>
+                      )}
                     </div>
                     {isSuperUser && (
                       <input
