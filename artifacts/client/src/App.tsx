@@ -5926,6 +5926,24 @@ function App() {
     superFeatureParentPortal: boolean;
     featureAcademicEvidence: boolean;
     superFeatureAcademicEvidence: boolean;
+    featureDataChats: boolean;
+    superFeatureDataChats: boolean;
+    featurePickup: boolean;
+    superFeaturePickup: boolean;
+    featureTicketing: boolean;
+    superFeatureTicketing: boolean;
+    featureTours: boolean;
+    superFeatureTours: boolean;
+    featureEsign: boolean;
+    superFeatureEsign: boolean;
+    featureBrainLab: boolean;
+    superFeatureBrainLab: boolean;
+    featureGradebook: boolean;
+    superFeatureGradebook: boolean;
+    featureSchoolGrade: boolean;
+    superFeatureSchoolGrade: boolean;
+    featureSafetyPlans: boolean;
+    superFeatureSafetyPlans: boolean;
   }>({
     schoolName: "",
     fromName: "",
@@ -5990,6 +6008,24 @@ function App() {
     superFeatureParentPortal: true,
     featureAcademicEvidence: true,
     superFeatureAcademicEvidence: true,
+    featureDataChats: true,
+    superFeatureDataChats: true,
+    featurePickup: true,
+    superFeaturePickup: true,
+    featureTicketing: true,
+    superFeatureTicketing: true,
+    featureTours: true,
+    superFeatureTours: true,
+    featureEsign: true,
+    superFeatureEsign: true,
+    featureBrainLab: true,
+    superFeatureBrainLab: true,
+    featureGradebook: true,
+    superFeatureGradebook: true,
+    featureSchoolGrade: true,
+    superFeatureSchoolGrade: true,
+    featureSafetyPlans: true,
+    superFeatureSafetyPlans: true,
   });
   const [settingsStatus, setSettingsStatus] = useState<
     "idle" | "saving" | "saved" | "error"
@@ -7872,6 +7908,24 @@ function App() {
           superFeatureAcademicEvidence: boolOrTrue(
             data.superFeatureAcademicEvidence,
           ),
+          featureDataChats: boolOrTrue(data.featureDataChats),
+          superFeatureDataChats: boolOrTrue(data.superFeatureDataChats),
+          featurePickup: boolOrTrue(data.featurePickup),
+          superFeaturePickup: boolOrTrue(data.superFeaturePickup),
+          featureTicketing: boolOrTrue(data.featureTicketing),
+          superFeatureTicketing: boolOrTrue(data.superFeatureTicketing),
+          featureTours: boolOrTrue(data.featureTours),
+          superFeatureTours: boolOrTrue(data.superFeatureTours),
+          featureEsign: boolOrTrue(data.featureEsign),
+          superFeatureEsign: boolOrTrue(data.superFeatureEsign),
+          featureBrainLab: boolOrTrue(data.featureBrainLab),
+          superFeatureBrainLab: boolOrTrue(data.superFeatureBrainLab),
+          featureGradebook: boolOrTrue(data.featureGradebook),
+          superFeatureGradebook: boolOrTrue(data.superFeatureGradebook),
+          featureSchoolGrade: boolOrTrue(data.featureSchoolGrade),
+          superFeatureSchoolGrade: boolOrTrue(data.superFeatureSchoolGrade),
+          featureSafetyPlans: boolOrTrue(data.featureSafetyPlans),
+          superFeatureSafetyPlans: boolOrTrue(data.superFeatureSafetyPlans),
         }),
       )
       .catch((err) => console.error("Failed to load school settings:", err));
@@ -8020,6 +8074,24 @@ function App() {
         superFeatureAcademicEvidence: boolOrTrue(
           data.superFeatureAcademicEvidence,
         ),
+        featureDataChats: boolOrTrue(data.featureDataChats),
+        superFeatureDataChats: boolOrTrue(data.superFeatureDataChats),
+        featurePickup: boolOrTrue(data.featurePickup),
+        superFeaturePickup: boolOrTrue(data.superFeaturePickup),
+        featureTicketing: boolOrTrue(data.featureTicketing),
+        superFeatureTicketing: boolOrTrue(data.superFeatureTicketing),
+        featureTours: boolOrTrue(data.featureTours),
+        superFeatureTours: boolOrTrue(data.superFeatureTours),
+        featureEsign: boolOrTrue(data.featureEsign),
+        superFeatureEsign: boolOrTrue(data.superFeatureEsign),
+        featureBrainLab: boolOrTrue(data.featureBrainLab),
+        superFeatureBrainLab: boolOrTrue(data.superFeatureBrainLab),
+        featureGradebook: boolOrTrue(data.featureGradebook),
+        superFeatureGradebook: boolOrTrue(data.superFeatureGradebook),
+        featureSchoolGrade: boolOrTrue(data.featureSchoolGrade),
+        superFeatureSchoolGrade: boolOrTrue(data.superFeatureSchoolGrade),
+        featureSafetyPlans: boolOrTrue(data.featureSafetyPlans),
+        superFeatureSafetyPlans: boolOrTrue(data.superFeatureSafetyPlans),
       });
       setSettingsStatus("saved");
       setTimeout(() => setSettingsStatus("idle"), 2000);
