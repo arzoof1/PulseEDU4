@@ -32,6 +32,7 @@ import Tier3WeeklyForm from "./Tier3WeeklyForm";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 import { LEVEL_BG, LEVEL_FG, PmDelta, nextStopCaption } from "./FastScorePill";
 import { TeacherPicker } from "./TeacherPicker";
+import { SelfDataChatModal } from "./DataChats";
 import { type TeacherOpt } from "./teacherDepartments";
 
 // Top-level tab in this page. "roster" is the original FAST PM
@@ -2124,6 +2125,28 @@ export default function TeacherRosterPage({
     studentName: string;
     localSisId?: string | null;
   } | null>(null);
+  // Inline data-chat icon: which student is being chatted with, plus the
+  // set of students still PENDING in one of this teacher's active
+  // campaigns (tints the icon purple + logging counts toward the campaign).
+  const [chatModal, setChatModal] = useState<string | null>(null);
+  const [pendingChatIds, setPendingChatIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [chatTick, setChatTick] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    authFetch("/api/data-chats/pending-students", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { studentIds?: string[] } | null) => {
+        if (!cancelled && Array.isArray(d?.studentIds)) {
+          setPendingChatIds(new Set(d.studentIds));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [chatTick]);
   const [negBehaviors, setNegBehaviors] = useState<NegBehavior[]>([]);
   const [ivTypes, setIvTypes] = useState<IvType[]>([]);
   useEffect(() => {
@@ -3133,6 +3156,41 @@ export default function TeacherRosterPage({
                         <span aria-hidden="true">📝</span>
                         <span>Log</span>
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => setChatModal(row.studentId)}
+                        title={
+                          pendingChatIds.has(row.studentId)
+                            ? `Data chat pending for ${row.firstName} ${row.lastName} — log it now`
+                            : `Log a data chat with ${row.firstName} ${row.lastName}`
+                        }
+                        aria-label={`Log a data chat with ${row.firstName} ${row.lastName}`}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          border: pendingChatIds.has(row.studentId)
+                            ? "1px solid #c4b5fd"
+                            : "1px solid #e2e8f0",
+                          background: pendingChatIds.has(row.studentId)
+                            ? "#f5f3ff"
+                            : "#f8fafc",
+                          color: pendingChatIds.has(row.studentId)
+                            ? "#6d28d9"
+                            : "#475569",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          lineHeight: 1.2,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span aria-hidden="true">💬</span>
+                        <span>
+                          {pendingChatIds.has(row.studentId) ? "Chat!" : "Chat"}
+                        </span>
+                      </button>
                       {sepSectionId != null && (() => {
                         const n = sepCountByStudent.get(row.studentId) ?? 0;
                         // Two-state icon per the product spec:
@@ -3406,6 +3464,13 @@ export default function TeacherRosterPage({
             />
           </div>
         </div>
+      )}
+      {chatModal && (
+        <SelfDataChatModal
+          studentId={chatModal}
+          onClose={() => setChatModal(null)}
+          onLogged={() => setChatTick((n) => n + 1)}
+        />
       )}
     </div>
   );

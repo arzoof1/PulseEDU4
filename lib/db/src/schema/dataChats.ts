@@ -78,6 +78,14 @@ export const dataChatCampaignsTable = pgTable(
       .notNull()
       .default("[]"),
     responsiblePeriod: integer("responsible_period").notNull().default(1),
+    // Student-scope criteria used at launch (display + resolution mode).
+    // JSON: { type: 'all'|'flags'|'df'|'handpicked', flags?: string[],
+    //         studentCount?: number, gradebookAsOf?: string }.
+    // NULL/absent = 'all' (legacy campaigns). When type != 'all' the student
+    // list is SNAPSHOTTED into data_chat_campaign_students at launch and
+    // readers use the snapshot; 'all' campaigns stay live-derived so new
+    // enrollments join the queue.
+    scopeJson: text("scope_json"),
     // Snapshots (see header comment).
     checklistJson: text("checklist_json").notNull().default("[]"),
     goalChipsJson: text("goal_chips_json").notNull().default("[]"),
@@ -100,6 +108,35 @@ export const dataChatCampaignsTable = pgTable(
   }),
 );
 
+// Snapshot of the (teacher, student) worklist for campaigns launched with a
+// narrowed student scope (scope type != 'all'). Written once at launch;
+// readers use these rows instead of live pair derivation so the list an
+// admin previewed is exactly the list teachers work — a student whose grade
+// improves mid-campaign does NOT silently drop off the queue.
+export const dataChatCampaignStudentsTable = pgTable(
+  "data_chat_campaign_students",
+  {
+    id: serial("id").primaryKey(),
+    schoolId: integer("school_id").notNull(),
+    campaignId: integer("campaign_id").notNull(),
+    studentId: text("student_id").notNull(),
+    teacherStaffId: integer("teacher_staff_id").notNull(),
+    // 'ela' | 'math' | null (custom campaigns).
+    subject: text("subject"),
+  },
+  (t) => ({
+    pairUnique: uniqueIndex("data_chat_campaign_students_pair_unique").on(
+      t.campaignId,
+      t.teacherStaffId,
+      t.studentId,
+    ),
+    campaignIdx: index("data_chat_campaign_students_campaign_idx").on(
+      t.schoolId,
+      t.campaignId,
+    ),
+  }),
+);
+
 // One row per (campaign, teacher, student) — a student with different ELA
 // and Math teachers in a 'both' campaign is chatted (and logged) by each.
 export const dataChatLogsTable = pgTable(
@@ -110,6 +147,11 @@ export const dataChatLogsTable = pgTable(
     campaignId: integer("campaign_id").notNull(),
     studentId: text("student_id").notNull(),
     teacherStaffId: integer("teacher_staff_id").notNull(),
+    // Repeat-chat sequence. Campaign logs are ALWAYS seq 0 — re-logging the
+    // same (campaign, teacher, student) upserts in place. Self-serve chats
+    // (the per-school 'self_serve' bucket campaign) insert max+1 so a
+    // teacher can log the same student repeatedly and keep full history.
+    entrySeq: integer("entry_seq").notNull().default(0),
     // Subject this pair was derived from ('ela'|'math'|null for custom).
     subject: text("subject"),
     // JSON array of checklist item ids checked.
@@ -127,10 +169,11 @@ export const dataChatLogsTable = pgTable(
       .defaultNow(),
   },
   (t) => ({
-    pairUnique: uniqueIndex("data_chat_logs_pair_unique").on(
+    pairUnique: uniqueIndex("data_chat_logs_pair_seq_unique").on(
       t.campaignId,
       t.teacherStaffId,
       t.studentId,
+      t.entrySeq,
     ),
     studentIdx: index("data_chat_logs_school_student_idx").on(
       t.schoolId,

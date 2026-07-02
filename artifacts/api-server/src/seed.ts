@@ -508,10 +508,37 @@ export async function ensureDataChatSchema() {
     )
   `);
   await db.execute(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS data_chat_logs_pair_unique ON data_chat_logs (campaign_id, teacher_staff_id, student_id)`,
+    sql`CREATE INDEX IF NOT EXISTS data_chat_logs_school_student_idx ON data_chat_logs (school_id, student_id)`,
+  );
+  // Additive: student-scope selector + snapshot table + self-serve repeat
+  // chats. entry_seq replaces the 3-column pair uniqueness with a 4-column
+  // one (campaign logs stay seq 0 = same upsert semantics; self-serve
+  // inserts max+1 for history).
+  await db.execute(
+    sql`ALTER TABLE data_chat_campaigns ADD COLUMN IF NOT EXISTS scope_json TEXT`,
   );
   await db.execute(
-    sql`CREATE INDEX IF NOT EXISTS data_chat_logs_school_student_idx ON data_chat_logs (school_id, student_id)`,
+    sql`ALTER TABLE data_chat_logs ADD COLUMN IF NOT EXISTS entry_seq INTEGER NOT NULL DEFAULT 0`,
+  );
+  await db.execute(sql`DROP INDEX IF EXISTS data_chat_logs_pair_unique`);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS data_chat_logs_pair_seq_unique ON data_chat_logs (campaign_id, teacher_staff_id, student_id, entry_seq)`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS data_chat_campaign_students (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      campaign_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      teacher_staff_id INTEGER NOT NULL,
+      subject TEXT
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS data_chat_campaign_students_pair_unique ON data_chat_campaign_students (campaign_id, teacher_staff_id, student_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS data_chat_campaign_students_campaign_idx ON data_chat_campaign_students (school_id, campaign_id)`,
   );
 }
 

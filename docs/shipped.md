@@ -3,6 +3,30 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Data Chat scopes + roster chat icon.** (1) New Campaign launcher gained a
+  student scope selector — All / support flags (ESE·504·ELL) / D-or-F in class
+  (current grade <70 from the latest committed gradebook via
+  `loadStudentGrades`; on FAST campaigns the failing course must infer to the
+  pair's subject) / hand-picked (typeahead via `/api/student-lookup/search`,
+  max 500) — with a "Preview who's included" count endpoint
+  (`POST /data-chats/campaigns/preview`). Narrower scopes are SNAPSHOTTED at
+  launch into `data_chat_campaign_students`; `resolvePairs` applies the
+  snapshot on every downstream surface (queue, reminder, pending, compliance)
+  so mid-campaign roster/flag/grade changes never shift the assignment. Scope
+  badge on campaign list rows + detail banner. `inferFastSubject` broadened to
+  cover the gradebook import's 15-char truncated `course_desc` ("LANG ARTS",
+  trailing "MAT"). (2) Teacher Roster rows gained an inline 💬 Chat button —
+  purple "Chat!" tint when the student is pending in one of the teacher's
+  active campaigns (`GET /data-chats/pending-students`); clicking opens
+  `SelfDataChatModal` which fetches `GET /data-chats/self-context/:studentId`
+  (mode `campaign` → logging counts toward the campaign via `POST /logs`;
+  mode `self` → logs to a lazily created per-school hidden `self_serve`
+  campaign reusing the built-in FAST template via `POST /self-log`,
+  `entry_seq` allows repeat chats). Self-serve campaigns are excluded (`ne()`)
+  from my-queue/reminder/pending/campaign lists. Both paths are gated
+  server-side: campaign logs re-derive queue membership; self routes require
+  `teacherHasStudent` (own roster only), school-scoped.
+
 - **Data Chat Campaigns (admin-pushed teacher↔student check-ins).** Templates
   (Core Team CRUD; built-in non-deletable "FAST Data Chat" lazily seeded per
   school on first templates GET — name/kind locked, checklist/chips/share flag

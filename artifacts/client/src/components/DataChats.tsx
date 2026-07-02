@@ -104,6 +104,30 @@ type TemplateRow = {
   shareWithFamilies: boolean;
 };
 
+type ScopeInfo = {
+  type: "all" | "flags" | "df" | "handpicked";
+  flags?: string[];
+  studentCount?: number;
+};
+
+const SCOPE_FLAG_LABELS: Record<string, string> = {
+  ese: "ESE",
+  is504: "504",
+  ell: "ELL",
+};
+
+function scopeLabel(scope: ScopeInfo | null | undefined): string | null {
+  if (!scope || scope.type === "all") return null;
+  if (scope.type === "flags") {
+    const f = (scope.flags ?? []).map((x) => SCOPE_FLAG_LABELS[x] ?? x);
+    return `Scope: ${f.join(" / ") || "support flags"}`;
+  }
+  if (scope.type === "df") return "Scope: D or F in class";
+  return `Scope: hand-picked${
+    scope.studentCount != null ? ` (${scope.studentCount})` : ""
+  }`;
+}
+
 type CampaignRow = {
   id: number;
   name: string;
@@ -119,6 +143,7 @@ type CampaignRow = {
   done: number;
   teacherCount: number;
   createdByName: string | null;
+  scope?: ScopeInfo | null;
 };
 
 type CampaignDetail = {
@@ -146,6 +171,7 @@ type CampaignDetail = {
     count: number;
     loggedTotal: number;
   }>;
+  scope?: ScopeInfo | null;
 };
 
 type DirectoryStaff = { id: number; displayName: string; email: string | null };
@@ -511,11 +537,15 @@ function LogForm({
   student,
   onSaved,
   onCancel,
+  selfServe = false,
 }: {
   entry: QueueEntry;
   student: QueueStudent;
   onSaved: () => void;
   onCancel: () => void;
+  // Teacher-initiated chat (no pending campaign): POST /self-log — appends a
+  // NEW history row each time instead of upserting the campaign pair.
+  selfServe?: boolean;
 }) {
   const c = entry.campaign;
   const [discussed, setDiscussed] = useState<Set<string>>(
@@ -545,17 +575,29 @@ function LogForm({
     setSaving(true);
     setErr(null);
     try {
-      const r = await authFetch("/api/data-chats/logs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          campaignId: c.id,
-          studentId: student.studentId,
-          discussed: [...discussed],
-          goal,
-          privateNote,
-        }),
-      });
+      const r = await authFetch(
+        selfServe ? "/api/data-chats/self-log" : "/api/data-chats/logs",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            selfServe
+              ? {
+                  studentId: student.studentId,
+                  discussed: [...discussed],
+                  goal,
+                  privateNote,
+                }
+              : {
+                  campaignId: c.id,
+                  studentId: student.studentId,
+                  discussed: [...discussed],
+                  goal,
+                  privateNote,
+                },
+          ),
+        },
+      );
       const d = (await r.json().catch(() => null)) as {
         ok?: boolean;
         error?: string;
@@ -1025,6 +1067,203 @@ export function DataChatQueueModal({ onClose }: { onClose: () => void }) {
 }
 
 // ---------------------------------------------------------------------------
+// Self-serve chat modal (Teacher Roster inline icon). Fetches the per-student
+// context — if the student is pending in one of this teacher's active
+// campaigns, the log counts toward it (mode 'campaign'); otherwise the chat
+// records against the school's self-serve bucket (mode 'self').
+// ---------------------------------------------------------------------------
+
+type SelfContext = {
+  mode: "campaign" | "self";
+  campaign: {
+    id: number;
+    name: string;
+    deadline: string | null;
+    daysLeft: number | null;
+    shareWithFamilies: boolean;
+    checklist: ChecklistItem[];
+    goalChips: string[];
+  };
+  subject: "ela" | "math" | null;
+  student: {
+    studentId: string;
+    name: string;
+    grade: number | null;
+    localSisId: string | null;
+  };
+  fast: Partial<Record<"ela" | "math", FastSet>> | null;
+  pastGoals: Array<{ campaignName: string; goal: string; date: string }>;
+};
+
+export function SelfDataChatModal({
+  studentId,
+  onClose,
+  onLogged,
+}: {
+  studentId: string;
+  onClose: () => void;
+  onLogged?: () => void;
+}) {
+  const [ctx, setCtx] = useState<SelfContext | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    ensureStyles();
+    let cancelled = false;
+    authFetch(`/api/data-chats/self-context/${encodeURIComponent(studentId)}`, {
+      cache: "no-store",
+    })
+      .then(async (r) => {
+        const d = (await r.json().catch(() => null)) as
+          | (SelfContext & { error?: string })
+          | null;
+        if (cancelled) return;
+        if (!r.ok || !d || d.error) {
+          setErr(d?.error ?? "Couldn't load the chat form.");
+          return;
+        }
+        setCtx(d);
+      })
+      .catch(() => {
+        if (!cancelled) setErr("Couldn't load the chat form.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId]);
+
+  const entry: QueueEntry | null = ctx
+    ? {
+        campaign: {
+          id: ctx.campaign.id,
+          name: ctx.campaign.name,
+          // Render the FAST mini-context whenever scores exist — the
+          // built-in template is FAST-oriented either way.
+          kind: ctx.fast && Object.keys(ctx.fast).length > 0 ? "fast_data" : "self_serve",
+          subject: ctx.subject,
+          deadline: ctx.campaign.deadline ?? "",
+          daysLeft: ctx.campaign.daysLeft ?? 9999,
+          shareWithFamilies: ctx.campaign.shareWithFamilies,
+          checklist: ctx.campaign.checklist,
+          goalChips: ctx.campaign.goalChips,
+        },
+        students: [],
+      }
+    : null;
+  const student: QueueStudent | null = ctx
+    ? {
+        studentId: ctx.student.studentId,
+        name: ctx.student.name,
+        lastFirst: ctx.student.name,
+        localSisId: ctx.student.localSisId,
+        grade: ctx.student.grade,
+        subject: ctx.subject,
+        fast: ctx.fast,
+        pastGoals: ctx.pastGoals,
+        logged: null,
+      }
+    : null;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Data chat"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1000,
+        background: "rgba(15, 23, 42, 0.55)",
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "center",
+        padding: "3vh 12px",
+        overflowY: "auto",
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        style={{
+          width: "min(680px, 100%)",
+          background: "var(--surface, #fff)",
+          color: "var(--text, #0f172a)",
+          borderRadius: 14,
+          padding: "1.1rem 1.2rem",
+          maxHeight: "92vh",
+          overflowY: "auto",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: "0.6rem",
+          }}
+        >
+          <div style={{ fontWeight: 800, fontSize: "1.05rem" }}>
+            💬 Data chat
+            {ctx && (
+              <span
+                style={{
+                  marginLeft: 10,
+                  fontSize: "0.75rem",
+                  fontWeight: 700,
+                  color: ctx.mode === "campaign" ? "#7c3aed" : "#0891b2",
+                  textTransform: "uppercase",
+                }}
+              >
+                {ctx.mode === "campaign"
+                  ? `Counts toward: ${ctx.campaign.name}`
+                  : "Teacher check-in"}
+              </span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            style={{
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              fontSize: "1.2rem",
+              color: "var(--text-subtle, #94a3b8)",
+              lineHeight: 1,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+        {err && <ErrText text={err} />}
+        {!err && (!ctx || !entry || !student) && (
+          <div
+            style={{ color: "var(--text-subtle, #94a3b8)", padding: "0.5rem 0" }}
+          >
+            Loading…
+          </div>
+        )}
+        {ctx && entry && student && (
+          <LogForm
+            entry={entry}
+            student={student}
+            selfServe={ctx.mode === "self"}
+            onSaved={() => {
+              onLogged?.();
+              onClose();
+            }}
+            onCancel={onClose}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Admin page — templates + campaigns (Core Team; server re-enforces)
 // ---------------------------------------------------------------------------
 
@@ -1361,6 +1600,107 @@ function LaunchForm({
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // Student scope
+  const [scopeType, setScopeType] = useState<ScopeInfo["type"]>("all");
+  const [scopeFlags, setScopeFlags] = useState<Set<string>>(new Set());
+  const [picked, setPicked] = useState<
+    Array<{ studentId: string; name: string; localSisId: string | null }>
+  >([]);
+  const [studentQuery, setStudentQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<
+    Array<{
+      studentId: string;
+      firstName: string;
+      lastName: string;
+      grade: string;
+      localSisId: string | null;
+    }>
+  >([]);
+  const [preview, setPreview] = useState<{
+    students: number;
+    pairs: number;
+    teachers: number;
+    unmatchedStudentIds: string[];
+  } | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+
+  // Typeahead for hand-picked students (debounced).
+  useEffect(() => {
+    if (scopeType !== "handpicked" || studentQuery.trim().length < 2) {
+      setSearchResults([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      authFetch(
+        `/api/student-lookup/search?q=${encodeURIComponent(studentQuery.trim())}`,
+      )
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (d?.students) setSearchResults(d.students);
+        })
+        .catch(() => {});
+    }, 250);
+    return () => clearTimeout(t);
+  }, [scopeType, studentQuery]);
+
+  // Any input change invalidates a previous preview.
+  useEffect(() => {
+    setPreview(null);
+  }, [templateId, subject, teacherIds, period, scopeType, scopeFlags, picked]);
+
+  const buildScopeBody = (): Record<string, unknown> | null => {
+    if (scopeType === "all") return null;
+    if (scopeType === "flags") return { type: "flags", flags: [...scopeFlags] };
+    if (scopeType === "df") return { type: "df" };
+    return { type: "handpicked", studentIds: picked.map((p) => p.studentId) };
+  };
+
+  const validateScope = (): string | null => {
+    if (scopeType === "flags" && scopeFlags.size === 0)
+      return "Pick at least one support flag.";
+    if (scopeType === "handpicked" && picked.length === 0)
+      return "Pick at least one student.";
+    return null;
+  };
+
+  const runPreview = async () => {
+    if (!tpl) return;
+    const scopeErr = validateScope();
+    if (scopeErr) {
+      setErr(scopeErr);
+      return;
+    }
+    setPreviewing(true);
+    setErr(null);
+    try {
+      const body: Record<string, unknown> = { templateId: tpl.id };
+      if (tpl.kind === "fast_data") body.subject = subject;
+      else {
+        body.teacherIds = [...teacherIds];
+        body.responsiblePeriod = period;
+      }
+      const scope = buildScopeBody();
+      if (scope) body.scope = scope;
+      const r = await authFetch("/api/data-chats/campaigns/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const d = (await r.json().catch(() => null)) as
+        | (typeof preview & { error?: string })
+        | null;
+      if (!r.ok || !d) {
+        setErr(d?.error ?? "Couldn't preview the scope.");
+        return;
+      }
+      setPreview(d);
+    } catch {
+      setErr("Couldn't preview the scope.");
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
   useEffect(() => {
     authFetch("/api/staff-directory")
       .then((r) => (r.ok ? r.json() : null))
@@ -1386,6 +1726,11 @@ function LaunchForm({
       setErr("Pick at least one teacher.");
       return;
     }
+    const scopeErr = validateScope();
+    if (scopeErr) {
+      setErr(scopeErr);
+      return;
+    }
     setSaving(true);
     setErr(null);
     try {
@@ -1401,6 +1746,8 @@ function LaunchForm({
       }
       if (checked !== null) body.checklistItemIds = [...checked];
       if (share !== null) body.shareWithFamilies = share;
+      const scope = buildScopeBody();
+      if (scope) body.scope = scope;
       const r = await authFetch("/api/data-chats/campaigns", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1646,6 +1993,270 @@ function LaunchForm({
       {tpl && (
         <div style={{ marginBottom: "0.7rem" }}>
           <div style={{ fontWeight: 700, fontSize: "0.85rem", marginBottom: 4 }}>
+            Which students?
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {(
+              [
+                ["all", "All students on the assigned rosters"],
+                ["flags", "Only students with support flags"],
+                ["df", "Only students with a D or F in class"],
+                ["handpicked", "Hand-pick students"],
+              ] as const
+            ).map(([v, label]) => (
+              <label
+                key={v}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: "0.88rem",
+                  cursor: "pointer",
+                }}
+              >
+                <input
+                  type="radio"
+                  name="dc-scope"
+                  checked={scopeType === v}
+                  onChange={() => setScopeType(v)}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          {scopeType === "flags" && (
+            <div style={{ display: "flex", gap: 14, margin: "6px 0 0 22px" }}>
+              {(
+                [
+                  ["ese", "ESE"],
+                  ["is504", "504"],
+                  ["ell", "ELL"],
+                ] as const
+              ).map(([v, label]) => (
+                <label
+                  key={v}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    fontSize: "0.85rem",
+                    cursor: "pointer",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={scopeFlags.has(v)}
+                    onChange={() =>
+                      setScopeFlags((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(v)) next.delete(v);
+                        else next.add(v);
+                        return next;
+                      })
+                    }
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          )}
+          {scopeType === "df" && (
+            <div
+              style={{
+                margin: "4px 0 0 22px",
+                fontSize: "0.75rem",
+                color: "var(--text-subtle, #94a3b8)",
+              }}
+            >
+              Current grade below 70 in the latest gradebook import. FAST
+              campaigns match the failing course to that teacher&apos;s subject;
+              custom campaigns count any failing course.
+            </div>
+          )}
+          {scopeType === "handpicked" && (
+            <div style={{ margin: "6px 0 0 22px" }}>
+              <input
+                value={studentQuery}
+                onChange={(e) => setStudentQuery(e.target.value)}
+                placeholder="Search students by name or ID…"
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  borderRadius: 8,
+                  border: "1px solid var(--border, #cbd5e1)",
+                  padding: "0.4rem 0.7rem",
+                  fontSize: "0.85rem",
+                }}
+              />
+              {searchResults.length > 0 && (
+                <div
+                  style={{
+                    maxHeight: 160,
+                    overflowY: "auto",
+                    border: "1px solid var(--border, #e2e8f0)",
+                    borderRadius: 8,
+                    marginTop: 4,
+                    padding: "0.3rem 0.5rem",
+                  }}
+                >
+                  {searchResults
+                    .filter(
+                      (s) => !picked.some((p) => p.studentId === s.studentId),
+                    )
+                    .map((s) => (
+                      <button
+                        key={s.studentId}
+                        type="button"
+                        onClick={() => {
+                          setPicked((prev) => [
+                            ...prev,
+                            {
+                              studentId: s.studentId,
+                              name: `${s.firstName} ${s.lastName}`,
+                              localSisId: s.localSisId,
+                            },
+                          ]);
+                          setStudentQuery("");
+                          setSearchResults([]);
+                        }}
+                        style={{
+                          display: "block",
+                          width: "100%",
+                          textAlign: "left",
+                          border: "none",
+                          background: "transparent",
+                          cursor: "pointer",
+                          fontSize: "0.85rem",
+                          padding: "0.18rem 0.2rem",
+                          color: "var(--text, inherit)",
+                        }}
+                      >
+                        + {s.firstName} {s.lastName}
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            fontSize: "0.72rem",
+                            color: "var(--text-subtle, #94a3b8)",
+                          }}
+                        >
+                          Gr {s.grade}
+                          {s.localSisId ? ` · ${s.localSisId}` : ""}
+                        </span>
+                      </button>
+                    ))}
+                </div>
+              )}
+              {picked.length > 0 && (
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 6,
+                    marginTop: 6,
+                  }}
+                >
+                  {picked.map((p) => (
+                    <span
+                      key={p.studentId}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        fontSize: "0.78rem",
+                        fontWeight: 600,
+                        borderRadius: 999,
+                        padding: "0.15rem 0.55rem",
+                        background: "rgba(139,92,246,0.12)",
+                        color: "#7c3aed",
+                      }}
+                    >
+                      {p.name}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPicked((prev) =>
+                            prev.filter((x) => x.studentId !== p.studentId),
+                          )
+                        }
+                        aria-label={`Remove ${p.name}`}
+                        style={{
+                          border: "none",
+                          background: "transparent",
+                          cursor: "pointer",
+                          color: "inherit",
+                          fontWeight: 800,
+                          padding: 0,
+                          lineHeight: 1,
+                        }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              marginTop: 8,
+            }}
+          >
+            <button
+              type="button"
+              onClick={runPreview}
+              disabled={previewing}
+              style={{
+                border: "1px solid rgba(139,92,246,0.5)",
+                borderRadius: 8,
+                padding: "0.3rem 0.8rem",
+                fontWeight: 700,
+                fontSize: "0.8rem",
+                cursor: previewing ? "default" : "pointer",
+                background: "transparent",
+                color: "#7c3aed",
+                opacity: previewing ? 0.6 : 1,
+              }}
+            >
+              {previewing ? "Counting…" : "Preview who's included"}
+            </button>
+            {preview && (
+              <span style={{ fontSize: "0.8rem", fontWeight: 600 }}>
+                {preview.students} student{preview.students === 1 ? "" : "s"} ·{" "}
+                {preview.pairs} chat{preview.pairs === 1 ? "" : "s"} ·{" "}
+                {preview.teachers} teacher{preview.teachers === 1 ? "" : "s"}
+              </span>
+            )}
+          </div>
+          {preview && preview.unmatchedStudentIds.length > 0 && (
+            <div
+              style={{
+                marginTop: 6,
+                fontSize: "0.78rem",
+                fontWeight: 600,
+                color: "#b45309",
+              }}
+            >
+              ⚠ {preview.unmatchedStudentIds.length} hand-picked student
+              {preview.unmatchedStudentIds.length === 1 ? " isn't" : "s aren't"}{" "}
+              on an assigned teacher&apos;s roster and won&apos;t get a chat:{" "}
+              {preview.unmatchedStudentIds
+                .map(
+                  (id) =>
+                    picked.find((p) => p.studentId === id)?.name ?? "Unknown",
+                )
+                .join(", ")}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tpl && (
+        <div style={{ marginBottom: "0.7rem" }}>
+          <div style={{ fontWeight: 700, fontSize: "0.85rem", marginBottom: 4 }}>
             Topics for this campaign
           </div>
           {tpl.checklist.map((item) => {
@@ -1817,6 +2428,18 @@ function CampaignDetailView({
 
   return (
     <div style={{ marginTop: "0.7rem" }}>
+      {scopeLabel(detail.scope) && (
+        <div
+          style={{
+            fontSize: "0.78rem",
+            fontWeight: 700,
+            color: "#b45309",
+            marginBottom: "0.5rem",
+          }}
+        >
+          {scopeLabel(detail.scope)} — student list was snapshotted at launch.
+        </div>
+      )}
       <div
         style={{
           display: "flex",
@@ -2100,6 +2723,18 @@ export default function DataChatsAdminPage() {
                 }}
               >
                 shared with families
+              </span>
+            )}
+            {scopeLabel(c.scope) && (
+              <span
+                style={{
+                  marginLeft: 8,
+                  fontSize: "0.72rem",
+                  fontWeight: 700,
+                  color: "#b45309",
+                }}
+              >
+                {scopeLabel(c.scope)}
               </span>
             )}
           </span>
