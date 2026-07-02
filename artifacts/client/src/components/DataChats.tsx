@@ -1113,9 +1113,11 @@ type SelfContext = {
 function FollowupScheduler({
   studentId,
   initial,
+  onScheduled,
 }: {
   studentId: string;
   initial: { id: number; dueDate: string; snoozeCount: number } | null;
+  onScheduled?: () => void;
 }) {
   const [current, setCurrent] = useState(initial);
   const [editing, setEditing] = useState(false);
@@ -1143,6 +1145,7 @@ function FollowupScheduler({
       setCurrent({ id: d.id, dueDate: d.dueDate, snoozeCount: 0 });
       setEditing(false);
       setDate("");
+      onScheduled?.();
     } catch {
       setErr("Couldn't schedule the follow-up.");
     } finally {
@@ -1348,6 +1351,9 @@ export function SelfDataChatModal({
 }) {
   const [ctx, setCtx] = useState<SelfContext | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // After the chat is saved we don't close immediately — we show a short
+  // "logged ✓ — schedule a follow-up?" step so the scheduler can't be missed.
+  const [logged, setLogged] = useState(false);
 
   useEffect(() => {
     ensureStyles();
@@ -1488,7 +1494,7 @@ export function SelfDataChatModal({
             Loading…
           </div>
         )}
-        {ctx && ctx.priorNotes.length > 0 && (
+        {ctx && !logged && ctx.priorNotes.length > 0 && (
           <div
             style={{
               marginBottom: "0.7rem",
@@ -1533,7 +1539,7 @@ export function SelfDataChatModal({
             ))}
           </div>
         )}
-        {ctx && entry && student && (
+        {ctx && entry && student && !logged && (
           <>
             <LogForm
               entry={entry}
@@ -1541,7 +1547,22 @@ export function SelfDataChatModal({
               selfServe={ctx.mode === "self"}
               onSaved={() => {
                 onLogged?.();
-                onClose();
+                // Show the confirmation step right away; refresh the
+                // follow-up state in the background (logging may have
+                // auto-completed or preserved the pending follow-up
+                // server-side — the keyed scheduler remounts when it lands).
+                setLogged(true);
+                authFetch(
+                  `/api/data-chats/self-context/${encodeURIComponent(studentId)}`,
+                  { cache: "no-store" },
+                )
+                  .then(async (r) => {
+                    const d = (await r.json().catch(() => null)) as
+                      | (SelfContext & { error?: string })
+                      | null;
+                    if (r.ok && d && !d.error) setCtx(d);
+                  })
+                  .catch(() => {});
               }}
               onCancel={onClose}
             />
@@ -1550,6 +1571,66 @@ export function SelfDataChatModal({
               initial={ctx.followup}
             />
           </>
+        )}
+        {ctx && logged && (
+          <div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "0.6rem 0.8rem",
+                borderRadius: 10,
+                background: "rgba(22, 163, 74, 0.1)",
+                border: "1px solid rgba(22, 163, 74, 0.3)",
+                fontWeight: 800,
+                color: "#15803d",
+              }}
+            >
+              ✓ Chat logged for {ctx.student.name}
+            </div>
+            <div
+              style={{
+                marginTop: "0.7rem",
+                fontWeight: 700,
+                fontSize: "0.88rem",
+              }}
+            >
+              {ctx.followup
+                ? "Your next follow-up is on the books — adjust it if needed."
+                : `Want to schedule a follow-up with ${ctx.student.name}?`}
+            </div>
+            <FollowupScheduler
+              key={ctx.followup ? `post-${ctx.followup.id}` : "post-none"}
+              studentId={ctx.student.studentId}
+              initial={ctx.followup}
+              onScheduled={onClose}
+            />
+            <div
+              style={{
+                marginTop: "0.9rem",
+                display: "flex",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                type="button"
+                onClick={onClose}
+                style={{
+                  border: "1px solid var(--border, #cbd5e1)",
+                  borderRadius: 8,
+                  padding: "0.4rem 1.1rem",
+                  fontWeight: 700,
+                  fontSize: "0.85rem",
+                  cursor: "pointer",
+                  background: "transparent",
+                  color: "var(--text, inherit)",
+                }}
+              >
+                Done
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </div>

@@ -11,7 +11,13 @@ For active follow-ups, see the **Open work** section in `replit.md`.
   weekend dates roll forward to the next school day, past/today dates are
   rejected). The modal also pins the teacher's OWN last two private notes
   for the student (🔒 block; `ne(privateNote,'')`, never another teacher's
-  notes, never parent-facing). Roster reminders (`FollowupReminders`,
+  notes, never parent-facing). Saving a chat does NOT close the modal:
+  it switches to a post-save step ("✓ Chat logged" + the follow-up
+  scheduler + Done) so the scheduler can't be missed — it shows
+  immediately and refetches self-context in the background (the keyed
+  scheduler remounts) to reflect whether logging auto-completed or
+  preserved the pending follow-up; scheduling from this step auto-closes
+  via the scheduler's `onScheduled`. Roster reminders (`FollowupReminders`,
   polls `GET /data-chats/followups/mine` every 60s above the Teacher
   Roster summary): quiet strip the school day BEFORE (`phase:"tomorrow"`)
   and on due-day mornings before the student's period; LOUD pulsing
