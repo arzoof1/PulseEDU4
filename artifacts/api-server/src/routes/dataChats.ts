@@ -46,8 +46,11 @@ import {
   dataChatCampaignsTable,
   dataChatCampaignStudentsTable,
   dataChatLogsTable,
+  dataChatFollowupsTable,
+  bellSchedulesTable,
+  bellSchedulePeriodsTable,
 } from "@workspace/db";
-import { and, eq, ne, inArray, desc } from "drizzle-orm";
+import { and, eq, ne, inArray, desc, sql } from "drizzle-orm";
 import { loadStudentGrades } from "../lib/studentMetrics.js";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
@@ -116,6 +119,38 @@ function csvCell(value: unknown): string {
 
 function todayISO(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: DEFAULT_SCHOOL_TZ });
+}
+
+// ISO YYYY-MM-DD date math (school-local strings; no tz drift because we
+// only ever move whole days on the UTC number line).
+function isoAddDays(iso: string, days: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + days));
+  return dt.toISOString().slice(0, 10);
+}
+
+function isoWeekday(iso: string): number {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=Sun..6=Sat
+}
+
+// Roll a date FORWARD to the next school day (Mon-Fri) if it lands on a
+// weekend. Public holidays are out of scope (matches lib/businessDays.ts).
+function rollToSchoolDay(iso: string): string {
+  let out = iso;
+  while (isoWeekday(out) === 0 || isoWeekday(out) === 6) {
+    out = isoAddDays(out, 1);
+  }
+  return out;
+}
+
+// Add N school days (Mon-Fri), always landing on a school day.
+function addSchoolDays(iso: string, days: number): string {
+  let out = rollToSchoolDay(iso);
+  for (let i = 0; i < days; i++) {
+    out = rollToSchoolDay(isoAddDays(out, 1));
+  }
+  return out;
 }
 
 // Whole-day difference between two local YYYY-MM-DD strings (b - a).
@@ -1699,6 +1734,7 @@ router.post("/data-chats/logs", requireStaff, async (req, res) => {
         updatedAt: new Date(),
       },
     });
+  await completePendingFollowup(schoolId, staff.id, studentId);
   res.json({ ok: true });
 });
 
@@ -1929,6 +1965,52 @@ router.get(
     ]);
     const fast = fastMap.get(student.studentId) ?? null;
 
+    // The acting teacher's OWN prior private notes on this student (most
+    // recent 2, any campaign). Own-notes-only by design: the note stays
+    // private to the teacher who wrote it — it is NOT shared across staff
+    // and never reaches parent payloads.
+    const ownNoteRows = await db
+      .select({
+        privateNote: dataChatLogsTable.privateNote,
+        updatedAt: dataChatLogsTable.updatedAt,
+      })
+      .from(dataChatLogsTable)
+      .where(
+        and(
+          eq(dataChatLogsTable.schoolId, schoolId),
+          eq(dataChatLogsTable.studentId, studentId),
+          eq(dataChatLogsTable.teacherStaffId, staff.id),
+          ne(dataChatLogsTable.privateNote, ""),
+        ),
+      )
+      .orderBy(desc(dataChatLogsTable.updatedAt))
+      .limit(2);
+    const priorNotes = ownNoteRows.map((r) => ({
+      note: r.privateNote,
+      date: r.updatedAt.toLocaleDateString("en-CA", {
+        timeZone: DEFAULT_SCHOOL_TZ,
+      }),
+    }));
+
+    // Pending follow-up for this (teacher, student), if any — so the modal
+    // can show/reschedule/cancel it.
+    const [pendingFollowup] = await db
+      .select({
+        id: dataChatFollowupsTable.id,
+        dueDate: dataChatFollowupsTable.dueDate,
+        snoozeCount: dataChatFollowupsTable.snoozeCount,
+      })
+      .from(dataChatFollowupsTable)
+      .where(
+        and(
+          eq(dataChatFollowupsTable.schoolId, schoolId),
+          eq(dataChatFollowupsTable.teacherStaffId, staff.id),
+          eq(dataChatFollowupsTable.studentId, studentId),
+          eq(dataChatFollowupsTable.status, "pending"),
+        ),
+      )
+      .limit(1);
+
     // Past goals across campaigns (any teacher), most recent 3.
     const priorLogs = await db
       .select({
@@ -1995,6 +2077,8 @@ router.get(
       },
       fast,
       pastGoals,
+      priorNotes,
+      followup: pendingFollowup ?? null,
     });
   },
 );
@@ -2058,6 +2142,7 @@ router.post("/data-chats/self-log", requireStaff, async (req, res) => {
         goal,
         privateNote,
       });
+      await completePendingFollowup(schoolId, staff.id, studentId);
       res.json({ ok: true });
       return;
     } catch (err) {
@@ -2067,5 +2152,401 @@ router.post("/data-chats/self-log", requireStaff, async (req, res) => {
     }
   }
 });
+
+// ---------------------------------------------------------------------------
+// Teacher-private follow-up scheduler
+//
+// NOT part of the student's record by design: never surfaced on HeartBEAT,
+// the parent portal, student support/intervention history, snapshots, or
+// data exports. Only the actual logged chat enters the record. Scheduling,
+// snoozing, and cancelling leave no family-visible trace.
+// ---------------------------------------------------------------------------
+
+// Logging any data chat with the student completes the teacher's pending
+// follow-up so the reminder stops (the meeting happened). EXCEPTION: a
+// follow-up the teacher scheduled/rescheduled TODAY for a FUTURE date is
+// left alone — that's the "schedule the next check-in, then log this one"
+// flow inside the same modal, and completing it would silently swallow the
+// teacher's just-made plan.
+async function completePendingFollowup(
+  schoolId: number,
+  teacherStaffId: number,
+  studentId: string,
+): Promise<void> {
+  const [row] = await db
+    .select({
+      id: dataChatFollowupsTable.id,
+      dueDate: dataChatFollowupsTable.dueDate,
+      snoozeCount: dataChatFollowupsTable.snoozeCount,
+      updatedAt: dataChatFollowupsTable.updatedAt,
+    })
+    .from(dataChatFollowupsTable)
+    .where(
+      and(
+        eq(dataChatFollowupsTable.schoolId, schoolId),
+        eq(dataChatFollowupsTable.teacherStaffId, teacherStaffId),
+        eq(dataChatFollowupsTable.studentId, studentId),
+        eq(dataChatFollowupsTable.status, "pending"),
+      ),
+    )
+    .limit(1);
+  if (!row) return;
+  const today = todayISO();
+  const touchedToday =
+    row.updatedAt.toLocaleDateString("en-CA", { timeZone: DEFAULT_SCHOOL_TZ }) ===
+    today;
+  // snoozeCount === 0 distinguishes a deliberate schedule/reschedule (which
+  // resets the counter) from a snooze made earlier today (counter > 0) —
+  // a snoozed follow-up should still complete when the chat happens.
+  if (touchedToday && row.dueDate > today && row.snoozeCount === 0) return;
+  await db
+    .update(dataChatFollowupsTable)
+    .set({ status: "done", updatedAt: new Date() })
+    .where(eq(dataChatFollowupsTable.id, row.id));
+}
+
+// Current time as HH:MM in the school timezone (matches bell-schedule
+// period start/end format).
+function nowHmSchoolTz(): string {
+  return new Date().toLocaleTimeString("en-GB", {
+    timeZone: DEFAULT_SCHOOL_TZ,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+// POST /data-chats/followups — schedule (or reschedule) the ONE pending
+// follow-up for (me, student). Weekend dates roll forward to Monday.
+router.post("/data-chats/followups", requireStaff, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId === null) return;
+  const staff = getStaff(req);
+  const studentId = String(req.body?.studentId ?? "");
+  const rawDate = String(req.body?.dueDate ?? "");
+  if (!studentId || !/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+    res.status(400).json({ error: "studentId and dueDate (YYYY-MM-DD) required" });
+    return;
+  }
+  if (!(await teacherHasStudent(schoolId, staff.id, studentId))) {
+    res.status(403).json({ error: "This student isn't on your roster" });
+    return;
+  }
+  const today = todayISO();
+  const dueDate = rollToSchoolDay(rawDate);
+  if (dueDate <= today) {
+    res.status(400).json({ error: "Pick a school day after today" });
+    return;
+  }
+  const [existing] = await db
+    .select({ id: dataChatFollowupsTable.id })
+    .from(dataChatFollowupsTable)
+    .where(
+      and(
+        eq(dataChatFollowupsTable.schoolId, schoolId),
+        eq(dataChatFollowupsTable.teacherStaffId, staff.id),
+        eq(dataChatFollowupsTable.studentId, studentId),
+        eq(dataChatFollowupsTable.status, "pending"),
+      ),
+    )
+    .limit(1);
+  if (existing) {
+    // Reschedule in place — one open follow-up per student, no stacking.
+    // A deliberate reschedule resets the snooze counter.
+    await db
+      .update(dataChatFollowupsTable)
+      .set({ dueDate, snoozeCount: 0, updatedAt: new Date() })
+      .where(eq(dataChatFollowupsTable.id, existing.id));
+    res.json({ ok: true, id: existing.id, dueDate, rescheduled: true });
+    return;
+  }
+  // A partial unique index (pending rows only) backs the one-follow-up rule
+  // at the DB level; if two schedule requests race, the loser lands here and
+  // updates in place instead of stacking a second pending row.
+  const [row] = await db
+    .insert(dataChatFollowupsTable)
+    .values({ schoolId, teacherStaffId: staff.id, studentId, dueDate })
+    .onConflictDoUpdate({
+      target: [
+        dataChatFollowupsTable.schoolId,
+        dataChatFollowupsTable.teacherStaffId,
+        dataChatFollowupsTable.studentId,
+      ],
+      targetWhere: sql`status = 'pending'`,
+      set: { dueDate, snoozeCount: 0, updatedAt: new Date() },
+    })
+    .returning({ id: dataChatFollowupsTable.id });
+  res.json({ ok: true, id: row.id, dueDate, rescheduled: false });
+});
+
+// GET /data-chats/followups/mine — the acting teacher's pending follow-ups
+// with reminder phases for the Teacher Roster:
+//   phase 'tomorrow' — quiet reminder (due the next school day)
+//   phase 'due'      — due today or overdue; `loud` flips true once the
+//                      period the teacher has that student has STARTED
+//                      (bell-schedule start time; loud all day when no
+//                      bell schedule / period is known)
+//   phase 'upcoming' — listed for the modal, no reminder yet
+router.get("/data-chats/followups/mine", requireStaff, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId === null) return;
+  const staff = getStaff(req);
+  const rows = await db
+    .select({
+      id: dataChatFollowupsTable.id,
+      studentId: dataChatFollowupsTable.studentId,
+      dueDate: dataChatFollowupsTable.dueDate,
+      snoozeCount: dataChatFollowupsTable.snoozeCount,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+    })
+    .from(dataChatFollowupsTable)
+    .innerJoin(
+      studentsTable,
+      and(
+        eq(studentsTable.schoolId, dataChatFollowupsTable.schoolId),
+        eq(studentsTable.studentId, dataChatFollowupsTable.studentId),
+      ),
+    )
+    .where(
+      and(
+        eq(dataChatFollowupsTable.schoolId, schoolId),
+        eq(dataChatFollowupsTable.teacherStaffId, staff.id),
+        eq(dataChatFollowupsTable.status, "pending"),
+      ),
+    )
+    .orderBy(dataChatFollowupsTable.dueDate);
+
+  const today = todayISO();
+  const nextSchoolDay = addSchoolDays(today, 1);
+
+  // Which period do I have each due student? Earliest non-planning section
+  // period wins; used to time the loud reminder to the start of that period.
+  const dueStudentIds = rows
+    .filter((r) => r.dueDate <= today)
+    .map((r) => r.studentId);
+  const periodByStudent = new Map<string, number>();
+  if (dueStudentIds.length > 0) {
+    const secs = await db
+      .select({
+        studentId: sectionRosterTable.studentId,
+        period: classSectionsTable.period,
+      })
+      .from(sectionRosterTable)
+      .innerJoin(
+        classSectionsTable,
+        eq(sectionRosterTable.sectionId, classSectionsTable.id),
+      )
+      .where(
+        and(
+          eq(sectionRosterTable.schoolId, schoolId),
+          inArray(sectionRosterTable.studentId, dueStudentIds),
+          eq(classSectionsTable.schoolId, schoolId),
+          eq(classSectionsTable.teacherStaffId, staff.id),
+          eq(classSectionsTable.isPlanning, false),
+        ),
+      );
+    for (const s of secs) {
+      const prev = periodByStudent.get(s.studentId);
+      if (prev === undefined || s.period < prev) {
+        periodByStudent.set(s.studentId, s.period);
+      }
+    }
+  }
+
+  // Default active bell schedule → period start times (HH:MM).
+  const startByPeriod = new Map<number, string>();
+  let hasSchedule = false;
+  if (dueStudentIds.length > 0) {
+    const [schedule] = await db
+      .select({ id: bellSchedulesTable.id })
+      .from(bellSchedulesTable)
+      .where(
+        and(
+          eq(bellSchedulesTable.schoolId, schoolId),
+          eq(bellSchedulesTable.isDefault, true),
+          eq(bellSchedulesTable.active, true),
+        ),
+      );
+    if (schedule) {
+      hasSchedule = true;
+      const periods = await db
+        .select({
+          periodNumber: bellSchedulePeriodsTable.periodNumber,
+          startTime: bellSchedulePeriodsTable.startTime,
+        })
+        .from(bellSchedulePeriodsTable)
+        .where(eq(bellSchedulePeriodsTable.scheduleId, schedule.id));
+      for (const p of periods) startByPeriod.set(p.periodNumber, p.startTime);
+    }
+  }
+  const nowHm = nowHmSchoolTz();
+
+  const followups = rows.map((r) => {
+    const phase: "due" | "tomorrow" | "upcoming" =
+      r.dueDate <= today
+        ? "due"
+        : r.dueDate === nextSchoolDay
+          ? "tomorrow"
+          : "upcoming";
+    let loud = false;
+    let periodNumber: number | null = null;
+    if (phase === "due") {
+      periodNumber = periodByStudent.get(r.studentId) ?? null;
+      if (r.dueDate < today) {
+        loud = true; // overdue — loud regardless of period
+      } else if (!hasSchedule || periodNumber === null) {
+        loud = true; // no bell schedule / unknown period — loud all day
+      } else {
+        const start = startByPeriod.get(periodNumber);
+        loud = start === undefined || nowHm >= start;
+      }
+    }
+    return {
+      id: r.id,
+      studentId: r.studentId,
+      studentName: `${r.firstName} ${r.lastName}`,
+      dueDate: r.dueDate,
+      snoozeCount: r.snoozeCount,
+      phase,
+      loud,
+      periodNumber,
+    };
+  });
+  res.json({ followups });
+});
+
+// POST /data-chats/followups/:id/snooze — { days: 1 | 3 } school days from
+// today. Snoozing is a quiet, private action (no student-record trace).
+router.post(
+  "/data-chats/followups/:id/snooze",
+  requireStaff,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (schoolId === null) return;
+    const staff = getStaff(req);
+    const id = Number(req.params.id);
+    const days = Number(req.body?.days);
+    if (days !== 1 && days !== 3) {
+      res.status(400).json({ error: "days must be 1 or 3" });
+      return;
+    }
+    const dueDate = addSchoolDays(todayISO(), days);
+    const updated = await db
+      .update(dataChatFollowupsTable)
+      .set({
+        dueDate,
+        snoozeCount: sql`${dataChatFollowupsTable.snoozeCount} + 1`,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(dataChatFollowupsTable.id, id),
+          eq(dataChatFollowupsTable.schoolId, schoolId),
+          eq(dataChatFollowupsTable.teacherStaffId, staff.id),
+          eq(dataChatFollowupsTable.status, "pending"),
+        ),
+      )
+      .returning({ id: dataChatFollowupsTable.id });
+    if (updated.length === 0) {
+      res.status(404).json({ error: "Follow-up not found" });
+      return;
+    }
+    res.json({ ok: true, dueDate });
+  },
+);
+
+// POST /data-chats/followups/:id/cancel — quiet cancel, own rows only.
+router.post(
+  "/data-chats/followups/:id/cancel",
+  requireStaff,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (schoolId === null) return;
+    const staff = getStaff(req);
+    const id = Number(req.params.id);
+    const updated = await db
+      .update(dataChatFollowupsTable)
+      .set({ status: "cancelled", updatedAt: new Date() })
+      .where(
+        and(
+          eq(dataChatFollowupsTable.id, id),
+          eq(dataChatFollowupsTable.schoolId, schoolId),
+          eq(dataChatFollowupsTable.teacherStaffId, staff.id),
+          eq(dataChatFollowupsTable.status, "pending"),
+        ),
+      )
+      .returning({ id: dataChatFollowupsTable.id });
+    if (updated.length === 0) {
+      res.status(404).json({ error: "Follow-up not found" });
+      return;
+    }
+    res.json({ ok: true });
+  },
+);
+
+// GET /data-chats/followups/admin-stats — Core Team consistency dashboard:
+// per-teacher scheduled/completed/cancelled/pending counts + snoozes. This
+// is a STAFF recognition surface (wrap-around support consistency) — it
+// aggregates per teacher and never exposes per-student rows.
+router.get(
+  "/data-chats/followups/admin-stats",
+  requireStaff,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (schoolId === null) return;
+    const staff = getStaff(req);
+    if (!isCoreTeam(staff)) {
+      res.status(403).json({ error: "Core Team only" });
+      return;
+    }
+    const rows = await db
+      .select({
+        teacherStaffId: dataChatFollowupsTable.teacherStaffId,
+        status: dataChatFollowupsTable.status,
+        snoozeCount: dataChatFollowupsTable.snoozeCount,
+      })
+      .from(dataChatFollowupsTable)
+      .where(eq(dataChatFollowupsTable.schoolId, schoolId));
+    const byTeacher = new Map<
+      number,
+      { scheduled: number; done: number; cancelled: number; pending: number; snoozes: number }
+    >();
+    for (const r of rows) {
+      let t = byTeacher.get(r.teacherStaffId);
+      if (!t) {
+        t = { scheduled: 0, done: 0, cancelled: 0, pending: 0, snoozes: 0 };
+        byTeacher.set(r.teacherStaffId, t);
+      }
+      t.scheduled += 1;
+      t.snoozes += r.snoozeCount;
+      if (r.status === "done") t.done += 1;
+      else if (r.status === "cancelled") t.cancelled += 1;
+      else t.pending += 1;
+    }
+    const teacherIds = [...byTeacher.keys()];
+    const nameById = new Map<number, string>();
+    if (teacherIds.length > 0) {
+      const staffRows = await db
+        .select({ id: staffTable.id, displayName: staffTable.displayName })
+        .from(staffTable)
+        .where(
+          and(
+            eq(staffTable.schoolId, schoolId),
+            inArray(staffTable.id, teacherIds),
+          ),
+        );
+      for (const s of staffRows) nameById.set(s.id, s.displayName);
+    }
+    const teachers = teacherIds
+      .map((id) => ({
+        teacherStaffId: id,
+        teacherName: nameById.get(id) ?? "Unknown",
+        ...byTeacher.get(id)!,
+      }))
+      .sort((a, b) => b.done - a.done || a.teacherName.localeCompare(b.teacherName));
+    res.json({ teachers });
+  },
+);
 
 export default router;

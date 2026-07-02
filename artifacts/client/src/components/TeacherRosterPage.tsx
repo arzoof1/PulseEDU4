@@ -32,7 +32,7 @@ import Tier3WeeklyForm from "./Tier3WeeklyForm";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 import { LEVEL_BG, LEVEL_FG, PmDelta, nextStopCaption } from "./FastScorePill";
 import { TeacherPicker } from "./TeacherPicker";
-import { SelfDataChatModal } from "./DataChats";
+import { SelfDataChatModal, FollowupReminders } from "./DataChats";
 import { type TeacherOpt } from "./teacherDepartments";
 
 // Top-level tab in this page. "roster" is the original FAST PM
@@ -2858,6 +2858,8 @@ export default function TeacherRosterPage({
         </label>
       </div>
 
+      <FollowupReminders onOpenChat={(sid) => setChatModal(sid)} />
+
       {summary && (
         <div style={{ fontSize: 13, color: "#374151", marginBottom: 12 }}>
           {summary.total} student{summary.total === 1 ? "" : "s"} •{" "}
@@ -3467,6 +3469,7 @@ export default function TeacherRosterPage({
       )}
       {chatModal && (
         <SelfDataChatModal
+          key={chatModal}
           studentId={chatModal}
           onClose={() => setChatModal(null)}
           onLogged={() => setChatTick((n) => n + 1)}

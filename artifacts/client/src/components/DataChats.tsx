@@ -1103,7 +1103,239 @@ type SelfContext = {
   };
   fast: Partial<Record<"ela" | "math", FastSet>> | null;
   pastGoals: Array<{ campaignName: string; goal: string; date: string }>;
+  priorNotes: Array<{ note: string; date: string }>;
+  followup: { id: number; dueDate: string; snoozeCount: number } | null;
 };
+
+// Teacher-private follow-up scheduler inside the chat modal. One pending
+// follow-up per student — scheduling again replaces the date. Never
+// family-facing: nothing here touches HeartBEAT or the student record.
+function FollowupScheduler({
+  studentId,
+  initial,
+}: {
+  studentId: string;
+  initial: { id: number; dueDate: string; snoozeCount: number } | null;
+}) {
+  const [current, setCurrent] = useState(initial);
+  const [editing, setEditing] = useState(false);
+  const [date, setDate] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const save = async () => {
+    if (!date) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      const r = await authFetch("/api/data-chats/followups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentId, dueDate: date }),
+      });
+      const d = (await r.json().catch(() => null)) as
+        | { ok?: boolean; id?: number; dueDate?: string; error?: string }
+        | null;
+      if (!r.ok || !d?.ok || !d.id || !d.dueDate) {
+        setErr(d?.error ?? "Couldn't schedule the follow-up.");
+        return;
+      }
+      setCurrent({ id: d.id, dueDate: d.dueDate, snoozeCount: 0 });
+      setEditing(false);
+      setDate("");
+    } catch {
+      setErr("Couldn't schedule the follow-up.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const cancelFollowup = async () => {
+    if (!current) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      const r = await authFetch(
+        `/api/data-chats/followups/${current.id}/cancel`,
+        { method: "POST" },
+      );
+      if (!r.ok) {
+        setErr("Couldn't cancel the follow-up.");
+        return;
+      }
+      setCurrent(null);
+    } catch {
+      setErr("Couldn't cancel the follow-up.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const fmtDate = (iso: string) => {
+    const [y, m, d] = iso.split("-").map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    });
+  };
+
+  const btn: React.CSSProperties = {
+    border: "1px solid var(--border, #cbd5e1)",
+    borderRadius: 8,
+    padding: "0.3rem 0.75rem",
+    fontWeight: 700,
+    fontSize: "0.78rem",
+    cursor: "pointer",
+    background: "transparent",
+    color: "var(--text, inherit)",
+  };
+
+  const minDate = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d.toLocaleDateString("en-CA");
+  })();
+
+  return (
+    <div
+      style={{
+        marginTop: "0.8rem",
+        padding: "0.7rem 0.85rem",
+        borderRadius: 10,
+        border: "1px dashed var(--border, #cbd5e1)",
+        background: "var(--surface-2, rgba(148,163,184,0.08))",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ fontWeight: 800, fontSize: "0.85rem" }}>
+          🔔 Follow-up
+          {current && !editing && (
+            <span style={{ fontWeight: 600, marginLeft: 8 }}>
+              scheduled for {fmtDate(current.dueDate)}
+              {current.snoozeCount > 0 && (
+                <span
+                  style={{
+                    marginLeft: 6,
+                    fontSize: "0.72rem",
+                    color: "#b45309",
+                    fontWeight: 700,
+                  }}
+                >
+                  (snoozed {current.snoozeCount}×)
+                </span>
+              )}
+            </span>
+          )}
+          {!current && !editing && (
+            <span
+              style={{
+                fontWeight: 500,
+                marginLeft: 8,
+                color: "var(--text-subtle, #94a3b8)",
+                fontSize: "0.8rem",
+              }}
+            >
+              private reminder to check back in — never visible to families
+            </span>
+          )}
+        </div>
+        {!editing ? (
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              type="button"
+              style={btn}
+              disabled={saving}
+              onClick={() => {
+                setDate(current?.dueDate ?? "");
+                setEditing(true);
+              }}
+            >
+              {current ? "Reschedule" : "+ Schedule"}
+            </button>
+            {current && (
+              <button
+                type="button"
+                style={{ ...btn, color: "#dc2626", borderColor: "#fca5a5" }}
+                disabled={saving}
+                onClick={() => void cancelFollowup()}
+              >
+                Cancel it
+              </button>
+            )}
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input
+              type="date"
+              value={date}
+              min={minDate}
+              onChange={(e) => setDate(e.target.value)}
+              style={{
+                border: "1px solid var(--border, #cbd5e1)",
+                borderRadius: 8,
+                padding: "0.25rem 0.5rem",
+                fontSize: "0.8rem",
+                background: "var(--surface, #fff)",
+                color: "var(--text, #0f172a)",
+              }}
+            />
+            <button
+              type="button"
+              style={{
+                ...btn,
+                background: "#8b5cf6",
+                color: "#fff",
+                border: "none",
+                opacity: !date || saving ? 0.6 : 1,
+              }}
+              disabled={!date || saving}
+              onClick={() => void save()}
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              style={btn}
+              disabled={saving}
+              onClick={() => {
+                setEditing(false);
+                setErr(null);
+              }}
+            >
+              Back
+            </button>
+          </div>
+        )}
+      </div>
+      {editing && (
+        <div
+          style={{
+            marginTop: 4,
+            fontSize: "0.72rem",
+            color: "var(--text-subtle, #94a3b8)",
+          }}
+        >
+          Weekend dates roll to the next school day. Logging a chat with this
+          student marks the follow-up done automatically.
+        </div>
+      )}
+      {err && (
+        <div style={{ marginTop: 4, color: "#dc2626", fontSize: "0.78rem" }}>
+          {err}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function SelfDataChatModal({
   studentId,
@@ -1256,19 +1488,282 @@ export function SelfDataChatModal({
             Loading…
           </div>
         )}
-        {ctx && entry && student && (
-          <LogForm
-            entry={entry}
-            student={student}
-            selfServe={ctx.mode === "self"}
-            onSaved={() => {
-              onLogged?.();
-              onClose();
+        {ctx && ctx.priorNotes.length > 0 && (
+          <div
+            style={{
+              marginBottom: "0.7rem",
+              padding: "0.6rem 0.8rem",
+              borderRadius: 10,
+              background: "rgba(8, 145, 178, 0.08)",
+              border: "1px solid rgba(8, 145, 178, 0.25)",
             }}
-            onCancel={onClose}
-          />
+          >
+            <div
+              style={{
+                fontWeight: 800,
+                fontSize: "0.78rem",
+                color: "#0e7490",
+                marginBottom: 4,
+              }}
+            >
+              🔒 Your private notes from last time (only you can see these)
+            </div>
+            {ctx.priorNotes.map((n, i) => (
+              <div
+                key={i}
+                style={{
+                  fontSize: "0.82rem",
+                  marginTop: i === 0 ? 0 : 4,
+                  display: "flex",
+                  gap: 8,
+                  alignItems: "baseline",
+                }}
+              >
+                <span
+                  style={{
+                    color: "var(--text-subtle, #94a3b8)",
+                    fontSize: "0.72rem",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {n.date}
+                </span>
+                <span style={{ whiteSpace: "pre-wrap" }}>{n.note}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {ctx && entry && student && (
+          <>
+            <LogForm
+              entry={entry}
+              student={student}
+              selfServe={ctx.mode === "self"}
+              onSaved={() => {
+                onLogged?.();
+                onClose();
+              }}
+              onCancel={onClose}
+            />
+            <FollowupScheduler
+              studentId={ctx.student.studentId}
+              initial={ctx.followup}
+            />
+          </>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Follow-up reminders (Teacher Roster banner)
+// ---------------------------------------------------------------------------
+
+type FollowupItem = {
+  id: number;
+  studentId: string;
+  studentName: string;
+  dueDate: string;
+  snoozeCount: number;
+  phase: "due" | "tomorrow" | "upcoming";
+  loud: boolean;
+  periodNumber: number | null;
+};
+
+// Persistent (not popup) reminder strip for the Teacher Roster:
+//  - quiet line the school day BEFORE a follow-up is due
+//  - loud pulsing banner on the due day, starting when the period the
+//    teacher has that student begins (server decides `loud`)
+// Polls so the banner appears mid-session without a refresh.
+export function FollowupReminders({
+  onOpenChat,
+}: {
+  onOpenChat: (studentId: string) => void;
+}) {
+  const [items, setItems] = useState<FollowupItem[]>([]);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  const load = async () => {
+    try {
+      const r = await authFetch("/api/data-chats/followups/mine", {
+        cache: "no-store",
+      });
+      if (!r.ok) return;
+      const d = (await r.json().catch(() => null)) as
+        | { followups?: FollowupItem[] }
+        | null;
+      if (d?.followups) setItems(d.followups);
+    } catch {
+      // silent — reminder strip is best-effort
+    }
+  };
+
+  useEffect(() => {
+    ensureStyles();
+    void load();
+    const t = window.setInterval(() => void load(), 60_000);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const act = async (id: number, action: "snooze1" | "snooze3" | "cancel") => {
+    setBusyId(id);
+    try {
+      const url =
+        action === "cancel"
+          ? `/api/data-chats/followups/${id}/cancel`
+          : `/api/data-chats/followups/${id}/snooze`;
+      const r = await authFetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body:
+          action === "cancel"
+            ? undefined
+            : JSON.stringify({ days: action === "snooze1" ? 1 : 3 }),
+      });
+      if (r.ok) await load();
+    } catch {
+      // best-effort
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const loud = items.filter((i) => i.phase === "due" && i.loud);
+  const quietDue = items.filter((i) => i.phase === "due" && !i.loud);
+  const tomorrow = items.filter((i) => i.phase === "tomorrow");
+  if (loud.length === 0 && quietDue.length === 0 && tomorrow.length === 0) {
+    return null;
+  }
+
+  const smallBtn: React.CSSProperties = {
+    border: "1px solid rgba(255,255,255,0.5)",
+    borderRadius: 7,
+    padding: "0.2rem 0.55rem",
+    fontWeight: 700,
+    fontSize: "0.72rem",
+    cursor: "pointer",
+    background: "rgba(255,255,255,0.15)",
+    color: "#fff",
+  };
+
+  return (
+    <div style={{ display: "grid", gap: 6, margin: "0.5rem 0 0.8rem" }}>
+      {loud.map((f) => (
+        <div
+          key={f.id}
+          className="data-chat-bell"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap",
+            padding: "0.55rem 0.8rem",
+            borderRadius: 10,
+            background: "linear-gradient(90deg, #7c3aed, #8b5cf6)",
+            color: "#fff",
+          }}
+        >
+          <span className="data-chat-bell-icon" aria-hidden>
+            🔔
+          </span>
+          <span style={{ fontWeight: 800, fontSize: "0.85rem" }}>
+            Follow-up chat with {f.studentName} is due today
+            {f.periodNumber !== null ? ` (period ${f.periodNumber})` : ""}
+          </span>
+          {f.snoozeCount >= 3 && (
+            <span
+              style={{
+                fontSize: "0.72rem",
+                fontWeight: 700,
+                background: "rgba(255,255,255,0.2)",
+                borderRadius: 999,
+                padding: "0.1rem 0.5rem",
+              }}
+            >
+              snoozed {f.snoozeCount}× — maybe today's the day?
+            </span>
+          )}
+          <span style={{ flex: 1 }} />
+          <button
+            type="button"
+            style={{ ...smallBtn, background: "#fff", color: "#7c3aed", border: "none" }}
+            disabled={busyId === f.id}
+            onClick={() => onOpenChat(f.studentId)}
+          >
+            💬 Chat now
+          </button>
+          <button
+            type="button"
+            style={smallBtn}
+            disabled={busyId === f.id}
+            onClick={() => void act(f.id, "snooze1")}
+          >
+            Snooze 1 day
+          </button>
+          <button
+            type="button"
+            style={smallBtn}
+            disabled={busyId === f.id}
+            onClick={() => void act(f.id, "snooze3")}
+          >
+            3 days
+          </button>
+          <button
+            type="button"
+            style={{ ...smallBtn, opacity: 0.85 }}
+            disabled={busyId === f.id}
+            onClick={() => void act(f.id, "cancel")}
+          >
+            Cancel
+          </button>
+        </div>
+      ))}
+      {(quietDue.length > 0 || tomorrow.length > 0) && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+            padding: "0.4rem 0.7rem",
+            borderRadius: 10,
+            border: "1px solid var(--border, #cbd5e1)",
+            background: "var(--surface-2, rgba(148,163,184,0.08))",
+            fontSize: "0.8rem",
+          }}
+        >
+          <span aria-hidden>🗓️</span>
+          {quietDue.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => onOpenChat(f.studentId)}
+              style={{
+                border: "none",
+                background: "transparent",
+                cursor: "pointer",
+                color: "#7c3aed",
+                fontWeight: 700,
+                fontSize: "0.8rem",
+                padding: 0,
+              }}
+            >
+              {f.studentName} — follow-up due today
+            </button>
+          ))}
+          {tomorrow.map((f) => (
+            <span key={f.id} style={{ color: "var(--text-subtle, #64748b)" }}>
+              Heads-up: follow-up chat with{" "}
+              <strong style={{ color: "var(--text, inherit)" }}>
+                {f.studentName}
+              </strong>{" "}
+              tomorrow
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2726,8 +3221,152 @@ function CampaignDetailView({
   );
 }
 
+// Core Team consistency dashboard for follow-ups — recognition framing:
+// this celebrates teachers keeping their check-in commitments, it is not a
+// student-record surface (no per-student rows on purpose).
+function FollowupStatsTab() {
+  const [teachers, setTeachers] = useState<
+    | Array<{
+        teacherStaffId: number;
+        teacherName: string;
+        scheduled: number;
+        done: number;
+        cancelled: number;
+        pending: number;
+        snoozes: number;
+      }>
+    | null
+  >(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    authFetch("/api/data-chats/followups/admin-stats", { cache: "no-store" })
+      .then(async (r) => {
+        const d = (await r.json().catch(() => null)) as
+          | { teachers?: NonNullable<typeof teachers>; error?: string }
+          | null;
+        if (cancelled) return;
+        if (!r.ok || !d?.teachers) {
+          setErr(d?.error ?? "Couldn't load follow-up stats.");
+          return;
+        }
+        setTeachers(d.teachers);
+      })
+      .catch(() => {
+        if (!cancelled) setErr("Couldn't load follow-up stats.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const th: React.CSSProperties = {
+    textAlign: "left",
+    padding: "0.4rem 0.6rem",
+    fontSize: "0.75rem",
+    textTransform: "uppercase",
+    color: "var(--text-subtle, #94a3b8)",
+    borderBottom: "1px solid var(--border, #cbd5e1)",
+  };
+  const td: React.CSSProperties = {
+    padding: "0.45rem 0.6rem",
+    fontSize: "0.85rem",
+    borderBottom: "1px solid var(--border, rgba(148,163,184,0.25))",
+  };
+
+  return (
+    <div>
+      <p
+        style={{
+          color: "var(--text-subtle, #94a3b8)",
+          fontSize: "0.85rem",
+          margin: "0 0 0.8rem",
+        }}
+      >
+        Teachers can schedule private follow-up chats with individual students.
+        This view celebrates that consistency — who's circling back and closing
+        the loop. Follow-ups are teacher-private planning: they never appear on
+        the HeartBEAT, parent portal, or any student record.
+      </p>
+      <ErrText text={err} />
+      {teachers === null && !err && (
+        <div style={{ color: "var(--text-subtle, #94a3b8)" }}>Loading…</div>
+      )}
+      {teachers !== null && teachers.length === 0 && (
+        <div style={{ color: "var(--text-subtle, #94a3b8)", fontSize: "0.85rem" }}>
+          No follow-ups scheduled yet. Teachers can schedule one from the chat
+          window on their roster.
+        </div>
+      )}
+      {teachers !== null && teachers.length > 0 && (
+        <table style={{ borderCollapse: "collapse", width: "100%" }}>
+          <thead>
+            <tr>
+              <th style={th}>Teacher</th>
+              <th style={th}>Scheduled</th>
+              <th style={th}>Completed</th>
+              <th style={th}>Follow-through</th>
+              <th style={th}>Open</th>
+              <th style={th}>Cancelled</th>
+              <th style={th}>Snoozes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {teachers.map((t) => {
+              const closed = t.done + t.cancelled;
+              const rate =
+                closed > 0 ? Math.round((t.done / closed) * 100) : null;
+              return (
+                <tr key={t.teacherStaffId}>
+                  <td style={{ ...td, fontWeight: 700 }}>{t.teacherName}</td>
+                  <td style={td}>{t.scheduled}</td>
+                  <td style={td}>
+                    {t.done}
+                    {t.done > 0 && (
+                      <span aria-hidden style={{ marginLeft: 4 }}>
+                        🌟
+                      </span>
+                    )}
+                  </td>
+                  <td style={td}>
+                    {rate === null ? (
+                      <span style={{ color: "var(--text-subtle, #94a3b8)" }}>
+                        —
+                      </span>
+                    ) : (
+                      <span
+                        style={{
+                          fontWeight: 700,
+                          color:
+                            rate >= 80
+                              ? "#16a34a"
+                              : rate >= 50
+                                ? "#b45309"
+                                : "var(--text, inherit)",
+                        }}
+                      >
+                        {rate}%
+                      </span>
+                    )}
+                  </td>
+                  <td style={td}>{t.pending}</td>
+                  <td style={td}>{t.cancelled}</td>
+                  <td style={td}>{t.snoozes}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 export default function DataChatsAdminPage() {
-  const [tab, setTab] = useState<"campaigns" | "templates">("campaigns");
+  const [tab, setTab] = useState<"campaigns" | "templates" | "followups">(
+    "campaigns",
+  );
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
   const [campaigns, setCampaigns] = useState<CampaignRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -2885,6 +3524,7 @@ export default function DataChatsAdminPage() {
           [
             ["campaigns", "Campaigns"],
             ["templates", "Templates"],
+            ["followups", "Follow-ups"],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -2967,6 +3607,8 @@ export default function DataChatsAdminPage() {
           )}
         </>
       )}
+
+      {tab === "followups" && <FollowupStatsTab />}
 
       {tab === "templates" && (
         <>

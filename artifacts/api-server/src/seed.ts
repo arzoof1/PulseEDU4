@@ -540,6 +540,32 @@ export async function ensureDataChatSchema() {
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS data_chat_campaign_students_campaign_idx ON data_chat_campaign_students (school_id, campaign_id)`,
   );
+  // Teacher-private follow-up scheduler (never family-facing, never part of
+  // the student record — see schema comment).
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS data_chat_followups (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      teacher_staff_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      due_date TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      snooze_count INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS data_chat_followups_teacher_idx ON data_chat_followups (school_id, teacher_staff_id, status)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS data_chat_followups_student_idx ON data_chat_followups (school_id, student_id)`,
+  );
+  // ONE pending follow-up per (teacher, student) — enforced at the DB level
+  // so concurrent schedule requests can't stack pending rows.
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS data_chat_followups_pending_unique ON data_chat_followups (school_id, teacher_staff_id, student_id) WHERE status = 'pending'`,
+  );
 }
 
 export async function ensureHousesSchema() {

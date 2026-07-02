@@ -3,6 +3,33 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Data Chat Follow-Ups.** From `SelfDataChatModal` a teacher can schedule
+  ONE pending follow-up per teacher+student (`data_chat_followups`, backed
+  by a partial unique index on pending rows + `onConflictDoUpdate` so
+  concurrent schedules can't stack; reschedule replaces the row in place
+  and resets the snooze counter;
+  weekend dates roll forward to the next school day, past/today dates are
+  rejected). The modal also pins the teacher's OWN last two private notes
+  for the student (🔒 block; `ne(privateNote,'')`, never another teacher's
+  notes, never parent-facing). Roster reminders (`FollowupReminders`,
+  polls `GET /data-chats/followups/mine` every 60s above the Teacher
+  Roster summary): quiet strip the school day BEFORE (`phase:"tomorrow"`)
+  and on due-day mornings before the student's period; LOUD pulsing
+  banner from the start of the earliest non-planning period the teacher
+  has that student (default bell schedule `startTime`; loud all day when
+  no schedule/period resolves; overdue is always loud) with **Chat now /
+  Snooze 1 or 3 school days / Cancel** — a "snoozed 3×" nudge appears at
+  `snoozeCount ≥ 3`. Logging ANY chat (campaign queue or roster self-log)
+  auto-completes the pending follow-up via `completePendingFollowup` in
+  both log POSTs — EXCEPT a row scheduled/rescheduled today for a future
+  date (schedule-next-then-log flow), discriminated by `snoozeCount === 0`
+  so a same-day SNOOZE still completes. Admin **Follow-ups** tab in
+  Family → Data Chats (Core Team, `GET /followups/admin-stats`):
+  recognition-framed per-teacher table (scheduled/pending/done +
+  follow-through %). Follow-ups never touch HeartBEAT, the parent portal,
+  support records, or exports. Server: `routes/dataChats.ts`
+  (`isoAddDays`/`rollToSchoolDay`/`addSchoolDays`); schema:
+  `lib/db/src/schema/dataChats.ts` + `seed.ts ensureDataChatSchema`.
 - **Launcher teacher multi-select matches the shared TeacherPicker
   convention.** The "pick any teachers" checkbox list in the Data Chats
   campaign launcher now groups by department (canonical order, tinted

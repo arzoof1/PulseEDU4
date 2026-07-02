@@ -182,6 +182,47 @@ export const dataChatLogsTable = pgTable(
   }),
 );
 
+// Teacher-private follow-up scheduler for data chats. Deliberately NOT part
+// of the student's record: never surfaced on HeartBEAT, the parent portal,
+// student support/intervention history, snapshots, or data exports. Only the
+// actual logged chat (data_chat_logs) enters the record. One PENDING row per
+// (school, teacher, student) — rescheduling updates it in place (enforced in
+// the route; done/cancelled history rows may accumulate for the admin
+// consistency dashboard).
+export const dataChatFollowupsTable = pgTable(
+  "data_chat_followups",
+  {
+    id: serial("id").primaryKey(),
+    schoolId: integer("school_id").notNull(),
+    teacherStaffId: integer("teacher_staff_id").notNull(),
+    studentId: text("student_id").notNull(),
+    // School-local YYYY-MM-DD; always rolled to a school day (Mon-Fri).
+    dueDate: text("due_date").notNull(),
+    // pending | done | cancelled. 'done' is set automatically when the
+    // teacher logs any data chat with the student.
+    status: text("status").notNull().default("pending"),
+    snoozeCount: integer("snooze_count").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    teacherIdx: index("data_chat_followups_teacher_idx").on(
+      t.schoolId,
+      t.teacherStaffId,
+      t.status,
+    ),
+    studentIdx: index("data_chat_followups_student_idx").on(
+      t.schoolId,
+      t.studentId,
+    ),
+  }),
+);
+
 export type DataChatTemplateRow = typeof dataChatTemplatesTable.$inferSelect;
 export type DataChatCampaignRow = typeof dataChatCampaignsTable.$inferSelect;
 export type DataChatLogRow = typeof dataChatLogsTable.$inferSelect;
+export type DataChatFollowupRow = typeof dataChatFollowupsTable.$inferSelect;
