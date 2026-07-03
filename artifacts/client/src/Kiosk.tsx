@@ -5515,37 +5515,40 @@ function AttendanceMode({
           </div>
         </div>
       ) : (
+        /* Camera OFF — fixed two-column layout: growing name list on the LEFT
+           (scrolls within its own column), scan input + keypad anchored on the
+           RIGHT so the keypad is always reachable no matter how many students
+           have checked in. */
         <div
           style={{
             display: "flex",
-            flexWrap: "nowrap",
-            justifyContent: "center",
             alignItems: "flex-start",
-            gap: "2rem",
+            justifyContent: "center",
+            gap: "2.75rem",
             width: "100%",
-            maxWidth: 1100,
+            maxWidth: 1180,
             marginTop: "1.25rem",
           }}
         >
-          {/* LEFT — result card + growing name list; scrolls within its
-              own column so it never pushes the keypad off-screen. */}
+          {/* LEFT — result card + growing name feed (scrolls in place). */}
           <div
             style={{
-              flex: "1 1 auto",
+              flex: "1 1 0",
               minWidth: 0,
-              maxWidth: 620,
+              maxWidth: 560,
               display: "flex",
               flexDirection: "column",
               gap: "1rem",
-              maxHeight: "calc(100vh - 280px)",
-              overflowY: "auto",
             }}
           >
             {resultCardSlot}
-            {nameFeed}
+            <div style={{ maxHeight: "calc(100vh - 280px)", overflowY: "auto" }}>
+              {nameFeed}
+            </div>
           </div>
-          {/* RIGHT — scan input + on-screen keypad, anchored so it stays
-              on screen regardless of how many students have checked in. */}
+
+          {/* RIGHT — USB scan field + on-screen keypad, anchored so it never
+              scrolls off screen as the left column grows. */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -5553,7 +5556,7 @@ function AttendanceMode({
             }}
             style={{
               flex: "0 0 auto",
-              width: "min(420px, 42vw)",
+              width: "min(400px, 94vw)",
               alignSelf: "flex-start",
               position: "sticky",
               top: 0,
@@ -5566,92 +5569,92 @@ function AttendanceMode({
               gap: "0.9rem",
             }}
           >
-        <div style={{ display: "flex", gap: "0.5rem" }}>
-          <input
-            ref={inputRef}
-            type="text"
-            inputMode="numeric"
-            autoComplete="off"
-            autoFocus
-            value={studentId}
-            onChange={(e) => setStudentId(e.target.value)}
-            placeholder="Scan badge or enter your ID"
-            style={{ ...inputStyle, flex: 1, fontSize: "1.3rem", textAlign: "center" }}
-            disabled={busy}
-          />
-          <button
-            type="button"
-            onClick={() => {
-              setCameraOn((v) => !v);
-              setCameraKey((k) => k + 1);
-            }}
-            aria-label="Toggle camera scanning"
-            title="Toggle camera scanning"
-            style={{
-              background: cameraOn ? "#3b82f6" : "rgba(255,255,255,0.1)",
-              border: "1px solid rgba(255,255,255,0.2)",
-              borderRadius: 10,
-              color: "#fff",
-              width: 64,
-              fontSize: "1.6rem",
-              cursor: "pointer",
-              flexShrink: 0,
-            }}
-          >
-            📷
-          </button>
-        </div>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <input
+                ref={inputRef}
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                autoFocus
+                value={studentId}
+                onChange={(e) => setStudentId(e.target.value)}
+                placeholder="Scan badge or enter your ID"
+                style={{ ...inputStyle, flex: 1, fontSize: "1.3rem", textAlign: "center" }}
+                disabled={busy}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setCameraOn((v) => !v);
+                  setCameraKey((k) => k + 1);
+                }}
+                aria-label="Toggle camera scanning"
+                title="Toggle camera scanning"
+                style={{
+                  background: cameraOn ? "#3b82f6" : "rgba(255,255,255,0.1)",
+                  border: "1px solid rgba(255,255,255,0.2)",
+                  borderRadius: 10,
+                  color: "#fff",
+                  width: 64,
+                  fontSize: "1.6rem",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                }}
+              >
+                📷
+              </button>
+            </div>
 
-        {/* On-screen keypad (live alongside the USB field). */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
-            gap: "0.5rem",
-          }}
-        >
-          {keypadDigits.map((d) => (
-            <button
-              key={d}
-              type="button"
-              onClick={() => setStudentId((s) => s + d)}
-              disabled={busy}
-              style={keypadBtnStyle}
+            {/* On-screen keypad (live alongside the USB field). */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 1fr)",
+                gap: "0.5rem",
+              }}
             >
-              {d}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => setStudentId((s) => s.slice(0, -1))}
-            disabled={busy}
-            style={keypadBtnStyle}
-            aria-label="Delete last digit"
-          >
-            ⌫
-          </button>
-          <button
-            type="button"
-            onClick={() => setStudentId((s) => s + "0")}
-            disabled={busy}
-            style={keypadBtnStyle}
-          >
-            0
-          </button>
-          <button
-            type="submit"
-            disabled={busy || !studentId.trim()}
-            style={{
-              ...keypadBtnStyle,
-              background:
-                busy || !studentId.trim() ? "rgba(34,197,94,0.4)" : "#22c55e",
-              border: "none",
-            }}
-            aria-label="Submit check-in"
-          >
-            ✓
-          </button>
-        </div>
+              {keypadDigits.map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setStudentId((s) => s + d)}
+                  disabled={busy}
+                  style={keypadBtnStyle}
+                >
+                  {d}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setStudentId((s) => s.slice(0, -1))}
+                disabled={busy}
+                style={keypadBtnStyle}
+                aria-label="Delete last digit"
+              >
+                ⌫
+              </button>
+              <button
+                type="button"
+                onClick={() => setStudentId((s) => s + "0")}
+                disabled={busy}
+                style={keypadBtnStyle}
+              >
+                0
+              </button>
+              <button
+                type="submit"
+                disabled={busy || !studentId.trim()}
+                style={{
+                  ...keypadBtnStyle,
+                  background:
+                    busy || !studentId.trim() ? "rgba(34,197,94,0.4)" : "#22c55e",
+                  border: "none",
+                }}
+                aria-label="Submit check-in"
+              >
+                ✓
+              </button>
+            </div>
           </form>
         </div>
       )}
