@@ -37,6 +37,7 @@ export * from "./communicationTypes";
 export * from "./communicationLogs";
 export * from "./badNumberFlags";
 export * from "./callInitiatives";
+export * from "./callScripts";
 export * from "./dataChats";
 export * from "./trustedAdultInterventions";
 export * from "./pbisGoals";

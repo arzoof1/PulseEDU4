@@ -1170,6 +1170,7 @@ router.post(
 
 import {
   callInitiativesTable,
+  callScriptsTable,
   classSectionsTable,
   sectionRosterTable,
 } from "@workspace/db";
@@ -1396,10 +1397,11 @@ async function computeTeacherWorklist(
     });
 }
 
-async function loadActiveInitiative(
-  schoolId: number,
-): Promise<Initiative | null> {
-  const [row] = await db
+// All currently-active campaigns for a school (newest first). The system
+// supports MULTIPLE concurrent campaigns (e.g. different responsible periods /
+// subgroups of teachers), so callers aggregate across the list.
+async function loadActiveInitiatives(schoolId: number): Promise<Initiative[]> {
+  return db
     .select()
     .from(callInitiativesTable)
     .where(
@@ -1408,12 +1410,16 @@ async function loadActiveInitiative(
         eq(callInitiativesTable.active, true),
       ),
     )
-    .orderBy(desc(callInitiativesTable.createdAt))
-    .limit(1);
-  return row ?? null;
+    .orderBy(desc(callInitiativesTable.createdAt));
 }
 
-// POST /communications/call-initiatives  (Core Team) — create + archive prior.
+function daysRemainingFor(init: Initiative): number {
+  const { end } = initiativeWindow(init);
+  return Math.max(0, Math.ceil((end.getTime() - Date.now()) / 86400000));
+}
+
+// POST /communications/call-initiatives  (Core Team) — create.
+// Multiple concurrent active campaigns are supported (no auto-archive).
 router.post("/communications/call-initiatives", requireStaff, async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (schoolId === null) return;
@@ -1455,16 +1461,6 @@ router.post("/communications/call-initiatives", requireStaff, async (req, res) =
     ? Math.max(1, Math.min(10, Number(body.attemptsRequired)))
     : 2;
 
-  // Archive any currently-active campaign (one active at a time).
-  await db
-    .update(callInitiativesTable)
-    .set({ active: false })
-    .where(
-      and(
-        eq(callInitiativesTable.schoolId, schoolId),
-        eq(callInitiativesTable.active, true),
-      ),
-    );
   const [row] = await db
     .insert(callInitiativesTable)
     .values({
@@ -1512,34 +1508,41 @@ router.post(
   },
 );
 
-// GET /communications/call-initiatives/active — active campaign + the signed-in
-// staffer's own progress (drives the app-wide banner). Returns {initiative:null}
-// when nothing is running.
+// GET /communications/call-initiatives/active — the signed-in staffer's own
+// progress across EVERY active campaign they own students in (drives the
+// app-wide banner). Returns { campaigns: [] } when nothing is running or the
+// staffer owns no reachable students.
 router.get(
   "/communications/call-initiatives/active",
   requireStaff,
   async (req, res) => {
     const schoolId = requireSchool(req, res);
     if (schoolId === null) return;
-    const init = await loadActiveInitiative(schoolId);
-    if (!init) {
-      res.json({ initiative: null });
-      return;
-    }
-    const { end } = initiativeWindow(init);
-    const daysRemaining = Math.max(
-      0,
-      Math.ceil((end.getTime() - Date.now()) / 86400000),
-    );
-    const worklist = await computeTeacherWorklist(
-      schoolId,
-      getStaff(req).id,
-      init,
-    );
-    const reachable = worklist.filter((w) => w.reachable);
-    const done = reachable.filter((w) => w.done).length;
-    res.json({
-      initiative: {
+    const inits = await loadActiveInitiatives(schoolId);
+    const staffId = getStaff(req).id;
+    const campaigns: Array<{
+      id: number;
+      name: string;
+      startDate: string;
+      windowDays: number;
+      responsiblePeriod: number;
+      completionRule: string;
+      attemptsRequired: number;
+      daysRemaining: number;
+      myProgress: {
+        total: number;
+        done: number;
+        remaining: number;
+        excluded: number;
+      };
+    }> = [];
+    for (const init of inits) {
+      const worklist = await computeTeacherWorklist(schoolId, staffId, init);
+      const reachable = worklist.filter((w) => w.reachable);
+      // Only surface campaigns where this teacher actually owns reachable work.
+      if (reachable.length === 0) continue;
+      const done = reachable.filter((w) => w.done).length;
+      campaigns.push({
         id: init.id,
         name: init.name,
         startDate: init.startDate,
@@ -1547,48 +1550,161 @@ router.get(
         responsiblePeriod: init.responsiblePeriod,
         completionRule: init.completionRule,
         attemptsRequired: init.attemptsRequired,
-        daysRemaining,
-      },
-      myProgress: {
-        total: reachable.length,
-        done,
-        remaining: reachable.length - done,
-        excluded: worklist.length - reachable.length,
-      },
-    });
+        daysRemaining: daysRemainingFor(init),
+        myProgress: {
+          total: reachable.length,
+          done,
+          remaining: reachable.length - done,
+          excluded: worklist.length - reachable.length,
+        },
+      });
+    }
+    res.json({ campaigns });
   },
 );
 
 // GET /communications/call-initiatives/worklist — the signed-in staffer's
-// per-student worklist for the active campaign.
+// per-student worklist for every active campaign, grouped by campaign.
 router.get(
   "/communications/call-initiatives/worklist",
   requireStaff,
   async (req, res) => {
     const schoolId = requireSchool(req, res);
     if (schoolId === null) return;
-    const init = await loadActiveInitiative(schoolId);
-    if (!init) {
-      res.json({ initiative: null, students: [] });
-      return;
-    }
-    const students = await computeTeacherWorklist(
-      schoolId,
-      getStaff(req).id,
-      init,
-    );
-    res.json({
-      initiative: {
+    const inits = await loadActiveInitiatives(schoolId);
+    const staffId = getStaff(req).id;
+    const campaigns: Array<{
+      id: number;
+      name: string;
+      responsiblePeriod: number;
+      completionRule: string;
+      attemptsRequired: number;
+      students: WorklistStudent[];
+    }> = [];
+    for (const init of inits) {
+      const students = await computeTeacherWorklist(schoolId, staffId, init);
+      if (students.length === 0) continue;
+      campaigns.push({
         id: init.id,
         name: init.name,
         responsiblePeriod: init.responsiblePeriod,
         completionRule: init.completionRule,
         attemptsRequired: init.attemptsRequired,
-      },
-      students,
+        students,
+      });
+    }
+    res.json({ campaigns });
+  },
+);
+
+// GET /communications/call-initiatives/admin — Core Team: ALL active campaigns
+// for the school (not teacher-scoped), each with its own end control.
+router.get(
+  "/communications/call-initiatives/admin",
+  requireStaff,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (schoolId === null) return;
+    if (!isCoreTeam(getStaff(req))) {
+      res.status(403).json({ error: "Core Team only" });
+      return;
+    }
+    const inits = await loadActiveInitiatives(schoolId);
+    res.json({
+      campaigns: inits.map((init) => ({
+        id: init.id,
+        name: init.name,
+        startDate: init.startDate,
+        windowDays: init.windowDays,
+        responsiblePeriod: init.responsiblePeriod,
+        completionRule: init.completionRule,
+        attemptsRequired: init.attemptsRequired,
+        daysRemaining: daysRemainingFor(init),
+        createdByName: init.createdByName,
+      })),
     });
   },
 );
+
+// -----------------------------------------------------------------------------
+// Call scripts — a small (max 5) school-level library of title + body scripts
+// teachers can pull up in a drawer while logging a family call. Shared across
+// campaigns.
+// -----------------------------------------------------------------------------
+
+const MAX_CALL_SCRIPTS = 5;
+
+// GET /communications/call-scripts — any staff member: the school's scripts,
+// ordered. Drives the teacher call-log "Need help with this call?" drawer.
+router.get("/communications/call-scripts", requireStaff, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId === null) return;
+  const rows = await db
+    .select()
+    .from(callScriptsTable)
+    .where(eq(callScriptsTable.schoolId, schoolId))
+    .orderBy(callScriptsTable.sort, callScriptsTable.id);
+  res.json({
+    scripts: rows.map((r) => ({ id: r.id, title: r.title, body: r.body })),
+  });
+});
+
+// PUT /communications/call-scripts — Core Team: replace the whole library
+// (add/edit/delete happens client-side; this persists the final list).
+router.put("/communications/call-scripts", requireStaff, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId === null) return;
+  if (!isCoreTeam(getStaff(req))) {
+    res.status(403).json({ error: "Core Team only" });
+    return;
+  }
+  const raw = (req.body as { scripts?: unknown }).scripts;
+  if (!Array.isArray(raw)) {
+    res.status(400).json({ error: "scripts must be an array" });
+    return;
+  }
+  if (raw.length > MAX_CALL_SCRIPTS) {
+    res.status(400).json({ error: `At most ${MAX_CALL_SCRIPTS} scripts` });
+    return;
+  }
+  const cleaned: Array<{ title: string; body: string }> = [];
+  for (const item of raw) {
+    const title = String((item as { title?: unknown })?.title ?? "").trim();
+    const body = String((item as { body?: unknown })?.body ?? "").trim();
+    if (!title) {
+      res.status(400).json({ error: "Each script needs a title" });
+      return;
+    }
+    if (!body) {
+      res.status(400).json({ error: "Each script needs a body" });
+      return;
+    }
+    cleaned.push({ title: title.slice(0, 120), body: body.slice(0, 4000) });
+  }
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(callScriptsTable)
+      .where(eq(callScriptsTable.schoolId, schoolId));
+    if (cleaned.length > 0) {
+      await tx.insert(callScriptsTable).values(
+        cleaned.map((c, i) => ({
+          schoolId,
+          title: c.title,
+          body: c.body,
+          sort: i,
+        })),
+      );
+    }
+  });
+  const rows = await db
+    .select()
+    .from(callScriptsTable)
+    .where(eq(callScriptsTable.schoolId, schoolId))
+    .orderBy(callScriptsTable.sort, callScriptsTable.id);
+  res.json({
+    scripts: rows.map((r) => ({ id: r.id, title: r.title, body: r.body })),
+  });
+});
 
 // -----------------------------------------------------------------------------
 // Insights — Contact Rate.

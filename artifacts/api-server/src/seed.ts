@@ -429,6 +429,23 @@ export async function ensureCommunicationSchema() {
     sql`CREATE INDEX IF NOT EXISTS call_initiatives_school_active_idx ON call_initiatives (school_id, active)`,
   );
 
+  // call_scripts — school-level Call Initiative script library (max 5, enforced
+  // in the route). Shared across campaigns; surfaced in the teacher call-log
+  // "Need help with this call?" drawer.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS call_scripts (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      sort INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS call_scripts_school_sort_idx ON call_scripts (school_id, sort)`,
+  );
+
   // capManageContactInfo — front-office capability for the bad-number
   // "Contact Info Fixes" queue. Additive boolean on staff; default FALSE.
   await db.execute(
