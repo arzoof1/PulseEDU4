@@ -20076,7 +20076,10 @@ function App() {
         // re-slide every time they round-trip (Roster → Student
         // Profile → Roster). Closing the tab re-arms the gate, which
         // is the correct trigger for "device may now be mirrored".
-        <PrivacyGate sessionKey="teacherRoster">
+        <PrivacyGate
+          sessionKey="teacherRoster"
+          onBack={() => setActiveSection("hallPasses")}
+        >
         <TeacherRosterPage
           isCoreTeam={
             Boolean(authUser?.isSuperUser) ||
@@ -20118,7 +20121,10 @@ function App() {
         // flags, and safety-plan indicators that must never land on a
         // student-facing display. Visibility scoping (own roster vs school-
         // wide) is enforced server-side on every endpoint it calls.
-        <PrivacyGate sessionKey="studentLookup">
+        <PrivacyGate
+          sessionKey="studentLookup"
+          onBack={() => setActiveSection("hallPasses")}
+        >
           <StudentLookupPage
             onBack={() => setActiveSection("hallPasses")}
             // Dismissal-mode editor gate — mirrors canManageDismissal() in
