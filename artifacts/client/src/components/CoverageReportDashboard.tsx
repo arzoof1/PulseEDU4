@@ -101,6 +101,18 @@ const SUBJECTS: { key: string; label: string }[] = [
   { key: "geometry", label: "Geometry" },
 ];
 
+// Match the standard Insights filter-bar teacher control so the picker
+// looks identical to the rest of the Insights area (InsightsFilterBar).
+const TEACHER_SELECT_STYLE: React.CSSProperties = {
+  padding: "0.35rem 0.5rem",
+  borderRadius: 6,
+  border: "1px solid var(--border)",
+  background: "var(--surface)",
+  color: "var(--text)",
+  fontSize: "0.85rem",
+  minWidth: 180,
+};
+
 function fmtPct(v: number | null | undefined): string {
   return v == null ? "—" : `${v}%`;
 }
@@ -221,6 +233,8 @@ export default function CoverageReportDashboard({
               teachers.length <= 1 ? "My report" : "Me (my report)"
             }
             showDeptFilter
+            ariaLabel="Teacher"
+            selectStyle={TEACHER_SELECT_STYLE}
           />
         </label>
 
