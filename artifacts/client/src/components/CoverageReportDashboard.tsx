@@ -139,6 +139,13 @@ export default function CoverageReportDashboard({
   const [teachers, setTeachers] = useState<TeacherOpt[]>([]);
   const [teacherId, setTeacherId] = useState<number | null>(null);
   const [subject, setSubject] = useState("ela");
+  // FAST subjects the selected teacher actually teaches (derived from their
+  // course/subject area server-side). null = not yet resolved.
+  const [availableSubjects, setAvailableSubjects] = useState<string[] | null>(
+    null,
+  );
+  const [department, setDepartment] = useState<string | null>(null);
+  const [contextLoading, setContextLoading] = useState(false);
   const [termKey, setTermKey] = useState<string>(""); // `${schoolYear}|${window}`
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(false);
@@ -152,6 +159,51 @@ export default function CoverageReportDashboard({
       .then((d) => setTeachers(d.teachers ?? []))
       .catch(() => setTeachers([]));
   }, []);
+
+  // On teacher change, resolve which FAST subjects they teach and auto-pick
+  // one — so the subject follows the teacher instead of a manual button row.
+  useEffect(() => {
+    let cancelled = false;
+    setContextLoading(true);
+    setAvailableSubjects(null);
+    setError(null);
+    const params = new URLSearchParams();
+    if (teacherId != null) params.set("teacherId", String(teacherId));
+    authFetch(`/api/coverage-report/context?${params.toString()}`)
+      .then(async (r) => {
+        if (!r.ok) {
+          throw new Error(
+            (await r.json().catch(() => ({}))).error ??
+              "Couldn't load this teacher's subjects",
+          );
+        }
+        return r.json();
+      })
+      .then(
+        (d: {
+          subjects?: string[];
+          teacher?: { department?: string | null };
+        }) => {
+          if (cancelled) return;
+          const subs = d.subjects ?? [];
+          setAvailableSubjects(subs);
+          setDepartment(d.teacher?.department ?? null);
+          setSubject((cur) => (subs.includes(cur) ? cur : (subs[0] ?? cur)));
+        },
+      )
+      .catch((e) => {
+        if (cancelled) return;
+        setAvailableSubjects([]);
+        setDepartment(null);
+        setError(e.message ?? "Couldn't load this teacher's subjects");
+      })
+      .finally(() => {
+        if (!cancelled) setContextLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [teacherId]);
 
   const loadReport = useCallback(() => {
     setLoading(true);
@@ -184,9 +236,14 @@ export default function CoverageReportDashboard({
   }, [subject, teacherId]);
 
   useEffect(() => {
+    if (availableSubjects == null) return; // teacher context still resolving
+    if (availableSubjects.length === 0 || !availableSubjects.includes(subject)) {
+      setReport(null);
+      return;
+    }
     loadReport();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subject, teacherId]);
+  }, [subject, teacherId, availableSubjects]);
 
   const benchmarks = report?.benchmarks ?? [];
 
@@ -240,18 +297,45 @@ export default function CoverageReportDashboard({
 
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span style={{ fontSize: 12, fontWeight: 600 }}>Subject</span>
-          <div style={{ display: "inline-flex", gap: 4 }}>
-            {SUBJECTS.map((s) => (
-              <button
-                key={s.key}
-                className={subject === s.key ? "primary" : "secondary"}
-                onClick={() => setSubject(s.key)}
-                style={{ padding: "5px 12px" }}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
+          {contextLoading || availableSubjects == null ? (
+            <span
+              style={{
+                fontSize: 13,
+                color: "var(--text-subtle)",
+                padding: "5px 0",
+              }}
+            >
+              Detecting…
+            </span>
+          ) : availableSubjects.length === 0 ? (
+            <span
+              style={{
+                fontSize: 13,
+                color: "var(--text-subtle)",
+                padding: "5px 0",
+              }}
+            >
+              Not FAST-assessed
+            </span>
+          ) : availableSubjects.length === 1 ? (
+            <span style={{ fontSize: 14, fontWeight: 600, padding: "5px 0" }}>
+              {SUBJECTS.find((s) => s.key === availableSubjects[0])?.label ??
+                availableSubjects[0]}
+            </span>
+          ) : (
+            <div style={{ display: "inline-flex", gap: 4 }}>
+              {availableSubjects.map((k) => (
+                <button
+                  key={k}
+                  className={subject === k ? "primary" : "secondary"}
+                  onClick={() => setSubject(k)}
+                  style={{ padding: "5px 12px" }}
+                >
+                  {SUBJECTS.find((s) => s.key === k)?.label ?? k}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -296,6 +380,36 @@ export default function CoverageReportDashboard({
           {error}
         </div>
       )}
+
+      {!error &&
+        !contextLoading &&
+        availableSubjects != null &&
+        availableSubjects.length === 0 && (
+          <div
+            style={{
+              background: "var(--surface)",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              padding: "16px 18px",
+              color: "var(--text-subtle)",
+              fontSize: 14,
+              lineHeight: 1.5,
+            }}
+          >
+            <strong style={{ color: "var(--text)" }}>
+              No FAST benchmark data for this subject area.
+            </strong>
+            <p style={{ margin: "8px 0 0" }}>
+              The Coverage Report is built on Florida FAST benchmark results,
+              which only exist for <strong>ELA</strong>, <strong>Math</strong>,{" "}
+              <strong>Algebra&nbsp;1</strong>, and <strong>Geometry</strong>.
+              {department
+                ? ` ${department} isn't a FAST-assessed subject area, `
+                : " This teacher's subject area isn't FAST-assessed, "}
+              so there are no per-benchmark coverage or mastery numbers to show.
+            </p>
+          </div>
+        )}
 
       {report && !error && (
         <>

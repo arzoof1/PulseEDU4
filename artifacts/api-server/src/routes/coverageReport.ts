@@ -56,6 +56,42 @@ const router: IRouter = Router();
 type StaffRow = typeof staffTable.$inferSelect;
 
 const VALID_SUBJECTS = new Set(["ela", "math", "algebra1", "geometry"]);
+const SUBJECT_ORDER = ["ela", "math", "algebra1", "geometry"];
+
+// Which FAST-assessed subjects a teacher actually teaches, inferred from
+// their course names. Florida FAST only produces benchmark-level data for
+// ELA, grade-level Math, and the Algebra 1 / Geometry EOCs — Science,
+// Social Studies, World Languages, and electives have NO benchmark data,
+// so those teachers resolve to an empty list and the client explains why
+// rather than showing a phantom empty report. This is the "subject follows
+// the teacher" driver: the client no longer offers a subject a teacher
+// doesn't teach.
+function fastSubjectsForCourses(courseNames: string[]): string[] {
+  const set = new Set<string>();
+  for (const raw of courseNames) {
+    const n = (raw ?? "").toLowerCase();
+    // Math family — mutually exclusive. Only Algebra 1 and Geometry have
+    // FAST EOCs; Algebra 2 has none, and pre-algebra is grade-level Math.
+    // NB: the Florida "M/J" prefix means Middle/Junior and appears on every
+    // subject (M/J Science, M/J Civics), so it is NOT a math signal.
+    if (/geometry/.test(n)) {
+      set.add("geometry");
+    } else if (/algebra/.test(n)) {
+      if (/pre-?\s*alg/.test(n)) set.add("math");
+      else if (!/algebra\s*(2|ii)\b/.test(n)) set.add("algebra1");
+    } else if (/(\bmath\b|mathematics)/.test(n)) {
+      set.add("math");
+    }
+    if (
+      /(\bela\b|english|language arts|lang arts|\breading\b|literature|\bwriting\b)/.test(
+        n,
+      )
+    ) {
+      set.add("ela");
+    }
+  }
+  return SUBJECT_ORDER.filter((s) => set.has(s));
+}
 const VALID_WINDOWS = ["pm1", "pm2", "pm3"] as const;
 type Window = (typeof VALID_WINDOWS)[number];
 
@@ -931,6 +967,71 @@ router.get("/coverage-report/send-outs", async (req, res) => {
     totalSendOuts,
     periods,
     dimensions,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /coverage-report/context — resolve the target teacher and the FAST
+// subjects they actually teach, so the client can drive subject selection
+// off the teacher (no manual subject buttons). Auth mirrors the main
+// endpoint: self by default, ?teacherId= gated to Core Team, school-scoped.
+// ---------------------------------------------------------------------------
+router.get("/coverage-report/context", async (req, res) => {
+  const actor = await resolveStaff(req);
+  if (!actor) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+
+  const rawTeacherId = req.query.teacherId;
+  let targetTeacherId = actor.id;
+  if (typeof rawTeacherId === "string" && rawTeacherId.length > 0) {
+    const parsed = Number(rawTeacherId);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      res.status(400).json({ error: "Invalid teacherId" });
+      return;
+    }
+    if (parsed !== actor.id && !isCoreTeam(actor)) {
+      res.status(403).json({
+        error: "Only core team can view another teacher's report",
+      });
+      return;
+    }
+    targetTeacherId = parsed;
+  }
+
+  const [target] = await db
+    .select()
+    .from(staffTable)
+    .where(
+      and(eq(staffTable.id, targetTeacherId), eq(staffTable.schoolId, schoolId)),
+    );
+  if (!target) {
+    res.status(404).json({ error: "Teacher not found" });
+    return;
+  }
+
+  const sections = await db
+    .select({ courseName: classSectionsTable.courseName })
+    .from(classSectionsTable)
+    .where(
+      and(
+        eq(classSectionsTable.schoolId, schoolId),
+        eq(classSectionsTable.teacherStaffId, target.id),
+        eq(classSectionsTable.isPlanning, false),
+      ),
+    );
+  const subjects = fastSubjectsForCourses(sections.map((s) => s.courseName));
+
+  res.json({
+    teacher: {
+      id: target.id,
+      displayName: target.displayName,
+      department: target.department ?? null,
+    },
+    subjects,
   });
 });
 
