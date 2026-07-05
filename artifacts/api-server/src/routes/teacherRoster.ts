@@ -59,6 +59,11 @@ import {
 import { decideLearningGain } from "../lib/learningGains.js";
 import { inferDepartment } from "../lib/teacherDepartments.js";
 import { loadAttendanceMetrics } from "../lib/attendanceMetrics.js";
+import * as ExcelJS from "exceljs";
+import {
+  renderRosterPrintPdf,
+  type RosterPrintGroup,
+} from "../lib/rosterPrintPdf.js";
 
 // Per-PM placement enriched with the gap-to-next-sublevel caption is now
 // single-sourced in fastCutScores.ts (`withGap` / `PlacementWithGap`) so the
@@ -1029,6 +1034,327 @@ router.post(
         set: { method },
       });
     res.status(201).json({ ok: true });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Printable / downloadable class rosters (PDF + Excel + CSV)
+//
+// Same auth model as GET /teacher-roster: a teacher gets their own roster;
+// only Core Team may pass ?teacherId= to print/export another teacher's
+// roster (investigations, call-downs). Rosters are ALWAYS sorted A–Z by last
+// name, then first name. The visible identifier is the Local SIS id only.
+//   period=all  → one group per non-planning period (each A–Z)
+//   period=N    → a single period's roster
+// ---------------------------------------------------------------------------
+
+// Neutralize CSV formula injection (leading = + - @ / control char).
+function rosterCsvCell(value: unknown): string {
+  let s = value == null ? "" : String(value);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+function arrParam(v: unknown, max: number, maxLen: number): string[] {
+  const raw = Array.isArray(v) ? v : v == null ? [] : [v];
+  return raw
+    .map((x) => String(x).replace(/[\u0000-\u001f\u007f]/g, " ").trim())
+    .filter((s) => s.length > 0)
+    .map((s) => s.slice(0, maxLen))
+    .slice(0, max);
+}
+
+function strParam(v: unknown, maxLen: number): string {
+  if (typeof v !== "string") return "";
+  return v.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, maxLen);
+}
+
+interface ResolvedRosterPrint {
+  teacher: { id: number; displayName: string };
+  groups: RosterPrintGroup[];
+  // Human label describing the selection, for filenames.
+  scopeLabel: string;
+}
+
+// Shared resolver for all three export routes. Returns null after writing an
+// error response when auth / lookup fails.
+async function resolveRosterPrint(
+  req: Request,
+  res: Response,
+): Promise<ResolvedRosterPrint | null> {
+  const staff = await resolveStaff(req);
+  if (!staff) {
+    res.status(401).json({ error: "Sign-in required" });
+    return null;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return null;
+
+  const rawTeacherId = req.query.teacherId;
+  let targetTeacherId = staff.id;
+  if (typeof rawTeacherId === "string" && rawTeacherId.length > 0) {
+    const parsed = Number(rawTeacherId);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      res.status(400).json({ error: "Invalid teacherId" });
+      return null;
+    }
+    if (parsed !== staff.id && !isCoreTeam(staff)) {
+      res
+        .status(403)
+        .json({ error: "Only core team can export another teacher's roster" });
+      return null;
+    }
+    targetTeacherId = parsed;
+  }
+
+  // period=all (default) or a specific positive integer.
+  const rawPeriod = req.query.period;
+  let periodFilter: number | null = null;
+  if (
+    typeof rawPeriod === "string" &&
+    rawPeriod.length > 0 &&
+    rawPeriod !== "all"
+  ) {
+    const p = Number(rawPeriod);
+    if (!Number.isInteger(p) || p <= 0) {
+      res.status(400).json({ error: "Invalid period" });
+      return null;
+    }
+    periodFilter = p;
+  }
+
+  const [targetTeacher] = await db
+    .select()
+    .from(staffTable)
+    .where(
+      and(
+        eq(staffTable.id, targetTeacherId),
+        eq(staffTable.schoolId, schoolId),
+      ),
+    );
+  if (!targetTeacher) {
+    res.status(404).json({ error: "Teacher not found" });
+    return null;
+  }
+
+  // Non-planning sections for this teacher (optionally one period).
+  const allSections = await db
+    .select()
+    .from(classSectionsTable)
+    .where(
+      and(
+        eq(classSectionsTable.schoolId, schoolId),
+        eq(classSectionsTable.teacherStaffId, targetTeacherId),
+      ),
+    );
+  const teachingSections = allSections.filter(
+    (s) =>
+      !s.isPlanning && (periodFilter === null || s.period === periodFilter),
+  );
+
+  // Roster rows across every relevant section (one query), then bucket by
+  // period so each period group can dedupe + sort independently.
+  const sectionIds = teachingSections.map((s) => s.id);
+  const rosterRows =
+    sectionIds.length > 0
+      ? await db
+          .select()
+          .from(sectionRosterTable)
+          .where(
+            and(
+              eq(sectionRosterTable.schoolId, schoolId),
+              inArray(sectionRosterTable.sectionId, sectionIds),
+            ),
+          )
+      : [];
+
+  const studentIds = Array.from(new Set(rosterRows.map((r) => r.studentId)));
+  const studentRows =
+    studentIds.length > 0
+      ? await db
+          .select()
+          .from(studentsTable)
+          .where(
+            and(
+              eq(studentsTable.schoolId, schoolId),
+              inArray(studentsTable.studentId, studentIds),
+            ),
+          )
+      : [];
+  const studentById = new Map(studentRows.map((s) => [s.studentId, s]));
+
+  // sectionId → period, and period → set of studentIds present that period.
+  const sectionPeriod = new Map(teachingSections.map((s) => [s.id, s.period]));
+  const periodStudents = new Map<number, Set<string>>();
+  for (const r of rosterRows) {
+    const period = sectionPeriod.get(r.sectionId);
+    if (period === undefined) continue;
+    if (!periodStudents.has(period)) periodStudents.set(period, new Set());
+    periodStudents.get(period)!.add(r.studentId);
+  }
+
+  const periods = Array.from(periodStudents.keys()).sort((a, b) => a - b);
+  const groups: RosterPrintGroup[] = periods.map((period) => {
+    const ids = periodStudents.get(period)!;
+    const students = Array.from(ids)
+      .map((id) => studentById.get(id))
+      .filter((s): s is NonNullable<typeof s> => Boolean(s))
+      .sort((a, b) => {
+        const an = `${a.lastName ?? ""} ${a.firstName ?? ""}`.toLowerCase();
+        const bn = `${b.lastName ?? ""} ${b.firstName ?? ""}`.toLowerCase();
+        return an.localeCompare(bn);
+      })
+      .map((s) => ({
+        lastName: s.lastName,
+        firstName: s.firstName,
+        localSisId: s.localSisId ?? null,
+        grade: s.grade ?? null,
+      }));
+    return { periodLabel: `Period ${period}`, students };
+  });
+
+  const scopeLabel =
+    periodFilter !== null ? `period-${periodFilter}` : "all-periods";
+
+  return {
+    teacher: { id: targetTeacher.id, displayName: targetTeacher.displayName },
+    groups,
+    scopeLabel,
+  };
+}
+
+function rosterFilename(
+  teacherName: string,
+  scopeLabel: string,
+  ext: string,
+): string {
+  const safeName = teacherName.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "");
+  const date = new Date().toISOString().slice(0, 10);
+  return `roster-${safeName || "teacher"}-${scopeLabel}-${date}.${ext}`;
+}
+
+// GET /api/teacher-roster/print.pdf
+router.get(
+  "/teacher-roster/print.pdf",
+  async (req: Request, res: Response) => {
+    const resolved = await resolveRosterPrint(req, res);
+    if (!resolved) return;
+
+    const layout = req.query.layout === "grid" ? "grid" : "list";
+    const boxCountRaw = Number(req.query.boxes);
+    const boxCount = Number.isInteger(boxCountRaw)
+      ? Math.min(12, Math.max(0, boxCountRaw))
+      : 5;
+
+    const pdf = await renderRosterPrintPdf(resolved.groups, {
+      title: strParam(req.query.title, 80) || "Class Roster",
+      teacherName: resolved.teacher.displayName,
+      classLabel: strParam(req.query.classLabel, 100) || null,
+      headerFields: arrParam(req.query.field, 6, 40),
+      layout,
+      customColumns: arrParam(req.query.col, 8, 40),
+      boxCount: layout === "grid" ? boxCount : 0,
+      boxLabel: strParam(req.query.boxLabel, 40) || null,
+      dateLabel: new Date().toLocaleDateString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      }),
+    });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="${rosterFilename(resolved.teacher.displayName, resolved.scopeLabel, "pdf")}"`,
+    );
+    res.send(pdf);
+  },
+);
+
+// Flatten resolved groups into spreadsheet rows. When more than one period is
+// present, a leading Period column disambiguates.
+function rosterTabularRows(
+  resolved: ResolvedRosterPrint,
+  customColumns: string[],
+): { headers: string[]; rows: string[][]; multiPeriod: boolean } {
+  const multiPeriod = resolved.groups.length > 1;
+  const headers = [
+    ...(multiPeriod ? ["Period"] : []),
+    "Last Name",
+    "First Name",
+    "Local SIS ID",
+    "Grade",
+    ...customColumns,
+  ];
+  const rows: string[][] = [];
+  for (const g of resolved.groups) {
+    for (const s of g.students) {
+      rows.push([
+        ...(multiPeriod ? [g.periodLabel] : []),
+        s.lastName ?? "",
+        s.firstName ?? "",
+        s.localSisId ?? "",
+        s.grade == null ? "" : String(s.grade),
+        ...customColumns.map(() => ""),
+      ]);
+    }
+  }
+  return { headers, rows, multiPeriod };
+}
+
+// GET /api/teacher-roster/export.xlsx
+router.get(
+  "/teacher-roster/export.xlsx",
+  async (req: Request, res: Response) => {
+    const resolved = await resolveRosterPrint(req, res);
+    if (!resolved) return;
+    const customColumns = arrParam(req.query.col, 8, 40);
+    const { headers, rows } = rosterTabularRows(resolved, customColumns);
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Roster");
+    ws.addRow(headers);
+    ws.getRow(1).font = { bold: true };
+    for (const r of rows) ws.addRow(r);
+    ws.columns.forEach((c) => {
+      c.width = 16;
+    });
+
+    const buf = await wb.xlsx.writeBuffer();
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${rosterFilename(resolved.teacher.displayName, resolved.scopeLabel, "xlsx")}"`,
+    );
+    res.send(Buffer.from(buf));
+  },
+);
+
+// GET /api/teacher-roster/export.csv
+router.get(
+  "/teacher-roster/export.csv",
+  async (req: Request, res: Response) => {
+    const resolved = await resolveRosterPrint(req, res);
+    if (!resolved) return;
+    const customColumns = arrParam(req.query.col, 8, 40);
+    const { headers, rows } = rosterTabularRows(resolved, customColumns);
+
+    const lines = [
+      headers.map(rosterCsvCell).join(","),
+      ...rows.map((r) => r.map(rosterCsvCell).join(",")),
+    ];
+    const csv = "\uFEFF" + lines.join("\r\n");
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${rosterFilename(resolved.teacher.displayName, resolved.scopeLabel, "csv")}"`,
+    );
+    res.send(csv);
   },
 );
 
