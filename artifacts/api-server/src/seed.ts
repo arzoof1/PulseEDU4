@@ -585,6 +585,36 @@ export async function ensureDataChatSchema() {
   );
 }
 
+// Section Support Access — grants a support teacher (e.g. ESE / co-teacher)
+// access to another teacher's WHOLE class section, assigned by the ESE
+// Coordinator. Keyed on the STABLE section business identity
+// (school_id, teacher_staff_id, period) so it survives roster re-imports that
+// wipe & reinsert class_sections. Idempotent CREATE TABLE IF NOT EXISTS.
+export async function ensureSectionSupportSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS section_support_staff (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      teacher_staff_id INTEGER NOT NULL,
+      period INTEGER NOT NULL,
+      support_staff_id INTEGER NOT NULL,
+      assigned_by_staff_id INTEGER,
+      assigned_by_name TEXT,
+      assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      notes TEXT
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS section_support_staff_unique ON section_support_staff (school_id, teacher_staff_id, period, support_staff_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS section_support_staff_support_idx ON section_support_staff (school_id, support_staff_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS section_support_staff_section_idx ON section_support_staff (school_id, teacher_staff_id, period)`,
+  );
+}
+
 export async function ensureHousesSchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS houses (

@@ -8,6 +8,8 @@ import {
   studentAccommodationsTable,
   staffTable,
   studentsTable,
+  classSectionsTable,
+  sectionSupportStaffTable,
 } from "@workspace/db";
 import { and, eq, isNull, sql, desc, inArray } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -464,6 +466,200 @@ router.delete(
       return;
     }
     res.json(row);
+  },
+);
+
+// ---- Section Support Access ----
+// Coordinator (ESE / Admin / SuperUser) grants a support teacher access to
+// another teacher's whole section for a given period. Keyed on the STABLE
+// section business identity (school_id, teacher_staff_id, period) so grants
+// survive roster re-imports. All routes are school-scoped and gated by
+// requireEseOrAdmin.
+
+router.get("/support-assignments", requireEseOrAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const rows = await db
+    .select({
+      id: sectionSupportStaffTable.id,
+      teacherStaffId: sectionSupportStaffTable.teacherStaffId,
+      period: sectionSupportStaffTable.period,
+      supportStaffId: sectionSupportStaffTable.supportStaffId,
+      assignedByName: sectionSupportStaffTable.assignedByName,
+      assignedAt: sectionSupportStaffTable.assignedAt,
+      notes: sectionSupportStaffTable.notes,
+    })
+    .from(sectionSupportStaffTable)
+    .where(eq(sectionSupportStaffTable.schoolId, schoolId))
+    .orderBy(
+      sectionSupportStaffTable.teacherStaffId,
+      sectionSupportStaffTable.period,
+    );
+  // Decorate with teacher + support display names and the live course name for
+  // the (teacher, period) section (re-resolved so it tracks the roster).
+  const staffIds = Array.from(
+    new Set(rows.flatMap((r) => [r.teacherStaffId, r.supportStaffId])),
+  );
+  const staffRows = staffIds.length
+    ? await db
+        .select({ id: staffTable.id, displayName: staffTable.displayName })
+        .from(staffTable)
+        .where(
+          and(
+            eq(staffTable.schoolId, schoolId),
+            inArray(staffTable.id, staffIds),
+          ),
+        )
+    : [];
+  const nameById = new Map(staffRows.map((s) => [s.id, s.displayName]));
+  const sections = await db
+    .select({
+      teacherStaffId: classSectionsTable.teacherStaffId,
+      period: classSectionsTable.period,
+      courseName: classSectionsTable.courseName,
+    })
+    .from(classSectionsTable)
+    .where(
+      and(
+        eq(classSectionsTable.schoolId, schoolId),
+        eq(classSectionsTable.isPlanning, false),
+      ),
+    );
+  const courseByKey = new Map(
+    sections.map((s) => [`${s.teacherStaffId}:${s.period}`, s.courseName]),
+  );
+  res.json(
+    rows.map((r) => ({
+      ...r,
+      teacherName: nameById.get(r.teacherStaffId) ?? "",
+      supportName: nameById.get(r.supportStaffId) ?? "",
+      courseName: courseByKey.get(`${r.teacherStaffId}:${r.period}`) ?? null,
+    })),
+  );
+});
+
+router.post("/support-assignments", requireEseOrAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const { teacherStaffId, period, supportStaffId, notes } = req.body ?? {};
+  if (
+    typeof teacherStaffId !== "number" ||
+    !Number.isInteger(teacherStaffId) ||
+    typeof supportStaffId !== "number" ||
+    !Number.isInteger(supportStaffId) ||
+    typeof period !== "number" ||
+    !Number.isInteger(period) ||
+    period < 1
+  ) {
+    res.status(400).json({
+      error: "teacherStaffId, supportStaffId, and period are required",
+    });
+    return;
+  }
+  if (teacherStaffId === supportStaffId) {
+    res
+      .status(400)
+      .json({ error: "Support teacher and section teacher must differ" });
+    return;
+  }
+  // Both staff must belong to this school.
+  const staffRows = await db
+    .select({ id: staffTable.id })
+    .from(staffTable)
+    .where(
+      and(
+        eq(staffTable.schoolId, schoolId),
+        inArray(staffTable.id, [teacherStaffId, supportStaffId]),
+      ),
+    );
+  if (staffRows.length !== 2) {
+    res.status(400).json({ error: "Unknown staff for this school" });
+    return;
+  }
+  // A live non-planning section must exist for (teacher, period).
+  const [section] = await db
+    .select({ id: classSectionsTable.id })
+    .from(classSectionsTable)
+    .where(
+      and(
+        eq(classSectionsTable.schoolId, schoolId),
+        eq(classSectionsTable.teacherStaffId, teacherStaffId),
+        eq(classSectionsTable.period, period),
+        eq(classSectionsTable.isPlanning, false),
+      ),
+    );
+  if (!section) {
+    res
+      .status(400)
+      .json({ error: "That teacher does not teach a class this period" });
+    return;
+  }
+  const [row] = await db
+    .insert(sectionSupportStaffTable)
+    .values({
+      schoolId,
+      teacherStaffId,
+      period,
+      supportStaffId,
+      assignedByStaffId: staff.id,
+      assignedByName: staff.displayName,
+      notes: typeof notes === "string" && notes.trim() ? notes.trim() : null,
+    })
+    .onConflictDoNothing({
+      target: [
+        sectionSupportStaffTable.schoolId,
+        sectionSupportStaffTable.teacherStaffId,
+        sectionSupportStaffTable.period,
+        sectionSupportStaffTable.supportStaffId,
+      ],
+    })
+    .returning();
+  // Idempotent: if the grant already existed, return it.
+  if (!row) {
+    const [existing] = await db
+      .select()
+      .from(sectionSupportStaffTable)
+      .where(
+        and(
+          eq(sectionSupportStaffTable.schoolId, schoolId),
+          eq(sectionSupportStaffTable.teacherStaffId, teacherStaffId),
+          eq(sectionSupportStaffTable.period, period),
+          eq(sectionSupportStaffTable.supportStaffId, supportStaffId),
+        ),
+      );
+    res.json(existing ?? null);
+    return;
+  }
+  res.json(row);
+});
+
+router.delete(
+  "/support-assignments/:id",
+  requireEseOrAdmin,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [row] = await db
+      .delete(sectionSupportStaffTable)
+      .where(
+        and(
+          eq(sectionSupportStaffTable.schoolId, schoolId),
+          eq(sectionSupportStaffTable.id, id),
+        ),
+      )
+      .returning();
+    if (!row) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    res.json({ ok: true });
   },
 );
 

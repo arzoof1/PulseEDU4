@@ -4,6 +4,7 @@ import {
   classSectionsTable,
   sectionRosterTable,
   staffTable,
+  sectionSupportStaffTable,
 } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -74,6 +75,46 @@ router.get("/schedule", async (req: Request, res: Response) => {
         .from(classSectionsTable)
         .where(eq(classSectionsTable.schoolId, schoolId));
 
+  // Section Support Access: when returning the caller's OWN schedule (not the
+  // ?all=1 browse view), also append sections the caller has been granted
+  // support access to. Assignments are keyed on the STABLE business identity
+  // (teacher_staff_id, period) — re-resolve the live section here so it tracks
+  // the current roster after a re-import. Tagged `support: true` in the output
+  // so the client can attribute logs to the support teacher (not the owner).
+  const supportSectionIds = new Set<number>();
+  if (filterByTeacher) {
+    const supportAssignments = await db
+      .select({
+        teacherStaffId: sectionSupportStaffTable.teacherStaffId,
+        period: sectionSupportStaffTable.period,
+      })
+      .from(sectionSupportStaffTable)
+      .where(
+        and(
+          eq(sectionSupportStaffTable.schoolId, schoolId),
+          eq(sectionSupportStaffTable.supportStaffId, staff.id),
+        ),
+      );
+    const ownIds = new Set(sections.map((s) => s.id));
+    for (const a of supportAssignments) {
+      const [sec] = await db
+        .select()
+        .from(classSectionsTable)
+        .where(
+          and(
+            eq(classSectionsTable.schoolId, schoolId),
+            eq(classSectionsTable.teacherStaffId, a.teacherStaffId),
+            eq(classSectionsTable.period, a.period),
+            eq(classSectionsTable.isPlanning, false),
+          ),
+        );
+      if (sec && !ownIds.has(sec.id)) {
+        sections.push(sec);
+        supportSectionIds.add(sec.id);
+      }
+    }
+  }
+
   if (sections.length === 0) {
     res.json({ sections: [] });
     return;
@@ -122,6 +163,7 @@ router.get("/schedule", async (req: Request, res: Response) => {
       teacherStaffId: s.teacherStaffId,
       teacherName: teacherById.get(s.teacherStaffId)?.displayName ?? "",
       studentIds: studentsBySection.get(s.id) ?? [],
+      support: supportSectionIds.has(s.id),
     })),
   });
 });

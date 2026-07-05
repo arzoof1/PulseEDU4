@@ -22,6 +22,7 @@ import FamilyMessagesHub from "./components/FamilyMessagesHub";
 import ParentNotificationsPanel from "./components/ParentNotificationsPanel";
 import PulloutNotificationsPanel from "./components/PulloutNotificationsPanel";
 import PulseDnaStudio from "./components/PulseDnaStudio";
+import { TeacherPicker } from "./components/TeacherPicker";
 import HelpAssistant from "./components/HelpAssistant";
 import { TileHome, type Tile as TileHomeTile } from "./pages/TileHome";
 import StaffAstPage from "./components/ast/StaffAstPage";
@@ -6111,6 +6112,14 @@ function App() {
     courseName: string;
     isPlanning: boolean;
     studentIds: string[];
+    // Section owner (present for support sections; for own sections this is
+    // the caller). Used to attribute accommodation logs to the correct owner
+    // when the caller is logging via Section Support Access.
+    teacherStaffId?: number;
+    teacherName?: string;
+    // True when this section belongs to another teacher and the caller has
+    // been granted support access to it by the ESE Coordinator.
+    support?: boolean;
   }
   const [mySections, setMySections] = useState<MySection[]>([]);
   const periodRoster: Record<string, string[]> = Object.fromEntries(
@@ -6211,7 +6220,43 @@ function App() {
       inUseCount: number;
     }>
   >([]);
-  const [eseTab, setEseTab] = useState<"students" | "master">("students");
+  const [eseTab, setEseTab] = useState<
+    "students" | "master" | "support"
+  >("students");
+  // Section Support Access assignments (coordinator grants a support teacher
+  // access to another teacher's whole section for a period).
+  interface SupportAssignment {
+    id: number;
+    teacherStaffId: number;
+    period: number;
+    supportStaffId: number;
+    teacherName: string;
+    supportName: string;
+    courseName: string | null;
+    assignedByName: string | null;
+    assignedAt: string;
+    notes: string | null;
+  }
+  const [supportAssignments, setSupportAssignments] = useState<
+    SupportAssignment[]
+  >([]);
+  const [supportOwnerId, setSupportOwnerId] = useState<number | null>(null);
+  const [supportPeriod, setSupportPeriod] = useState<number | "">("");
+  const [supportStaffId, setSupportStaffId] = useState<number | null>(null);
+  const [sectSupNotes, setSectSupNotes] = useState("");
+  const [supportMsg, setSupportMsg] = useState("");
+  const loadSupportAssignments = async () => {
+    try {
+      const res = await authFetch("/api/support-assignments", {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as SupportAssignment[];
+      setSupportAssignments(Array.isArray(data) ? data : []);
+    } catch {
+      setSupportAssignments([]);
+    }
+  };
   const [eseStudentSearch, setEseStudentSearch] = useState("");
   const [eseStudentId, setEseStudentId] = useState("");
   const [eseStudentAccs, setEseStudentAccs] = useState<
@@ -8663,6 +8708,29 @@ function App() {
       isElevated && dailyTeacherId != null && dailyTeacherId !== authUser?.id
         ? dailyTeacherId
         : null;
+    // Section Support Access: when the selected period maps to a section the
+    // caller SUPPORTS (owned by another teacher) rather than one they own,
+    // send `sectionTeacherStaffId` so the server resolves the owner's section
+    // while keeping the log attributed to the acting support teacher. Own
+    // sections take precedence, and this is mutually exclusive with the
+    // elevated `actingAsStaffId` delegation path.
+    let sectionTeacherStaffId: number | null = null;
+    if (actingAsStaffId == null) {
+      const ownSection = mySections.find(
+        (s) => s.period === periodNum && !s.support,
+      );
+      const supportSection = mySections.find(
+        (s) => s.period === periodNum && s.support,
+      );
+      if (
+        !ownSection &&
+        supportSection &&
+        supportSection.teacherStaffId != null &&
+        supportSection.teacherStaffId !== authUser?.id
+      ) {
+        sectionTeacherStaffId = supportSection.teacherStaffId;
+      }
+    }
     setDailySubmitMsg("Submitting...");
     try {
       const res = await authFetch(
@@ -8677,6 +8745,9 @@ function App() {
             entries,
             ...(actingAsStaffId != null
               ? { actingAsStaffId }
+              : {}),
+            ...(sectionTeacherStaffId != null
+              ? { sectionTeacherStaffId }
               : {}),
           }),
         },
@@ -20727,8 +20798,19 @@ function App() {
               type="button"
               onClick={() => setEseTab("master")}
               disabled={eseTab === "master"}
+              style={{ marginRight: "0.25rem" }}
             >
               Master Accommodations List
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEseTab("support");
+                loadSupportAssignments();
+              }}
+              disabled={eseTab === "support"}
+            >
+              Support Access
             </button>
           </div>
 
@@ -21298,7 +21380,7 @@ function App() {
               )}
               </details>
             </div>
-          ) : (
+          ) : eseTab === "master" ? (
             <div>
               <h3 style={{ marginTop: 0 }}>
                 Master Accommodations
@@ -21498,6 +21580,274 @@ function App() {
                 </tbody>
               </table>
             </div>
+          ) : (
+            (() => {
+              // Section Support Access — grant a support teacher (e.g. an ESE
+              // co-teacher) LOG-ONLY access to another teacher's whole section
+              // for a period. Support teachers can SEE those students and LOG
+              // accommodation delivery, but cannot edit the accommodation list.
+              const teacherOpts = Array.from(
+                new Map(
+                  allSections
+                    .filter((s) => !s.isPlanning)
+                    .map(
+                      (s) => [s.teacherStaffId, s.teacherName] as const,
+                    ),
+                ).entries(),
+              )
+                .map(([id, name]) => ({ id, displayName: name }))
+                .sort((a, b) => a.displayName.localeCompare(b.displayName));
+              const ownerPeriods = Array.from(
+                new Set(
+                  allSections
+                    .filter(
+                      (s) =>
+                        !s.isPlanning &&
+                        s.teacherStaffId === supportOwnerId,
+                    )
+                    .map((s) => s.period),
+                ),
+              ).sort((a, b) => a - b);
+              const canGrant =
+                supportOwnerId != null &&
+                supportPeriod !== "" &&
+                supportStaffId != null &&
+                supportStaffId !== supportOwnerId;
+              const grant = async () => {
+                if (!canGrant) return;
+                setSupportMsg("Saving…");
+                try {
+                  const res = await authFetch("/api/support-assignments", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    credentials: "include",
+                    body: JSON.stringify({
+                      teacherStaffId: supportOwnerId,
+                      period: Number(supportPeriod),
+                      supportStaffId,
+                      notes: sectSupNotes.trim() || undefined,
+                    }),
+                  });
+                  if (!res.ok) {
+                    const t = await res.text().catch(() => "");
+                    throw new Error(t || `HTTP ${res.status}`);
+                  }
+                  setSupportMsg("Support access granted.");
+                  setSectSupNotes("");
+                  setSupportPeriod("");
+                  setSupportStaffId(null);
+                  loadSupportAssignments();
+                } catch (err) {
+                  setSupportMsg(
+                    `Failed: ${
+                      err instanceof Error ? err.message : String(err)
+                    }`,
+                  );
+                }
+              };
+              const removeGrant = async (id: number) => {
+                try {
+                  const res = await authFetch(
+                    `/api/support-assignments/${id}`,
+                    { method: "DELETE", credentials: "include" },
+                  );
+                  if (!res.ok && res.status !== 404) {
+                    throw new Error(`HTTP ${res.status}`);
+                  }
+                  loadSupportAssignments();
+                } catch (err) {
+                  setSupportMsg(
+                    `Failed to remove: ${
+                      err instanceof Error ? err.message : String(err)
+                    }`,
+                  );
+                }
+              };
+              return (
+                <div>
+                  <h3 style={{ marginTop: 0 }}>Section Support Access</h3>
+                  <p style={{ marginTop: 0, color: "#475569" }}>
+                    Give a support teacher (e.g. an ESE co-teacher)
+                    access to another teacher's whole class section for a
+                    period. They can see those students across the app and
+                    log accommodation delivery, including small-group and
+                    bulk. They cannot edit the accommodation list.
+                  </p>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr 1fr",
+                      gap: "0.75rem",
+                      alignItems: "start",
+                      maxWidth: "56rem",
+                      marginBottom: "0.75rem",
+                    }}
+                  >
+                    <label>
+                      <div style={{ fontSize: "0.85rem", fontWeight: 600 }}>
+                        Section teacher (owner)
+                      </div>
+                      <TeacherPicker
+                        teachers={teacherOpts}
+                        value={supportOwnerId}
+                        onChange={(id) => {
+                          setSupportOwnerId(id);
+                          setSupportPeriod("");
+                        }}
+                        allowEmpty
+                        emptyLabel="Select teacher…"
+                        showDeptFilter
+                      />
+                    </label>
+                    <label>
+                      <div style={{ fontSize: "0.85rem", fontWeight: 600 }}>
+                        Period
+                      </div>
+                      <select
+                        value={supportPeriod === "" ? "" : supportPeriod}
+                        onChange={(e) =>
+                          setSupportPeriod(
+                            e.target.value === ""
+                              ? ""
+                              : Number(e.target.value),
+                          )
+                        }
+                        disabled={supportOwnerId == null}
+                        style={{ width: "100%", padding: "0.4rem" }}
+                      >
+                        <option value="">Select period…</option>
+                        {ownerPeriods.map((p) => (
+                          <option key={p} value={p}>
+                            Period {p}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <div style={{ fontSize: "0.85rem", fontWeight: 600 }}>
+                        Support teacher
+                      </div>
+                      <TeacherPicker
+                        teachers={teacherOpts}
+                        value={supportStaffId}
+                        onChange={setSupportStaffId}
+                        allowEmpty
+                        emptyLabel="Select teacher…"
+                        showDeptFilter
+                      />
+                    </label>
+                  </div>
+                  <label style={{ display: "block", maxWidth: "56rem" }}>
+                    <div style={{ fontSize: "0.85rem", fontWeight: 600 }}>
+                      Notes (optional)
+                    </div>
+                    <input
+                      type="text"
+                      value={sectSupNotes}
+                      onChange={(e) => setSectSupNotes(e.target.value)}
+                      placeholder="e.g. Co-teaches ELA support block"
+                      style={{ width: "100%", padding: "0.4rem" }}
+                    />
+                  </label>
+                  <div
+                    style={{
+                      marginTop: "0.75rem",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.75rem",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={grant}
+                      disabled={!canGrant}
+                      style={{
+                        background: canGrant ? "#0d9488" : "#94a3b8",
+                        color: "#fff",
+                        border: "none",
+                        padding: "0.45rem 1.1rem",
+                        borderRadius: 4,
+                        fontWeight: 600,
+                        cursor: canGrant ? "pointer" : "not-allowed",
+                      }}
+                    >
+                      Grant access
+                    </button>
+                    {supportMsg && (
+                      <span style={{ fontSize: "0.85rem", color: "#475569" }}>
+                        {supportMsg}
+                      </span>
+                    )}
+                  </div>
+
+                  <h4 style={{ marginBottom: "0.4rem" }}>
+                    Current assignments
+                  </h4>
+                  {supportAssignments.length === 0 ? (
+                    <div style={{ color: "#64748b" }}>
+                      No support access granted yet.
+                    </div>
+                  ) : (
+                    <table
+                      style={{
+                        width: "100%",
+                        borderCollapse: "collapse",
+                        fontSize: "0.9rem",
+                      }}
+                    >
+                      <thead>
+                        <tr style={{ textAlign: "left" }}>
+                          <th style={{ padding: "0.4rem" }}>Support teacher</th>
+                          <th style={{ padding: "0.4rem" }}>Section owner</th>
+                          <th style={{ padding: "0.4rem" }}>Period</th>
+                          <th style={{ padding: "0.4rem" }}>Class</th>
+                          <th style={{ padding: "0.4rem" }}>Notes</th>
+                          <th style={{ padding: "0.4rem" }}></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {supportAssignments.map((a) => (
+                          <tr
+                            key={a.id}
+                            style={{ borderTop: "1px solid #e2e8f0" }}
+                          >
+                            <td style={{ padding: "0.4rem" }}>
+                              {a.supportName || `#${a.supportStaffId}`}
+                            </td>
+                            <td style={{ padding: "0.4rem" }}>
+                              {a.teacherName || `#${a.teacherStaffId}`}
+                            </td>
+                            <td style={{ padding: "0.4rem" }}>{a.period}</td>
+                            <td style={{ padding: "0.4rem" }}>
+                              {a.courseName ?? "—"}
+                            </td>
+                            <td style={{ padding: "0.4rem" }}>
+                              {a.notes ?? ""}
+                            </td>
+                            <td style={{ padding: "0.4rem" }}>
+                              <button
+                                type="button"
+                                onClick={() => removeGrant(a.id)}
+                                style={{
+                                  background: "#dc2626",
+                                  color: "#fff",
+                                  border: "none",
+                                  padding: "0.25rem 0.7rem",
+                                  borderRadius: 4,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                Remove
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              );
+            })()
           )}
         </section>
       )}

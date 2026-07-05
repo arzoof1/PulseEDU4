@@ -46,6 +46,7 @@ import {
   ensureParentMessagesSchema,
   ensureCommunicationSchema,
   ensureDataChatSchema,
+  ensureSectionSupportSchema,
   ensureDataExportSchema,
   ensurePulseDnaVideosSchema,
   ensureStudentLocalSisIdBackfill,
@@ -316,6 +317,9 @@ async function runSeed(): Promise<void> {
   // Data Chat / Check-In campaign engine (templates + campaigns + logs).
   // Idempotent.
   await ensureDataChatSchema();
+  // Section Support Access — support teachers (ESE / co-teachers) assigned to
+  // another teacher's whole section by the ESE Coordinator. Idempotent.
+  await ensureSectionSupportSchema();
   // Data Export audit trail (customizable exporter). Idempotent.
   await ensureDataExportSchema();
   // PulseDNA videos (Recording Studio) + parent_messages.video_id link.

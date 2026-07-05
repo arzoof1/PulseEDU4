@@ -63,6 +63,7 @@ export * from "./schoolStoreRedemptions";
 export * from "./studentMtssPlans";
 export * from "./mtssFastSuggestionDismissals";
 export * from "./studentTrustedAdults";
+export * from "./sectionSupportStaff";
 export * from "./imports";
 export * from "./studentImportSnapshots";
 export * from "./assessments";

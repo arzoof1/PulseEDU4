@@ -7,6 +7,7 @@ import {
   classSectionsTable,
   sectionRosterTable,
   staffTable,
+  sectionSupportStaffTable,
 } from "@workspace/db";
 import { eq, and, isNull, sql, inArray } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -44,6 +45,22 @@ async function requireStaff(
     .from(staffTable)
     .where(eq(staffTable.id, staffId));
   if (!staff || !staff.active) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  // Tenant-alignment guard. `req.schoolId` is derived independently from the
+  // session/bearer actor (see app.ts). The ?staffId=/body.staffId fallback
+  // above exists only for the Replit preview iframe where session cookies can
+  // be blocked; a live session always wins, so this guard never fires for a
+  // legitimately-authenticated user. It exists so the fallback can NEVER bind
+  // a principal from a different school than the request's tenant (defense in
+  // depth for the Section Support authorization checks that key off this
+  // identity). SuperUsers legitimately act under an override school != home.
+  if (
+    !staff.isSuperUser &&
+    req.schoolId != null &&
+    staff.schoolId !== req.schoolId
+  ) {
     res.status(401).json({ error: "Sign-in required" });
     return;
   }
@@ -351,7 +368,8 @@ router.post(
     const principal = (
       req as Request & { staff: typeof staffTable.$inferSelect }
     ).staff;
-    const { period, date, entries, actingAsStaffId } = req.body ?? {};
+    const { period, date, entries, actingAsStaffId, sectionTeacherStaffId } =
+      req.body ?? {};
 
     if (typeof period !== "number" || !Number.isInteger(period) || period < 1) {
       res.status(400).json({ error: "period (positive integer) is required" });
@@ -487,6 +505,60 @@ router.post(
       norm.push({ studentId: sid, accommodationId: accId, status: st });
     }
 
+    // Section Support Access: a support teacher (ESE / co-teacher) may LOG
+    // delivery for another teacher's whole section without editing the
+    // accommodation list. The client passes `sectionTeacherStaffId` (the
+    // section OWNER). We verify a coordinator-created support grant exists for
+    // (school, owner, period, support = the acting principal), then resolve
+    // the section by the owner — but the log identity stays the acting support
+    // teacher (`staff` is unchanged), NOT the owner. This is distinct from the
+    // elevated `actingAsStaffId` delegation path, which reassigns identity to
+    // the target; the two are mutually exclusive.
+    let sectionOwnerStaffId = staff.id;
+    let viaSupportAccess = false;
+    if (sectionTeacherStaffId != null) {
+      if (
+        typeof sectionTeacherStaffId !== "number" ||
+        !Number.isInteger(sectionTeacherStaffId)
+      ) {
+        res
+          .status(400)
+          .json({ error: "sectionTeacherStaffId must be an integer" });
+        return;
+      }
+      if (actingAsStaffId != null && actingAsStaffId !== principal.id) {
+        res.status(400).json({
+          error:
+            "sectionTeacherStaffId cannot be combined with actingAsStaffId",
+        });
+        return;
+      }
+      if (sectionTeacherStaffId !== principal.id) {
+        const [grant] = await db
+          .select({ id: sectionSupportStaffTable.id })
+          .from(sectionSupportStaffTable)
+          .where(
+            and(
+              eq(sectionSupportStaffTable.schoolId, schoolId),
+              eq(
+                sectionSupportStaffTable.teacherStaffId,
+                sectionTeacherStaffId,
+              ),
+              eq(sectionSupportStaffTable.period, period),
+              eq(sectionSupportStaffTable.supportStaffId, principal.id),
+            ),
+          );
+        if (!grant) {
+          res.status(403).json({
+            error: "You do not have support access to that section this period",
+          });
+          return;
+        }
+        sectionOwnerStaffId = sectionTeacherStaffId;
+        viaSupportAccess = true;
+      }
+    }
+
     // Section ownership for `period`. Scoped to the requesting principal's
     // school to prevent any cross-school lookup if (teacherStaffId, period)
     // were ever to collide across tenants.
@@ -496,14 +568,15 @@ router.post(
       .where(
         and(
           eq(classSectionsTable.schoolId, schoolId),
-          eq(classSectionsTable.teacherStaffId, staff.id),
+          eq(classSectionsTable.teacherStaffId, sectionOwnerStaffId),
           eq(classSectionsTable.period, period),
         ),
       );
     if (!section || section.isPlanning) {
       res.status(400).json({
-        error:
-          actingAsStaffId != null && actingAsStaffId !== principal.id
+        error: viaSupportAccess
+          ? "That teacher does not teach a class this period"
+          : actingAsStaffId != null && actingAsStaffId !== principal.id
             ? "Selected teacher does not teach a class this period"
             : "You do not teach a class this period",
       });
