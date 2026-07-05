@@ -543,6 +543,10 @@ const tableStyle: React.CSSProperties = {
   width: "100%",
   borderCollapse: "collapse",
   fontSize: "0.9rem",
+  // Override the global `table { overflow: hidden }` so the sticky <th> below
+  // pins to the drawer's scroll container (bodyStyle) instead of to the table
+  // box itself (which would scroll the header away).
+  overflow: "visible",
 };
 
 const thStyle: React.CSSProperties = {
@@ -551,6 +555,11 @@ const thStyle: React.CSSProperties = {
   borderBottom: "1px solid var(--border)",
   color: "var(--text-subtle)",
   fontWeight: 600,
+  // Keep the header row visible while the student list scrolls inside the drawer.
+  position: "sticky",
+  top: 0,
+  zIndex: 1,
+  background: "var(--surface, #0f172a)",
 };
 
 const thStyleNum: React.CSSProperties = {
