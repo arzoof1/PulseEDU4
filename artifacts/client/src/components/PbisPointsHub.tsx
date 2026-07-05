@@ -7512,7 +7512,7 @@ export function PbisPointsReportView({ me }: { me: Me | null }) {
               </strong>
             </span>
           </div>
-          <div style={{ ...card, padding: 0, overflowX: "auto" }}>
+          <div className="sticky-scroll" style={{ padding: 0 }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr

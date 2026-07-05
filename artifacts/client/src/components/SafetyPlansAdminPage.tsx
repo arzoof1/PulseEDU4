@@ -327,7 +327,7 @@ export default function SafetyPlansAdminPage({ canManage, onBack }: Props) {
               : "No plans match the current filter."}
           </div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
+          <div className="sticky-scroll">
             <table className="pulse-table"
               style={{
                 width: "100%",

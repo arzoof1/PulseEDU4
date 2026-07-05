@@ -3341,7 +3341,7 @@ export default function TeacherRosterPage({
       )}
 
       {!loading && data && data.students.length > 0 && (
-        <div style={{ overflowX: "auto" }}>
+        <div className="sticky-scroll sticky-scroll--group">
           <table className="pulse-table"
             style={{
               borderCollapse: "collapse",

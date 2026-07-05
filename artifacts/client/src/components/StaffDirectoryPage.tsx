@@ -323,7 +323,7 @@ export default function StaffDirectoryPage({
               SuperUser can edit phone numbers.
             </div>
           )}
-          <div style={{ overflowX: "auto" }}>
+          <div className="sticky-scroll">
             <table className="pulse-table" style={{ width: "100%" }}>
               <thead>
                 <tr>

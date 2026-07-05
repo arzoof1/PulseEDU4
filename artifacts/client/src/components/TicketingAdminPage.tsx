@@ -1963,6 +1963,10 @@ const table: CSSProperties = {
   width: "100%",
   borderCollapse: "collapse",
   fontSize: 13,
+  // Override the global `table { overflow: hidden }` so the already-sticky
+  // <th> (position: sticky; top: 0) pins to the surrounding scroll wrapper
+  // instead of to the table box itself (which would clip it away on scroll).
+  overflow: "visible",
 };
 const th: CSSProperties = {
   textAlign: "left",

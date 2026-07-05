@@ -889,6 +889,20 @@ td {
   background: var(--surface-2);
 }
 
+/* Grouped (multi-row) header variant. Tables like the Teacher Roster have a
+   two-row <thead> (a colSpan group label row on top, sub-columns beneath).
+   Pinning each <th> to top:0 would stack the two rows on top of each other, so
+   instead we pin the whole <thead> as a single block — no magic per-row offset
+   needed. The per-th sticky rule above is neutralized for this variant. */
+.sticky-scroll--group thead {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+.sticky-scroll--group thead th {
+  position: static;
+}
+
 /* Bulk-upload affordance: a dashed, clickable drop-zone so the file picker
    reads unmistakably as "click here to upload a file" rather than blending in
    with the row of ordinary buttons next to it. */
