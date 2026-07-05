@@ -110,6 +110,7 @@ import PrivacyGate from "./components/PrivacyGate";
 import SeparationSuggestionsPage from "./components/SeparationSuggestionsPage";
 import FastBenchmarksDashboard from "./components/FastBenchmarksDashboard";
 import InstructionalCoverageDashboard from "./components/InstructionalCoverageDashboard";
+import CoverageReportDashboard from "./components/CoverageReportDashboard";
 import SeparationTagsAdmin from "./components/SeparationTagsAdmin";
 import SafetyPlanEditor from "./components/SafetyPlanEditor";
 import SignageLauncherView from "./components/SignageLauncherView";
@@ -3937,6 +3938,16 @@ const INSIGHTS_TILES: InsightsTile[] = [
     targetSection: "instructionalCoverage",
   },
   {
+    id: "coverageReport",
+    icon: "📈",
+    title: "Coverage Report",
+    subtitle:
+      "Per-benchmark teacher effectiveness: coverage vs mastery, how you compare to same-grade peers, PM1→2→3 growth, period/subgroup drill-downs, and a discretionary send-out equity check. Teachers see their own; core team sees any.",
+    phase: "Today",
+    group: "monitoring",
+    targetSection: "coverageReport",
+  },
+  {
     id: "earlyWarning",
     icon: "🚨",
     title: "Early Warning",
@@ -5634,6 +5645,7 @@ function App() {
     | "separationSuggestions"
     | "fastBenchmarks"
     | "instructionalCoverage"
+    | "coverageReport"
     | "spotlight"
     | "houseRankings"
     | "issReporting"
@@ -10765,6 +10777,14 @@ function App() {
       label: "Teacher Roster",
       description: "Your class lists, FAST scores, and student quick actions.",
       emoji: "👥",
+      group: "quick",
+    });
+    add(!isNonExemptOnly, {
+      key: "coverageReport",
+      label: "Coverage Report",
+      description:
+        "Your per-benchmark effectiveness: coverage, mastery vs peers, PM growth, and a send-out equity check.",
+      emoji: "📈",
       group: "quick",
     });
     add(!isNonExemptOnly, {
@@ -23706,6 +23726,12 @@ function App() {
             onBack={() => setActiveSection("insights")}
           />
         )}
+
+      {activeSection === "coverageReport" && (
+        <CoverageReportDashboard
+          onBack={() => setActiveSection("insights")}
+        />
+      )}
 
       {activeSection === "parentAccess" && canManageSettings && (
         <FeatureGate feature="parentPortal" label="Parent Portal">

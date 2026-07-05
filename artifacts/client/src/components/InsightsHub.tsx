@@ -30,6 +30,7 @@ export type InsightsTileId =
   | "separations"
   | "fastBenchmarks"
   | "instructionalCoverage"
+  | "coverageReport"
   | "classComposer"
   | "algebraPlacement"
   | "reteachActivity"
