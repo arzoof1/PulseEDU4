@@ -1992,7 +1992,7 @@ export default function DataImports({
             : "1px solid var(--border, #2a3447)",
           background: selected
             ? "rgba(59, 130, 246, 0.08)"
-            : "var(--card-bg, #0f172a)",
+            : "var(--surface)",
           color: "inherit",
           font: "inherit",
           cursor: disabled ? "not-allowed" : "pointer",
@@ -2971,7 +2971,7 @@ export default function DataImports({
                       }
                       style={{
                         padding: "0.3rem 0.5rem",
-                        background: "var(--card-bg, #0f172a)",
+                        background: "var(--surface)",
                         color: "inherit",
                         border: "1px solid var(--border, #2a3447)",
                         borderRadius: 6,
@@ -3125,7 +3125,7 @@ export default function DataImports({
                           style={{
                             flex: 1,
                             padding: "0.25rem",
-                            background: "var(--card-bg, #0f172a)",
+                            background: "var(--surface)",
                             color: "inherit",
                             border: "1px solid var(--border, #2a3447)",
                             borderRadius: 4,
@@ -3648,7 +3648,7 @@ export default function DataImports({
                       border: "1px solid var(--border, #2a3447)",
                       borderRadius: 8,
                       marginBottom: "1rem",
-                      background: "var(--card-bg, #0f172a)",
+                      background: "var(--surface)",
                     }}
                   >
                     <div
@@ -3725,7 +3725,7 @@ export default function DataImports({
                       spellCheck={false}
                       style={{
                         padding: "0.5rem 0.65rem",
-                        background: "var(--card-bg, #0f172a)",
+                        background: "var(--surface)",
                         color: "inherit",
                         border: "1px solid var(--border, #2a3447)",
                         borderRadius: 6,
@@ -4088,7 +4088,7 @@ export default function DataImports({
             style={{
               maxWidth: 560,
               width: "100%",
-              background: "var(--card-bg, #0f172a)",
+              background: "var(--surface)",
               border: "1px solid var(--border, #2a3447)",
               borderRadius: 12,
               padding: "1.5rem",
