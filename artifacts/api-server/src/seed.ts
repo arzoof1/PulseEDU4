@@ -3446,6 +3446,25 @@ export async function ensureFastScoresSchema() {
   await db.execute(
     sql`ALTER TABLE student_fast_scores ADD COLUMN IF NOT EXISTS imported_as_historical_at TIMESTAMPTZ`,
   );
+  // Rollback ledger for the BQ / Lower-25 (L25) full-replace importer.
+  // One row per committed bq_l25 job, snapshotting the prior bottom-quartile
+  // set so a full-replace can be undone. drizzle-kit push can't apply this
+  // non-interactively (see the HOUSES note), so create it idempotently here.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS fast_bq_import_batches (
+      id SERIAL PRIMARY KEY,
+      import_job_id INTEGER NOT NULL,
+      school_id INTEGER NOT NULL,
+      prior_json JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS fast_bq_import_batches_job_idx ON fast_bq_import_batches (import_job_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS fast_bq_import_batches_school_idx ON fast_bq_import_batches (school_id)`,
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -75,6 +75,7 @@ export const SCHOOL_IMPORT_KIND_CAP: Record<
   fast_florida: "capImportFast",
   fast_scores: "capImportFast",
   fast_prior_year: "capImportFast",
+  bq_l25: "capImportFast",
   assessments: "capImportIready",
 };
 

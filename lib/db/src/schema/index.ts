@@ -66,6 +66,7 @@ export * from "./studentTrustedAdults";
 export * from "./sectionSupportStaff";
 export * from "./imports";
 export * from "./studentImportSnapshots";
+export * from "./fastBqImportBatches";
 export * from "./assessments";
 export * from "./schoolBranding";
 export * from "./studentFastScores";

@@ -10004,7 +10004,7 @@ function App() {
     const kinds: ImportKind[] = [];
     if (capImportGrades) kinds.push("gradebook");
     if (capImportFast)
-      kinds.push("fast_scores", "fast_florida", "fast_prior_year");
+      kinds.push("fast_scores", "fast_florida", "bq_l25");
     if (capImportIready) kinds.push("assessments");
     return kinds;
   }, [capImportGrades, capImportFast, capImportIready]);
