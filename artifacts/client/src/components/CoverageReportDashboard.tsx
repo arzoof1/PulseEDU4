@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ResponsiveContainer,
   ScatterChart,
@@ -101,18 +101,6 @@ const SUBJECTS: { key: string; label: string }[] = [
   { key: "geometry", label: "Geometry" },
 ];
 
-// Match the standard Insights filter-bar teacher control so the picker
-// looks identical to the rest of the Insights area (InsightsFilterBar).
-const TEACHER_SELECT_STYLE: React.CSSProperties = {
-  padding: "0.35rem 0.5rem",
-  borderRadius: 6,
-  border: "1px solid var(--border)",
-  background: "var(--surface)",
-  color: "var(--text)",
-  fontSize: "0.85rem",
-  minWidth: 180,
-};
-
 function fmtPct(v: number | null | undefined): string {
   return v == null ? "—" : `${v}%`;
 }
@@ -132,12 +120,14 @@ function deltaColor(d: number | null): string {
 }
 
 export default function CoverageReportDashboard({
+  defaultTeacherId = null,
   onBack,
 }: {
+  defaultTeacherId?: number | null;
   onBack: () => void;
 }) {
   const [teachers, setTeachers] = useState<TeacherOpt[]>([]);
-  const [teacherId, setTeacherId] = useState<number | null>(null);
+  const [teacherId, setTeacherId] = useState<number | null>(defaultTeacherId);
   const [subject, setSubject] = useState("ela");
   // FAST subjects the selected teacher actually teaches (derived from their
   // course/subject area server-side). null = not yet resolved.
@@ -152,13 +142,55 @@ export default function CoverageReportDashboard({
   const [error, setError] = useState<string | null>(null);
   const [drillCode, setDrillCode] = useState<string | null>(null);
 
+  // True once the user explicitly picks a teacher, so the self-default
+  // effect below never reverts a deliberate choice (core team only).
+  const userPickedRef = useRef(false);
+  const pickTeacher = useCallback((id: number | null) => {
+    userPickedRef.current = true;
+    setTeacherId(id);
+  }, []);
+
   // Teacher list (self-only for non-core-team; full list for core team).
   useEffect(() => {
+    let cancelled = false;
     authFetch("/api/teacher-roster/teachers")
       .then((r) => r.json())
-      .then((d) => setTeachers(d.teachers ?? []))
-      .catch(() => setTeachers([]));
+      .then((d: { teachers?: TeacherOpt[] }) => {
+        if (cancelled) return;
+        // Sort alphabetically by display name (case-insensitive) so the
+        // department-grouped picker reads alphabetically within each group,
+        // identical to the Teacher Roster picker.
+        const sorted = [...(d.teachers ?? [])].sort((a, b) => {
+          const an = a.displayName ?? "";
+          const bn = b.displayName ?? "";
+          if (!an && !bn) return 0;
+          if (!an) return 1;
+          if (!bn) return -1;
+          return an.localeCompare(bn, undefined, { sensitivity: "base" });
+        });
+        setTeachers(sorted);
+      })
+      .catch(() => {
+        if (!cancelled) setTeachers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  // Default the selected teacher to the signed-in user (self) once their id
+  // is known — matching the Teacher Roster picker — or to the first teacher
+  // alphabetically as a degenerate fallback. `defaultTeacherId` may hydrate
+  // after mount (auth still loading), so this runs on every change; the
+  // userPicked ref keeps it from ever reverting a deliberate pick.
+  useEffect(() => {
+    if (userPickedRef.current) return;
+    if (defaultTeacherId != null) {
+      if (teacherId !== defaultTeacherId) setTeacherId(defaultTeacherId);
+    } else if (teacherId == null && teachers.length > 0) {
+      setTeacherId(teachers[0].id);
+    }
+  }, [defaultTeacherId, teachers, teacherId]);
 
   // On teacher change, resolve which FAST subjects they teach and auto-pick
   // one — so the subject follows the teacher instead of a manual button row.
@@ -279,21 +311,18 @@ export default function CoverageReportDashboard({
           margin: "12px 0",
         }}
       >
-        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span style={{ fontSize: 12, fontWeight: 600 }}>Teacher</span>
-          <TeacherPicker
-            teachers={teachers}
-            value={teacherId}
-            onChange={setTeacherId}
-            allowEmpty
-            emptyLabel={
-              teachers.length <= 1 ? "My report" : "Me (my report)"
-            }
-            showDeptFilter
-            ariaLabel="Teacher"
-            selectStyle={TEACHER_SELECT_STYLE}
-          />
-        </label>
+        {teachers.length > 1 ? (
+          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontSize: 12, fontWeight: 600 }}>Teacher</span>
+            <TeacherPicker
+              teachers={teachers}
+              value={teacherId}
+              onChange={pickTeacher}
+              showDeptFilter
+              ariaLabel="Teacher"
+            />
+          </label>
+        ) : null}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span style={{ fontSize: 12, fontWeight: 600 }}>Subject</span>
@@ -339,7 +368,7 @@ export default function CoverageReportDashboard({
         </div>
 
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span style={{ fontSize: 12, fontWeight: 600 }}>Term (PM window)</span>
+          <span style={{ fontSize: 12, fontWeight: 600 }}>Term</span>
           <select
             value={termKey}
             onChange={(e) => setTermKey(e.target.value)}
@@ -352,7 +381,7 @@ export default function CoverageReportDashboard({
               </option>
             ))}
             {report && report.availableWindows.length === 0 && (
-              <option value="">No FAST data</option>
+              <option value="">No data</option>
             )}
           </select>
         </label>

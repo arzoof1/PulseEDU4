@@ -23729,6 +23729,7 @@ function App() {
 
       {activeSection === "coverageReport" && (
         <CoverageReportDashboard
+          defaultTeacherId={authUser?.id ?? null}
           onBack={() => setActiveSection("insights")}
         />
       )}

@@ -47,7 +47,7 @@ import {
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam as isCoreTeamShared } from "../lib/coreTeam.js";
-import { inferDepartment } from "../lib/teacherDepartments.js";
+import { inferDepartment, clampDepartment } from "../lib/teacherDepartments.js";
 import { loadRestroomDestinationNames } from "../lib/oneWayPass.js";
 import { schoolYearStartDate, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 
@@ -92,8 +92,65 @@ function fastSubjectsForCourses(courseNames: string[]): string[] {
   }
   return SUBJECT_ORDER.filter((s) => set.has(s));
 }
-const VALID_WINDOWS = ["pm1", "pm2", "pm3"] as const;
+
+// FAST content-affinity by department. A teacher's students are assessed on
+// the FAST subject their content leans on even when the teacher isn't
+// FAST-tested themselves: Science leans on Math, Social Studies on reading
+// (ELA); ELA/Math map to themselves. Course names still refine Math into the
+// Algebra 1 / Geometry EOCs on top of this baseline. Later, Science / Social
+// Studies teachers also gain their OWN benchmark subject once that (separate)
+// benchmark-level upload exists — that is purely data-driven and needs no
+// change here.
+const DEPT_FAST_AFFINITY: Record<string, string> = {
+  ELA: "ela",
+  Math: "math",
+  Science: "math",
+  "Social Studies": "ela",
+};
+const MATH_FAMILY = new Set(["math", "algebra1", "geometry"]);
+function fastFamilyOf(subject: string): "math" | "ela" {
+  return MATH_FAMILY.has(subject) ? "math" : "ela";
+}
+
+// Subjects to offer for a teacher: the FAST subjects their course names prove
+// they teach, PLUS a department content-affinity baseline (Science→Math,
+// Social Studies→ELA) when that content family isn't already covered by a
+// course. Department comes from the admin-set staff.department, falling back
+// to the course-name inference the teacher pickers use.
+function resolveTeacherSubjects(
+  courseNames: string[],
+  department: string | null,
+): string[] {
+  const set = new Set(fastSubjectsForCourses(courseNames));
+  const dept = clampDepartment(department) ?? inferDepartment(courseNames);
+  const affinity = DEPT_FAST_AFFINITY[dept];
+  if (affinity) {
+    const fam = fastFamilyOf(affinity);
+    const covered = [...set].some((s) => fastFamilyOf(s) === fam);
+    if (!covered) set.add(affinity);
+  }
+  return SUBJECT_ORDER.filter((s) => set.has(s));
+}
+
+// Assessment windows the report understands. FAST uses PM1–PM3; benchmark-
+// level subjects assessed quarterly (Science, Social Studies, EOC) use
+// Q1–Q4. The Term selector is data-driven — it shows whichever of these a
+// subject actually has data for — so quarters surface automatically once a
+// quarter-based benchmark upload lands.
+const VALID_WINDOWS = ["pm1", "pm2", "pm3", "q1", "q2", "q3", "q4"] as const;
 type Window = (typeof VALID_WINDOWS)[number];
+// Newest-first ordering within a school year (latest term shown first). PM and
+// quarter windows never coexist for one subject, so a single rank table is
+// unambiguous.
+const WINDOW_RANK: Record<string, number> = {
+  pm3: 0,
+  pm2: 1,
+  pm1: 2,
+  q4: 0,
+  q3: 1,
+  q2: 2,
+  q1: 3,
+};
 
 async function resolveStaff(req: Request): Promise<StaffRow | null> {
   const id = req.staffId;
@@ -390,13 +447,12 @@ router.get("/coverage-report", async (req, res) => {
       studentFastItemResponsesTable.schoolYear,
       studentFastItemResponsesTable.window,
     );
-  const windowRank: Record<string, number> = { pm3: 0, pm2: 1, pm1: 2 };
   const availableWindows = availRows
     .filter((r) => VALID_WINDOWS.includes(r.window as Window))
     .sort((a, b) => {
       if (a.schoolYear !== b.schoolYear)
         return b.schoolYear.localeCompare(a.schoolYear);
-      return (windowRank[a.window] ?? 9) - (windowRank[b.window] ?? 9);
+      return (WINDOW_RANK[a.window] ?? 9) - (WINDOW_RANK[b.window] ?? 9);
     })
     .map((r) => ({
       schoolYear: r.schoolYear,
@@ -1023,7 +1079,10 @@ router.get("/coverage-report/context", async (req, res) => {
         eq(classSectionsTable.isPlanning, false),
       ),
     );
-  const subjects = fastSubjectsForCourses(sections.map((s) => s.courseName));
+  const subjects = resolveTeacherSubjects(
+    sections.map((s) => s.courseName),
+    target.department ?? null,
+  );
 
   res.json({
     teacher: {
