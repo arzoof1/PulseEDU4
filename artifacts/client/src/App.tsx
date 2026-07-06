@@ -4133,10 +4133,28 @@ function NavGroup({
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
   }, []);
-  // Resolution order: mobile forces open, else contains-active wins,
-  // else user preference, else default-closed. Default-closed gives the
-  // compact sidebar the user asked for; the active group is always visible.
-  const open = isMobile || containsActive || userOpen === true;
+  // When the group NEWLY becomes the active one (the user navigated into it
+  // from elsewhere), clear any stale manual collapse so the active group is
+  // visible by default. We only reset on the false→true transition, never
+  // while the user stays on the same page — so an explicit collapse below
+  // still sticks for the current view.
+  const prevContainsActive = useRef(containsActive);
+  useEffect(() => {
+    if (containsActive && !prevContainsActive.current) {
+      setUserOpen(null);
+      try {
+        localStorage.removeItem(storageKey);
+      } catch {
+        /* ignore */
+      }
+    }
+    prevContainsActive.current = containsActive;
+  }, [containsActive, storageKey]);
+  // Resolution order: mobile forces open; an explicit user preference (open
+  // OR closed) always wins next — so re-clicking the header can collapse a
+  // group even while it holds the active page; otherwise contains-active
+  // opens it by default; otherwise default-closed for a compact sidebar.
+  const open = isMobile || (userOpen === null ? containsActive : userOpen);
   const toggle = () => {
     const next = !open;
     setUserOpen(next);
