@@ -35,9 +35,13 @@ import {
   parentMessagesTable,
   parentMessageRecipientsTable,
   pulseDnaVideosTable,
+  schoolSettingsTable,
+  classSectionsTable,
+  sectionRosterTable,
 } from "@workspace/db";
 import { and, eq, inArray, desc, sql, isNotNull } from "drizzle-orm";
 import { isCoreTeam } from "../lib/coreTeam.js";
+import { getVisibleStudentIds } from "./insights.js";
 import { verifyParentAuthToken } from "../lib/authToken.js";
 import {
   bindObjectToSchool,
@@ -133,18 +137,133 @@ function staffOf(req: Request): StaffRow {
   return (req as Request & { staff: StaffRow }).staff;
 }
 
-function requireFamilyMessenger(
+// Whether the teacher-scoped Family Messaging opt-in is enabled for a school.
+async function teacherMessagingEnabled(schoolId: number): Promise<boolean> {
+  const [row] = await db
+    .select({ enabled: schoolSettingsTable.teacherFamilyMessagingEnabled })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
+  return Boolean(row?.enabled);
+}
+
+// A classroom teacher is any staff member who OWNS at least one live,
+// non-planning class section in this school. This is the stable, data-driven
+// definition we gate the teacher opt-in on — role flags can drift, but "has a
+// roster to message" is exactly what the feature is for.
+async function isClassroomTeacher(
+  staff: StaffRow,
+  schoolId: number,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: classSectionsTable.id })
+    .from(classSectionsTable)
+    .where(
+      and(
+        eq(classSectionsTable.schoolId, schoolId),
+        eq(classSectionsTable.teacherStaffId, staff.id),
+        eq(classSectionsTable.isPlanning, false),
+      ),
+    )
+    .limit(1);
+  return Boolean(row);
+}
+
+// The set of student_id (TEXT) rostered into the sections THIS staff member
+// personally teaches (non-planning). Used as the hard scope for a non-Core
+// sender so that broad *read* visibility (e.g. a counselor with school-wide
+// insight access) can never widen who they may MESSAGE.
+async function ownRosterStudentIds(
+  staff: StaffRow,
+  schoolId: number,
+): Promise<Set<string>> {
+  const rows = await db
+    .select({ studentId: sectionRosterTable.studentId })
+    .from(sectionRosterTable)
+    .innerJoin(
+      classSectionsTable,
+      and(
+        eq(classSectionsTable.id, sectionRosterTable.sectionId),
+        eq(classSectionsTable.schoolId, sectionRosterTable.schoolId),
+      ),
+    )
+    .where(
+      and(
+        eq(sectionRosterTable.schoolId, schoolId),
+        eq(classSectionsTable.teacherStaffId, staff.id),
+        eq(classSectionsTable.isPlanning, false),
+      ),
+    );
+  return new Set(rows.map((r) => r.studentId).filter((s): s is string => s != null));
+}
+
+// Who may enter the Family Messages module at all. Core Team can always
+// compose/monitor the full history. A non-Core-Team actor may enter ONLY when
+// the admin opt-in is on AND they are an actual classroom teacher (own a live
+// roster) — non-teaching staff (front office, counselors without a section,
+// etc.) are excluded even with the toggle on. The composer + list are then
+// further scoped (own periods / own students / own sent messages) per route.
+async function canAccessFamilyMessages(
+  staff: StaffRow,
+  schoolId: number,
+): Promise<boolean> {
+  if (isCoreTeam(staff)) return true;
+  if (!(await teacherMessagingEnabled(schoolId))) return false;
+  return isClassroomTeacher(staff, schoolId);
+}
+
+async function requireFamilyMessenger(
   req: Request,
   res: Response,
   next: NextFunction,
-): void {
-  if (!isCoreTeam(staffOf(req))) {
+): Promise<void> {
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+  if (!(await canAccessFamilyMessages(staffOf(req), schoolId))) {
     res
       .status(403)
       .json({ error: "Not authorized to send Family Messages" });
     return;
   }
   next();
+}
+
+// Intersect a set of numeric students.id with the acting staff's visible
+// roster. This function is only ever called for a NON-Core sender; it is the
+// SERVER enforcement of "teachers → own students only", independent of any
+// audience the client claims to have selected. Broad read visibility never
+// widens the messageable set (see the full-visibility fallback below).
+async function scopeToVisibleStudentIds(
+  staff: StaffRow,
+  schoolId: number,
+  studentIds: number[],
+): Promise<number[]> {
+  if (studentIds.length === 0) return [];
+  const visibility = await getVisibleStudentIds(staff, schoolId);
+  // The allowed set of student_id (TEXT) this NON-CORE sender may message. We
+  // deliberately do NOT honor visibility.full here: broad *read* visibility
+  // (e.g. a counselor with school-wide insight access) must never widen who a
+  // non-Core actor may MESSAGE. When the actor has full read visibility we fall
+  // back to the students on their OWN taught roster; otherwise their normal
+  // visible set (own roster + trusted-adult) already excludes school-wide.
+  const allowed = visibility.full
+    ? await ownRosterStudentIds(staff, schoolId)
+    : visibility.ids;
+  // Map our numeric students.id to their student_id and keep only allowed ones.
+  const rows = await db
+    .select({ id: studentsTable.id, studentId: studentsTable.studentId })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.schoolId, schoolId),
+        inArray(studentsTable.id, studentIds),
+      ),
+    );
+  return rows
+    .filter((r) => r.studentId != null && allowed.has(r.studentId))
+    .map((r) => r.id);
 }
 
 // Resolve the set of target students.id values for an audience selection,
@@ -157,8 +276,61 @@ async function resolveAudienceStudentIds(
     grades?: string[];
     houseIds?: number[];
     localSisIds?: string[];
+    period?: string;
+    teacherStaffId?: number;
   },
 ): Promise<{ studentIds: number[]; unmatchedSisIds: string[] } | null> {
+  if (audienceType === "period") {
+    // class_sections.period is an INTEGER column; accept a string or number.
+    const periodNum = Number(opts.period);
+    const teacherStaffId = opts.teacherStaffId;
+    if (
+      !Number.isFinite(periodNum) ||
+      !teacherStaffId ||
+      !Number.isFinite(teacherStaffId)
+    ) {
+      return null;
+    }
+    // Resolve the teacher's LIVE non-planning section(s) for this period. We
+    // never persist / trust a class_sections.id (not stable across roster
+    // re-imports) — we re-derive from the stable (school, teacher, period)
+    // identity on every send.
+    const sections = await db
+      .select({ id: classSectionsTable.id })
+      .from(classSectionsTable)
+      .where(
+        and(
+          eq(classSectionsTable.schoolId, schoolId),
+          eq(classSectionsTable.teacherStaffId, teacherStaffId),
+          eq(classSectionsTable.period, periodNum),
+          eq(classSectionsTable.isPlanning, false),
+        ),
+      );
+    const sectionIds = sections.map((s) => s.id);
+    if (sectionIds.length === 0) {
+      return { studentIds: [], unmatchedSisIds: [] };
+    }
+    const rows = await db
+      .select({ id: studentsTable.id })
+      .from(sectionRosterTable)
+      .innerJoin(
+        studentsTable,
+        and(
+          eq(studentsTable.studentId, sectionRosterTable.studentId),
+          eq(studentsTable.schoolId, sectionRosterTable.schoolId),
+        ),
+      )
+      .where(
+        and(
+          eq(sectionRosterTable.schoolId, schoolId),
+          inArray(sectionRosterTable.sectionId, sectionIds),
+        ),
+      );
+    return {
+      studentIds: Array.from(new Set(rows.map((r) => r.id))),
+      unmatchedSisIds: [],
+    };
+  }
   if (audienceType === "school") {
     const rows = await db
       .select({ id: studentsTable.id })
@@ -388,8 +560,21 @@ router.post(
     }
 
     const audienceType = String(req.body?.audienceType ?? "school");
-    if (!["school", "grade", "house", "students"].includes(audienceType)) {
+    if (
+      !["school", "grade", "house", "students", "period"].includes(audienceType)
+    ) {
       res.status(400).json({ error: "Invalid audience" });
+      return;
+    }
+    // A non-Core-Team teacher may ONLY target one of their own periods or a
+    // hand-picked set of their own students. The broadcast audiences
+    // (school/grade/house) stay Core-Team-only. This is enforced here, on the
+    // server, regardless of what the composer UI offered.
+    const isCore = isCoreTeam(staff);
+    if (!isCore && !["period", "students"].includes(audienceType)) {
+      res.status(403).json({
+        error: "Teachers can only message their own class period or students",
+      });
       return;
     }
     const grades = Array.isArray(req.body?.audienceGrades)
@@ -401,6 +586,9 @@ router.post(
     const localSisIds = Array.isArray(req.body?.audienceLocalSisIds)
       ? req.body.audienceLocalSisIds.map((s: unknown) => String(s))
       : [];
+    const audiencePeriod = req.body?.audiencePeriod
+      ? String(req.body.audiencePeriod)
+      : "";
     const emailNudge = req.body?.emailNudge !== false;
 
     // Optional attachment (png/pdf only). Bind it to the school so the
@@ -461,10 +649,25 @@ router.post(
       grades,
       houseIds,
       localSisIds,
+      period: audiencePeriod,
+      // "period" always resolves against the ACTING teacher's own sections — a
+      // teacher can only address a period they themselves teach.
+      teacherStaffId: staff.id,
     });
     if (!resolved) {
       res.status(400).json({ error: "Audience selection is incomplete" });
       return;
+    }
+    // SERVER enforcement of "teachers → own students only". For a non-Core-Team
+    // actor, narrow the resolved set to their visible roster. "period" is
+    // already their own section, so this is a defensive no-op there; for
+    // "students" it drops any hand-picked id outside their roster.
+    if (!isCore) {
+      resolved.studentIds = await scopeToVisibleStudentIds(
+        staff,
+        schoolId,
+        resolved.studentIds,
+      );
     }
     if (resolved.studentIds.length === 0) {
       res
@@ -502,8 +705,13 @@ router.post(
         audienceType,
         audienceGrades: audienceType === "grade" ? grades : null,
         audienceHouseIds: audienceType === "house" ? houseIds : null,
+        // Snapshot the concrete recipients for both hand-picked students and a
+        // whole class period (period membership can change after re-import, so
+        // freeze who it actually went to).
         audienceStudentIds:
-          audienceType === "students" ? resolved.studentIds : null,
+          audienceType === "students" || audienceType === "period"
+            ? resolved.studentIds
+            : null,
         emailNudge,
         videoId: videoRow ? videoRow.id : null,
         totalRecipients: recipients.length,
@@ -623,10 +831,19 @@ router.get(
       res.status(401).json({ error: "Authentication required" });
       return;
     }
+    // Core Team sees the whole school's history; a classroom teacher sees only
+    // the messages they themselves sent.
+    const staff = staffOf(req);
+    const listWhere = isCoreTeam(staff)
+      ? eq(parentMessagesTable.schoolId, schoolId)
+      : and(
+          eq(parentMessagesTable.schoolId, schoolId),
+          eq(parentMessagesTable.createdByStaffId, staff.id),
+        );
     const messages = await db
       .select()
       .from(parentMessagesTable)
-      .where(eq(parentMessagesTable.schoolId, schoolId))
+      .where(listWhere)
       .orderBy(desc(parentMessagesTable.createdAt));
 
     if (messages.length === 0) {
@@ -686,6 +903,123 @@ router.get(
   },
 );
 
+// GET /family-messages/capabilities — what the current staff can do in the
+// module, so the composer can render role-aware modes without guessing.
+router.get(
+  "/family-messages/capabilities",
+  requireStaff,
+  requireFamilyMessenger,
+  async (req: Request, res: Response) => {
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(401).json({ error: "Authentication required" });
+      return;
+    }
+    const staff = staffOf(req);
+    const core = isCoreTeam(staff);
+    res.json({
+      canCompose: true,
+      isCoreTeam: core,
+      // Only meaningful for non-Core-Team teachers; Core Team always has access.
+      teacherMessagingEnabled: core
+        ? true
+        : await teacherMessagingEnabled(schoolId),
+    });
+  },
+);
+
+// GET /family-messages/my-periods — the acting teacher's own non-planning
+// class periods (period + course label + family count), so a teacher can pick a
+// whole period to message. Core Team may pass ?teacherId to view another
+// teacher's periods; a classroom teacher is always scoped to themselves.
+router.get(
+  "/family-messages/my-periods",
+  requireStaff,
+  requireFamilyMessenger,
+  async (req: Request, res: Response) => {
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(401).json({ error: "Authentication required" });
+      return;
+    }
+    const staff = staffOf(req);
+    const core = isCoreTeam(staff);
+    // Classroom teachers can only ever see their own periods.
+    let teacherId = staff.id;
+    if (core && req.query.teacherId != null) {
+      const requested = Number(req.query.teacherId);
+      if (Number.isFinite(requested)) teacherId = requested;
+    }
+
+    const sections = await db
+      .select({
+        id: classSectionsTable.id,
+        period: classSectionsTable.period,
+        courseName: classSectionsTable.courseName,
+      })
+      .from(classSectionsTable)
+      .where(
+        and(
+          eq(classSectionsTable.schoolId, schoolId),
+          eq(classSectionsTable.teacherStaffId, teacherId),
+          eq(classSectionsTable.isPlanning, false),
+        ),
+      )
+      .orderBy(classSectionsTable.period);
+
+    const sectionIds = sections.map((s) => s.id);
+    // Count distinct rostered students per period so the teacher sees the size
+    // before sending. (Family/recipient count is derived at send time.)
+    const rosterRows = sectionIds.length
+      ? await db
+          .select({
+            sectionId: sectionRosterTable.sectionId,
+            studentId: sectionRosterTable.studentId,
+          })
+          .from(sectionRosterTable)
+          .where(
+            and(
+              eq(sectionRosterTable.schoolId, schoolId),
+              inArray(sectionRosterTable.sectionId, sectionIds),
+            ),
+          )
+      : [];
+    const countBySection = new Map<number, Set<string>>();
+    for (const r of rosterRows) {
+      const set = countBySection.get(r.sectionId) ?? new Set<string>();
+      set.add(r.studentId);
+      countBySection.set(r.sectionId, set);
+    }
+
+    // Collapse to one entry per period label (a teacher can have multiple
+    // sections in the same period only rarely; union their students).
+    const byPeriod = new Map<
+      number,
+      { period: number; courseNames: string[]; studentCount: number }
+    >();
+    for (const s of sections) {
+      const entry = byPeriod.get(s.period) ?? {
+        period: s.period,
+        courseNames: [],
+        studentCount: 0,
+      };
+      if (s.courseName && !entry.courseNames.includes(s.courseName)) {
+        entry.courseNames.push(s.courseName);
+      }
+      entry.studentCount += countBySection.get(s.id)?.size ?? 0;
+      byPeriod.set(s.period, entry);
+    }
+
+    res.json(
+      Array.from(byPeriod.values()).map((e) => ({
+        period: e.period,
+        courseName: e.courseNames.join(" · "),
+        studentCount: e.studentCount,
+      })),
+    );
+  },
+);
+
 // GET /family-messages/:id — detail with the recipient table + Power Reader.
 router.get(
   "/family-messages/:id",
@@ -711,7 +1045,9 @@ router.get(
           eq(parentMessagesTable.schoolId, schoolId),
         ),
       );
-    if (!message) {
+    // A classroom teacher may only open a message they sent. Collapse an
+    // out-of-scope message into the same 404 as a missing one.
+    if (!message || (!isCoreTeam(staffOf(req)) && message.createdByStaffId !== staffOf(req).id)) {
       res.status(404).json({ error: "Message not found" });
       return;
     }
@@ -849,7 +1185,11 @@ router.get(
           eq(parentMessagesTable.schoolId, schoolId),
         ),
       );
-    if (!message) {
+    if (
+      !message ||
+      (!isCoreTeam(staffOf(req)) &&
+        message.createdByStaffId !== staffOf(req).id)
+    ) {
       res.status(404).json({ error: "Not found" });
       return;
     }

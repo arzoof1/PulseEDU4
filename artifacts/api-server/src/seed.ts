@@ -2127,6 +2127,8 @@ export async function ensureSchoolSettingsFeatureFlagsSchema() {
   const falseDefaultCols = [
     "feature_school_store_notify",
     "super_feature_school_store_notify",
+    // Teacher-scoped Family Messaging permission. OFF by default — admin opt-in.
+    "teacher_family_messaging_enabled",
   ];
   for (const col of falseDefaultCols) {
     await db.execute(

@@ -5789,6 +5789,7 @@ function App() {
     manualRosterUploadEnabled: boolean;
     strictHouseNameMatch: boolean;
     gpaEnabled: boolean;
+    teacherFamilyMessagingEnabled: boolean;
     // Two-tier feature flags. Defaults are TRUE so the optimistic UI
     // matches what the server returns for any school that has not yet
     // flipped anything off.
@@ -5874,6 +5875,7 @@ function App() {
     manualRosterUploadEnabled: false,
     strictHouseNameMatch: false,
     gpaEnabled: false,
+    teacherFamilyMessagingEnabled: false,
     featureFamilyComm: true,
     featurePbis: true,
     featureSchoolStore: true,
@@ -7810,6 +7812,10 @@ function App() {
               : false,
           gpaEnabled:
             typeof data.gpaEnabled === "boolean" ? data.gpaEnabled : false,
+          teacherFamilyMessagingEnabled:
+            typeof data.teacherFamilyMessagingEnabled === "boolean"
+              ? data.teacherFamilyMessagingEnabled
+              : false,
           featureFamilyComm: boolOrTrue(data.featureFamilyComm),
           featurePbis: boolOrTrue(data.featurePbis),
           featureSchoolStore: boolOrTrue(data.featureSchoolStore),
@@ -7980,6 +7986,10 @@ function App() {
             : false,
         gpaEnabled:
           typeof data.gpaEnabled === "boolean" ? data.gpaEnabled : false,
+        teacherFamilyMessagingEnabled:
+          typeof data.teacherFamilyMessagingEnabled === "boolean"
+            ? data.teacherFamilyMessagingEnabled
+            : false,
         featureFamilyComm: boolOrTrue(data.featureFamilyComm),
         featurePbis: boolOrTrue(data.featurePbis),
         featureSchoolStore: boolOrTrue(data.featureSchoolStore),
@@ -12144,7 +12154,8 @@ function App() {
                     icon: IconUser,
                   })}
                 {effectiveFeatures.FamilyComm &&
-                  isCoreTeamMember &&
+                  (isCoreTeamMember ||
+                    schoolSettings.teacherFamilyMessagingEnabled) &&
                   renderNavItem({
                     key: "familyMessages",
                     label: "Family Messages",
@@ -23805,7 +23816,8 @@ function App() {
 
       {activeSection === "familyMessages" &&
         effectiveFeatures.FamilyComm &&
-        isCoreTeamMember && (
+        (isCoreTeamMember ||
+          schoolSettings.teacherFamilyMessagingEnabled) && (
           <FamilyMessagesHub
             grades={Array.from(new Set(students.map((s) => s.grade)))}
           />
@@ -25671,6 +25683,59 @@ function App() {
                     70–79 = 2, 60–69 = 1, below 60 = 0 — a simple average
                     over the current semester's graded courses. Requires a
                     Gradebook import (Data &amp; Integrations).
+                  </span>
+                </span>
+              </label>
+            )}
+            {Boolean(
+              authUser?.isSuperUser ||
+                authUser?.isDistrictAdmin ||
+                authUser?.isAdmin ||
+                authUser?.isBehaviorSpecialist ||
+                authUser?.isMtssCoordinator ||
+                authUser?.isSchoolPsychologist ||
+                authUser?.isCoreTeam ||
+                authUser?.isConfidentialSecretary,
+            ) && (
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: "0.5rem",
+                  padding: "0.6rem 0.75rem",
+                  border: "1px solid var(--border-subtle, #e2e8f0)",
+                  borderRadius: 6,
+                  background: "var(--surface-subtle, #f8fafc)",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={schoolSettings.teacherFamilyMessagingEnabled}
+                  onChange={(e) =>
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      teacherFamilyMessagingEnabled: e.target.checked,
+                    })
+                  }
+                  style={{ marginTop: "0.2rem" }}
+                />
+                <span style={{ display: "grid", gap: "0.15rem" }}>
+                  <span style={{ fontWeight: 600 }}>
+                    Let teachers send Family Messages to their own students
+                  </span>
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontSize: "0.85rem",
+                      fontWeight: "normal",
+                    }}
+                  >
+                    Off by default. When on, teachers can send a Family Message
+                    to the families of one of their own class periods, or to
+                    individual students hand-picked from their own roster.
+                    Teachers can never message the whole school, a grade, or a
+                    house — those stay Core Team only. The server enforces these
+                    limits regardless of what a client sends.
                   </span>
                 </span>
               </label>

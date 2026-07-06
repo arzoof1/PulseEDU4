@@ -162,6 +162,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     onTimeLotteryRevealLeadMinutes,
     schoolStoreInventoryMode,
     gpaEnabled,
+    teacherFamilyMessagingEnabled,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -715,6 +716,40 @@ router.put("/school-settings", async (req, res): Promise<void> => {
         return;
       }
       updates.gpaEnabled = gpaEnabled;
+    }
+  }
+  // -----------------------------------------------------------------
+  // Teacher Family Messaging permission. Admin-controlled opt-in that lets
+  // non-Core-Team teachers send Family Messages to their OWN periods/students.
+  // ADMIN-ONLY (stricter than the bulk save) — gate on CHANGE so the echo-back
+  // bulk save by any settings-manager doesn't 403. Boolean only. Default OFF.
+  // -----------------------------------------------------------------
+  if (teacherFamilyMessagingEnabled !== undefined) {
+    if (typeof teacherFamilyMessagingEnabled !== "boolean") {
+      res.status(400).json({
+        error: "teacherFamilyMessagingEnabled must be a boolean",
+      });
+      return;
+    }
+    if (teacherFamilyMessagingEnabled !== current.teacherFamilyMessagingEnabled) {
+      let tfmActor: typeof staffTable.$inferSelect | undefined;
+      if (req.staffId) {
+        const [s] = await db
+          .select()
+          .from(staffTable)
+          .where(eq(staffTable.id, req.staffId));
+        tfmActor = s;
+      }
+      const isAdminUser = Boolean(
+        tfmActor?.active && (tfmActor?.isAdmin || tfmActor?.isSuperUser),
+      );
+      if (!isAdminUser) {
+        res.status(403).json({
+          error: "Only an admin may change teacher Family Messaging",
+        });
+        return;
+      }
+      updates.teacherFamilyMessagingEnabled = teacherFamilyMessagingEnabled;
     }
   }
   if (onTimeLotteryLabel !== undefined) {
