@@ -207,5 +207,7 @@ export async function bootstrapCriticalColumns(): Promise<void> {
   } catch (err) {
     logger.error({ err }, "[boot] critical column bootstrap failed");
     throw err;
+
+
   }
 }
