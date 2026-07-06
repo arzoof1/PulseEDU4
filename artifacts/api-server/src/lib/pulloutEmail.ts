@@ -451,15 +451,17 @@ export async function sendPulloutDispatchEmail(
       : [];
 
   // Recipients: active staff in THIS pullout's school who EITHER hold a
-  // dispatch role (admin / dean / MTSS / ISS) OR were hand-picked as extra
-  // pullout recipients (e.g. a reading coach who helps with pullouts but
-  // isn't one of those roles). School-scoped so pullout details (student id,
-  // reason, teacher) don't leak to dispatchers in other schools.
+  // dispatch role (admin / dean / MTSS / ISS / Behavior Specialist) OR were
+  // hand-picked as extra pullout recipients (e.g. a reading coach who helps
+  // with pullouts but isn't one of those roles). School-scoped so pullout
+  // details (student id, reason, teacher) don't leak to dispatchers in other
+  // schools.
   const roleClauses = [
     eq(staffTable.isAdmin, true),
     eq(staffTable.isDean, true),
     eq(staffTable.isMtssCoordinator, true),
     eq(staffTable.isIssTeacher, true),
+    eq(staffTable.isBehaviorSpecialist, true),
   ];
   const recipientClause = extraIds.length
     ? or(...roleClauses, inArray(staffTable.id, extraIds))

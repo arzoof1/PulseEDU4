@@ -33,6 +33,7 @@ import {
   ensurePickupSchema,
   ensurePulseBrainLabGroupsSchema,
   ensurePulseDnaVideosSchema,
+  ensureSectionSupportSchema,
   ensureSchoolBenchmarksCatalogBackfill,
   ensureSchoolGradeSchema,
   ensureSchoolsTimezoneColumn,
@@ -137,6 +138,7 @@ export async function runSeed(): Promise<void> {
   await ensureParentMessagesSchema();
   await ensureCommunicationSchema();
   await ensureDataChatSchema();
+  await ensureSectionSupportSchema();
   await ensureDataExportSchema();
   await ensurePulseDnaVideosSchema();
   await ensureStudentLocalSisIdBackfill();

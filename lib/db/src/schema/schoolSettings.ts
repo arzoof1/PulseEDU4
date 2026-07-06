@@ -254,6 +254,15 @@ export const schoolSettingsTable = pgTable(
   featureSchoolStoreNotify: boolean("feature_school_store_notify")
     .notNull()
     .default(false),
+  // Allow classroom teachers (non-Core-Team) to send Family Messages to the
+  // families of ONE of their own class periods, or to hand-picked students from
+  // their own roster. OFF by default — an admin must opt in. Core Team can
+  // always broadcast regardless of this flag; this only unlocks the narrower,
+  // roster-scoped teacher composer. Server always re-enforces the own-periods
+  // and own-students scopes; this flag only decides whether a teacher may send.
+  teacherFamilyMessagingEnabled: boolean("teacher_family_messaging_enabled")
+    .notNull()
+    .default(false),
   superFeatureFamilyComm: boolean("super_feature_family_comm").notNull().default(true),
   superFeaturePbis: boolean("super_feature_pbis").notNull().default(true),
   superFeatureSchoolStore: boolean("super_feature_school_store").notNull().default(true),

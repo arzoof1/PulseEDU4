@@ -430,6 +430,23 @@ export async function ensureCommunicationSchema() {
     sql`CREATE INDEX IF NOT EXISTS call_initiatives_school_active_idx ON call_initiatives (school_id, active)`,
   );
 
+  // call_scripts — school-level Call Initiative script library (max 5, enforced
+  // in the route). Shared across campaigns; surfaced in the teacher call-log
+  // "Need help with this call?" drawer.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS call_scripts (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      sort INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS call_scripts_school_sort_idx ON call_scripts (school_id, sort)`,
+  );
+
   // capManageContactInfo — front-office capability for the bad-number
   // "Contact Info Fixes" queue. Additive boolean on staff; default FALSE.
   await db.execute(
@@ -566,6 +583,36 @@ export async function ensureDataChatSchema() {
   // so concurrent schedule requests can't stack pending rows.
   await db.execute(
     sql`CREATE UNIQUE INDEX IF NOT EXISTS data_chat_followups_pending_unique ON data_chat_followups (school_id, teacher_staff_id, student_id) WHERE status = 'pending'`,
+  );
+}
+
+// Section Support Access — grants a support teacher (e.g. ESE / co-teacher)
+// access to another teacher's WHOLE class section, assigned by the ESE
+// Coordinator. Keyed on the STABLE section business identity
+// (school_id, teacher_staff_id, period) so it survives roster re-imports that
+// wipe & reinsert class_sections. Idempotent CREATE TABLE IF NOT EXISTS.
+export async function ensureSectionSupportSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS section_support_staff (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      teacher_staff_id INTEGER NOT NULL,
+      period INTEGER NOT NULL,
+      support_staff_id INTEGER NOT NULL,
+      assigned_by_staff_id INTEGER,
+      assigned_by_name TEXT,
+      assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      notes TEXT
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS section_support_staff_unique ON section_support_staff (school_id, teacher_staff_id, period, support_staff_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS section_support_staff_support_idx ON section_support_staff (school_id, support_staff_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS section_support_staff_section_idx ON section_support_staff (school_id, teacher_staff_id, period)`,
   );
 }
 
@@ -2081,6 +2128,8 @@ export async function ensureSchoolSettingsFeatureFlagsSchema() {
   const falseDefaultCols = [
     "feature_school_store_notify",
     "super_feature_school_store_notify",
+    // Teacher-scoped Family Messaging permission. OFF by default — admin opt-in.
+    "teacher_family_messaging_enabled",
   ];
   for (const col of falseDefaultCols) {
     await db.execute(
@@ -3399,6 +3448,25 @@ export async function ensureFastScoresSchema() {
   );
   await db.execute(
     sql`ALTER TABLE student_fast_scores ADD COLUMN IF NOT EXISTS imported_as_historical_at TIMESTAMPTZ`,
+  );
+  // Rollback ledger for the BQ / Lower-25 (L25) full-replace importer.
+  // One row per committed bq_l25 job, snapshotting the prior bottom-quartile
+  // set so a full-replace can be undone. drizzle-kit push can't apply this
+  // non-interactively (see the HOUSES note), so create it idempotently here.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS fast_bq_import_batches (
+      id SERIAL PRIMARY KEY,
+      import_job_id INTEGER NOT NULL,
+      school_id INTEGER NOT NULL,
+      prior_json JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS fast_bq_import_batches_job_idx ON fast_bq_import_batches (import_job_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS fast_bq_import_batches_school_idx ON fast_bq_import_batches (school_id)`,
   );
 }
 

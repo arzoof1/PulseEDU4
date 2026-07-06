@@ -27,6 +27,7 @@ import {
   classSectionsTable,
   sectionRosterTable,
   studentTrustedAdultsTable,
+  sectionSupportStaffTable,
   studentMtssPlansTable,
   studentFastScoresTable,
   assessmentsTable,
@@ -242,9 +243,41 @@ export async function getVisibleStudentIds(
         eq(studentTrustedAdultsTable.staffId, staff.id),
       ),
     );
+  // Section Support Access: students in any section this staff has been
+  // granted support access to. Assignments are keyed on the STABLE section
+  // business identity (school_id, teacher_staff_id, period) — NOT the section
+  // id, which is not stable across roster re-imports. We re-resolve the live
+  // section from that key on every read (JOIN class_sections on teacher+period)
+  // so the visibility follows the current roster.
+  const supportRows = await db
+    .select({ studentId: sectionRosterTable.studentId })
+    .from(sectionSupportStaffTable)
+    .innerJoin(
+      classSectionsTable,
+      and(
+        eq(classSectionsTable.schoolId, sectionSupportStaffTable.schoolId),
+        eq(
+          classSectionsTable.teacherStaffId,
+          sectionSupportStaffTable.teacherStaffId,
+        ),
+        eq(classSectionsTable.period, sectionSupportStaffTable.period),
+        eq(classSectionsTable.isPlanning, false),
+      ),
+    )
+    .innerJoin(
+      sectionRosterTable,
+      eq(sectionRosterTable.sectionId, classSectionsTable.id),
+    )
+    .where(
+      and(
+        eq(sectionSupportStaffTable.schoolId, schoolId),
+        eq(sectionSupportStaffTable.supportStaffId, staff.id),
+      ),
+    );
   const ids = new Set<string>();
   for (const r of rosterRows) ids.add(r.studentId);
   for (const r of trustedRows) ids.add(r.studentId);
+  for (const r of supportRows) ids.add(r.studentId);
   return { ids, full: false };
 }
 

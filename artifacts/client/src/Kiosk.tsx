@@ -5473,9 +5473,10 @@ function AttendanceMode({
             : "Open now"}
       </div>
 
-      {/* Live board: camera viewer on the LEFT, names populate on the RIGHT.
-          With the camera off it collapses to a single centered column that
-          sits above the keypad. */}
+      {/* Live board. Camera ON: camera viewer LEFT, names RIGHT (no keypad —
+          the camera is the input). Camera OFF: two columns — result card +
+          growing name list scroll on the LEFT, scan input + keypad stay
+          anchored on the RIGHT so they never get pushed off-screen. */}
       {cameraOn ? (
         <div
           style={{
@@ -5514,127 +5515,148 @@ function AttendanceMode({
           </div>
         </div>
       ) : (
+        /* Camera OFF — fixed two-column layout: growing name list on the LEFT
+           (scrolls within its own column), scan input + keypad anchored on the
+           RIGHT so the keypad is always reachable no matter how many students
+           have checked in. */
         <div
           style={{
-            width: "min(560px, 94vw)",
-            marginTop: "1.25rem",
             display: "flex",
-            flexDirection: "column",
-            gap: "1rem",
+            alignItems: "flex-start",
+            justifyContent: "center",
+            gap: "2.75rem",
+            width: "100%",
+            maxWidth: 1180,
+            marginTop: "1.25rem",
           }}
         >
-          {resultCardSlot}
-          {nameFeed}
-        </div>
-      )}
-
-      {/* Scan field — serves the USB scanner AND the on-screen keypad.
-          Hidden while the camera is open (the camera is the input then). */}
-      {!cameraOn && (
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          void submit(studentId, "usb");
-        }}
-        style={{
-          width: "min(560px, 94vw)",
-          marginTop: "1rem",
-          background: "rgba(255,255,255,0.06)",
-          border: "1px solid rgba(255,255,255,0.12)",
-          borderRadius: 14,
-          padding: "1.25rem",
-          display: "flex",
-          flexDirection: "column",
-          gap: "0.9rem",
-        }}
-      >
-        <div style={{ display: "flex", gap: "0.5rem" }}>
-          <input
-            ref={inputRef}
-            type="text"
-            inputMode="numeric"
-            autoComplete="off"
-            autoFocus
-            value={studentId}
-            onChange={(e) => setStudentId(e.target.value)}
-            placeholder="Scan badge or enter your ID"
-            style={{ ...inputStyle, flex: 1, fontSize: "1.3rem", textAlign: "center" }}
-            disabled={busy}
-          />
-          <button
-            type="button"
-            onClick={() => {
-              setCameraOn((v) => !v);
-              setCameraKey((k) => k + 1);
-            }}
-            aria-label="Toggle camera scanning"
-            title="Toggle camera scanning"
+          {/* LEFT — result card + growing name feed (scrolls in place). */}
+          <div
             style={{
-              background: cameraOn ? "#3b82f6" : "rgba(255,255,255,0.1)",
-              border: "1px solid rgba(255,255,255,0.2)",
-              borderRadius: 10,
-              color: "#fff",
-              width: 64,
-              fontSize: "1.6rem",
-              cursor: "pointer",
-              flexShrink: 0,
+              flex: "1 1 0",
+              minWidth: 0,
+              maxWidth: 560,
+              display: "flex",
+              flexDirection: "column",
+              gap: "1rem",
             }}
           >
-            📷
-          </button>
-        </div>
+            {resultCardSlot}
+            <div style={{ maxHeight: "calc(100vh - 280px)", overflowY: "auto" }}>
+              {nameFeed}
+            </div>
+          </div>
 
-        {/* On-screen keypad (live alongside the USB field). */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
-            gap: "0.5rem",
-          }}
-        >
-          {keypadDigits.map((d) => (
-            <button
-              key={d}
-              type="button"
-              onClick={() => setStudentId((s) => s + d)}
-              disabled={busy}
-              style={keypadBtnStyle}
+          {/* RIGHT — USB scan field + on-screen keypad, anchored so it never
+              scrolls off screen as the left column grows. */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void submit(studentId, "usb");
+            }}
+            style={{
+              flex: "0 0 auto",
+              width: "min(400px, 94vw)",
+              alignSelf: "flex-start",
+              position: "sticky",
+              top: 0,
+              background: "rgba(255,255,255,0.06)",
+              border: "1px solid rgba(255,255,255,0.12)",
+              borderRadius: 14,
+              padding: "1.25rem",
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.9rem",
+            }}
+          >
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <input
+                ref={inputRef}
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                autoFocus
+                value={studentId}
+                onChange={(e) => setStudentId(e.target.value)}
+                placeholder="Scan badge or enter your ID"
+                style={{ ...inputStyle, flex: 1, fontSize: "1.3rem", textAlign: "center" }}
+                disabled={busy}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setCameraOn((v) => !v);
+                  setCameraKey((k) => k + 1);
+                }}
+                aria-label="Toggle camera scanning"
+                title="Toggle camera scanning"
+                style={{
+                  background: cameraOn ? "#3b82f6" : "rgba(255,255,255,0.1)",
+                  border: "1px solid rgba(255,255,255,0.2)",
+                  borderRadius: 10,
+                  color: "#fff",
+                  width: 64,
+                  fontSize: "1.6rem",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                }}
+              >
+                📷
+              </button>
+            </div>
+
+            {/* On-screen keypad (live alongside the USB field). */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 1fr)",
+                gap: "0.5rem",
+              }}
             >
-              {d}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => setStudentId((s) => s.slice(0, -1))}
-            disabled={busy}
-            style={keypadBtnStyle}
-            aria-label="Delete last digit"
-          >
-            ⌫
-          </button>
-          <button
-            type="button"
-            onClick={() => setStudentId((s) => s + "0")}
-            disabled={busy}
-            style={keypadBtnStyle}
-          >
-            0
-          </button>
-          <button
-            type="submit"
-            disabled={busy || !studentId.trim()}
-            style={{
-              ...keypadBtnStyle,
-              background:
-                busy || !studentId.trim() ? "rgba(34,197,94,0.4)" : "#22c55e",
-              border: "none",
-            }}
-            aria-label="Submit check-in"
-          >
-            ✓
-          </button>
+              {keypadDigits.map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setStudentId((s) => s + d)}
+                  disabled={busy}
+                  style={keypadBtnStyle}
+                >
+                  {d}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setStudentId((s) => s.slice(0, -1))}
+                disabled={busy}
+                style={keypadBtnStyle}
+                aria-label="Delete last digit"
+              >
+                ⌫
+              </button>
+              <button
+                type="button"
+                onClick={() => setStudentId((s) => s + "0")}
+                disabled={busy}
+                style={keypadBtnStyle}
+              >
+                0
+              </button>
+              <button
+                type="submit"
+                disabled={busy || !studentId.trim()}
+                style={{
+                  ...keypadBtnStyle,
+                  background:
+                    busy || !studentId.trim() ? "rgba(34,197,94,0.4)" : "#22c55e",
+                  border: "none",
+                }}
+                aria-label="Submit check-in"
+              >
+                ✓
+              </button>
+            </div>
+          </form>
         </div>
-      </form>
       )}
 
       {/* Teacher "Done" — only at the bell. One tap reverts to hall pass. */}

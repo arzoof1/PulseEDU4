@@ -601,83 +601,13 @@ strong {
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
-/* Phase 4b — Quick Access favorites: the header row carries a "Customize"
-   toggle, and the inline "Edit Favorites" checklist panel lets the user
-   pick which shortcuts (max 5) appear. Scoped under .sidebar so it
-   inherits the light sidebar surface and labels stay readable. */
+/* Quick Access header label. The strip is a fixed, non-customizable set of
+   shortcuts shared by all staff at a school, so the header no longer carries
+   a "Customize" toggle. Scoped under .sidebar for the light sidebar surface. */
 .sidebar .quick-access-label {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 0.5rem;
-}
-.sidebar .quick-access-edit-btn {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: none;
-  color: var(--primary);
-  padding: 2px 4px;
-  border-radius: 4px;
-}
-.sidebar .quick-access-edit-btn:hover {
-  color: var(--accent, #ef4444);
-}
-.sidebar .quick-access-edit-btn:focus-visible {
-  outline: 2px solid var(--accent, #ef4444);
-  outline-offset: -2px;
-}
-.sidebar .quick-access-empty {
-  font-style: italic;
-  opacity: 0.75;
-}
-.sidebar .quick-access-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-  margin: 0.125rem 0 0.4rem;
-  padding: 0.4rem 0.5rem;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-}
-.sidebar .quick-access-editor-hint {
-  font-size: 11px;
-  color: var(--text-muted);
-  padding: 0.1rem 0.25rem 0.3rem;
-}
-.sidebar .quick-access-option {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.3rem 0.25rem;
-  font-size: 13px;
-  color: var(--text);
-  cursor: pointer;
-  border-radius: 4px;
-}
-.sidebar .quick-access-option:hover {
-  background: var(--surface);
-}
-.sidebar .quick-access-option.is-disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.sidebar .quick-access-option input {
-  cursor: inherit;
-  flex-shrink: 0;
-}
-.sidebar .quick-access-option .nav-icon {
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
 }
 
 /* Convention: a `disabled` <button> in this app marks the currently-selected
@@ -983,6 +913,20 @@ td {
   top: 0;
   z-index: 3;
   background: var(--surface-2);
+}
+
+/* Grouped (multi-row) header variant. Tables like the Teacher Roster have a
+   two-row <thead> (a colSpan group label row on top, sub-columns beneath).
+   Pinning each <th> to top:0 would stack the two rows on top of each other, so
+   instead we pin the whole <thead> as a single block — no magic per-row offset
+   needed. The per-th sticky rule above is neutralized for this variant. */
+.sticky-scroll--group thead {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+.sticky-scroll--group thead th {
+  position: static;
 }
 
 /* Bulk-upload affordance: a dashed, clickable drop-zone so the file picker

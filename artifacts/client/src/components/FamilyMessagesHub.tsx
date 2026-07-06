@@ -81,7 +81,23 @@ interface House {
   name: string;
 }
 
-type AudienceType = "school" | "grade" | "house" | "students";
+// A class period the acting teacher can message (from /my-periods).
+interface MyPeriod {
+  period: number;
+  courseName: string;
+  studentCount: number;
+}
+
+// A student hit from the visibility-scoped search (teacher hand-pick mode).
+interface StudentHit {
+  studentId: string;
+  localSisId: string | null;
+  firstName: string;
+  lastName: string;
+  grade: number | null;
+}
+
+type AudienceType = "school" | "grade" | "house" | "students" | "period";
 
 // mm:ss for the video picker labels.
 function formatVideoDuration(sec: number): string {
@@ -173,11 +189,38 @@ export default function FamilyMessagesHub({ grades }: { grades: number[] }) {
   const [loadingList, setLoadingList] = useState(true);
   const [listError, setListError] = useState("");
 
+  // Role awareness. Core Team keeps the full broadcast composer; a classroom
+  // teacher (only present here when the admin opt-in is on) is restricted to
+  // their own class period or hand-picked own students. Null until loaded.
+  const [isCore, setIsCore] = useState<boolean | null>(null);
+  const [myPeriods, setMyPeriods] = useState<MyPeriod[]>([]);
+  const [selectedPeriod, setSelectedPeriod] = useState<number | null>(null);
+
+  // Teacher hand-pick: visibility-scoped student search + picked set.
+  const [studentQuery, setStudentQuery] = useState("");
+  const [studentResults, setStudentResults] = useState<StudentHit[]>([]);
+  const [pickedStudents, setPickedStudents] = useState<StudentHit[]>([]);
+
   // Detail drawer
   const [detail, setDetail] = useState<MessageDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
   const csvIds = useMemo(() => parseLocalSisIds(csvText), [csvText]);
+  // Local SIS IDs to send when hand-picking students: teachers use the search
+  // picker, Core Team uses the pasted CSV.
+  const pickedSisIds = useMemo(
+    () =>
+      isCore
+        ? csvIds
+        : Array.from(
+            new Set(
+              pickedStudents
+                .map((s) => s.localSisId)
+                .filter((v): v is string => !!v),
+            ),
+          ),
+    [isCore, csvIds, pickedStudents],
+  );
 
   async function loadMessages() {
     try {
@@ -227,12 +270,72 @@ export default function FamilyMessagesHub({ grades }: { grades: number[] }) {
       } catch {
         /* videos are optional — picker just shows none */
       }
+      // Capabilities decide whether we render the full broadcast composer
+      // (Core Team) or the restricted teacher composer. Default to the
+      // restricted composer if this fails (fail closed).
+      let core = false;
+      try {
+        const res = await authFetch("/api/family-messages/capabilities");
+        if (res.ok) {
+          const b = (await res.json()) as { isCoreTeam?: boolean };
+          core = !!b.isCoreTeam;
+        }
+      } catch {
+        /* fail closed to the restricted composer */
+      }
+      if (!cancelled) {
+        setIsCore(core);
+        // Seed the default audience per role: Core Team → whole school,
+        // teacher → their own class period.
+        setAudienceType(core ? "school" : "period");
+      }
+      // A teacher's own class periods (also fetched for Core Team so they can
+      // optionally target a period, though their primary tools are broadcasts).
+      if (!core) {
+        try {
+          const res = await authFetch("/api/family-messages/my-periods");
+          if (!cancelled && res.ok) {
+            const b = (await res.json()) as MyPeriod[];
+            setMyPeriods(Array.isArray(b) ? b : []);
+          }
+        } catch {
+          /* periods optional — picker just shows none */
+        }
+      }
       if (!cancelled) await loadMessages();
     })();
     return () => {
       cancelled = true;
     };
   }, []);
+
+  // Debounced visibility-scoped student search for the teacher hand-pick mode.
+  useEffect(() => {
+    if (audienceType !== "students") return;
+    const q = studentQuery.trim();
+    if (q.length < 2) {
+      setStudentResults([]);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const res = await authFetch(
+          `/api/student-lookup/search?q=${encodeURIComponent(q)}`,
+        );
+        if (!cancelled && res.ok) {
+          const b = (await res.json()) as { students?: StudentHit[] };
+          setStudentResults(Array.isArray(b.students) ? b.students : []);
+        }
+      } catch {
+        if (!cancelled) setStudentResults([]);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [studentQuery, audienceType]);
 
   function onPickFile(file: File | null) {
     setAttachmentError("");
@@ -282,10 +385,15 @@ export default function FamilyMessagesHub({ grades }: { grades: number[] }) {
   function resetCompose() {
     setSubject("");
     setBody("");
-    setAudienceType("school");
+    // Reset to the role-appropriate default audience.
+    setAudienceType(isCore ? "school" : "period");
     setSelectedGrades(new Set());
     setSelectedHouses(new Set());
     setCsvText("");
+    setSelectedPeriod(null);
+    setStudentQuery("");
+    setStudentResults([]);
+    setPickedStudents([]);
     setEmailNudge(true);
     setAttachment(null);
     setAttachmentError("");
@@ -314,8 +422,16 @@ export default function FamilyMessagesHub({ grades }: { grades: number[] }) {
       setSendError("Pick at least one house.");
       return;
     }
-    if (audienceType === "students" && csvIds.length === 0) {
-      setSendError("Paste or upload a CSV with at least one local SIS ID.");
+    if (audienceType === "period" && selectedPeriod == null) {
+      setSendError("Pick one of your class periods.");
+      return;
+    }
+    if (audienceType === "students" && pickedSisIds.length === 0) {
+      setSendError(
+        isCore
+          ? "Paste or upload a CSV with at least one local SIS ID."
+          : "Search and add at least one student.",
+      );
       return;
     }
 
@@ -342,7 +458,11 @@ export default function FamilyMessagesHub({ grades }: { grades: number[] }) {
             : [],
         audienceHouseIds:
           audienceType === "house" ? Array.from(selectedHouses) : [],
-        audienceLocalSisIds: audienceType === "students" ? csvIds : [],
+        audienceLocalSisIds: audienceType === "students" ? pickedSisIds : [],
+        audiencePeriod:
+          audienceType === "period" && selectedPeriod != null
+            ? String(selectedPeriod)
+            : "",
         emailNudge,
         attachmentObjectKey,
         attachmentName: attachment?.name ?? null,
@@ -486,14 +606,25 @@ export default function FamilyMessagesHub({ grades }: { grades: number[] }) {
           {/* Audience */}
           <div style={{ display: "grid", gap: 6 }}>
             <span style={{ fontWeight: 600, fontSize: "0.85rem" }}>Audience</span>
+            {!isCore && (
+              <span style={{ color: "var(--muted, #64748b)", fontSize: "0.8rem" }}>
+                You can message families of one of your own class periods, or
+                pick individual students from your roster.
+              </span>
+            )}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               {(
-                [
-                  ["school", "Whole school"],
-                  ["grade", "By grade"],
-                  ["house", "By house"],
-                  ["students", "Specific families (CSV)"],
-                ] as [AudienceType, string][]
+                (isCore
+                  ? [
+                      ["school", "Whole school"],
+                      ["grade", "By grade"],
+                      ["house", "By house"],
+                      ["students", "Specific families (CSV)"],
+                    ]
+                  : [
+                      ["period", "My class period"],
+                      ["students", "Pick students"],
+                    ]) as [AudienceType, string][]
               ).map(([val, label]) => (
                 <button
                   key={val}
@@ -505,6 +636,125 @@ export default function FamilyMessagesHub({ grades }: { grades: number[] }) {
                 </button>
               ))}
             </div>
+
+            {audienceType === "period" && (
+              <div style={{ display: "grid", gap: 6, marginTop: 4 }}>
+                {myPeriods.length === 0 ? (
+                  <span style={{ color: "var(--muted, #64748b)", fontSize: "0.85rem" }}>
+                    No class periods found for your account.
+                  </span>
+                ) : (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {myPeriods.map((p) => {
+                      const on = selectedPeriod === p.period;
+                      return (
+                        <button
+                          key={p.period}
+                          type="button"
+                          className={"btn" + (on ? " primary" : "")}
+                          onClick={() => setSelectedPeriod(on ? null : p.period)}
+                        >
+                          Period {p.period}
+                          {p.courseName ? ` · ${p.courseName}` : ""} (
+                          {p.studentCount})
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {audienceType === "students" && !isCore && (
+              <div style={{ display: "grid", gap: 6, marginTop: 4 }}>
+                <span style={{ color: "var(--muted, #64748b)", fontSize: "0.8rem" }}>
+                  Search your students by name or ID, then add them. Only
+                  students on your roster appear.
+                </span>
+                <input
+                  type="text"
+                  value={studentQuery}
+                  onChange={(e) => setStudentQuery(e.target.value)}
+                  placeholder="Search students…"
+                  style={{ padding: "0.5rem 0.65rem", borderRadius: 8, border: "1px solid var(--border, #cbd5e1)" }}
+                />
+                {studentResults.length > 0 && (
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 2,
+                      maxHeight: 180,
+                      overflowY: "auto",
+                      border: "1px solid var(--border, #cbd5e1)",
+                      borderRadius: 8,
+                      padding: 4,
+                    }}
+                  >
+                    {studentResults.map((s) => {
+                      const already = pickedStudents.some(
+                        (p) => p.studentId === s.studentId,
+                      );
+                      return (
+                        <button
+                          key={s.studentId}
+                          type="button"
+                          className="btn"
+                          disabled={already || !s.localSisId}
+                          onClick={() =>
+                            setPickedStudents((prev) =>
+                              prev.some((p) => p.studentId === s.studentId)
+                                ? prev
+                                : [...prev, s],
+                            )
+                          }
+                          style={{ justifyContent: "flex-start", textAlign: "left" }}
+                        >
+                          {s.lastName}, {s.firstName}
+                          {s.localSisId ? ` · ${s.localSisId}` : " · (no ID)"}
+                          {already ? " ✓" : ""}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {pickedStudents.length > 0 && (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {pickedStudents.map((s) => (
+                      <span
+                        key={s.studentId}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                          background: "var(--chip-bg, #e2e8f0)",
+                          borderRadius: 999,
+                          padding: "2px 10px",
+                          fontSize: "0.8rem",
+                        }}
+                      >
+                        {s.firstName} {s.lastName}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPickedStudents((prev) =>
+                              prev.filter((p) => p.studentId !== s.studentId),
+                            )
+                          }
+                          style={{ border: "none", background: "none", cursor: "pointer", fontWeight: 700 }}
+                          aria-label={`Remove ${s.firstName} ${s.lastName}`}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <span style={{ fontSize: "0.8rem", color: "var(--muted, #64748b)" }}>
+                  {pickedSisIds.length} student
+                  {pickedSisIds.length === 1 ? "" : "s"} selected
+                </span>
+              </div>
+            )}
 
             {audienceType === "grade" && (
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
@@ -562,7 +812,7 @@ export default function FamilyMessagesHub({ grades }: { grades: number[] }) {
               </div>
             )}
 
-            {audienceType === "students" && (
+            {audienceType === "students" && isCore && (
               <div style={{ display: "grid", gap: 6, marginTop: 4 }}>
                 <span style={{ color: "var(--muted, #64748b)", fontSize: "0.8rem" }}>
                   Paste a list of local SIS IDs (one per line, or a CSV with a

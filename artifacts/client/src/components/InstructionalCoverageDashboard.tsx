@@ -53,6 +53,93 @@ interface DrillResp {
   teachers: TeacherDrill[];
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Effectiveness band — the SINGLE source of truth shared by the schoolwide
+// row flag and the per-teacher drawer flag. Both surfaces call
+// `computeCoverageBand`; the only difference is what's fed in — the row
+// passes the schoolwide aggregate (totalDeliveries + rolled-up mastery),
+// the drawer passes one teacher's own numbers. Keeping ONE function means
+// the two can never drift apart again.
+//
+// The ladder deliberately separates two dimensions that used to be mashed
+// together:
+//   • COVERAGE  — was it taught at all? (the first rung is pure coverage)
+//   • MASTERY   — when taught, did students get it? (method effectiveness)
+// "Method effectiveness" only has meaning once BOTH a delivery and a
+// mastery signal exist, so:
+//   - 0 deliveries        → Critical gap  (not taught — nothing to judge)
+//   - taught, no FAST data → No signal yet (can't judge effectiveness)
+//   - mastery < 50%        → Re-teach     (taught but not landing; any count)
+//   - mastery ≥ 70% & ≥2×  → Effective
+//   - otherwise            → Building     (mid mastery, or strong but thin)
+// Crucially, more deliveries never make a teacher LESS urgent.
+export type CoverageBand =
+  | "critical"
+  | "reteach"
+  | "nosignal"
+  | "building"
+  | "effective";
+
+const EFFECTIVE_MIN_DELIVERIES = 2;
+
+function computeCoverageBand(
+  deliveries: number,
+  masteryPct: number | null,
+): CoverageBand {
+  if (deliveries === 0) return "critical";
+  if (masteryPct === null) return "nosignal";
+  if (masteryPct < 50) return "reteach";
+  if (masteryPct >= 70 && deliveries >= EFFECTIVE_MIN_DELIVERIES)
+    return "effective";
+  return "building";
+}
+
+const COVERAGE_BAND_META: Record<
+  CoverageBand,
+  { label: string; bg: string; fg: string; row: string; rank: number; help: string }
+> = {
+  critical: {
+    label: "Critical gap",
+    bg: "#fecaca",
+    fg: "#7f1d1d",
+    row: "#fef2f2",
+    rank: 0,
+    help: "Not taught yet (0 deliveries). There's no method to evaluate — this is a coverage gap, not a failed method. Action: schedule instruction.",
+  },
+  reteach: {
+    label: "Re-teach",
+    bg: "#fed7aa",
+    fg: "#7c2d12",
+    row: "#fff7ed",
+    rank: 1,
+    help: "Taught but mastery <50% (even a single lesson counts). The method isn't landing — coach a different strategy, swap materials, or pull MTSS Tier 2.",
+  },
+  nosignal: {
+    label: "No signal yet",
+    bg: "#e2e8f0",
+    fg: "#334155",
+    row: "#f8fafc",
+    rank: 2,
+    help: "Taught, but no FAST mastery data yet — effectiveness can't be judged. Action: collect or confirm assessment evidence.",
+  },
+  building: {
+    label: "Building",
+    bg: "#fef08a",
+    fg: "#713f12",
+    row: "#fefce8",
+    rank: 3,
+    help: "Mid mastery (50–69%), or ≥70% with only one delivery. Trending the right direction — keep going.",
+  },
+  effective: {
+    label: "Effective",
+    bg: "#bbf7d0",
+    fg: "#14532d",
+    row: "#f0fdf4",
+    rank: 4,
+    help: "Mastery ≥70% with ≥2 deliveries. The methods are working — capture what's being done and share with the team.",
+  },
+};
+
 const SUBJECTS: Array<{ value: string; label: string }> = [
   { value: "ela", label: "ELA" },
   { value: "math", label: "Math" },
@@ -287,60 +374,13 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
       .sort((a, b) => a.suffix.localeCompare(b.suffix));
   }, [data, grade]);
 
-  // Effectiveness band — combines delivery count with mastery to indicate
-  // whether the methods being used are landing. Used for both the row Flag
-  // pill and the default sort order.
-  type Band = "critical" | "reteach" | "building" | "effective";
-  const bandOf = (r: Row): Band => {
-    const m = r.masteryPct;
-    const d = r.totalDeliveries;
-    if (d === 0) return "critical";
-    if (m === null) {
-      // Taught but no mastery signal yet — treat as building.
-      return d >= 2 ? "building" : "critical";
-    }
-    if (d === 1 && m < 50) return "critical";
-    if (d >= 2 && m < 50) return "reteach";
-    if (m >= 70 && d >= 3) return "effective";
-    return "building";
-  };
-  const BAND_META: Record<
-    Band,
-    { label: string; bg: string; fg: string; row: string; rank: number; help: string }
-  > = {
-    critical: {
-      label: "Critical gap",
-      bg: "#fecaca",
-      fg: "#7f1d1d",
-      row: "#fef2f2",
-      rank: 0,
-      help: "Untaught or barely touched + low mastery",
-    },
-    reteach: {
-      label: "Re-teach",
-      bg: "#fed7aa",
-      fg: "#7c2d12",
-      row: "#fff7ed",
-      rank: 1,
-      help: "Taught but mastery <50% — methods aren't landing",
-    },
-    building: {
-      label: "Building",
-      bg: "#fef08a",
-      fg: "#713f12",
-      row: "#fefce8",
-      rank: 2,
-      help: "Mid mastery or limited coverage — trending",
-    },
-    effective: {
-      label: "Effective",
-      bg: "#bbf7d0",
-      fg: "#14532d",
-      row: "#f0fdf4",
-      rank: 3,
-      help: "Mastery ≥70% with ≥3 deliveries — methods working",
-    },
-  };
+  // Schoolwide row flag — reuses the shared band engine (see
+  // `computeCoverageBand`), fed the benchmark's aggregate numbers. The
+  // per-teacher drawer uses the SAME engine so the two never diverge.
+  type Band = CoverageBand;
+  const bandOf = (r: Row): Band =>
+    computeCoverageBand(r.totalDeliveries, r.masteryPct);
+  const BAND_META = COVERAGE_BAND_META;
 
   const sorted = useMemo(() => {
     if (!data) return [] as Row[];
@@ -368,7 +408,13 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
   }, [data, filteredBenchmarks, sort]);
 
   const bandCounts = useMemo(() => {
-    const c = { critical: 0, reteach: 0, building: 0, effective: 0 };
+    const c: Record<Band, number> = {
+      critical: 0,
+      reteach: 0,
+      nosignal: 0,
+      building: 0,
+      effective: 0,
+    };
     for (const r of filteredBenchmarks) c[bandOf(r)]++;
     return c;
   }, [filteredBenchmarks]);
@@ -509,35 +555,50 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
           </ul>
         </HowToSection>
         <HowToSection title="What the bands mean">
+          <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "#374151" }}>
+            The flag reads two separate things: <strong>coverage</strong> (was
+            it taught?) and <strong>method effectiveness</strong> (when taught,
+            did students master it?). Effectiveness can only be judged once
+            there's both a delivery <em>and</em> a mastery signal — so the first
+            rung is purely about coverage, not a verdict on the teaching.
+          </p>
           <ul style={howtoListStyle}>
             <li>
               <strong style={{ color: BAND_META.critical.fg }}>
                 Critical gap
               </strong>{" "}
-              — 0 deliveries, or 1 delivery and mastery still under 50%.
-              Either nobody's taught it or one touch wasn't enough.
-              Action: schedule instruction.
+              — <em>Coverage gap.</em> 0 deliveries — nobody has taught it, so
+              there's no method to evaluate yet. Action: schedule instruction.
             </li>
             <li>
               <strong style={{ color: BAND_META.reteach.fg }}>
                 Re-teach
               </strong>{" "}
-              — Taught at least twice, but mastery still under 50%. The
-              methods being used <em>aren't landing</em> — coach a
+              — Taught but mastery still under 50% (<em>even a single
+              lesson</em> counts — more attempts never make it less urgent).
+              The methods being used <em>aren't landing</em> — coach a
               different strategy, swap materials, or pull MTSS Tier 2.
+            </li>
+            <li>
+              <strong style={{ color: BAND_META.nosignal.fg }}>
+                No signal yet
+              </strong>{" "}
+              — Taught, but there's no FAST mastery data behind it yet, so
+              effectiveness can't be judged. Action: collect or confirm
+              assessment evidence before drawing a conclusion.
             </li>
             <li>
               <strong style={{ color: BAND_META.building.fg }}>
                 Building
               </strong>{" "}
-              — Mid mastery (50–69%) or ≥70% with limited coverage.
+              — Mid mastery (50–69%), or ≥70% with only one delivery.
               Trending the right direction; keep going.
             </li>
             <li>
               <strong style={{ color: BAND_META.effective.fg }}>
                 Effective
               </strong>{" "}
-              — Mastery ≥70% with ≥3 deliveries. The methods are working —
+              — Mastery ≥70% with ≥2 deliveries. The methods are working —
               capture what's being done and share with the team.
             </li>
           </ul>
@@ -596,19 +657,17 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
               gap: 10,
             }}
           >
-            {(["critical", "reteach", "building", "effective"] as const).map(
+            {(
+              [
+                "critical",
+                "reteach",
+                "nosignal",
+                "building",
+                "effective",
+              ] as const
+            ).map(
               (b) => {
                 const meta = BAND_META[b];
-                const explanations: Record<typeof b, string> = {
-                  critical:
-                    "0 deliveries, or 1 delivery + mastery <50%. Not being taught.",
-                  reteach:
-                    "≥2 deliveries but mastery <50%. Methods aren't landing — try a different strategy.",
-                  building:
-                    "Mid mastery (50–69%), or ≥70% with limited coverage. Trending right.",
-                  effective:
-                    "Mastery ≥70% with ≥3 deliveries. Methods are working — keep going.",
-                };
                 return (
                   <div
                     key={b}
@@ -656,7 +715,7 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
                         lineHeight: 1.35,
                       }}
                     >
-                      {explanations[b]}
+                      {meta.help}
                     </div>
                   </div>
                 );
@@ -844,31 +903,14 @@ function BenchmarkDrillDrawer({
   data: DrillResp | null;
   onClose: () => void;
 }) {
-  // Per-teacher effectiveness band. Bands are about the coaching
-  // conversation, not a score: Critical = no instruction happened at
-  // all (the most actionable gap); Re-teach = it was taught but kids
-  // aren't getting it; Effective = strong mastery backed by repeated
-  // instruction; Building = everything in between. Crucially, taking
-  // more swings at a benchmark should never make a teacher LESS
-  // urgent — so we no longer downgrade "1 lesson + low mastery" to
-  // critical above "3 lessons + low mastery".
-  const teacherBand = (
-    t: TeacherDrill,
-  ): "critical" | "reteach" | "building" | "effective" => {
-    if (t.deliveries === 0) return "critical";
-    if ((t.masteryPct ?? 100) < 50) return "reteach";
-    if ((t.masteryPct ?? 0) >= 70 && t.deliveries >= 2) return "effective";
-    return "building";
-  };
-  const BAND: Record<
-    "critical" | "reteach" | "building" | "effective",
-    { label: string; bg: string; fg: string; rank: number }
-  > = {
-    critical: { label: "Critical gap", bg: "#fecaca", fg: "#7f1d1d", rank: 0 },
-    reteach: { label: "Re-teach", bg: "#fed7aa", fg: "#7c2d12", rank: 1 },
-    building: { label: "Building", bg: "#fef08a", fg: "#713f12", rank: 2 },
-    effective: { label: "Effective", bg: "#bbf7d0", fg: "#14532d", rank: 3 },
-  };
+  // Per-teacher flag — the SAME shared band engine the schoolwide row
+  // uses (`computeCoverageBand`), just fed one teacher's own deliveries +
+  // mastery instead of the aggregate. This is the "separated by teacher"
+  // application of the single source of truth, so the drawer pill and the
+  // row pill can't drift apart.
+  const teacherBand = (t: TeacherDrill): CoverageBand =>
+    computeCoverageBand(t.deliveries, t.masteryPct);
+  const BAND = COVERAGE_BAND_META;
   const sortedTeachers = data
     ? [...data.teachers].sort(
         (a, b) =>
@@ -1158,6 +1200,7 @@ function BenchmarkDrillDrawer({
                           </td>
                           <td style={{ padding: "8px 8px" }}>
                             <span
+                              title={meta.help}
                               style={{
                                 background: meta.bg,
                                 color: meta.fg,
@@ -1188,8 +1231,11 @@ function BenchmarkDrillDrawer({
               >
                 Mastery = % correct on this benchmark's FAST items for kids
                 on that teacher's roster, current school year ({data.schoolYear}
-                ). Flags: <strong>Critical</strong> = never taught;{" "}
-                <strong>Re-teach</strong> = taught but mastery &lt; 50%;{" "}
+                ). Flags (same logic as the schoolwide row):{" "}
+                <strong>Critical gap</strong> = never taught (coverage gap, no
+                method to judge); <strong>Re-teach</strong> = taught but mastery
+                &lt; 50% (even a single lesson);{" "}
+                <strong>No signal yet</strong> = taught, no FAST data to judge;{" "}
                 <strong>Effective</strong> = mastery ≥ 70% with ≥ 2 deliveries;{" "}
                 <strong>Building</strong> = everything else.
               </div>

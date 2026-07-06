@@ -50,6 +50,14 @@ interface PrivacyGateProps {
   // right balance for the "is the device mirrored?" concern: a fresh
   // session is still gated, but in-session navigation is not.
   sessionKey?: string;
+  // Optional "back out" affordance. When provided, a Back button is
+  // shown under the slider so a teacher who reached this screen by
+  // mistake (or who realizes the device IS mirrored) can leave without
+  // revealing anything — instead of being forced to slide forward. The
+  // parent decides where "back" goes (typically the previous section).
+  onBack?: () => void;
+  // Label for the back button. Defaults to "← Back".
+  backLabel?: string;
   // Children render behind the gate from the moment the gate opens
   // (so the page is loading in the background). They are blurred
   // until the teacher drags to unlock.
@@ -73,6 +81,8 @@ export default function PrivacyGate({
   footerHint = "Slide the handle all the way to the right to confirm and view the page.",
   sliderAriaLabel = "Slide to confirm and view roster",
   sessionKey = "default",
+  onBack,
+  backLabel = "← Back",
   children,
 }: PrivacyGateProps) {
   const storageKey = SESSION_KEY_PREFIX + sessionKey;
@@ -110,6 +120,8 @@ export default function PrivacyGate({
         sliderDoneLabel={sliderDoneLabel}
         sliderAriaLabel={sliderAriaLabel}
         footerHint={footerHint}
+        cancelLabel={onBack ? backLabel : undefined}
+        onCancel={onBack}
         onUnlock={markUnlocked}
       />
     </>

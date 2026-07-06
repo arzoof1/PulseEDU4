@@ -36,6 +36,7 @@ import {
   studentFastItemResponsesTable,
   studentCourseGradesTable,
   studentImportSnapshotsTable,
+  fastBqImportBatchesTable,
   schoolSettingsTable,
   housesTable,
   pbisEntriesTable,
@@ -1830,6 +1831,64 @@ router.post(
             ),
           );
         count = (r as unknown as { rowCount?: number }).rowCount ?? 0;
+      } else if (job.kind === "bq_l25" && job.schoolId != null) {
+        // BQ / L25 full-replace rollback. Commit did a destructive
+        // clear-then-flag over (school, current year, subjects-in-file),
+        // so we can't reconstruct the prior state from the rows — it was
+        // snapshotted into fast_bq_import_batches (per-subject student
+        // lists + the school year). Restore = re-clear the exact same
+        // scope, then re-flag the snapshot students. Empty rows this job
+        // created for students with no current-year row are left behind
+        // with prior_year_bq back to false — harmless placeholders a
+        // re-import overwrites (accepted limitation).
+        const [ledger] = await tx
+          .select()
+          .from(fastBqImportBatchesTable)
+          .where(
+            and(
+              eq(fastBqImportBatchesTable.importJobId, id),
+              eq(fastBqImportBatchesTable.schoolId, job.schoolId),
+            ),
+          );
+        if (ledger) {
+          const snap = ledger.priorJson;
+          const subjects = Object.keys(snap.prior);
+          if (subjects.length > 0) {
+            // Re-clear the full scope for the snapshot's school year.
+            await tx
+              .update(studentFastScoresTable)
+              .set({ priorYearBq: false, updatedAt: new Date() })
+              .where(
+                and(
+                  eq(studentFastScoresTable.schoolId, job.schoolId),
+                  eq(studentFastScoresTable.schoolYear, snap.schoolYear),
+                  inArray(studentFastScoresTable.subject, subjects),
+                  eq(studentFastScoresTable.priorYearBq, true),
+                ),
+              );
+            // Restore the prior bottom-quartile set, per subject.
+            for (const subject of subjects) {
+              const ids = snap.prior[subject] ?? [];
+              if (ids.length === 0) continue;
+              const r = await tx
+                .update(studentFastScoresTable)
+                .set({ priorYearBq: true, updatedAt: new Date() })
+                .where(
+                  and(
+                    eq(studentFastScoresTable.schoolId, job.schoolId),
+                    eq(studentFastScoresTable.schoolYear, snap.schoolYear),
+                    eq(studentFastScoresTable.subject, subject),
+                    inArray(studentFastScoresTable.studentId, ids),
+                  ),
+                );
+              count += (r as unknown as { rowCount?: number }).rowCount ?? 0;
+            }
+          }
+          // Drop the ledger row so a re-commit can't chain onto stale state.
+          await tx
+            .delete(fastBqImportBatchesTable)
+            .where(eq(fastBqImportBatchesTable.id, ledger.id));
+        }
       } else if (job.kind === "assessments") {
         if (job.districtId != null && job.schoolId == null) {
           // District-scope rollback: rows span multiple schools. We
@@ -3321,6 +3380,109 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
 };
 
 // ---------------------------------------------------------------------------
+// BQ / Lower-25 (L25) full-replace importer.
+//
+// The state sends a bottom-quartile (a.k.a. "Lower 25" / L25) list separate
+// from scale scores. This importer sets ONLY prior_year_bq on the CURRENT
+// school-year student_fast_scores row (never PMs, never prior_year_score),
+// and does so as a FULL REPLACE per (school, current year, subject-in-file):
+// every in-scope row is cleared first, then the students the file lists are
+// flagged. That means a student who WAS bottom-quartile but is no longer in
+// the file gets un-flagged — the file is the complete list.
+//
+// Because a full replace loses prior state, rollback can't be a simple
+// import_job_id delete; commit snapshots the prior BQ set into
+// fast_bq_import_batches and the rollback route restores from it. This
+// KindConfig is only used by makePreviewHandler (parse + validate for the
+// preview step); the commit + rollback live in dedicated routes, so
+// insertChunk/rollback here are unreachable stubs.
+// ---------------------------------------------------------------------------
+type ParsedBqL25 = {
+  studentId: string;
+  subject: "ela" | "math" | "algebra1" | "geometry";
+  // TRUE when the row marks the student bottom-quartile. When the file has
+  // no BQ column, presence in the file == bottom-quartile (bq=true).
+  bq: boolean;
+};
+
+const BQ_L25_CONFIG: KindConfig<ParsedBqL25> = {
+  validTargets: new Set(["student_id", "subject", "prior_year_bq"]),
+  // The BQ flag column is optional — a bare (student_id, subject) file is a
+  // pure "these are the L25 students" list. When present it lets a combined
+  // roster carry Y/N so non-BQ rows are ignored by the true-set filter.
+  requiredFields: ["student_id", "subject"],
+  headerSynonyms: {
+    student_id: ["student_id", "student_number", "sis_id", "id", "studentid"],
+    subject: ["subject", "test", "assessment", "area", "domain"],
+    prior_year_bq: [
+      "prior_year_bq",
+      "bq",
+      "bottom_quartile",
+      "py_bq",
+      "is_bq",
+      "l25",
+      "lower_25",
+      "lowest_25",
+      "lowest_quartile",
+    ],
+  },
+  parseRow(row, mapping) {
+    const target: Record<string, string> = {};
+    for (const [csvCol, tgt] of Object.entries(mapping)) {
+      target[tgt] = csvCol;
+    }
+    for (const req of this.requiredFields) {
+      const csvCol = target[req];
+      if (!csvCol) {
+        return { ok: false, message: `Missing required column: ${req}` };
+      }
+      const raw = (row[csvCol] ?? "").toString().trim();
+      if (!raw) {
+        return { ok: false, message: `Empty value for ${req}` };
+      }
+    }
+    const studentId = row[target.student_id].toString().trim();
+    // Same subject normalization as FAST_PRIOR_YEAR_CONFIG.
+    const subjectRaw = row[target.subject].toString().trim().toLowerCase();
+    let subject: "ela" | "math" | "algebra1" | "geometry";
+    if (subjectRaw === "ela" || subjectRaw === "reading") {
+      subject = "ela";
+    } else if (subjectRaw === "math" || subjectRaw === "mathematics") {
+      subject = "math";
+    } else if (
+      subjectRaw === "algebra1" ||
+      subjectRaw === "algebra 1" ||
+      subjectRaw === "alg1" ||
+      subjectRaw === "algebra_1"
+    ) {
+      subject = "algebra1";
+    } else if (subjectRaw === "geometry" || subjectRaw === "geo") {
+      subject = "geometry";
+    } else {
+      return {
+        ok: false,
+        message: `Unsupported subject "${subjectRaw}" (expected ela, math, algebra1, or geometry)`,
+      };
+    }
+    // No BQ column mapped → presence in the file means bottom-quartile.
+    const bq =
+      target.prior_year_bq !== undefined
+        ? parseBoolFlag(row[target.prior_year_bq]?.toString())
+        : true;
+    return { ok: true, value: { studentId, subject, bq } };
+  },
+  async insertChunk() {
+    // Unreachable — bq_l25 commits through its dedicated full-replace route.
+    throw new Error("bq_l25 uses a dedicated commit route, not insertChunk");
+  },
+  async rollback() {
+    // Unreachable — bq_l25 rolls back via the fast_bq_import_batches ledger
+    // branch in the rollback route.
+    throw new Error("bq_l25 uses a dedicated rollback branch, not this stub");
+  },
+};
+
+// ---------------------------------------------------------------------------
 // FAST Phase 1 — Florida per-student xlsx parser.
 //
 // The state ships a wide xlsx where each row is one student × one
@@ -4093,6 +4255,50 @@ router.post(
               updatedAt: now,
             },
           });
+      }
+
+      // 1b) Historical fold-in. When importing a prior year as historical,
+      //     ALSO stamp prior_year_score onto the CURRENT school-year row so
+      //     the Trajectory drawer + every reader of the scalar prior_year_score
+      //     lights up from this one file (no separate prior-year upload).
+      //     Historical files are PM3-only, so the scale score IS last spring's
+      //     PM3. Brand-new current-year rows created solely to hold the scalar
+      //     carry THIS job's import_job_id (so a rollback deletes them);
+      //     pre-existing current-year rows PRESERVE their import_job_id, PMs,
+      //     and BQ — a rollback of this historical job must never delete or
+      //     wipe real current-year data (it leaves the stamped scalar behind,
+      //     which a re-import overwrites).
+      if (isHistorical) {
+        const priorStamp = parsed.students.map((s) => ({
+          schoolId,
+          studentId: s.studentId,
+          subject,
+          schoolYear: current,
+          priorYearScore: s.scaleScore,
+          priorYearBq: false,
+          importJobId: job.id,
+          updatedAt: now,
+        }));
+        for (let i = 0; i < priorStamp.length; i += 500) {
+          await tx
+            .insert(studentFastScoresTable)
+            .values(priorStamp.slice(i, i + 500))
+            .onConflictDoUpdate({
+              target: [
+                studentFastScoresTable.schoolId,
+                studentFastScoresTable.studentId,
+                studentFastScoresTable.subject,
+                studentFastScoresTable.schoolYear,
+              ],
+              set: {
+                priorYearScore: sql`EXCLUDED.prior_year_score`,
+                // Preserve everything else on an existing current-year row.
+                priorYearBq: sql`${studentFastScoresTable.priorYearBq}`,
+                importJobId: sql`${studentFastScoresTable.importJobId}`,
+                updatedAt: now,
+              },
+            });
+        }
       }
 
       // 2) Item responses. For idempotency on re-upload, DELETE any
@@ -5072,6 +5278,196 @@ router.post(
   requireImporter(),
   requireImportKind("fast_scores"),
   makeCommitHandler("fast_scores", FAST_SCORES_CONFIG),
+);
+// BQ / L25 full-replace importer. Preview reuses the generic handler; the
+// commit is dedicated because it's a destructive full-replace with a
+// snapshot ledger (see BQ_L25_CONFIG). Gated by the FAST importer cap.
+router.post(
+  "/data-imports/bq_l25/preview",
+  requireImporter(),
+  requireImportKind("bq_l25"),
+  makePreviewHandler("bq_l25", BQ_L25_CONFIG),
+);
+router.post(
+  "/data-imports/bq_l25/commit",
+  requireImporter(),
+  requireImportKind("bq_l25"),
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const csv = typeof req.body?.csv === "string" ? req.body.csv : "";
+    const filename =
+      typeof req.body?.filename === "string" && req.body.filename.trim()
+        ? req.body.filename.trim().slice(0, 200)
+        : "upload.csv";
+    const mapping =
+      req.body?.mapping && typeof req.body.mapping === "object"
+        ? (req.body.mapping as Record<string, string>)
+        : {};
+    if (!csv.trim()) {
+      res.status(400).json({ error: "CSV body is required" });
+      return;
+    }
+    const { headers, rows, parseError } = parseCsv(csv);
+    if (parseError) {
+      res.status(400).json({ error: parseError });
+      return;
+    }
+    if (rows.length > MAX_ROWS_PER_IMPORT) {
+      res.status(400).json({
+        error: `CSV exceeds the ${MAX_ROWS_PER_IMPORT}-row limit (got ${rows.length}). Split the file and try again.`,
+      });
+      return;
+    }
+    const mappingError = validateMappingForConfig(
+      mapping,
+      headers,
+      BQ_L25_CONFIG,
+    );
+    if (mappingError) {
+      res.status(400).json({ error: mappingError });
+      return;
+    }
+    const valid: ParsedBqL25[] = [];
+    const errors: Array<{
+      row: number;
+      message: string;
+      raw?: Record<string, string>;
+    }> = [];
+    for (let i = 0; i < rows.length; i++) {
+      const parsed = BQ_L25_CONFIG.parseRow(rows[i], mapping);
+      if (parsed.ok) {
+        valid.push(parsed.value);
+      } else if (errors.length < 500) {
+        errors.push({ row: i + 2, message: parsed.message, raw: rows[i] });
+      }
+    }
+    // Scope subjects = every subject present in the file (BQ true OR false).
+    // A subject appearing in the file means "this is the complete L25 list
+    // for that subject" — so every in-scope row is cleared, then the true
+    // set is re-flagged (full replace).
+    const scopeSubjects = Array.from(new Set(valid.map((v) => v.subject)));
+    const current = await currentSchoolYearLabelForSchool(schoolId);
+    const now = new Date();
+    // Dedupe the true set by (subject, student) — a file may list a
+    // student twice; the flag is idempotent.
+    const trueSeen = new Set<string>();
+    const upserts: Array<typeof studentFastScoresTable.$inferInsert> = [];
+    for (const v of valid) {
+      if (!v.bq) continue;
+      const key = `${v.subject}::${v.studentId}`;
+      if (trueSeen.has(key)) continue;
+      trueSeen.add(key);
+      upserts.push({
+        schoolId,
+        studentId: v.studentId,
+        subject: v.subject,
+        schoolYear: current,
+        pm1: null,
+        pm2: null,
+        pm3: null,
+        priorYearScore: null,
+        priorYearBq: true,
+        importJobId: null,
+        updatedAt: now,
+      });
+    }
+    const result = await db.transaction(async (tx) => {
+      const [job] = await tx
+        .insert(importJobsTable)
+        .values({
+          schoolId,
+          districtId: null,
+          kind: "bq_l25",
+          filename,
+          uploadedBy: staff.id,
+          status: "committed",
+          totalRows: rows.length,
+          successRows: 0,
+          errorRows: rows.length - valid.length,
+          errorLog: errors,
+          mapping,
+          committedAt: new Date(),
+        })
+        .returning({ id: importJobsTable.id });
+      // Snapshot the prior bottom-quartile set (per subject) BEFORE the
+      // destructive clear, so rollback can restore it. Store a key for
+      // EVERY scope subject (even when its list is empty) so rollback
+      // re-clears the exact same scope.
+      const prior: Record<string, string[]> = {};
+      for (const subject of scopeSubjects) {
+        const priorRows = await tx
+          .select({ studentId: studentFastScoresTable.studentId })
+          .from(studentFastScoresTable)
+          .where(
+            and(
+              eq(studentFastScoresTable.schoolId, schoolId),
+              eq(studentFastScoresTable.schoolYear, current),
+              eq(studentFastScoresTable.subject, subject),
+              eq(studentFastScoresTable.priorYearBq, true),
+            ),
+          );
+        prior[subject] = priorRows.map((r) => r.studentId);
+      }
+      await tx.insert(fastBqImportBatchesTable).values({
+        importJobId: job.id,
+        schoolId,
+        priorJson: { schoolYear: current, prior },
+      });
+      // FULL REPLACE step 1: clear BQ for every in-scope current-year row.
+      if (scopeSubjects.length > 0) {
+        await tx
+          .update(studentFastScoresTable)
+          .set({ priorYearBq: false, updatedAt: now })
+          .where(
+            and(
+              eq(studentFastScoresTable.schoolId, schoolId),
+              eq(studentFastScoresTable.schoolYear, current),
+              inArray(studentFastScoresTable.subject, scopeSubjects),
+              eq(studentFastScoresTable.priorYearBq, true),
+            ),
+          );
+      }
+      // FULL REPLACE step 2: flag the true set. Upsert-create a scalar-only
+      // row for students with no current-year row yet. On conflict set ONLY
+      // the BQ flag — preserve PMs, prior_year_score, and the existing
+      // import_job_id so we never clobber a real FAST-scores row (and a
+      // Florida-import rollback still owns its rows).
+      for (let i = 0; i < upserts.length; i += 500) {
+        await tx
+          .insert(studentFastScoresTable)
+          .values(upserts.slice(i, i + 500))
+          .onConflictDoUpdate({
+            target: [
+              studentFastScoresTable.schoolId,
+              studentFastScoresTable.studentId,
+              studentFastScoresTable.subject,
+              studentFastScoresTable.schoolYear,
+            ],
+            set: {
+              priorYearBq: sql`true`,
+              importJobId: sql`${studentFastScoresTable.importJobId}`,
+              priorYearScore: sql`${studentFastScoresTable.priorYearScore}`,
+              updatedAt: now,
+            },
+          });
+      }
+      await tx
+        .update(importJobsTable)
+        .set({ successRows: upserts.length })
+        .where(eq(importJobsTable.id, job.id));
+      return { id: job.id, flagged: upserts.length };
+    });
+    res.json({
+      jobId: result.id,
+      totalRows: rows.length,
+      validRows: valid.length,
+      successRows: result.flagged,
+      skippedRows: valid.length - result.flagged,
+      errorRows: rows.length - valid.length,
+    });
+  },
 );
 router.post(
   "/data-imports/fast_prior_year/preview",

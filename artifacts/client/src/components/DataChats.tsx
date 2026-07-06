@@ -3209,6 +3209,7 @@ function CampaignDetailView({
       <div style={{ fontWeight: 700, fontSize: "0.85rem", marginBottom: 4 }}>
         Teacher compliance ({detail.done}/{detail.total} logged)
       </div>
+      <div className="sticky-scroll">
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
         <thead>
           <tr style={{ textAlign: "left", color: "var(--text-subtle, #94a3b8)" }}>
@@ -3257,6 +3258,7 @@ function CampaignDetailView({
           })}
         </tbody>
       </table>
+      </div>
 
       <div style={{ fontWeight: 700, fontSize: "0.85rem", margin: "0.8rem 0 4px" }}>
         Topic coverage — % of logged chats that covered each topic
@@ -3381,6 +3383,7 @@ function FollowupStatsTab() {
         </div>
       )}
       {teachers !== null && teachers.length > 0 && (
+        <div className="sticky-scroll">
         <table style={{ borderCollapse: "collapse", width: "100%" }}>
           <thead>
             <tr>
@@ -3439,6 +3442,7 @@ function FollowupStatsTab() {
             })}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   );

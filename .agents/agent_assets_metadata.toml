@@ -498,3 +498,21 @@ id = "LpGcDY-xsrO9K5yPHwc0v"
 uri = "file://exports/PulseEDU-Migration-July1-2-2026.pdf"
 type = "pdf"
 title = "Migration Guide — Everything Shipped July 1–2, 2026"
+
+[[outputs]]
+id = "U5VdnmaO7NcthxdM8qbpQ"
+uri = "file://exports/PulseEDU-Feature-Dependency-Warnings-2026-07-02.pdf"
+type = "pdf"
+title = "Feature Dependency Warnings — Change Summary"
+
+[[outputs]]
+id = "bIVRUx1Y_7MAfv7JphU-D"
+uri = "file://docs/migration-report-2026-07-06.md"
+type = "text"
+title = "Migration Report — 2026-07-06 to present"
+
+[[outputs]]
+id = "Y7lWp2zHcG-Yi53SZh6E-"
+uri = "file://docs/migration-report-2026-07-06.pdf"
+type = "pdf"
+title = "Migration Report — 2026-07-06 to present (PDF)"

@@ -1131,6 +1131,13 @@ export function CommunicationLogModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // "Need help with this call?" — school-level call scripts shown in a drawer.
+  const [scripts, setScripts] = useState<
+    Array<{ id: number; title: string; body: string }>
+  >([]);
+  const [scriptsOpen, setScriptsOpen] = useState(false);
+  const [openScriptId, setOpenScriptId] = useState<number | null>(null);
+
   // Inline "Flag bad number" — which contact slot has its reason picker open,
   // and which slots have been flagged this session (optimistic).
   const [flagOpenSlot, setFlagOpenSlot] = useState<number | null>(null);
@@ -1215,6 +1222,26 @@ export function CommunicationLogModal({
       cancelled = true;
     };
   }, [student.studentId]);
+
+  // Load the school's call scripts (for the "Need help with this call?" drawer).
+  useEffect(() => {
+    let cancelled = false;
+    authFetch("/api/communications/call-scripts")
+      .then((r) => (r.ok ? r.json() : null))
+      .then(
+        (
+          j: {
+            scripts?: Array<{ id: number; title: string; body: string }>;
+          } | null,
+        ) => {
+          if (!cancelled) setScripts(j?.scripts ?? []);
+        },
+      )
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const noteOver = note.length > 1000;
   const canSubmit = !!type && COMM_OUTCOMES.includes(outcome) && !noteOver && !submitting;
@@ -1628,6 +1655,94 @@ export function CommunicationLogModal({
               </div>
             )}
           </div>
+
+          {/* Need help with this call? — school call scripts drawer */}
+          {scripts.length > 0 && (
+            <div style={{ marginBottom: "1rem" }}>
+              <button
+                type="button"
+                onClick={() => setScriptsOpen((o) => !o)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.4rem",
+                  padding: "0.5rem 0.75rem",
+                  borderRadius: "0.5rem",
+                  border: "1px solid #bfdbfe",
+                  background: "#eff6ff",
+                  color: "#1e3a8a",
+                  fontWeight: 700,
+                  fontSize: "0.85rem",
+                  cursor: "pointer",
+                  width: "100%",
+                  justifyContent: "space-between",
+                }}
+              >
+                <span>💡 Need help with this call?</span>
+                <span>{scriptsOpen ? "▲" : "▼"}</span>
+              </button>
+              {scriptsOpen && (
+                <div
+                  style={{
+                    marginTop: "0.5rem",
+                    border: "1px solid #e2e8f0",
+                    borderRadius: "0.5rem",
+                    overflow: "hidden",
+                  }}
+                >
+                  {scripts.map((s) => {
+                    const open = openScriptId === s.id;
+                    return (
+                      <div
+                        key={s.id}
+                        style={{ borderBottom: "1px solid #f1f5f9" }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setOpenScriptId(open ? null : s.id)
+                          }
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            width: "100%",
+                            padding: "0.55rem 0.75rem",
+                            border: "none",
+                            background: open ? "#f8fafc" : "#fff",
+                            color: "#0f172a",
+                            fontWeight: 600,
+                            fontSize: "0.85rem",
+                            cursor: "pointer",
+                            textAlign: "left",
+                          }}
+                        >
+                          <span>{s.title}</span>
+                          <span style={{ color: "#94a3b8" }}>
+                            {open ? "−" : "+"}
+                          </span>
+                        </button>
+                        {open && (
+                          <div
+                            style={{
+                              padding: "0.6rem 0.75rem",
+                              background: "#f8fafc",
+                              color: "#334155",
+                              fontSize: "0.85rem",
+                              whiteSpace: "pre-wrap",
+                              lineHeight: 1.5,
+                            }}
+                          >
+                            {s.body}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Note + voice-to-text */}
           <div style={{ marginBottom: "1rem" }}>
@@ -7396,7 +7511,7 @@ export function PbisPointsReportView({ me }: { me: Me | null }) {
               </strong>
             </span>
           </div>
-          <div style={{ ...card, padding: 0, overflowX: "auto" }}>
+          <div className="sticky-scroll" style={{ padding: 0 }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr

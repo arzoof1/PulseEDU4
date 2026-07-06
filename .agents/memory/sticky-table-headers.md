@@ -21,3 +21,18 @@ the global stylesheet, so every "fix the scroll container" attempt fails identic
 **How to apply:** inline `overflow: "visible"` wins over the global rule. Precedent:
 `components/AlgebraPlacementReview.tsx`. Note `border-top` on `<tr>` does not render
 under `border-collapse: separate` — use cell borders for row dividers.
+
+**App convention:** the reusable `.sticky-scroll` class in `index.css` does both
+halves (bounded scroll region `max-height:calc(100vh-240px)` + sticky `thead th` +
+`> table {overflow:visible !important}`). Wrap a `<table>` in
+`<div className="sticky-scroll">` and it just works — used by EligibilityHub,
+TeacherRoster, MTSS/Safety/StaffDir/Tour/PBIS/Store/DataChats admin tables.
+
+**Multi-row grouped headers** (e.g. Teacher Roster: a `colSpan` group-label row over
+a sub-column row, with `rowSpan={2}` label cells): pinning every `<th>` to `top:0`
+stacks the two header rows on top of each other. Use the `.sticky-scroll--group`
+variant instead — it pins the whole `<thead>` as ONE sticky block
+(`thead {position:sticky;top:0}`) and neutralizes per-`th` sticky
+(`thead th {position:static}`). No fragile per-row `top` offset needed.
+Works because `border-collapse` is `separate` (thead-sticky is unreliable under
+`collapse`).

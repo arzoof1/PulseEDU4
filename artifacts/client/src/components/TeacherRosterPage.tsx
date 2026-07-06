@@ -1860,6 +1860,426 @@ function QuickLogForm({
   );
 }
 
+// Print / download a class roster (PDF for printing, Excel + CSV for
+// records). Teachers export their own roster; Core Team can export the
+// currently-selected teacher's. Scope is "all periods" (grouped) or a
+// single period; every list is A–Z by last name (server-sorted). Teachers
+// can add write-in columns ("list") or a grid of empty boxes ("grid") for
+// tracking, plus labeled fill-in header lines.
+function RosterExportModal({
+  teacherId,
+  periodOptions,
+  currentPeriod,
+  onClose,
+}: {
+  teacherId: number | null;
+  periodOptions: number[];
+  currentPeriod: number | null;
+  onClose: () => void;
+}) {
+  const [scope, setScope] = useState<"all" | number>(
+    currentPeriod ?? "all",
+  );
+  const [layout, setLayout] = useState<"list" | "grid">("list");
+  const [columns, setColumns] = useState<string[]>(["", "", ""]);
+  const [boxCount, setBoxCount] = useState(5);
+  const [boxLabel, setBoxLabel] = useState("");
+  const [title, setTitle] = useState("Class Roster");
+  const [classLabel, setClassLabel] = useState("");
+  const [headerFields, setHeaderFields] = useState<string[]>(["", ""]);
+  const [busy, setBusy] = useState<"pdf" | "xlsx" | "csv" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  function buildParams(kind: "pdf" | "xlsx" | "csv"): string {
+    const p = new URLSearchParams();
+    if (teacherId != null) p.set("teacherId", String(teacherId));
+    p.set("period", scope === "all" ? "all" : String(scope));
+    // Custom write-in columns apply to PDF (list layout) and spreadsheets.
+    const cols = columns.map((c) => c.trim()).filter((c) => c.length > 0);
+    if (kind === "csv" || kind === "xlsx" || layout === "list") {
+      for (const c of cols) p.append("col", c);
+    }
+    if (kind === "pdf") {
+      p.set("layout", layout);
+      if (layout === "grid") {
+        p.set("boxes", String(boxCount));
+        if (boxLabel.trim()) p.set("boxLabel", boxLabel.trim());
+      }
+      if (title.trim()) p.set("title", title.trim());
+      if (classLabel.trim()) p.set("classLabel", classLabel.trim());
+      for (const f of headerFields.map((x) => x.trim()).filter(Boolean)) {
+        p.append("field", f);
+      }
+    }
+    return p.toString();
+  }
+
+  async function run(kind: "pdf" | "xlsx" | "csv") {
+    setError(null);
+    // Pre-open a tab for the PDF so the browser treats it as user-initiated
+    // (popup blockers ignore the later async navigation). Preview iframes
+    // suppress window.prompt/confirm/alert, so all errors surface inline.
+    const win = kind === "pdf" ? window.open("", "_blank") : null;
+    setBusy(kind);
+    try {
+      const path =
+        kind === "pdf"
+          ? "print.pdf"
+          : kind === "xlsx"
+            ? "export.xlsx"
+            : "export.csv";
+      const res = await authFetch(
+        `/api/teacher-roster/${path}?${buildParams(kind)}`,
+      );
+      if (!res.ok) {
+        if (win) win.close();
+        setError(
+          res.status === 403
+            ? "You don't have access to export this roster."
+            : `Export failed (${res.status}).`,
+        );
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      if (kind === "pdf" && win) {
+        win.location.href = url;
+      } else {
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `roster.${kind}`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch {
+      if (win) win.close();
+      setError("Something went wrong. Please try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const labelStyle: React.CSSProperties = {
+    fontSize: 13,
+    fontWeight: 600,
+    color: "#374151",
+    display: "block",
+    marginBottom: 4,
+  };
+  const inputStyle: React.CSSProperties = {
+    width: "100%",
+    padding: "7px 9px",
+    border: "1px solid #d1d5db",
+    borderRadius: 6,
+    fontSize: 13,
+    boxSizing: "border-box",
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Print or download roster"
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,23,42,0.45)",
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "center",
+        padding: "5vh 16px",
+        zIndex: 1000,
+        overflowY: "auto",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "white",
+          borderRadius: 12,
+          width: "min(560px, 100%)",
+          padding: 20,
+          boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 14,
+          }}
+        >
+          <h3 style={{ margin: 0, fontSize: 17 }}>Print / download roster</h3>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            style={{
+              border: "none",
+              background: "transparent",
+              fontSize: 22,
+              lineHeight: 1,
+              cursor: "pointer",
+              color: "#6b7280",
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div>
+            <label style={labelStyle} htmlFor="rex-scope">
+              Which roster?
+            </label>
+            <select
+              id="rex-scope"
+              value={scope === "all" ? "all" : String(scope)}
+              onChange={(e) =>
+                setScope(
+                  e.target.value === "all" ? "all" : Number(e.target.value),
+                )
+              }
+              style={inputStyle}
+            >
+              <option value="all">All periods (whole day, grouped)</option>
+              {periodOptions.map((p) => (
+                <option key={p} value={p}>
+                  Period {p}
+                </option>
+              ))}
+            </select>
+            <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+              Always sorted A–Z by last name. Shows student name + Local SIS ID.
+            </div>
+          </div>
+
+          <fieldset
+            style={{
+              border: "1px solid #e5e7eb",
+              borderRadius: 8,
+              padding: 12,
+              margin: 0,
+            }}
+          >
+            <legend style={{ fontSize: 12, fontWeight: 700, color: "#4b5563" }}>
+              PDF (for printing)
+            </legend>
+
+            <label style={labelStyle} htmlFor="rex-title">
+              Title
+            </label>
+            <input
+              id="rex-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              style={inputStyle}
+            />
+
+            <label style={{ ...labelStyle, marginTop: 10 }} htmlFor="rex-class">
+              Subtitle (optional — e.g. class / subject)
+            </label>
+            <input
+              id="rex-class"
+              value={classLabel}
+              onChange={(e) => setClassLabel(e.target.value)}
+              placeholder="e.g. 3rd Period — Algebra I"
+              style={inputStyle}
+            />
+
+            <div style={{ marginTop: 10 }}>
+              <span style={labelStyle}>Fill-in header lines (optional)</span>
+              <div style={{ display: "flex", gap: 8 }}>
+                {headerFields.map((f, i) => (
+                  <input
+                    key={i}
+                    value={f}
+                    onChange={(e) =>
+                      setHeaderFields((prev) =>
+                        prev.map((x, j) => (j === i ? e.target.value : x)),
+                      )
+                    }
+                    placeholder={i === 0 ? "e.g. Week of" : "e.g. Notes"}
+                    style={inputStyle}
+                  />
+                ))}
+              </div>
+              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                Each prints as a labeled blank line to write on.
+              </div>
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <span style={labelStyle}>Tracking space</span>
+              <div style={{ display: "flex", gap: 16, marginBottom: 8 }}>
+                <label style={{ fontSize: 13, cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name="rex-layout"
+                    checked={layout === "list"}
+                    onChange={() => setLayout("list")}
+                  />{" "}
+                  Write-in columns
+                </label>
+                <label style={{ fontSize: 13, cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name="rex-layout"
+                    checked={layout === "grid"}
+                    onChange={() => setLayout("grid")}
+                  />{" "}
+                  Grid of boxes
+                </label>
+              </div>
+
+              {layout === "list" ? (
+                <div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {columns.map((c, i) => (
+                      <input
+                        key={i}
+                        value={c}
+                        onChange={(e) =>
+                          setColumns((prev) =>
+                            prev.map((x, j) =>
+                              j === i ? e.target.value : x,
+                            ),
+                          )
+                        }
+                        placeholder={`Column ${i + 1}`}
+                        style={{ ...inputStyle, width: 150 }}
+                      />
+                    ))}
+                    {columns.length < 8 && (
+                      <button
+                        type="button"
+                        onClick={() => setColumns((p) => [...p, ""])}
+                        style={{
+                          border: "1px dashed #9ca3af",
+                          background: "white",
+                          borderRadius: 6,
+                          padding: "0 12px",
+                          fontSize: 13,
+                          cursor: "pointer",
+                          color: "#4b5563",
+                        }}
+                      >
+                        + Column
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                    Empty labeled columns to write in (e.g. "Parent
+                    contacted", "Time called").
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                  <label style={{ fontSize: 13 }}>
+                    Boxes per student:&nbsp;
+                    <input
+                      type="number"
+                      min={1}
+                      max={12}
+                      value={boxCount}
+                      onChange={(e) =>
+                        setBoxCount(
+                          Math.min(
+                            12,
+                            Math.max(1, Number(e.target.value) || 1),
+                          ),
+                        )
+                      }
+                      style={{ ...inputStyle, width: 70, display: "inline" }}
+                    />
+                  </label>
+                  <input
+                    value={boxLabel}
+                    onChange={(e) => setBoxLabel(e.target.value)}
+                    placeholder="Boxes header (optional)"
+                    style={{ ...inputStyle, flex: 1 }}
+                  />
+                </div>
+              )}
+            </div>
+          </fieldset>
+
+          {error && (
+            <div
+              style={{
+                background: "#fef2f2",
+                color: "#b91c1c",
+                border: "1px solid #fecaca",
+                borderRadius: 6,
+                padding: "8px 10px",
+                fontSize: 13,
+              }}
+            >
+              {error}
+            </div>
+          )}
+
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              justifyContent: "flex-end",
+              flexWrap: "wrap",
+            }}
+          >
+            <button
+              onClick={() => run("csv")}
+              disabled={busy !== null}
+              style={secondaryBtn}
+            >
+              {busy === "csv" ? "…" : "Download CSV"}
+            </button>
+            <button
+              onClick={() => run("xlsx")}
+              disabled={busy !== null}
+              style={secondaryBtn}
+            >
+              {busy === "xlsx" ? "…" : "Download Excel"}
+            </button>
+            <button
+              onClick={() => run("pdf")}
+              disabled={busy !== null}
+              style={primaryBtn}
+            >
+              {busy === "pdf" ? "Preparing…" : "Open PDF to print"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const secondaryBtn: React.CSSProperties = {
+  padding: "9px 14px",
+  borderRadius: 8,
+  border: "1px solid #d1d5db",
+  background: "white",
+  color: "#374151",
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
+const primaryBtn: React.CSSProperties = {
+  padding: "9px 16px",
+  borderRadius: 8,
+  border: "none",
+  background: "#4f46e5",
+  color: "white",
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
 export default function TeacherRosterPage({
   isCoreTeam,
   defaultTeacherId,
@@ -1896,6 +2316,7 @@ export default function TeacherRosterPage({
     if (teacherId != null && onTeacherChange) onTeacherChange(teacherId);
   }, [teacherId, onTeacherChange]);
   const [period, setPeriod] = useState<number | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
   const [tab, setTab] = useState<RosterTab>("roster");
   // Roster-wide pill view default. Persisted to localStorage so the
   // teacher's choice survives reloads + navigation. Per-browser, not
@@ -2350,8 +2771,35 @@ export default function TeacherRosterPage({
               />
             </label>
           )}
+          <button
+            type="button"
+            onClick={() => setExportOpen(true)}
+            disabled={teacherId == null}
+            title="Print or download this roster"
+            style={{
+              padding: "7px 12px",
+              borderRadius: 8,
+              border: "1px solid #d1d5db",
+              background: teacherId == null ? "#f3f4f6" : "white",
+              color: teacherId == null ? "#9ca3af" : "#374151",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: teacherId == null ? "not-allowed" : "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            🖨 Print / Download
+          </button>
         </div>
       </div>
+      {exportOpen && (
+        <RosterExportModal
+          teacherId={teacherId}
+          periodOptions={periodOptions}
+          currentPeriod={period}
+          onClose={() => setExportOpen(false)}
+        />
+      )}
 
       <HowToUseHelp title="How to use Teacher Roster">
         <HowToSection title="What this page is">
@@ -2893,7 +3341,7 @@ export default function TeacherRosterPage({
       )}
 
       {!loading && data && data.students.length > 0 && (
-        <div style={{ overflowX: "auto" }}>
+        <div className="sticky-scroll sticky-scroll--group">
           <table className="pulse-table"
             style={{
               borderCollapse: "collapse",

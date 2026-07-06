@@ -24,6 +24,7 @@ export type Kind =
   | "behavior"
   | "fast_scores"
   | "fast_prior_year"
+  | "bq_l25"
   | "fast_florida"
   | "gradebook"
   | "points_migration";
@@ -190,6 +191,17 @@ const FAST_PRIOR_YEAR_TARGETS: TargetDef[] = [
   { value: "subject", label: "Subject (ela/reading or math)", required: true },
   { value: "prior_year_score", label: "Prior-year final scale score (last year's PM3)", required: true },
   { value: "prior_year_bq", label: "Prior-year bottom-quartile flag", required: false },
+];
+
+// BQ / Lower-25 (L25) full-replace targets. Mirror of BQ_L25_CONFIG
+// .validTargets. Only (student_id, subject) are required — the BQ flag
+// column is optional (presence in the file == bottom-quartile). This is a
+// FULL REPLACE per subject: any current-year student not listed for that
+// subject gets un-flagged.
+const BQ_L25_TARGETS: TargetDef[] = [
+  { value: "student_id", label: "Student ID (SIS number)", required: true },
+  { value: "subject", label: "Subject (ela/reading, math, algebra1, geometry)", required: true },
+  { value: "prior_year_bq", label: "Bottom-quartile / L25 flag (Y/N — optional)", required: false },
 ];
 
 // PBIS point-balance migration targets — match by local_sis_id (the only
@@ -566,6 +578,56 @@ const KIND_DEFS: Record<Kind, KindDef> = {
       "Subject 'Reading' is normalized to 'ela' to match Florida FAST exports.",
     ],
   },
+  bq_l25: {
+    label: "Bottom Quartile / Lower 25 (full replace)",
+    targetsFor: () => BQ_L25_TARGETS,
+    supportsDistrict: false,
+    helpText:
+      "Quick upload of this year's Bottom-Quartile (Lower 25) list. Flips ONLY the BQ flag on current-year rows — never touches scores. FULL REPLACE: students not in the file for a subject get un-flagged.",
+    description:
+      "The state sends the Bottom-Quartile / Lower-25 (L25) list separately from scale scores, and it changes as data is re-run. This importer is a repeatable quick upload that sets ONLY prior_year_bq on the current school-year student_fast_scores row (never PM1/PM2/PM3, never prior_year_score). It is a FULL REPLACE per subject present in the file: the current BQ set for that subject is cleared first, then the students you list are flagged — so a student who is no longer bottom-quartile drops off automatically. Each upload is a single restorable job (undo from the History tab restores the exact prior flags).",
+    columns: [
+      {
+        target: "student_id",
+        label: "Student ID",
+        required: true,
+        acceptedHeaders: ["student_id", "student_number", "sis_id", "id", "studentid"],
+      },
+      {
+        target: "subject",
+        label: "Subject",
+        required: true,
+        acceptedHeaders: ["subject", "test", "assessment", "area", "domain"],
+        notes: "Accepts 'ela', 'ELA', 'Reading' (mapped to ela), 'math', 'algebra1', 'geometry'. Every subject in the file is FULL-REPLACED.",
+      },
+      {
+        target: "prior_year_bq",
+        label: "Bottom-quartile / L25 flag",
+        required: false,
+        acceptedHeaders: [
+          "prior_year_bq",
+          "bq",
+          "bottom_quartile",
+          "py_bq",
+          "is_bq",
+          "l25",
+          "lower_25",
+          "lowest_25",
+          "lowest_quartile",
+        ],
+        notes: "Optional. Y/N, Yes/No, true/false, or 1/0. If you leave this column out entirely, every student in the file is treated as bottom-quartile (a pure L25 list).",
+      },
+    ],
+    sampleCsv:
+      "student_id,subject,bq\n10234,ELA,Y\n10235,ELA,Y\n10234,Math,Y\n10240,Math,Y\n",
+    notes: [
+      "School-scope only.",
+      "FULL REPLACE per subject in the file: any current-year student NOT listed (or listed with N) for that subject has their BQ flag cleared.",
+      "Only the Bottom-Quartile flag is touched — PM1/PM2/PM3 and prior-year scale scores are never changed.",
+      "Undo from the History tab restores the exact set of BQ flags that existed before the upload.",
+      "Subject 'Reading' is normalized to 'ela' to match Florida FAST exports.",
+    ],
+  },
   fast_florida: {
     label: "Florida FAST (state xlsx — ELA Reading + Math)",
     // This importer doesn't use the column-mapping flow — the xlsx layout
@@ -681,8 +743,8 @@ const KIND_GROUPS: KindGroup[] = [
   {
     title: "FAST scores",
     caption:
-      "Florida FAST, imported after each PM window (about 4× a year). Most schools use the state portal file — the other two are fallbacks for schools that build their own CSVs.",
-    kinds: ["fast_florida", "fast_scores", "fast_prior_year"],
+      "Florida FAST, imported after each PM window (about 4× a year). Most schools use the state portal file; a manual CSV is a fallback, and the Bottom-Quartile list is a quick repeatable upload.",
+    kinds: ["fast_florida", "fast_scores", "bq_l25"],
     primary: "fast_florida",
   },
   {
@@ -717,6 +779,7 @@ const KIND_ROW_TITLE: Partial<Record<Kind, string>> = {
   fast_florida: "From the state portal file (.xlsx)",
   fast_scores: "Manual entry — build a CSV of scale scores",
   fast_prior_year: "Prior-year final scores only",
+  bq_l25: "Bottom Quartile / Lower 25 list (full replace)",
 };
 
 // Small badge on the recommended/most-common row within a group.
@@ -1306,6 +1369,7 @@ export default function DataImports({
     behavior: "BEHAVIOR",
     fast_scores: "FAST",
     fast_prior_year: "FAST",
+    bq_l25: "FAST",
     fast_florida: "FLORIDA",
     gradebook: "GRADEBOOK",
     points_migration: "POINTS",
@@ -1992,7 +2056,7 @@ export default function DataImports({
             : "1px solid var(--border, #2a3447)",
           background: selected
             ? "rgba(59, 130, 246, 0.08)"
-            : "var(--card-bg, #0f172a)",
+            : "var(--surface)",
           color: "inherit",
           font: "inherit",
           cursor: disabled ? "not-allowed" : "pointer",
@@ -2595,6 +2659,10 @@ export default function DataImports({
                         file: "pulseedu-fast-prior-year-sample.csv",
                         label: "Sample FAST prior-year CSV",
                       },
+                      bq_l25: {
+                        file: "pulseedu-bq-l25-sample.csv",
+                        label: "Sample Bottom-Quartile / L25 CSV",
+                      },
                       // Florida xlsx has no sample we can ship — admins
                       // supply their own state-portal export. The
                       // download bar below is conditionally hidden for
@@ -2971,7 +3039,7 @@ export default function DataImports({
                       }
                       style={{
                         padding: "0.3rem 0.5rem",
-                        background: "var(--card-bg, #0f172a)",
+                        background: "var(--surface)",
                         color: "inherit",
                         border: "1px solid var(--border, #2a3447)",
                         borderRadius: 6,
@@ -3125,7 +3193,7 @@ export default function DataImports({
                           style={{
                             flex: 1,
                             padding: "0.25rem",
-                            background: "var(--card-bg, #0f172a)",
+                            background: "var(--surface)",
                             color: "inherit",
                             border: "1px solid var(--border, #2a3447)",
                             borderRadius: 4,
@@ -3648,7 +3716,7 @@ export default function DataImports({
                       border: "1px solid var(--border, #2a3447)",
                       borderRadius: 8,
                       marginBottom: "1rem",
-                      background: "var(--card-bg, #0f172a)",
+                      background: "var(--surface)",
                     }}
                   >
                     <div
@@ -3725,7 +3793,7 @@ export default function DataImports({
                       spellCheck={false}
                       style={{
                         padding: "0.5rem 0.65rem",
-                        background: "var(--card-bg, #0f172a)",
+                        background: "var(--surface)",
                         color: "inherit",
                         border: "1px solid var(--border, #2a3447)",
                         borderRadius: 6,
@@ -4088,7 +4156,7 @@ export default function DataImports({
             style={{
               maxWidth: 560,
               width: "100%",
-              background: "var(--card-bg, #0f172a)",
+              background: "var(--surface)",
               border: "1px solid var(--border, #2a3447)",
               borderRadius: 12,
               padding: "1.5rem",

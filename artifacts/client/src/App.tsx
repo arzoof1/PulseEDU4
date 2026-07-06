@@ -22,6 +22,7 @@ import FamilyMessagesHub from "./components/FamilyMessagesHub";
 import ParentNotificationsPanel from "./components/ParentNotificationsPanel";
 import PulloutNotificationsPanel from "./components/PulloutNotificationsPanel";
 import PulseDnaStudio from "./components/PulseDnaStudio";
+import { TeacherPicker } from "./components/TeacherPicker";
 import HelpAssistant from "./components/HelpAssistant";
 import { TileHome, type Tile as TileHomeTile } from "./pages/TileHome";
 import StaffAstPage from "./components/ast/StaffAstPage";
@@ -110,6 +111,7 @@ import PrivacyGate from "./components/PrivacyGate";
 import SeparationSuggestionsPage from "./components/SeparationSuggestionsPage";
 import FastBenchmarksDashboard from "./components/FastBenchmarksDashboard";
 import InstructionalCoverageDashboard from "./components/InstructionalCoverageDashboard";
+import CoverageReportDashboard from "./components/CoverageReportDashboard";
 import SeparationTagsAdmin from "./components/SeparationTagsAdmin";
 import SafetyPlanEditor from "./components/SafetyPlanEditor";
 import SignageLauncherView from "./components/SignageLauncherView";
@@ -3937,6 +3939,16 @@ const INSIGHTS_TILES: InsightsTile[] = [
     targetSection: "instructionalCoverage",
   },
   {
+    id: "coverageReport",
+    icon: "📈",
+    title: "Coverage Report",
+    subtitle:
+      "Per-benchmark teacher effectiveness: coverage vs mastery, how you compare to same-grade peers, PM1→2→3 growth, period/subgroup drill-downs, and a discretionary send-out equity check. Teachers see their own; core team sees any.",
+    phase: "Today",
+    group: "monitoring",
+    targetSection: "coverageReport",
+  },
+  {
     id: "earlyWarning",
     icon: "🚨",
     title: "Early Warning",
@@ -4013,9 +4025,17 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "verifyPullouts",
     "issDashboard",
     "behaviorReview",
+    // Pullout Notifications moved here from the Family group — it configures
+    // STAFF dispatch alerts for pullout requests, so it belongs with the
+    // pullout workflow (requestPullout/verifyPullouts) rather than Family.
+    "pulloutNotifications",
   ],
   specialPrograms: ["accommodations", "ese"],
-  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess", "callCampaign", "dataChats", "parentNotifications", "pulloutNotifications"],
+  // Family = parent/teacher-facing everyday comms. familyAdmin = the
+  // admin/Core-Team-facing family tools (outreach campaigns + config) split
+  // out so a plain teacher's Family section stays short.
+  family: ["student", "familyMessages"],
+  familyAdmin: ["pulseDnaStudio", "parentAccess", "callCampaign", "dataChats", "parentNotifications"],
   people: ["teacherRoster", "staffRoles"],
   // hallPassMgmt is reached via the Hall Passes admin tools; it has no
   // dedicated nav item so we anchor it to School Admin so the sidebar
@@ -4149,142 +4169,33 @@ function NavGroup({
   );
 }
 
-// Phase 4b — Quick Access is a per-user PINNABLE favorites strip (max 5),
-// persisted in localStorage so it survives reload and is scoped per user
-// (two staff sharing an iPad don't inherit each other's favorites). Every
-// pinnable destination has a permanent home OUTSIDE this strip — either a
-// themed accordion (pbis/houseRankings/requestPullout/accommodations, Phase
-// 4a) or the always-on Tile Home launcher (hallPasses/teacherRoster/
-// studentLookup/partneringWithParents). Each item's pin gate matches its
-// Tile Home tile gate, so unpinning never makes a destination unreachable.
-// First-time users are seeded a familiar
-// default set. The smart/special Quick Access items (AST, Comp Time,
-// Verify Pullout, Pickup, Spotlight) are NOT pinnable — they stay rendered
-// unconditionally by the parent after this favorites block.
+// Quick Access is a fixed shortcut strip: every staff member at a school
+// sees the SAME set of items, in one canonical order, driven purely by what
+// the school has enabled + the viewer's role gates (the `canShow` flag on
+// each item). There is no per-user customization — a consistent layout means
+// support can reliably say "third item from the top" without an item silently
+// hidden by a personal preference. Every destination here also has a permanent
+// home outside this strip (a themed accordion or the always-on Tile Home
+// launcher). The smart/special Quick Access items (AST, Comp Time, Verify
+// Pullout, Pickup, Spotlight) are rendered unconditionally by the parent after
+// this block.
 function QuickAccessFavorites<
   S extends { key: string; label: string; icon: React.ReactNode },
 >({
-  userId,
   items,
   renderItem,
 }: {
-  userId: string;
   items: Array<S & { canShow: boolean }>;
   renderItem: (s: S) => React.ReactNode;
 }) {
-  const storageKey = `pulseedu.quickaccess.${userId}.v1`;
-  const MAX_PINS = 5;
-  // Seeded defaults for a first-time user (no stored value). Filtered to
-  // what the user can actually see and capped at MAX_PINS below.
-  const DEFAULT_PINS = [
-    "hallPasses",
-    "teacherRoster",
-    "studentLookup",
-    "requestPullout",
-    "pbis",
-  ];
   const available = items.filter((it) => it.canShow);
-  const availableKeys = new Set(available.map((it) => it.key));
-  const [pins, setPins] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem(storageKey);
-      if (raw === null) {
-        return DEFAULT_PINS.filter((k) => availableKeys.has(k)).slice(
-          0,
-          MAX_PINS,
-        );
-      }
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        return parsed.filter((k): k is string => typeof k === "string");
-      }
-      return [];
-    } catch {
-      return [];
-    }
-  });
-  const [editing, setEditing] = useState(false);
-  // Persist on every change. Pins for a temporarily-off feature are kept
-  // in storage (we filter at render) so the pin returns if the feature
-  // comes back — only the user's explicit unpin removes it.
-  useEffect(() => {
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(pins));
-    } catch {
-      /* ignore quota / private-mode failures */
-    }
-  }, [storageKey, pins]);
-  // Render pinned items in the canonical master order (not pin-click
-  // order) for a stable layout, filtered to what's currently visible and
-  // hard-capped at MAX_PINS.
-  const visiblePinCount = pins.filter((k) => availableKeys.has(k)).length;
-  const pinnedToRender = available
-    .filter((it) => pins.includes(it.key))
-    .slice(0, MAX_PINS);
-  const togglePin = (key: string) => {
-    setPins((prev) => {
-      if (prev.includes(key)) return prev.filter((k) => k !== key);
-      if (prev.filter((k) => availableKeys.has(k)).length >= MAX_PINS) {
-        return prev;
-      }
-      return [...prev, key];
-    });
-  };
+  if (available.length === 0) return null;
   return (
     <>
       <div className="section-label quick-access-label">
         <span>Quick Access</span>
-        {available.length > 0 && (
-          <button
-            type="button"
-            className="quick-access-edit-btn"
-            onClick={() => setEditing((v) => !v)}
-            aria-expanded={editing}
-            title="Choose which shortcuts appear in Quick Access"
-          >
-            {editing ? "Done" : "Customize"}
-          </button>
-        )}
       </div>
-      {pinnedToRender.map((it) => renderItem(it))}
-      {!editing && pinnedToRender.length === 0 && available.length > 0 && (
-        <button
-          type="button"
-          className="nav-item quick-access-empty"
-          onClick={() => setEditing(true)}
-        >
-          <span className="nav-icon">➕</span>
-          Pin your favorites
-        </button>
-      )}
-      {editing && (
-        <div className="quick-access-editor">
-          <div className="quick-access-editor-hint">
-            Pick up to {MAX_PINS} shortcuts
-          </div>
-          {available.map((it) => {
-            const checked = pins.includes(it.key);
-            const atCap = !checked && visiblePinCount >= MAX_PINS;
-            return (
-              <label
-                key={it.key}
-                className={
-                  "quick-access-option" + (atCap ? " is-disabled" : "")
-                }
-              >
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  disabled={atCap}
-                  onChange={() => togglePin(it.key)}
-                />
-                <span className="nav-icon">{it.icon}</span>
-                <span>{it.label}</span>
-              </label>
-            );
-          })}
-        </div>
-      )}
+      {available.map((it) => renderItem(it))}
     </>
   );
 }
@@ -5859,6 +5770,7 @@ function App() {
     | "separationSuggestions"
     | "fastBenchmarks"
     | "instructionalCoverage"
+    | "coverageReport"
     | "spotlight"
     | "houseRankings"
     | "issReporting"
@@ -6002,6 +5914,7 @@ function App() {
     manualRosterUploadEnabled: boolean;
     strictHouseNameMatch: boolean;
     gpaEnabled: boolean;
+    teacherFamilyMessagingEnabled: boolean;
     // Two-tier feature flags. Defaults are TRUE so the optimistic UI
     // matches what the server returns for any school that has not yet
     // flipped anything off.
@@ -6043,6 +5956,24 @@ function App() {
     superFeatureParentPortal: boolean;
     featureAcademicEvidence: boolean;
     superFeatureAcademicEvidence: boolean;
+    featureDataChats: boolean;
+    superFeatureDataChats: boolean;
+    featurePickup: boolean;
+    superFeaturePickup: boolean;
+    featureTicketing: boolean;
+    superFeatureTicketing: boolean;
+    featureTours: boolean;
+    superFeatureTours: boolean;
+    featureEsign: boolean;
+    superFeatureEsign: boolean;
+    featureBrainLab: boolean;
+    superFeatureBrainLab: boolean;
+    featureGradebook: boolean;
+    superFeatureGradebook: boolean;
+    featureSchoolGrade: boolean;
+    superFeatureSchoolGrade: boolean;
+    featureSafetyPlans: boolean;
+    superFeatureSafetyPlans: boolean;
   }>({
     schoolName: "",
     fromName: "",
@@ -6069,6 +6000,7 @@ function App() {
     manualRosterUploadEnabled: false,
     strictHouseNameMatch: false,
     gpaEnabled: false,
+    teacherFamilyMessagingEnabled: false,
     featureFamilyComm: true,
     featurePbis: true,
     featureSchoolStore: true,
@@ -6107,6 +6039,24 @@ function App() {
     superFeatureParentPortal: true,
     featureAcademicEvidence: true,
     superFeatureAcademicEvidence: true,
+    featureDataChats: true,
+    superFeatureDataChats: true,
+    featurePickup: true,
+    superFeaturePickup: true,
+    featureTicketing: true,
+    superFeatureTicketing: true,
+    featureTours: true,
+    superFeatureTours: true,
+    featureEsign: true,
+    superFeatureEsign: true,
+    featureBrainLab: true,
+    superFeatureBrainLab: true,
+    featureGradebook: true,
+    superFeatureGradebook: true,
+    featureSchoolGrade: true,
+    superFeatureSchoolGrade: true,
+    featureSafetyPlans: true,
+    superFeatureSafetyPlans: true,
   });
   const [settingsStatus, setSettingsStatus] = useState<
     "idle" | "saving" | "saved" | "error"
@@ -6300,6 +6250,14 @@ function App() {
     courseName: string;
     isPlanning: boolean;
     studentIds: string[];
+    // Section owner (present for support sections; for own sections this is
+    // the caller). Used to attribute accommodation logs to the correct owner
+    // when the caller is logging via Section Support Access.
+    teacherStaffId?: number;
+    teacherName?: string;
+    // True when this section belongs to another teacher and the caller has
+    // been granted support access to it by the ESE Coordinator.
+    support?: boolean;
   }
   const [mySections, setMySections] = useState<MySection[]>([]);
   const periodRoster: Record<string, string[]> = Object.fromEntries(
@@ -6400,7 +6358,43 @@ function App() {
       inUseCount: number;
     }>
   >([]);
-  const [eseTab, setEseTab] = useState<"students" | "master">("students");
+  const [eseTab, setEseTab] = useState<
+    "students" | "master" | "support"
+  >("students");
+  // Section Support Access assignments (coordinator grants a support teacher
+  // access to another teacher's whole section for a period).
+  interface SupportAssignment {
+    id: number;
+    teacherStaffId: number;
+    period: number;
+    supportStaffId: number;
+    teacherName: string;
+    supportName: string;
+    courseName: string | null;
+    assignedByName: string | null;
+    assignedAt: string;
+    notes: string | null;
+  }
+  const [supportAssignments, setSupportAssignments] = useState<
+    SupportAssignment[]
+  >([]);
+  const [supportOwnerId, setSupportOwnerId] = useState<number | null>(null);
+  const [supportPeriod, setSupportPeriod] = useState<number | "">("");
+  const [supportStaffId, setSupportStaffId] = useState<number | null>(null);
+  const [sectSupNotes, setSectSupNotes] = useState("");
+  const [supportMsg, setSupportMsg] = useState("");
+  const loadSupportAssignments = async () => {
+    try {
+      const res = await authFetch("/api/support-assignments", {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as SupportAssignment[];
+      setSupportAssignments(Array.isArray(data) ? data : []);
+    } catch {
+      setSupportAssignments([]);
+    }
+  };
   const [eseStudentSearch, setEseStudentSearch] = useState("");
   const [eseStudentId, setEseStudentId] = useState("");
   const [eseStudentAccs, setEseStudentAccs] = useState<
@@ -7945,6 +7939,10 @@ function App() {
               : false,
           gpaEnabled:
             typeof data.gpaEnabled === "boolean" ? data.gpaEnabled : false,
+          teacherFamilyMessagingEnabled:
+            typeof data.teacherFamilyMessagingEnabled === "boolean"
+              ? data.teacherFamilyMessagingEnabled
+              : false,
           featureFamilyComm: boolOrTrue(data.featureFamilyComm),
           featurePbis: boolOrTrue(data.featurePbis),
           featureSchoolStore: boolOrTrue(data.featureSchoolStore),
@@ -7991,6 +7989,24 @@ function App() {
           superFeatureAcademicEvidence: boolOrTrue(
             data.superFeatureAcademicEvidence,
           ),
+          featureDataChats: boolOrTrue(data.featureDataChats),
+          superFeatureDataChats: boolOrTrue(data.superFeatureDataChats),
+          featurePickup: boolOrTrue(data.featurePickup),
+          superFeaturePickup: boolOrTrue(data.superFeaturePickup),
+          featureTicketing: boolOrTrue(data.featureTicketing),
+          superFeatureTicketing: boolOrTrue(data.superFeatureTicketing),
+          featureTours: boolOrTrue(data.featureTours),
+          superFeatureTours: boolOrTrue(data.superFeatureTours),
+          featureEsign: boolOrTrue(data.featureEsign),
+          superFeatureEsign: boolOrTrue(data.superFeatureEsign),
+          featureBrainLab: boolOrTrue(data.featureBrainLab),
+          superFeatureBrainLab: boolOrTrue(data.superFeatureBrainLab),
+          featureGradebook: boolOrTrue(data.featureGradebook),
+          superFeatureGradebook: boolOrTrue(data.superFeatureGradebook),
+          featureSchoolGrade: boolOrTrue(data.featureSchoolGrade),
+          superFeatureSchoolGrade: boolOrTrue(data.superFeatureSchoolGrade),
+          featureSafetyPlans: boolOrTrue(data.featureSafetyPlans),
+          superFeatureSafetyPlans: boolOrTrue(data.superFeatureSafetyPlans),
         }),
       )
       .catch((err) => console.error("Failed to load school settings:", err));
@@ -8097,6 +8113,10 @@ function App() {
             : false,
         gpaEnabled:
           typeof data.gpaEnabled === "boolean" ? data.gpaEnabled : false,
+        teacherFamilyMessagingEnabled:
+          typeof data.teacherFamilyMessagingEnabled === "boolean"
+            ? data.teacherFamilyMessagingEnabled
+            : false,
         featureFamilyComm: boolOrTrue(data.featureFamilyComm),
         featurePbis: boolOrTrue(data.featurePbis),
         featureSchoolStore: boolOrTrue(data.featureSchoolStore),
@@ -8139,6 +8159,24 @@ function App() {
         superFeatureAcademicEvidence: boolOrTrue(
           data.superFeatureAcademicEvidence,
         ),
+        featureDataChats: boolOrTrue(data.featureDataChats),
+        superFeatureDataChats: boolOrTrue(data.superFeatureDataChats),
+        featurePickup: boolOrTrue(data.featurePickup),
+        superFeaturePickup: boolOrTrue(data.superFeaturePickup),
+        featureTicketing: boolOrTrue(data.featureTicketing),
+        superFeatureTicketing: boolOrTrue(data.superFeatureTicketing),
+        featureTours: boolOrTrue(data.featureTours),
+        superFeatureTours: boolOrTrue(data.superFeatureTours),
+        featureEsign: boolOrTrue(data.featureEsign),
+        superFeatureEsign: boolOrTrue(data.superFeatureEsign),
+        featureBrainLab: boolOrTrue(data.featureBrainLab),
+        superFeatureBrainLab: boolOrTrue(data.superFeatureBrainLab),
+        featureGradebook: boolOrTrue(data.featureGradebook),
+        superFeatureGradebook: boolOrTrue(data.superFeatureGradebook),
+        featureSchoolGrade: boolOrTrue(data.featureSchoolGrade),
+        superFeatureSchoolGrade: boolOrTrue(data.superFeatureSchoolGrade),
+        featureSafetyPlans: boolOrTrue(data.featureSafetyPlans),
+        superFeatureSafetyPlans: boolOrTrue(data.superFeatureSafetyPlans),
       });
       setSettingsStatus("saved");
       setTimeout(() => setSettingsStatus("idle"), 2000);
@@ -8818,6 +8856,29 @@ function App() {
       isElevated && dailyTeacherId != null && dailyTeacherId !== authUser?.id
         ? dailyTeacherId
         : null;
+    // Section Support Access: when the selected period maps to a section the
+    // caller SUPPORTS (owned by another teacher) rather than one they own,
+    // send `sectionTeacherStaffId` so the server resolves the owner's section
+    // while keeping the log attributed to the acting support teacher. Own
+    // sections take precedence, and this is mutually exclusive with the
+    // elevated `actingAsStaffId` delegation path.
+    let sectionTeacherStaffId: number | null = null;
+    if (actingAsStaffId == null) {
+      const ownSection = mySections.find(
+        (s) => s.period === periodNum && !s.support,
+      );
+      const supportSection = mySections.find(
+        (s) => s.period === periodNum && s.support,
+      );
+      if (
+        !ownSection &&
+        supportSection &&
+        supportSection.teacherStaffId != null &&
+        supportSection.teacherStaffId !== authUser?.id
+      ) {
+        sectionTeacherStaffId = supportSection.teacherStaffId;
+      }
+    }
     setDailySubmitMsg("Submitting...");
     try {
       const res = await authFetch(
@@ -8832,6 +8893,9 @@ function App() {
             entries,
             ...(actingAsStaffId != null
               ? { actingAsStaffId }
+              : {}),
+            ...(sectionTeacherStaffId != null
+              ? { sectionTeacherStaffId }
               : {}),
           }),
         },
@@ -10076,7 +10140,7 @@ function App() {
     const kinds: ImportKind[] = [];
     if (capImportGrades) kinds.push("gradebook");
     if (capImportFast)
-      kinds.push("fast_scores", "fast_florida", "fast_prior_year");
+      kinds.push("fast_scores", "fast_florida", "bq_l25");
     if (capImportIready) kinds.push("assessments");
     return kinds;
   }, [capImportGrades, capImportFast, capImportIready]);
@@ -10849,6 +10913,14 @@ function App() {
       label: "Teacher Roster",
       description: "Your class lists, FAST scores, and student quick actions.",
       emoji: "👥",
+      group: "quick",
+    });
+    add(!isNonExemptOnly, {
+      key: "coverageReport",
+      label: "Coverage Report",
+      description:
+        "Your per-benchmark effectiveness: coverage, mastery vs peers, PM growth, and a send-out equity check.",
+      emoji: "📈",
       group: "quick",
     });
     add(!isNonExemptOnly, {
@@ -11645,6 +11717,11 @@ function App() {
           canAccessMtssHub ||
           isDistrictAdmin ||
           isDean ||
+          // Pullout Notifications (canManageSettings) now lives in this group,
+          // so a settings-manager must be able to see the group even without
+          // an MTSS/behavior capability. Keep this a superset of the item
+          // gates rendered inside.
+          canManageSettings ||
           (canManageBehaviorLists && !isBehaviorSpec);
         const showSpecialPrograms =
           effectiveFeatures.Accommodations || isEseCoord;
@@ -11680,23 +11757,21 @@ function App() {
         // People (Teacher Roster) is always rendered below the divider, so
         // the EKG always has content beneath it — render unconditionally.
         //
-        // Phase 4b — the pinnable Quick Access master list. Each item keeps
-        // its EXACT prior gate; `canShow` additionally folds in the two
-        // renderNavItem internal exclusions (non-exempt allowlist +
-        // front-office pullout) so the Edit Favorites panel only ever
-        // offers items that would actually render. NO-ORPHAN INVARIANT: each
-        // pinnable item's canShow MUST imply its Tile Home tile is visible
-        // (the always-on header launcher is the permanent home), so unpinning
-        // never removes the only entry point. The per-item gates below match
-        // the Tile Home `add(...)` gates exactly (hallPasses included).
+        // The Quick Access master list. Each item keeps its EXACT prior gate;
+        // `canShow` additionally folds in the two renderNavItem internal
+        // exclusions (non-exempt allowlist + front-office pullout) so only
+        // items that would actually render are ever shown. Every item's
+        // canShow implies its Tile Home tile is visible (the always-on header
+        // launcher is the permanent home), and the per-item gates below match
+        // the Tile Home `add(...)` gates exactly (hallPasses included). All
+        // staff at a school see this same set in this fixed order.
         const quickAccessBase: Array<NavSection & { canShow: boolean }> = [
           {
             key: "hallPasses",
             label: "Hall Passes",
             icon: IconDoor,
             // Parity with the Tile Home launcher gate (add(HallPasses !== false))
-            // so every pinnable item that CAN be pinned also has a visible
-            // permanent Tile Home tile — unpinning can never orphan it.
+            // so every visible item also has a permanent Tile Home tile.
             canShow: effectiveFeatures.HallPasses !== false,
           },
           { key: "teacherRoster", label: "Teacher Roster", icon: IconUser, canShow: true },
@@ -11732,7 +11807,7 @@ function App() {
             canShow: effectiveFeatures.Accommodations,
           },
         ];
-        const quickAccessPinnable = quickAccessBase.map((it) => ({
+        const quickAccessItems = quickAccessBase.map((it) => ({
           ...it,
           canShow:
             it.canShow &&
@@ -11745,17 +11820,15 @@ function App() {
                 Request Pullout and PBIS Points were promoted here per
                 user request — they're high-frequency teacher actions
                 so we surface them above the themed accordions. */}
-            {/* Quick Access is now a per-user pinnable favorites strip
-                (Phase 4b). Every pinnable destination has a permanent home
-                outside this strip — a themed accordion (Phase 4a) or the
-                always-on Tile Home launcher — and each pin gate matches its
-                Tile Home tile gate, so unpinning never orphans an item.
-                The smart/special items below (AST, Comp Time, Verify
-                Pullout, Pickup, Spotlight) are NOT pinnable and follow. */}
+            {/* Quick Access is a fixed shortcut strip — all staff at a school
+                see the same items (driven by enabled features + role gates),
+                in one canonical order. Every destination also has a permanent
+                home outside this strip (a themed accordion or the always-on
+                Tile Home launcher). The smart/special items below (AST, Comp
+                Time, Verify Pullout, Pickup, Spotlight) follow. */}
             <QuickAccessFavorites
               key={`${sidebarUserId}-quickaccess`}
-              userId={sidebarUserId}
-              items={quickAccessPinnable}
+              items={quickAccessItems}
               renderItem={renderNavItem}
             />
             {/* AST (Alternate Schedule Time) — visible to every staff
@@ -12109,6 +12182,17 @@ function App() {
                     label: "Request Pullout",
                     icon: IconClipboard,
                   })}
+                {/* Pullout Notifications — admin config for who receives
+                    dispatch alerts when a pullout is requested. Moved here
+                    from the Family group: it notifies STAFF, not families, so
+                    it belongs with the pullout workflow. Gate = canManageSettings
+                    (mirrors the page render). */}
+                {canManageSettings &&
+                  renderNavItem({
+                    key: "pulloutNotifications",
+                    label: "Pullout Notifications",
+                    icon: IconClipboard,
+                  })}
                 {isBehaviorSpec &&
                   behaviorSpecNavSections.map(renderNavItem)}
                 {isBehaviorSpec &&
@@ -12197,7 +12281,7 @@ function App() {
                 {isEseCoord && eseNavSections.map(renderNavItem)}
               </NavGroup>
             )}
-            {(effectiveFeatures.FamilyComm || canManageSettings) && (
+            {effectiveFeatures.FamilyComm && (
               <NavGroup
                 key={`${sidebarUserId}-family`}
                 id="family"
@@ -12212,12 +12296,30 @@ function App() {
                     icon: IconUser,
                   })}
                 {effectiveFeatures.FamilyComm &&
-                  isCoreTeamMember &&
+                  (isCoreTeamMember ||
+                    schoolSettings.teacherFamilyMessagingEnabled) &&
                   renderNavItem({
                     key: "familyMessages",
                     label: "Family Messages",
                     icon: IconUser,
                   })}
+              </NavGroup>
+            )}
+            {/* Family (Admin) — admin/Core-Team-facing family tools (outreach
+                campaigns + configuration) split out of the Family group so a
+                plain teacher's Family section stays lean (Family Communication
+                + Family Messages). The wrapper gate is the EXACT disjunction of
+                the item gates below so the group is never rendered empty. */}
+            {((effectiveFeatures.FamilyComm && isCoreTeamMember) ||
+              canManageSettings ||
+              (isCoreTeamMember && dataChatsVis.visible)) && (
+              <NavGroup
+                key={`${sidebarUserId}-familyAdmin`}
+                id="familyAdmin"
+                label="Family (Admin)"
+                userId={sidebarUserId}
+                containsActive={groupContainsActive("familyAdmin", activeSection)}
+              >
                 {effectiveFeatures.FamilyComm &&
                   isCoreTeamMember &&
                   renderNavItem({
@@ -12227,9 +12329,9 @@ function App() {
                   })}
                 {/* Call Campaign — Core Team launches a "call all families"
                     outreach campaign (each student owned by their
-                    responsible-period teacher). Moved here from the top of
-                    PBIS Points; it logs to the Communication Log and is a
-                    family-comms tool. Same gate as Family Messages. */}
+                    responsible-period teacher). It logs to the Communication
+                    Log and is a family-comms tool. Same gate as Family
+                    Messages. */}
                 {effectiveFeatures.FamilyComm &&
                   isCoreTeamMember &&
                   renderNavItem({
@@ -12274,12 +12376,6 @@ function App() {
                   renderNavItem({
                     key: "parentNotifications",
                     label: "Parent Notifications",
-                    icon: IconUser,
-                  })}
-                {canManageSettings &&
-                  renderNavItem({
-                    key: "pulloutNotifications",
-                    label: "Pullout Notifications",
                     icon: IconUser,
                   })}
               </NavGroup>
@@ -20037,7 +20133,10 @@ function App() {
         // re-slide every time they round-trip (Roster → Student
         // Profile → Roster). Closing the tab re-arms the gate, which
         // is the correct trigger for "device may now be mirrored".
-        <PrivacyGate sessionKey="teacherRoster">
+        <PrivacyGate
+          sessionKey="teacherRoster"
+          onBack={() => setActiveSection("hallPasses")}
+        >
         <TeacherRosterPage
           isCoreTeam={
             Boolean(authUser?.isSuperUser) ||
@@ -20079,7 +20178,10 @@ function App() {
         // flags, and safety-plan indicators that must never land on a
         // student-facing display. Visibility scoping (own roster vs school-
         // wide) is enforced server-side on every endpoint it calls.
-        <PrivacyGate sessionKey="studentLookup">
+        <PrivacyGate
+          sessionKey="studentLookup"
+          onBack={() => setActiveSection("hallPasses")}
+        >
           <StudentLookupPage
             onBack={() => setActiveSection("hallPasses")}
             // Dismissal-mode editor gate — mirrors canManageDismissal() in
@@ -20779,8 +20881,19 @@ function App() {
               type="button"
               onClick={() => setEseTab("master")}
               disabled={eseTab === "master"}
+              style={{ marginRight: "0.25rem" }}
             >
               Master Accommodations List
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEseTab("support");
+                loadSupportAssignments();
+              }}
+              disabled={eseTab === "support"}
+            >
+              Support Access
             </button>
           </div>
 
@@ -21350,7 +21463,7 @@ function App() {
               )}
               </details>
             </div>
-          ) : (
+          ) : eseTab === "master" ? (
             <div>
               <h3 style={{ marginTop: 0 }}>
                 Master Accommodations
@@ -21550,6 +21663,274 @@ function App() {
                 </tbody>
               </table>
             </div>
+          ) : (
+            (() => {
+              // Section Support Access — grant a support teacher (e.g. an ESE
+              // co-teacher) LOG-ONLY access to another teacher's whole section
+              // for a period. Support teachers can SEE those students and LOG
+              // accommodation delivery, but cannot edit the accommodation list.
+              const teacherOpts = Array.from(
+                new Map(
+                  allSections
+                    .filter((s) => !s.isPlanning)
+                    .map(
+                      (s) => [s.teacherStaffId, s.teacherName] as const,
+                    ),
+                ).entries(),
+              )
+                .map(([id, name]) => ({ id, displayName: name }))
+                .sort((a, b) => a.displayName.localeCompare(b.displayName));
+              const ownerPeriods = Array.from(
+                new Set(
+                  allSections
+                    .filter(
+                      (s) =>
+                        !s.isPlanning &&
+                        s.teacherStaffId === supportOwnerId,
+                    )
+                    .map((s) => s.period),
+                ),
+              ).sort((a, b) => a - b);
+              const canGrant =
+                supportOwnerId != null &&
+                supportPeriod !== "" &&
+                supportStaffId != null &&
+                supportStaffId !== supportOwnerId;
+              const grant = async () => {
+                if (!canGrant) return;
+                setSupportMsg("Saving…");
+                try {
+                  const res = await authFetch("/api/support-assignments", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    credentials: "include",
+                    body: JSON.stringify({
+                      teacherStaffId: supportOwnerId,
+                      period: Number(supportPeriod),
+                      supportStaffId,
+                      notes: sectSupNotes.trim() || undefined,
+                    }),
+                  });
+                  if (!res.ok) {
+                    const t = await res.text().catch(() => "");
+                    throw new Error(t || `HTTP ${res.status}`);
+                  }
+                  setSupportMsg("Support access granted.");
+                  setSectSupNotes("");
+                  setSupportPeriod("");
+                  setSupportStaffId(null);
+                  loadSupportAssignments();
+                } catch (err) {
+                  setSupportMsg(
+                    `Failed: ${
+                      err instanceof Error ? err.message : String(err)
+                    }`,
+                  );
+                }
+              };
+              const removeGrant = async (id: number) => {
+                try {
+                  const res = await authFetch(
+                    `/api/support-assignments/${id}`,
+                    { method: "DELETE", credentials: "include" },
+                  );
+                  if (!res.ok && res.status !== 404) {
+                    throw new Error(`HTTP ${res.status}`);
+                  }
+                  loadSupportAssignments();
+                } catch (err) {
+                  setSupportMsg(
+                    `Failed to remove: ${
+                      err instanceof Error ? err.message : String(err)
+                    }`,
+                  );
+                }
+              };
+              return (
+                <div>
+                  <h3 style={{ marginTop: 0 }}>Section Support Access</h3>
+                  <p style={{ marginTop: 0, color: "#475569" }}>
+                    Give a support teacher (e.g. an ESE co-teacher)
+                    access to another teacher's whole class section for a
+                    period. They can see those students across the app and
+                    log accommodation delivery, including small-group and
+                    bulk. They cannot edit the accommodation list.
+                  </p>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr 1fr",
+                      gap: "0.75rem",
+                      alignItems: "start",
+                      maxWidth: "56rem",
+                      marginBottom: "0.75rem",
+                    }}
+                  >
+                    <label>
+                      <div style={{ fontSize: "0.85rem", fontWeight: 600 }}>
+                        Section teacher (owner)
+                      </div>
+                      <TeacherPicker
+                        teachers={teacherOpts}
+                        value={supportOwnerId}
+                        onChange={(id) => {
+                          setSupportOwnerId(id);
+                          setSupportPeriod("");
+                        }}
+                        allowEmpty
+                        emptyLabel="Select teacher…"
+                        showDeptFilter
+                      />
+                    </label>
+                    <label>
+                      <div style={{ fontSize: "0.85rem", fontWeight: 600 }}>
+                        Period
+                      </div>
+                      <select
+                        value={supportPeriod === "" ? "" : supportPeriod}
+                        onChange={(e) =>
+                          setSupportPeriod(
+                            e.target.value === ""
+                              ? ""
+                              : Number(e.target.value),
+                          )
+                        }
+                        disabled={supportOwnerId == null}
+                        style={{ width: "100%", padding: "0.4rem" }}
+                      >
+                        <option value="">Select period…</option>
+                        {ownerPeriods.map((p) => (
+                          <option key={p} value={p}>
+                            Period {p}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <div style={{ fontSize: "0.85rem", fontWeight: 600 }}>
+                        Support teacher
+                      </div>
+                      <TeacherPicker
+                        teachers={teacherOpts}
+                        value={supportStaffId}
+                        onChange={setSupportStaffId}
+                        allowEmpty
+                        emptyLabel="Select teacher…"
+                        showDeptFilter
+                      />
+                    </label>
+                  </div>
+                  <label style={{ display: "block", maxWidth: "56rem" }}>
+                    <div style={{ fontSize: "0.85rem", fontWeight: 600 }}>
+                      Notes (optional)
+                    </div>
+                    <input
+                      type="text"
+                      value={sectSupNotes}
+                      onChange={(e) => setSectSupNotes(e.target.value)}
+                      placeholder="e.g. Co-teaches ELA support block"
+                      style={{ width: "100%", padding: "0.4rem" }}
+                    />
+                  </label>
+                  <div
+                    style={{
+                      marginTop: "0.75rem",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.75rem",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={grant}
+                      disabled={!canGrant}
+                      style={{
+                        background: canGrant ? "#0d9488" : "#94a3b8",
+                        color: "#fff",
+                        border: "none",
+                        padding: "0.45rem 1.1rem",
+                        borderRadius: 4,
+                        fontWeight: 600,
+                        cursor: canGrant ? "pointer" : "not-allowed",
+                      }}
+                    >
+                      Grant access
+                    </button>
+                    {supportMsg && (
+                      <span style={{ fontSize: "0.85rem", color: "#475569" }}>
+                        {supportMsg}
+                      </span>
+                    )}
+                  </div>
+
+                  <h4 style={{ marginBottom: "0.4rem" }}>
+                    Current assignments
+                  </h4>
+                  {supportAssignments.length === 0 ? (
+                    <div style={{ color: "#64748b" }}>
+                      No support access granted yet.
+                    </div>
+                  ) : (
+                    <table
+                      style={{
+                        width: "100%",
+                        borderCollapse: "collapse",
+                        fontSize: "0.9rem",
+                      }}
+                    >
+                      <thead>
+                        <tr style={{ textAlign: "left" }}>
+                          <th style={{ padding: "0.4rem" }}>Support teacher</th>
+                          <th style={{ padding: "0.4rem" }}>Section owner</th>
+                          <th style={{ padding: "0.4rem" }}>Period</th>
+                          <th style={{ padding: "0.4rem" }}>Class</th>
+                          <th style={{ padding: "0.4rem" }}>Notes</th>
+                          <th style={{ padding: "0.4rem" }}></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {supportAssignments.map((a) => (
+                          <tr
+                            key={a.id}
+                            style={{ borderTop: "1px solid #e2e8f0" }}
+                          >
+                            <td style={{ padding: "0.4rem" }}>
+                              {a.supportName || `#${a.supportStaffId}`}
+                            </td>
+                            <td style={{ padding: "0.4rem" }}>
+                              {a.teacherName || `#${a.teacherStaffId}`}
+                            </td>
+                            <td style={{ padding: "0.4rem" }}>{a.period}</td>
+                            <td style={{ padding: "0.4rem" }}>
+                              {a.courseName ?? "—"}
+                            </td>
+                            <td style={{ padding: "0.4rem" }}>
+                              {a.notes ?? ""}
+                            </td>
+                            <td style={{ padding: "0.4rem" }}>
+                              <button
+                                type="button"
+                                onClick={() => removeGrant(a.id)}
+                                style={{
+                                  background: "#dc2626",
+                                  color: "#fff",
+                                  border: "none",
+                                  padding: "0.25rem 0.7rem",
+                                  borderRadius: 4,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                Remove
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              );
+            })()
           )}
         </section>
       )}
@@ -23409,6 +23790,13 @@ function App() {
           />
         )}
 
+      {activeSection === "coverageReport" && (
+        <CoverageReportDashboard
+          defaultTeacherId={authUser?.id ?? null}
+          onBack={() => setActiveSection("insights")}
+        />
+      )}
+
       {activeSection === "parentAccess" && canManageSettings && (
         <FeatureGate feature="parentPortal" label="Parent Portal">
           <ParentAccess />
@@ -23474,7 +23862,8 @@ function App() {
 
       {activeSection === "familyMessages" &&
         effectiveFeatures.FamilyComm &&
-        isCoreTeamMember && (
+        (isCoreTeamMember ||
+          schoolSettings.teacherFamilyMessagingEnabled) && (
           <FamilyMessagesHub
             grades={Array.from(new Set(students.map((s) => s.grade)))}
           />
@@ -24823,10 +25212,37 @@ function App() {
             pilotKey: "schoolGrade",
           },
         ];
+        // Feature dependency map — mirrors the `requires` / `recommends`
+        // edges in lib/featureLicensing.ts FEATURE_KEYS, keyed by this
+        // panel's PascalCase keys. `requires` = HARD (the feature is
+        // non-functional without the target); `recommends` = SOFT (works
+        // but degraded). Keep in lockstep with the server registry so the
+        // school-admin panel warns about the same couplings the SuperUser
+        // licensing editor blocks on.
+        const FEATURE_DEPS: Record<
+          string,
+          { requires?: string[]; recommends?: string[] }
+        > = {
+          SchoolStore: { requires: ["Pbis"] },
+          Gradebook: { requires: ["DataImports"] },
+          DataChats: { recommends: ["Academics"] },
+          SchoolGrade: { recommends: ["Academics"] },
+        };
+        // Friendly labels for dependency targets (some, e.g. Academics /
+        // Data Imports, aren't rows in this panel — they're district-level).
+        const DEP_LABELS: Record<string, string> = {
+          Pbis: "PBIS Points",
+          DataImports: "Data Imports",
+          Academics: "Academics",
+        };
         const ssRec = schoolSettings as Record<string, unknown>;
         const adminVal = (k: string): boolean => ssRec[`feature${k}`] !== false;
         const superVal = (k: string): boolean =>
           ssRec[`superFeature${k}`] !== false;
+        // A dependency target is satisfied only when it is EFFECTIVELY on
+        // (district-allowed AND school-enabled) — the same rule the runtime
+        // gate applies.
+        const effectiveVal = (k: string): boolean => superVal(k) && adminVal(k);
         return (
           <div className="card" style={{ marginTop: "1rem" }}>
             <h2 style={{ marginTop: 0 }}>School Features</h2>
@@ -24882,6 +25298,20 @@ function App() {
                 const sup = superVal(f.key);
                 const adm = adminVal(f.key);
                 const adminLocked = !sup; // SuperUser-off forces the admin checkbox off.
+                // Dependency check — only meaningful once this feature is
+                // effectively live (both gates on). Warns about targets that
+                // are off so admins aren't surprised that a live feature is
+                // silently broken (hard) or degraded (soft).
+                const deps = FEATURE_DEPS[f.key];
+                const featureLive = sup && adm;
+                const missingRequires =
+                  featureLive && deps?.requires
+                    ? deps.requires.filter((t) => !effectiveVal(t))
+                    : [];
+                const missingRecommends =
+                  featureLive && deps?.recommends
+                    ? deps.recommends.filter((t) => !effectiveVal(t))
+                    : [];
                 return (
                   <Fragment key={f.key}>
                     <div>
@@ -24891,6 +25321,39 @@ function App() {
                       >
                         {f.help}
                       </div>
+                      {missingRequires.length > 0 && (
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: "#b91c1c",
+                            marginTop: 2,
+                            fontWeight: 500,
+                          }}
+                        >
+                          ⚠ Requires{" "}
+                          {missingRequires
+                            .map((t) => DEP_LABELS[t] ?? t)
+                            .join(", ")}{" "}
+                          — turn{" "}
+                          {missingRequires.length > 1 ? "them" : "it"} on or
+                          this feature won&rsquo;t work.
+                        </div>
+                      )}
+                      {missingRecommends.length > 0 && (
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: "#b45309",
+                            marginTop: 2,
+                          }}
+                        >
+                          Works best with{" "}
+                          {missingRecommends
+                            .map((t) => DEP_LABELS[t] ?? t)
+                            .join(", ")}{" "}
+                          enabled.
+                        </div>
+                      )}
                     </div>
                     {isSuperUser && (
                       <input
@@ -25266,6 +25729,59 @@ function App() {
                     70–79 = 2, 60–69 = 1, below 60 = 0 — a simple average
                     over the current semester's graded courses. Requires a
                     Gradebook import (Data &amp; Integrations).
+                  </span>
+                </span>
+              </label>
+            )}
+            {Boolean(
+              authUser?.isSuperUser ||
+                authUser?.isDistrictAdmin ||
+                authUser?.isAdmin ||
+                authUser?.isBehaviorSpecialist ||
+                authUser?.isMtssCoordinator ||
+                authUser?.isSchoolPsychologist ||
+                authUser?.isCoreTeam ||
+                authUser?.isConfidentialSecretary,
+            ) && (
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: "0.5rem",
+                  padding: "0.6rem 0.75rem",
+                  border: "1px solid var(--border-subtle, #e2e8f0)",
+                  borderRadius: 6,
+                  background: "var(--surface-subtle, #f8fafc)",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={schoolSettings.teacherFamilyMessagingEnabled}
+                  onChange={(e) =>
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      teacherFamilyMessagingEnabled: e.target.checked,
+                    })
+                  }
+                  style={{ marginTop: "0.2rem" }}
+                />
+                <span style={{ display: "grid", gap: "0.15rem" }}>
+                  <span style={{ fontWeight: 600 }}>
+                    Let teachers send Family Messages to their own students
+                  </span>
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontSize: "0.85rem",
+                      fontWeight: "normal",
+                    }}
+                  >
+                    Off by default. When on, teachers can send a Family Message
+                    to the families of one of their own class periods, or to
+                    individual students hand-picked from their own roster.
+                    Teachers can never message the whole school, a grade, or a
+                    house — those stay Core Team only. The server enforces these
+                    limits regardless of what a client sends.
                   </span>
                 </span>
               </label>

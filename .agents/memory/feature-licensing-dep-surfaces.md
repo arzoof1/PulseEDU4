@@ -26,3 +26,21 @@ review surfaced another path. There are 3 toggle surfaces, not 1.
 `override ?? plan default`) or it false-flags features enabled via the
 plan with no override row. `resetAll` is intentionally unguarded — it only
 reverts to plan defaults, which `PlanEditorModal` already guards.
+
+**4th surface — School Features panel (`App.tsx`, `settingsTile ==="schoolFeatures"`):**
+the school-admin two-tier panel (super_feature_ "Allowed" + feature_
+"Enabled") now surfaces the SAME deps as inline warnings (red=requires,
+amber=recommends), computed only when the feature is EFFECTIVELY live
+(`super && admin`) and a dep target's effective state is off. It WARNS,
+does not block (the panel is a plain save, not a plan editor). The dep map
+is a small hardcoded `FEATURE_DEPS` mirror (PascalCase keys) — the drift
+risk is accepted (must stay in lockstep with `FEATURE_KEYS`); dep targets
+`academics`/`dataImports` aren't rows here but their super/admin values ARE
+in `schoolSettings` state so effective checks still work.
+
+**Audit note (9 July-2026 modules):** dataChats/schoolGrade recommend
+academics, gradebook requires dataImports — already correct. pickup,
+ticketing, tours, esign, brainLab, safetyPlans are genuinely standalone
+(verified brainLab uses its OWN groups, not behaviorSpecialist; ticketing
+email is standalone, portal delivery is one optional channel). No hidden
+cascades — plan-apply blind-writes super_feature_ booleans by design.

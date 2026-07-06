@@ -2823,7 +2823,7 @@ function Report() {
         {s.byGuide.length === 0 ? (
           <div style={{ color: "#94a3b8" }}>No guide attributed yet.</div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
+          <div className="sticky-scroll">
             <table
               style={{
                 width: "100%",
