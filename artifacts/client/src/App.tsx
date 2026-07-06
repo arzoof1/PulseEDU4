@@ -4024,9 +4024,17 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     "verifyPullouts",
     "issDashboard",
     "behaviorReview",
+    // Pullout Notifications moved here from the Family group — it configures
+    // STAFF dispatch alerts for pullout requests, so it belongs with the
+    // pullout workflow (requestPullout/verifyPullouts) rather than Family.
+    "pulloutNotifications",
   ],
   specialPrograms: ["accommodations", "ese"],
-  family: ["student", "familyMessages", "pulseDnaStudio", "parentAccess", "callCampaign", "dataChats", "parentNotifications", "pulloutNotifications"],
+  // Family = parent/teacher-facing everyday comms. familyAdmin = the
+  // admin/Core-Team-facing family tools (outreach campaigns + config) split
+  // out so a plain teacher's Family section stays short.
+  family: ["student", "familyMessages"],
+  familyAdmin: ["pulseDnaStudio", "parentAccess", "callCampaign", "dataChats", "parentNotifications"],
   people: ["teacherRoster", "staffRoles"],
   // hallPassMgmt is reached via the Hall Passes admin tools; it has no
   // dedicated nav item so we anchor it to School Admin so the sidebar
@@ -11591,6 +11599,11 @@ function App() {
           canAccessMtssHub ||
           isDistrictAdmin ||
           isDean ||
+          // Pullout Notifications (canManageSettings) now lives in this group,
+          // so a settings-manager must be able to see the group even without
+          // an MTSS/behavior capability. Keep this a superset of the item
+          // gates rendered inside.
+          canManageSettings ||
           (canManageBehaviorLists && !isBehaviorSpec);
         const showSpecialPrograms =
           effectiveFeatures.Accommodations || isEseCoord;
@@ -12051,6 +12064,17 @@ function App() {
                     label: "Request Pullout",
                     icon: IconClipboard,
                   })}
+                {/* Pullout Notifications — admin config for who receives
+                    dispatch alerts when a pullout is requested. Moved here
+                    from the Family group: it notifies STAFF, not families, so
+                    it belongs with the pullout workflow. Gate = canManageSettings
+                    (mirrors the page render). */}
+                {canManageSettings &&
+                  renderNavItem({
+                    key: "pulloutNotifications",
+                    label: "Pullout Notifications",
+                    icon: IconClipboard,
+                  })}
                 {isBehaviorSpec &&
                   behaviorSpecNavSections.map(renderNavItem)}
                 {isBehaviorSpec &&
@@ -12139,7 +12163,7 @@ function App() {
                 {isEseCoord && eseNavSections.map(renderNavItem)}
               </NavGroup>
             )}
-            {(effectiveFeatures.FamilyComm || canManageSettings) && (
+            {effectiveFeatures.FamilyComm && (
               <NavGroup
                 key={`${sidebarUserId}-family`}
                 id="family"
@@ -12161,6 +12185,23 @@ function App() {
                     label: "Family Messages",
                     icon: IconUser,
                   })}
+              </NavGroup>
+            )}
+            {/* Family (Admin) — admin/Core-Team-facing family tools (outreach
+                campaigns + configuration) split out of the Family group so a
+                plain teacher's Family section stays lean (Family Communication
+                + Family Messages). The wrapper gate is the EXACT disjunction of
+                the item gates below so the group is never rendered empty. */}
+            {((effectiveFeatures.FamilyComm && isCoreTeamMember) ||
+              canManageSettings ||
+              (isCoreTeamMember && dataChatsVis.visible)) && (
+              <NavGroup
+                key={`${sidebarUserId}-familyAdmin`}
+                id="familyAdmin"
+                label="Family (Admin)"
+                userId={sidebarUserId}
+                containsActive={groupContainsActive("familyAdmin", activeSection)}
+              >
                 {effectiveFeatures.FamilyComm &&
                   isCoreTeamMember &&
                   renderNavItem({
@@ -12170,9 +12211,9 @@ function App() {
                   })}
                 {/* Call Campaign — Core Team launches a "call all families"
                     outreach campaign (each student owned by their
-                    responsible-period teacher). Moved here from the top of
-                    PBIS Points; it logs to the Communication Log and is a
-                    family-comms tool. Same gate as Family Messages. */}
+                    responsible-period teacher). It logs to the Communication
+                    Log and is a family-comms tool. Same gate as Family
+                    Messages. */}
                 {effectiveFeatures.FamilyComm &&
                   isCoreTeamMember &&
                   renderNavItem({
@@ -12217,12 +12258,6 @@ function App() {
                   renderNavItem({
                     key: "parentNotifications",
                     label: "Parent Notifications",
-                    icon: IconUser,
-                  })}
-                {canManageSettings &&
-                  renderNavItem({
-                    key: "pulloutNotifications",
-                    label: "Pullout Notifications",
                     icon: IconUser,
                   })}
               </NavGroup>
