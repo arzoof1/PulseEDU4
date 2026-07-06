@@ -26,7 +26,7 @@ type ExportConfig = {
 const EXPORT_CONFIG: Record<ExportKind, ExportConfig> = {
   rosters: {
     cols: [
-      "student_id",
+      "local_sis_id",
       "first_name",
       "last_name",
       "grade",
@@ -38,25 +38,25 @@ const EXPORT_CONFIG: Record<ExportKind, ExportConfig> = {
       "ese",
       "is_504",
     ],
-    required: ["student_id", "first_name", "last_name", "grade"],
+    required: ["local_sis_id", "first_name", "last_name", "grade"],
     filters: ["grade"],
     supportsDistrict: false,
   },
   behavior: {
     cols: [
-      "student_id",
+      "local_sis_id",
       "note_type",
       "note_text",
       "staff_name",
       "created_at",
     ],
-    required: ["student_id", "note_text"],
+    required: ["local_sis_id", "note_text"],
     filters: ["grade", "date", "noteType"],
     supportsDistrict: false,
   },
   fast_scores: {
     cols: [
-      "student_id",
+      "local_sis_id",
       "subject",
       "pm1",
       "pm2",
@@ -64,19 +64,19 @@ const EXPORT_CONFIG: Record<ExportKind, ExportConfig> = {
       "prior_year_score",
       "prior_year_bq",
     ],
-    required: ["student_id", "subject"],
+    required: ["local_sis_id", "subject"],
     filters: ["grade", "subject"],
     supportsDistrict: false,
   },
   fast_prior_year: {
-    cols: ["student_id", "subject", "prior_year_score", "prior_year_bq"],
-    required: ["student_id", "subject", "prior_year_score"],
+    cols: ["local_sis_id", "subject", "prior_year_score", "prior_year_bq"],
+    required: ["local_sis_id", "subject", "prior_year_score"],
     filters: ["grade", "subject"],
     supportsDistrict: false,
   },
   assessments: {
     cols: [
-      "student_id",
+      "local_sis_id",
       "assessment_name",
       "score",
       "score_level",
@@ -84,7 +84,7 @@ const EXPORT_CONFIG: Record<ExportKind, ExportConfig> = {
       "source",
       "school_code",
     ],
-    required: ["student_id", "assessment_name", "administered_at"],
+    required: ["local_sis_id", "assessment_name", "administered_at"],
     filters: ["grade", "date", "assessmentName"],
     supportsDistrict: true,
   },
@@ -282,8 +282,9 @@ export default function DataExportPanel({
       <h2 style={{ marginTop: 0 }}>Export data</h2>
       <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
         Download your school's current data as a CSV. Use filters to narrow
-        the rows and the column picker to slim the file. The CSV uses the
-        same headers the importer expects so you can edit and re-upload.
+        the rows and the column picker to slim the file. Students are
+        identified by your district Local SIS ID (the state FLEID is never
+        exported).
       </p>
 
       <div style={{ marginTop: "1rem" }}>

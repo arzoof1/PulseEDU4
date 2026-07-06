@@ -1572,6 +1572,38 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
     ]);
   }
 
+  // FLEID boundary for downloads. Every kind emits the canonical student_id
+  // (the FLEID, e.g. "FL000008101387") in column 0. Exported files must NEVER
+  // carry the FLEID — translate it to the district-friendly Local SIS ID
+  // (school-scoped) and relabel the header. Students with no Local SIS ID on
+  // file emit a blank cell. This ONLY rewrites the export payload; the import
+  // path and its student_id matching are intentionally left untouched.
+  if (headers[0] === "student_id") {
+    if (rows.length > 0) {
+      const fleids = Array.from(
+        new Set(rows.map((r) => String(r[0] ?? "")).filter(Boolean)),
+      );
+      const sisById = new Map<string, string>();
+      if (fleids.length > 0) {
+        const sisRows = await db
+          .select({
+            studentId: studentsTable.studentId,
+            localSisId: studentsTable.localSisId,
+          })
+          .from(studentsTable)
+          .where(
+            and(
+              inArray(studentsTable.schoolId, schoolIds),
+              inArray(studentsTable.studentId, fleids),
+            )!,
+          );
+        for (const s of sisRows) sisById.set(s.studentId, s.localSisId ?? "");
+      }
+      for (const r of rows) r[0] = sisById.get(String(r[0] ?? "")) ?? "";
+    }
+    headers[0] = "local_sis_id";
+  }
+
   // Column projection. We always force-keep the importer's required
   // columns even if the user un-checks them in the UI — otherwise the
   // CSV can't round-trip back through the importer. The required set
@@ -1579,11 +1611,11 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
   // config) because the export endpoint owns its own header order.
   if (columnsFilter && headers.length > 0) {
     const REQUIRED: Record<string, string[]> = {
-      rosters: ["student_id", "first_name", "last_name", "grade"],
-      behavior: ["student_id", "note_text"],
-      fast_scores: ["student_id", "subject"],
-      fast_prior_year: ["student_id", "subject", "prior_year_score"],
-      assessments: ["student_id", "assessment_name", "administered_at"],
+      rosters: ["local_sis_id", "first_name", "last_name", "grade"],
+      behavior: ["local_sis_id", "note_text"],
+      fast_scores: ["local_sis_id", "subject"],
+      fast_prior_year: ["local_sis_id", "subject", "prior_year_score"],
+      assessments: ["local_sis_id", "assessment_name", "administered_at"],
     };
     for (const r of REQUIRED[kindRaw] ?? []) columnsFilter.add(r);
     const keepIdx: number[] = [];
