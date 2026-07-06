@@ -504,3 +504,9 @@ id = "U5VdnmaO7NcthxdM8qbpQ"
 uri = "file://exports/PulseEDU-Feature-Dependency-Warnings-2026-07-02.pdf"
 type = "pdf"
 title = "Feature Dependency Warnings — Change Summary"
+
+[[outputs]]
+id = "bIVRUx1Y_7MAfv7JphU-D"
+uri = "file://docs/migration-report-2026-07-06.md"
+type = "text"
+title = "Migration Report — 2026-07-06 to present"
