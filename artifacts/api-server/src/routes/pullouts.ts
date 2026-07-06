@@ -119,6 +119,7 @@ function pulloutRoleLabels(s: StaffRow): string[] {
   if (s.isDean) labels.push("Dean");
   if (s.isMtssCoordinator) labels.push("MTSS Coordinator");
   if (s.isIssTeacher) labels.push("ISS Teacher");
+  if (s.isBehaviorSpecialist) labels.push("Behavior Specialist");
   return labels;
 }
 
