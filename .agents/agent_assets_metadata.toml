@@ -510,3 +510,9 @@ id = "bIVRUx1Y_7MAfv7JphU-D"
 uri = "file://docs/migration-report-2026-07-06.md"
 type = "text"
 title = "Migration Report — 2026-07-06 to present"
+
+[[outputs]]
+id = "Y7lWp2zHcG-Yi53SZh6E-"
+uri = "file://docs/migration-report-2026-07-06.pdf"
+type = "pdf"
+title = "Migration Report — 2026-07-06 to present (PDF)"
