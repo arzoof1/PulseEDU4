@@ -516,3 +516,9 @@ id = "Y7lWp2zHcG-Yi53SZh6E-"
 uri = "file://docs/migration-report-2026-07-06.pdf"
 type = "pdf"
 title = "Migration Report — 2026-07-06 to present (PDF)"
+
+[[outputs]]
+id = "03UUF_4mzwQCnt9i9ddxC"
+uri = "file://docs/kiosk-activation-architecture.pdf"
+type = "pdf"
+title = "Kiosk Activation — Architecture, Schema & Live-Debug Guide (PDF)"
