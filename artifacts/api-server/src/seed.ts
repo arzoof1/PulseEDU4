@@ -8409,6 +8409,106 @@ export async function ensureFeaturePlansSchema() {
 }
 
 // -----------------------------------------------------------------------------
+// Baseline L25 (bottom-quartile) FAST designation from prior-year PM3.
+//
+// At the start of a school year a student's L25 status can be derived from last
+// year's final FAST scale score (prior_year_score, i.e. prior-year PM3). We
+// auto-flag the lowest 25% per (current grade, subject) within each school as
+// prior_year_bq = TRUE so the roster BQ pill + the Insights Watch List light up
+// on day one — before any district L25 list exists.
+//
+// This is a BASELINE only. A district can later upload an official L25 list
+// through the `bq_l25` importer, which FULL-REPLACES prior_year_bq for the
+// subjects in the file (and snapshots the prior set for rollback). So the auto
+// baseline must never re-clobber a district upload:
+//   - Guarded by a per-(school, school_year) marker in app_one_shot_markers so
+//     it runs at most once per school-year.
+//   - If ANY prior_year_bq is already TRUE for the school's current year
+//     (a district upload OR a previous auto run already established L25), we
+//     take no action and just claim the marker.
+//   - If there is no prior_year_score data yet, we skip WITHOUT setting the
+//     marker so a later boot retries once prior-year PM3 is imported.
+// Provenance is distinguishable without a new column: auto rows keep
+// import_job_id = NULL; district-uploaded rows carry the importer's job id.
+// Bottom quartile = ntile(4) ordered ascending by prior_year_score, group 1.
+// -----------------------------------------------------------------------------
+export async function ensureL25BaselineFromPriorPm3(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS app_one_shot_markers (
+      name text PRIMARY KEY,
+      ran_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+
+  const schools = await db.execute<{ id: number }>(sql`SELECT id FROM schools`);
+  for (const { id: schoolId } of schools.rows) {
+    const sy = await resolveCurrentFastYear(schoolId);
+    const marker = `l25_baseline_${schoolId}_${sy}`;
+
+    const existing = await db.execute<{ name: string }>(
+      sql`SELECT name FROM app_one_shot_markers WHERE name = ${marker}`,
+    );
+    if (existing.rows.length > 0) continue;
+
+    // L25 already established for this school-year (district upload or a prior
+    // auto run) — claim the marker and leave the existing designation intact.
+    const already = await db.execute<{ n: number }>(sql`
+      SELECT COUNT(*)::int AS n
+        FROM student_fast_scores
+       WHERE school_id = ${schoolId}
+         AND school_year = ${sy}
+         AND is_historical = FALSE
+         AND prior_year_bq = TRUE
+    `);
+    if ((already.rows[0]?.n ?? 0) > 0) {
+      await db.execute(
+        sql`INSERT INTO app_one_shot_markers (name) VALUES (${marker}) ON CONFLICT DO NOTHING`,
+      );
+      continue;
+    }
+
+    // No prior-year PM3 to rank on yet — retry on a later boot (no marker).
+    const hasPrior = await db.execute<{ n: number }>(sql`
+      SELECT COUNT(*)::int AS n
+        FROM student_fast_scores
+       WHERE school_id = ${schoolId}
+         AND school_year = ${sy}
+         AND is_historical = FALSE
+         AND prior_year_score IS NOT NULL
+    `);
+    if ((hasPrior.rows[0]?.n ?? 0) === 0) continue;
+
+    // Flag the lowest quartile per (current grade, subject) by prior-year PM3.
+    await db.execute(sql`
+      WITH ranked AS (
+        SELECT fs.id,
+               ntile(4) OVER (
+                 PARTITION BY st.grade, fs.subject
+                 ORDER BY fs.prior_year_score ASC
+               ) AS q
+          FROM student_fast_scores fs
+          JOIN students st
+            ON st.school_id = fs.school_id
+           AND st.student_id = fs.student_id
+         WHERE fs.school_id = ${schoolId}
+           AND fs.school_year = ${sy}
+           AND fs.is_historical = FALSE
+           AND fs.prior_year_score IS NOT NULL
+      )
+      UPDATE student_fast_scores fs
+         SET prior_year_bq = TRUE, updated_at = now()
+        FROM ranked
+       WHERE fs.id = ranked.id
+         AND ranked.q = 1
+    `);
+
+    await db.execute(
+      sql`INSERT INTO app_one_shot_markers (name) VALUES (${marker}) ON CONFLICT DO NOTHING`,
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Hall pass kiosk activation cards (Phase 1).
 //
 // Adds the per-teacher enrollment-token table and the provenance /

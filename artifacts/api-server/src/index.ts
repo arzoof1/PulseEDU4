@@ -10,6 +10,7 @@ import {
   seedEligibilityForSchool1,
   seedFastScoresIfEmpty,
   seedHistoricalFastIfEmpty,
+  ensureL25BaselineFromPriorPm3,
   seedHousesIfEmpty,
   seedIreadyAndSciIfEmpty,
   seedEngagementEventsIfEmpty,
@@ -174,6 +175,11 @@ async function runSeed(): Promise<void> {
   // (student,subject,year) combo that already exists, so it never duplicates
   // or clobbers real current-year or legitimately-imported historical rows.
   await seedHistoricalFastIfEmpty();
+  // Baseline L25 (bottom-quartile) auto-designation from prior-year PM3
+  // scores. Idempotent per (school, school_year); never re-clobbers a district
+  // L25 upload. Runs after prior-year FAST is present so it has a score to rank
+  // on. See ensureL25BaselineFromPriorPm3 for the marker/guard rationale.
+  await ensureL25BaselineFromPriorPm3();
   // iReady AP1/AP2/AP3 (K-8) + SCI Benchmark 1/2/3 (G6-12) demo data
   // landed in the generic assessments table. Per-school + per-source
   // skip-if-non-empty so re-runs are a near-noop.
