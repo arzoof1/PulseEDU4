@@ -15,7 +15,6 @@ import {
 import { eq, and, or, ilike } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { getVisibleStudentIds } from "./insights.js";
-import { canViewFastHistory } from "../lib/coreTeam.js";
 import {
   placePmSet,
   placeOnChart,
@@ -315,15 +314,15 @@ router.put(
 // ---------------------------------------------------------------------------
 // GET /api/student-lookup/:studentId/fast-history
 //
-// Admin / Core-Team (or an admin-delegated `capViewFastHistory` holder)
-// multi-year FAST table for one student: the CURRENT year as the top anchor
+// Multi-year FAST table for one student: the CURRENT year as the top anchor
 // row plus every seeded/imported historical year (PM1/PM2/PM3), placed on the
-// grade the student was in THAT year. Deliberately NOT surfaced in the teacher
-// roster view, parent portal, or HeartBEAT.
+// grade the student was in THAT year. Powers the Teacher Roster "PM3 history"
+// book-icon drawer. Not surfaced in the parent portal or HeartBEAT.
 //
-// Gates, in order: requireStaff → canViewFastHistory (role/cap) → same
-// getVisibleStudentIds visibility set as the rest of this router. FLEID is
-// never returned — the only student id echoed is localSisId.
+// Gates, in order: requireStaff → same getVisibleStudentIds visibility set as
+// the rest of this router. A classroom teacher is therefore limited to their
+// own roster + trusted-adult set; admins / Core Team get the school-wide set.
+// FLEID is never returned — the only student id echoed is localSisId.
 // ---------------------------------------------------------------------------
 type PillPlacement = {
   score: number;
@@ -345,14 +344,11 @@ router.get(
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
       .staff;
 
-    // Role / capability gate. Admin + Core Team implicitly; otherwise the
-    // admin-only-assignable capViewFastHistory. This is the security boundary
-    // (client nav gating is bypassable).
-    if (!canViewFastHistory(staff)) {
-      res.status(403).json({ error: "Not authorized to view FAST history" });
-      return;
-    }
-
+    // No role/capability gate: any staff member may view FAST history for a
+    // student they can already see. The roster-visibility check below
+    // (getVisibleStudentIds) is the security boundary — a classroom teacher is
+    // limited to their own roster + trusted-adult set, admins / Core Team get
+    // the school-wide set. This powers the Teacher Roster "PM3 history" drawer.
     const studentId = String(req.params.studentId ?? "").trim();
     if (!studentId) {
       res.status(400).json({ error: "studentId required" });

@@ -139,3 +139,55 @@ covered by the base rule). No component/markup changes.
 
 **Verification:** CSS-only change, hot-reloaded by the client dev server; header
 labels render normally while the header stays pinned on scroll.
+
+---
+
+## Change #5 — Teacher Roster: "PM3 history" book-icon drawer
+
+**Area:** Teacher Roster rows.
+- Server: `artifacts/api-server/src/routes/studentLookup.ts` — `GET /api/student-lookup/:studentId/fast-history`.
+- Client: new `artifacts/client/src/components/FastHistoryModal.tsx`; wired into
+  `artifacts/client/src/components/TeacherRosterPage.tsx`.
+
+**Requirement (reported):** Add a 📖 book icon on each Teacher Roster row that
+opens a drawer showing the student's **historical FAST PM3** (prior years, ELA +
+Math PM3), a dividing line, then the **current year's full PM1 / PM2 / PM3**.
+This lives only on the Teacher Roster — the Student Profile page is unchanged
+(it stays the place for per-standard review). Teachers need access.
+
+**FLEID handling (confirmed):** The FLEID (`students.student_id`) is **never
+shown on screen** and is **never returned** by the endpoint — the response echoes
+only the district **Local SIS ID** plus grade / school-year / scores. Per the
+established app pattern (spider chart, data-chat, safety-plan actions all do the
+same), the FLEID is used only as the internal handle passed in the request URL;
+it is not rendered anywhere in the drawer.
+
+**Server change:** The `fast-history` endpoint previously returned **403** unless
+the caller was Core Team / admin (or held the `capViewFastHistory` cap). That
+role/cap gate was **removed** so any staff member can call it. Access is still
+bounded by the **same `getVisibleStudentIds` visibility check** already used by
+the rest of this router: a classroom teacher only sees their own roster (+ their
+trusted-adult set), while admins / Core Team / counselors get the school-wide
+set. (Access is therefore slightly broader than the old cap-gated model — any
+staff who can already see the roster row can open the drawer.) The pre-existing
+visibility responses are unchanged: an out-of-scope student returns **403**, a
+non-existent one **404**.
+
+**Client change:** New `FastHistoryModal` fetches the endpoint via `authFetch`
+and renders two blocks separated by a divider — **Historical · PM3 by year**
+(one row per prior year with ELA PM3 + Math PM3) and **Current year · PM1 → PM2
+→ PM3** (ELA + Math). Score cells reuse the shared `FastScorePill` (defaults to
+showing the scale score, click a pill or use the header toggle to flip to the
+achievement level). The header shows only the Local SIS ID and grade.
+
+**Data note (not a code issue):** For **school 1** only, the demo FAST data
+contains stray `26-27` rows (PM1 only, no PM2/PM3). Because the app derives the
+"current year" as the newest non-historical year, school 1 resolves to `26-27`,
+so the current-year block shows only a sparse PM1 and the complete `25-26` year
+is treated as historical. Every other school correctly resolves to `25-26`. This
+is pre-existing demo-data drift that affects the whole app (roster / insights),
+not just this drawer.
+
+**Verification:** `pnpm --filter @workspace/client run typecheck` and
+`pnpm --filter @workspace/api-server run typecheck` both pass; API server
+restarted clean and client hot-reloaded the roster.
