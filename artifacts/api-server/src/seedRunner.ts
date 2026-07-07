@@ -217,5 +217,6 @@ export async function bootstrapCriticalColumns(): Promise<void> {
     throw err;
 
 
+
   }
 }
