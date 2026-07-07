@@ -522,3 +522,9 @@ id = "03UUF_4mzwQCnt9i9ddxC"
 uri = "file://docs/kiosk-activation-architecture.pdf"
 type = "pdf"
 title = "Kiosk Activation — Architecture, Schema & Live-Debug Guide (PDF)"
+
+[[outputs]]
+id = "3ENJ1nFv90yE143-HkBkl"
+uri = "file://docs/migrations/2026-07-07-hall-pass-auto-end.pdf"
+type = "pdf"
+title = "Migration Notes — Hall Pass Auto-End (2026-07-07)"
