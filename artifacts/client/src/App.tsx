@@ -5816,6 +5816,10 @@ function App() {
     strictHouseNameMatch: boolean;
     gpaEnabled: boolean;
     teacherFamilyMessagingEnabled: boolean;
+    watchlistAbsenceThreshold: number;
+    watchlistBehaviorThreshold: number;
+    watchlistTardyThreshold: number;
+    watchlistIssThreshold: number;
     // Two-tier feature flags. Defaults are TRUE so the optimistic UI
     // matches what the server returns for any school that has not yet
     // flipped anything off.
@@ -5902,6 +5906,10 @@ function App() {
     strictHouseNameMatch: false,
     gpaEnabled: false,
     teacherFamilyMessagingEnabled: false,
+    watchlistAbsenceThreshold: 10,
+    watchlistBehaviorThreshold: 3,
+    watchlistTardyThreshold: 5,
+    watchlistIssThreshold: 1,
     featureFamilyComm: true,
     featurePbis: true,
     featureSchoolStore: true,
@@ -7842,6 +7850,22 @@ function App() {
             typeof data.teacherFamilyMessagingEnabled === "boolean"
               ? data.teacherFamilyMessagingEnabled
               : false,
+          watchlistAbsenceThreshold:
+            typeof data.watchlistAbsenceThreshold === "number"
+              ? data.watchlistAbsenceThreshold
+              : 10,
+          watchlistBehaviorThreshold:
+            typeof data.watchlistBehaviorThreshold === "number"
+              ? data.watchlistBehaviorThreshold
+              : 3,
+          watchlistTardyThreshold:
+            typeof data.watchlistTardyThreshold === "number"
+              ? data.watchlistTardyThreshold
+              : 5,
+          watchlistIssThreshold:
+            typeof data.watchlistIssThreshold === "number"
+              ? data.watchlistIssThreshold
+              : 1,
           featureFamilyComm: boolOrTrue(data.featureFamilyComm),
           featurePbis: boolOrTrue(data.featurePbis),
           featureSchoolStore: boolOrTrue(data.featureSchoolStore),
@@ -8016,6 +8040,22 @@ function App() {
           typeof data.teacherFamilyMessagingEnabled === "boolean"
             ? data.teacherFamilyMessagingEnabled
             : false,
+        watchlistAbsenceThreshold:
+          typeof data.watchlistAbsenceThreshold === "number"
+            ? data.watchlistAbsenceThreshold
+            : 10,
+        watchlistBehaviorThreshold:
+          typeof data.watchlistBehaviorThreshold === "number"
+            ? data.watchlistBehaviorThreshold
+            : 3,
+        watchlistTardyThreshold:
+          typeof data.watchlistTardyThreshold === "number"
+            ? data.watchlistTardyThreshold
+            : 5,
+        watchlistIssThreshold:
+          typeof data.watchlistIssThreshold === "number"
+            ? data.watchlistIssThreshold
+            : 1,
         featureFamilyComm: boolOrTrue(data.featureFamilyComm),
         featurePbis: boolOrTrue(data.featurePbis),
         featureSchoolStore: boolOrTrue(data.featureSchoolStore),
@@ -23284,6 +23324,14 @@ function App() {
                 group: "behavior-pbis",
               },
               {
+                id: "watchlist-thresholds",
+                icon: "👀",
+                title: "Watch List Thresholds",
+                subtitle:
+                  "Set the absence, behavior, tardy, and ISS triggers for the Insights Watch List.",
+                group: "behavior-pbis",
+              },
+              {
                 // Surfaces the existing PBIS Reasons editor (rendered as a
                 // top-level `activeSection === "pbisReasons"` page, not an
                 // in-frame tile). Clicking this tile is intercepted in the
@@ -25094,6 +25142,137 @@ function App() {
                 </div>
 
                 {(isAdmin || isCoreTeamMember) && <OnTimeTestingPanel />}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "watchlist-thresholds" && (() => {
+        const ranges = [
+          {
+            field: "watchlistAbsenceThreshold" as const,
+            label: "Days Absent trigger",
+            help: "Students with at least this many official days absent (from the latest Eligibility Hub upload) are flagged as needing attention. Default 10.",
+            min: 1,
+            max: 180,
+            unit: "days",
+          },
+          {
+            field: "watchlistBehaviorThreshold" as const,
+            label: "Behavior entries trigger",
+            help: "Students with at least this many behavior entries in the window are flagged. Default 3.",
+            min: 1,
+            max: 100,
+            unit: "entries",
+          },
+          {
+            field: "watchlistTardyThreshold" as const,
+            label: "Tardy trigger",
+            help: "Students with at least this many tardies in the window are flagged. Default 5.",
+            min: 1,
+            max: 100,
+            unit: "tardies",
+          },
+          {
+            field: "watchlistIssThreshold" as const,
+            label: "ISS days trigger",
+            help: "Students with at least this many ISS days in the window are flagged. Default 1.",
+            min: 1,
+            max: 100,
+            unit: "days",
+          },
+        ];
+        return (
+          <div className="card" style={{ marginTop: "1rem" }}>
+            <h2>Watch List Thresholds</h2>
+            <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+              These tunings decide which students appear in the Insights Watch
+              List "Needs attention" view by default. FAST bottom-quartile and
+              active Tier 2/3 plans always count as needing attention. Changes
+              save when you click "Save School Settings" below.
+            </p>
+            <div style={{ display: "grid", gap: "1rem", maxWidth: 560 }}>
+              {ranges.map((r) => (
+                <label
+                  key={r.field}
+                  style={{ display: "grid", gap: "0.25rem" }}
+                >
+                  <span>
+                    {r.label}
+                    <span
+                      style={{
+                        color: "var(--text-subtle, #64748b)",
+                        fontWeight: "normal",
+                        marginLeft: "0.5rem",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      ({r.min}–{r.max} {r.unit})
+                    </span>
+                  </span>
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontSize: "0.82rem",
+                    }}
+                  >
+                    {r.help}
+                  </span>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.75rem",
+                    }}
+                  >
+                    <input
+                      type="number"
+                      min={r.min}
+                      max={r.max}
+                      step={1}
+                      value={schoolSettings[r.field]}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        const next = Number.isFinite(n)
+                          ? Math.max(r.min, Math.min(r.max, Math.trunc(n)))
+                          : schoolSettings[r.field];
+                        setSchoolSettings({
+                          ...schoolSettings,
+                          [r.field]: next,
+                        });
+                      }}
+                      style={{ width: "6rem" }}
+                    />
+                    <span style={{ color: "var(--text-subtle, #64748b)" }}>
+                      {r.unit}
+                    </span>
+                  </div>
+                </label>
+              ))}
+              <div
+                style={{
+                  display: "flex",
+                  gap: "0.5rem",
+                  alignItems: "center",
+                  marginTop: "0.5rem",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => void saveSchoolSettings()}
+                  disabled={settingsStatus === "saving"}
+                >
+                  {settingsStatus === "saving"
+                    ? "Saving…"
+                    : "Save School Settings"}
+                </button>
+                {settingsStatus === "saved" && (
+                  <span style={{ color: "#15803d" }}>Saved.</span>
+                )}
+                {settingsStatus === "error" && (
+                  <span style={{ color: "#b91c1c" }}>{settingsError}</span>
+                )}
               </div>
             </div>
           </div>

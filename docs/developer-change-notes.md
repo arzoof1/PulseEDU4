@@ -195,3 +195,70 @@ This affected the whole app (roster / insights), not just this drawer.
 **Verification:** `pnpm --filter @workspace/client run typecheck` and
 `pnpm --filter @workspace/api-server run typecheck` both pass; API server
 restarted clean and client hot-reloaded the roster.
+
+---
+
+## Change #6 — Watch List: "Needs attention" gate + school-configurable thresholds
+
+**Area:** Insights Watch List (system-driven, was overwhelming teachers with 100+
+students) plus School Settings.
+- DB: `lib/db/src/schema/schoolSettings.ts` — 4 new int cols
+  (`watchlistAbsenceThreshold`=10, `watchlistBehaviorThreshold`=3,
+  `watchlistTardyThreshold`=5, `watchlistIssThreshold`=1); matching
+  `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` boot migration in
+  `artifacts/api-server/src/seed.ts`.
+- Server: `artifacts/api-server/src/routes/insights.ts`
+  (`GET /api/insights/watchlist`), `artifacts/api-server/src/routes/schoolSettings.ts`
+  (PUT).
+- Client: `artifacts/client/src/components/InsightsWatchlist.tsx`,
+  `artifacts/client/src/App.tsx`, `artifacts/client/src/components/SettingsHub.tsx`.
+
+**Requirement (reported):** Two enhancements. (#1) Default the Watch List to a
+"needs attention" gate showing only students who trip ≥1 risk trigger, with a
+"show full roster" escape hatch. (#5) Make the count-based thresholds
+school-configurable via a new "Watch List Thresholds" tile in School Settings
+(gated `canManageSettings`), stored in `school_settings`, saved via
+`PUT /api/school-settings`.
+
+**Server change:** `GET /api/insights/watchlist` now parses `scope=all|attention`
+(default `attention`; any unrecognized value falls back to the gated view) and
+loads the 4 thresholds from `school_settings` (schema-default fallback when the
+row doesn't exist yet). Each row gains an `absences` field (official days absent
+from `loadAttendanceMetrics` → latest Eligibility Hub upload; **null when no
+upload — never fabricated to 0**) and a server-computed `needsAttention` boolean.
+`needsAttention` = Tier≥2 **OR** FAST bottom-quartile ELA/Math (always-on boolean
+triggers) **OR** any count-based trigger meeting its threshold (behavior, ISS,
+tardy, absences). New flag codes `ABSENCES` (high) and `TARDY_TREND` (watch) join
+the existing set; behavior/ISS flags now compare against the configured
+thresholds instead of hardcoded constants. The response computes `totalInScope`
+(all rows matching the explicit filters) and `attentionCount`, then returns only
+the needs-attention subset unless `scope=all`. `scope`, `thresholds`,
+`totalInScope`, `attentionCount` are added to the JSON.
+
+**PUT /school-settings:** The 4 new fields are added to the destructure and to the
+shared `intRange` validation block (absence 1–180, behavior/tardy/iss 1–100). No
+extra role gate — any settings-manager (the gate on the Settings page itself) may
+tune them, matching the sibling PBIS-threshold knobs.
+
+**Client change:** `InsightsWatchlist` adds `scope` to `Filters`/`EMPTY_FILTERS`
+(default `"attention"`), sends it in the query string, and renders a segmented
+"Needs attention | Full roster" toggle (with live counts) plus a "Show full
+roster (N)" escape-hatch link when the gate is hiding students. `Row` gains
+`absences` + `needsAttention`; the card signal-chip list gains an "Absences N"
+chip. A new "Watch List Thresholds" settings tile (School Settings →
+behavior-pbis group, 👀) renders 4 numeric inputs mirroring the PBIS-thresholds
+tile and saves through the existing `saveSchoolSettings`. The 4 fields were added
+to all 4 exhaustive `App.tsx` schoolSettings mapper spots (type, defaults, load
+reducer, save reducer) and the `SettingsTileId` union in `SettingsHub.tsx`.
+
+**FLEID handling:** No FLEID exposure — the endpoint continues to key rows on the
+internal handle and surface only `localSisId`; the new `absences` field is a plain
+integer count.
+
+**Verification:** `pnpm run typecheck:libs`,
+`pnpm --filter @workspace/client run typecheck`, and
+`pnpm --filter @workspace/api-server run typecheck` all pass. Dev DB columns
+applied via direct SQL (drizzle-kit push is broken on this drizzle version — the
+app relies on the seed.ts boot migration by design). API server restarted clean;
+`GET /api/insights/watchlist` returns 200 on health and 401 unauthenticated as
+expected.

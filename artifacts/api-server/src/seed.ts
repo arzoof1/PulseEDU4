@@ -2275,6 +2275,22 @@ export async function ensureAdminHubSchema() {
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS intervention_effectiveness_days INTEGER NOT NULL DEFAULT 14`,
   );
 
+  // Watch List (Insights) "Needs Attention" thresholds. Additive; the
+  // system-driven Watch List defaults to only students tripping >=1 of
+  // these count-based triggers (plus always-on Tier>=2 / FAST BQ).
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS watchlist_absence_threshold INTEGER NOT NULL DEFAULT 10`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS watchlist_behavior_threshold INTEGER NOT NULL DEFAULT 3`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS watchlist_tardy_threshold INTEGER NOT NULL DEFAULT 5`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS watchlist_iss_threshold INTEGER NOT NULL DEFAULT 1`,
+  );
+
   // ISS daily seat capacity + soft/hard behavior on school_settings.
   await db.execute(
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS iss_daily_capacity INTEGER`,

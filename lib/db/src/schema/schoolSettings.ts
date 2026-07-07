@@ -62,6 +62,33 @@ export const schoolSettingsTable = pgTable(
   pbisColdPeriodMultiple: integer("pbis_cold_period_multiple")
     .notNull()
     .default(5),
+  // -----------------------------------------------------------------
+  // Watch List (Insights) "Needs Attention" thresholds.
+  //
+  // The system-driven Watch List defaults to showing ONLY students who
+  // trip at least one risk trigger (a "needs attention" gate), with a
+  // "Show full roster" escape hatch. A student surfaces when ANY of:
+  //   - an active MTSS plan at Tier >= 2                 (always-on)
+  //   - FAST bottom-quartile in ELA or Math             (always-on)
+  //   - absences >= watchlistAbsenceThreshold  (semester total, Eligibility Hub)
+  //   - behavior entries >= watchlistBehaviorThreshold  (pbis negatives + support notes, in window)
+  //   - tardies >= watchlistTardyThreshold              (in window)
+  //   - ISS days >= watchlistIssThreshold               (in window)
+  // Tier + bottom-quartile are inherently boolean triggers, so only the
+  // count-based ones are school-configurable here.
+  // -----------------------------------------------------------------
+  watchlistAbsenceThreshold: integer("watchlist_absence_threshold")
+    .notNull()
+    .default(10),
+  watchlistBehaviorThreshold: integer("watchlist_behavior_threshold")
+    .notNull()
+    .default(3),
+  watchlistTardyThreshold: integer("watchlist_tardy_threshold")
+    .notNull()
+    .default(5),
+  watchlistIssThreshold: integer("watchlist_iss_threshold")
+    .notNull()
+    .default(1),
   // Classroom-intervention effectiveness window (days). A logged intervention
   // counts as having WORKED if the behavior it targeted does not recur for that
   // student within this many days; if it recurs inside the window it RECURRED;

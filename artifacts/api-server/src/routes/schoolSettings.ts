@@ -163,6 +163,10 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     schoolStoreInventoryMode,
     gpaEnabled,
     teacherFamilyMessagingEnabled,
+    watchlistAbsenceThreshold,
+    watchlistBehaviorThreshold,
+    watchlistTardyThreshold,
+    watchlistIssThreshold,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -344,6 +348,37 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       5,
       240,
       "onTimeLotteryRevealLeadMinutes",
+    ),
+    // Watch List (Insights) "Needs Attention" thresholds. Any settings-
+    // manager (the gate on the Settings page itself) may tune these — they
+    // only affect which students the Watch List surfaces by default.
+    intRange(
+      "watchlistAbsenceThreshold",
+      watchlistAbsenceThreshold,
+      1,
+      180,
+      "watchlistAbsenceThreshold",
+    ),
+    intRange(
+      "watchlistBehaviorThreshold",
+      watchlistBehaviorThreshold,
+      1,
+      100,
+      "watchlistBehaviorThreshold",
+    ),
+    intRange(
+      "watchlistTardyThreshold",
+      watchlistTardyThreshold,
+      1,
+      100,
+      "watchlistTardyThreshold",
+    ),
+    intRange(
+      "watchlistIssThreshold",
+      watchlistIssThreshold,
+      1,
+      100,
+      "watchlistIssThreshold",
     ),
   ]) {
     if (err) {
