@@ -180,13 +180,17 @@ and renders two blocks separated by a divider — **Historical · PM3 by year**
 showing the scale score, click a pill or use the header toggle to flip to the
 achievement level). The header shows only the Local SIS ID and grade.
 
-**Data note (not a code issue):** For **school 1** only, the demo FAST data
-contains stray `26-27` rows (PM1 only, no PM2/PM3). Because the app derives the
-"current year" as the newest non-historical year, school 1 resolves to `26-27`,
-so the current-year block shows only a sparse PM1 and the complete `25-26` year
-is treated as historical. Every other school correctly resolves to `25-26`. This
-is pre-existing demo-data drift that affects the whole app (roster / insights),
-not just this drawer.
+**Data cleanup (applied):** While building this, I found **school 1** was the
+only school carrying stray `26-27` FAST rows (642 rows, PM1 only, no PM2/PM3).
+Because the app derives the "current year" as the newest non-historical year,
+school 1 resolved to `26-27`, so its current-year block showed only a sparse PM1
+while the complete `25-26` year fell into the historical section. These rows did
+not come from the seed (guarded, always writes full PM1/PM2/PM3) or the Parrott
+reseed (writes `25-26`, admin-triggered only) — they were leftover manual-import
+data. Per the decision made during this session, the stray non-historical
+`26-27` rows (and their 25,680 orphaned item-response rows) were **deleted**, so
+school 1 now resolves to `25-26` with full data, matching every other school.
+This affected the whole app (roster / insights), not just this drawer.
 
 **Verification:** `pnpm --filter @workspace/client run typecheck` and
 `pnpm --filter @workspace/api-server run typecheck` both pass; API server
