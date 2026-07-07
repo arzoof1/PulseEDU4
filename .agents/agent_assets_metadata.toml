@@ -534,3 +534,9 @@ id = "PF6IqZl3sZ8F6GZ2m6AJR"
 uri = "file://docs/migrations/2026-07-06-go-live-runbook.pdf"
 type = "pdf"
 title = "Manual Go-Live Runbook — All July 6, 2026 Changes"
+
+[[outputs]]
+id = "-XIk3PahlkG-jpiukU8tR"
+uri = "file://docs/migrations/2026-07-05_to_07-complete-go-live-runbook.pdf"
+type = "pdf"
+title = "Complete Go-Live Runbook — July 5–7, 2026 (all sessions)"
