@@ -199,7 +199,10 @@ export default function DataExportPanel({
     });
   };
 
-  const handleDownload = () => {
+  const [downloading, setDownloading] = useState(false);
+  const [downloadErr, setDownloadErr] = useState<string | null>(null);
+
+  const handleDownload = async () => {
     const params = new URLSearchParams();
     params.set("kind", kind);
     params.set("scope", effectiveScope);
@@ -233,14 +236,54 @@ export default function DataExportPanel({
       params.set("columns", Array.from(includedCols).join(","));
     }
     const url = `/api/data-imports/export?${params.toString()}`;
-    // Anchor-with-download so the response streams to disk without
-    // navigating away from the page.
-    const a = document.createElement("a");
-    a.href = url;
-    a.rel = "noopener";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    // The export is auth-gated with a Bearer token held in JS (not a
+    // cookie), so a plain <a href> navigation would hit the endpoint
+    // unauthenticated and return "Sign-in required" — especially inside
+    // the Replit preview iframe. Fetch it WITH the auth header, then save
+    // the response as a blob so the download carries our identity.
+    setDownloadErr(null);
+    setDownloading(true);
+    try {
+      const resp = await authFetch(url);
+      if (!resp.ok) {
+        let msg = `Export failed (${resp.status})`;
+        try {
+          const j = (await resp.clone().json()) as { error?: string };
+          if (j?.error) msg = j.error;
+        } catch {
+          /* non-JSON error body — keep the status message */
+        }
+        throw new Error(msg);
+      }
+      const blob = await resp.blob();
+      // Prefer the server-provided filename from Content-Disposition,
+      // falling back to the same pulseedu-<kind>-<date>.csv convention.
+      const cd = resp.headers.get("Content-Disposition") ?? "";
+      const match = /filename="?([^"]+)"?/.exec(cd);
+      const filename =
+        match?.[1] ??
+        `pulseedu-${kind.replace(/_/g, "-")}-${new Date()
+          .toISOString()
+          .slice(0, 10)}.csv`;
+      const objectUrl = URL.createObjectURL(blob);
+      try {
+        const a = document.createElement("a");
+        a.href = objectUrl;
+        a.download = filename;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    } catch (err) {
+      setDownloadErr(
+        err instanceof Error ? err.message : "Export failed. Please try again.",
+      );
+    } finally {
+      setDownloading(false);
+    }
   };
 
   const sectionLabel: CSSProperties = {
@@ -553,21 +596,30 @@ export default function DataExportPanel({
           justifyContent: "flex-end",
         }}
       >
+        {downloadErr && (
+          <span
+            role="alert"
+            style={{ color: "#ef4444", fontSize: 13, alignSelf: "center" }}
+          >
+            {downloadErr}
+          </span>
+        )}
         <button
           type="button"
           onClick={handleDownload}
+          disabled={downloading}
           style={{
             padding: "0.5rem 1rem",
             border: "1px solid #3b82f6",
-            background: "#3b82f6",
+            background: downloading ? "#3b82f680" : "#3b82f6",
             color: "white",
             borderRadius: 6,
             fontSize: 14,
             fontWeight: 600,
-            cursor: "pointer",
+            cursor: downloading ? "default" : "pointer",
           }}
         >
-          Download CSV
+          {downloading ? "Preparing…" : "Download CSV"}
         </button>
       </div>
     </div>

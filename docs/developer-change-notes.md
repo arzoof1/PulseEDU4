@@ -76,3 +76,32 @@ matches on the FLEID); every other column is unchanged.
 
 **Verification:** `pnpm --filter @workspace/api-server run typecheck` and
 `pnpm --filter @workspace/client run typecheck` both pass; API server restarted clean.
+Confirmed live: an authenticated download of the roster export now returns the
+header `local_sis_id` with district IDs (e.g. `S2-2394`) and no `FL…` values.
+
+---
+
+## Change #3 — Data Export download failed with "Sign-in required" (auth on download)
+
+**Area:** Settings → Data Management → **Export data** → *Download CSV*.
+- Client: `artifacts/client/src/components/DataExportPanel.tsx`.
+
+**Symptom (reported):** Clicking *Download CSV* returned a page reading
+`{"error":"Sign-in required"}` (and, in the Replit preview, the "Open a new tab
+to test authentication and file uploads" banner) instead of downloading a file.
+
+**Root cause:** The download was triggered by a plain `<a href="/api/data-imports/export?…">`
+browser navigation. This app authenticates with a **Bearer token held in JS**
+(via `authFetch`), **not** a cookie — so a raw navigation reaches the endpoint
+with no `Authorization` header and the server correctly rejects it as
+unauthenticated. This is especially visible inside the preview iframe.
+
+**Fix (client only):** `handleDownload` now fetches the export through `authFetch`
+(which attaches the Bearer token), reads the response as a **blob**, and saves it
+via an object URL — so the download carries the signed-in identity. The saved
+filename is taken from the server's `Content-Disposition` header (falling back to
+`pulseedu-<kind>-<date>.csv`). Added a *Preparing…* disabled state and an inline
+error message if the export fails. No server or endpoint change.
+
+**Verification:** `pnpm --filter @workspace/client run typecheck` passes; the
+authenticated export was confirmed returning CSV directly from the running server.
