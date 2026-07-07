@@ -25990,22 +25990,37 @@ function App() {
                 </span>
               </label>
             )}
-            {new Date().getMonth() >= 7 &&
-              Boolean(authUser?.isAdmin || authUser?.isSuperUser) && (
-                <label style={{ display: "grid", gap: "0.25rem" }}>
-                  <span>
-                    School-Year Flip Date
-                    <span
-                      style={{
-                        color: "var(--text-subtle, #64748b)",
-                        fontWeight: "normal",
-                        marginLeft: "0.5rem",
-                      }}
-                    >
-                      Admin only. Optional.
-                    </span>
+            {Boolean(authUser?.isAdmin || authUser?.isSuperUser) && (
+              <label style={{ display: "grid", gap: "0.25rem" }}>
+                <span>
+                  School-Year Flip Date
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontWeight: "normal",
+                      marginLeft: "0.5rem",
+                    }}
+                  >
+                    Admin only. Optional.
                   </span>
-                  <input
+                </span>
+                {new Date().getMonth() >= 7 && (
+                  <span
+                    style={{
+                      padding: "0.5rem 0.65rem",
+                      borderRadius: 6,
+                      background: "var(--warning-subtle, #fef3c7)",
+                      border: "1px solid var(--warning-border, #fcd34d)",
+                      color: "var(--warning-text, #92400e)",
+                      fontSize: "0.85rem",
+                    }}
+                  >
+                    A new school year has begun. When you&rsquo;re ready, set a
+                    flip date below to advance FAST &amp; Insights to the new
+                    reporting year.
+                  </span>
+                )}
+                <input
                     type="date"
                     value={schoolSettings.schoolYearFlipDate ?? ""}
                     onChange={(e) =>
