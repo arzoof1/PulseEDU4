@@ -56,8 +56,13 @@ function isCsrfExempt(path: string, method: string): boolean {
   if (path === "/api/parent-auth/login") return true;
   if (path === "/api/parent-auth/accept-invite") return true;
 
-  // Kiosk / queue endpoints authenticated by activation token, not session.
+  // Kiosk / queue endpoints authenticated by activation token, PIN, or
+  // enroll card — not staff session. Teachers and admins often open /kiosk
+  // in the same browser while signed in (or previewing as staff); CSRF
+  // must not block those flows.
   if (path === "/api/kiosk/activate") return true;
+  if (path === "/api/kiosk/activate-by-enrollment") return true;
+  if (path === "/api/kiosk/activate-by-pin") return true;
   if (path.startsWith("/api/kiosk/activation/")) return true;
   if (path.startsWith("/api/kiosk/branding/")) return true;
   if (path === "/api/kiosk/hall-passes" || path === "/api/kiosk/hall-passes/return") {
