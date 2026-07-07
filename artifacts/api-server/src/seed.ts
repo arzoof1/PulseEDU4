@@ -2301,6 +2301,11 @@ export async function ensureAdminHubSchema() {
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS school_year_flip_active TEXT`,
   );
 
+  // Forgotten-pass auto-end threshold (minutes). Additive; default 20.
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS hall_pass_auto_end_minutes INTEGER NOT NULL DEFAULT 20`,
+  );
+
   // ISS daily seat capacity + soft/hard behavior on school_settings.
   await db.execute(
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS iss_daily_capacity INTEGER`,

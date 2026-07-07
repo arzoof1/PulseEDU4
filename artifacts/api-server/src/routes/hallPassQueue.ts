@@ -20,6 +20,7 @@ import {
 } from "@workspace/db";
 import { and, eq, inArray, isNull, gt, asc, ne, sql } from "drizzle-orm";
 import { genUrlSafeToken } from "../lib/urlSafeToken.js";
+import { autoEndStalePasses } from "../lib/hallPassLifecycle.js";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { findPolarityConflict } from "./polarityPairs";
@@ -243,6 +244,7 @@ function shapeEntry(
 
 router.get("/kiosk/queue/:token", async (req, res) => {
   const act = await loadActivationByToken(req.params.token);
+  if (act) await autoEndStalePasses(act.schoolId);
   if (!act) {
     res
       .status(401)
@@ -366,6 +368,7 @@ router.get("/kiosk/queue/:token", async (req, res) => {
 
 router.post("/kiosk/queue/:token/add", async (req, res) => {
   const act = await loadActivationByToken(req.params.token);
+  if (act) await autoEndStalePasses(act.schoolId);
   if (!act) {
     res
       .status(401)
@@ -631,6 +634,7 @@ export async function peekNextInQueue(act: {
 router.get("/hall-pass-queue", requireStaff, async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
+  await autoEndStalePasses(schoolId);
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
 

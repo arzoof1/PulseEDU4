@@ -119,6 +119,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     periodCount,
     hallPassMaxMinutes,
     hallPassDefaultMinutes,
+    hallPassAutoEndMinutes,
     globalDailyHallPassLimit,
     pbisQuietTeacherDays,
     pbisInvisibleStudentDays,
@@ -207,6 +208,20 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.hallPassMaxMinutes = hallPassMaxMinutes;
+  }
+  if (hallPassAutoEndMinutes !== undefined) {
+    if (
+      typeof hallPassAutoEndMinutes !== "number" ||
+      !Number.isInteger(hallPassAutoEndMinutes) ||
+      hallPassAutoEndMinutes < 1 ||
+      hallPassAutoEndMinutes > 240
+    ) {
+      res.status(400).json({
+        error: "hallPassAutoEndMinutes must be an integer between 1 and 240",
+      });
+      return;
+    }
+    updates.hallPassAutoEndMinutes = hallPassAutoEndMinutes;
   }
   if (hallPassDefaultMinutes !== undefined) {
     if (

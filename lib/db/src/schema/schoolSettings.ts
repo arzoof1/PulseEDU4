@@ -19,6 +19,14 @@ export const schoolSettingsTable = pgTable(
   hallPassDefaultMinutes: integer("hall_pass_default_minutes")
     .notNull()
     .default(5),
+  // Forgotten-pass safety net. Any pass still `active` past this many minutes
+  // is auto-ended (status `auto_ended`) on the next read, with its recorded
+  // end time capped at createdAt + this value so a pass a student simply
+  // forgot to close (e.g. the bell rang) never balloons the duration.
+  // School-configurable; default 20.
+  hallPassAutoEndMinutes: integer("hall_pass_auto_end_minutes")
+    .notNull()
+    .default(20),
   // Optional school-wide cap on the number of hall passes a student can take
   // in one school day. Null means no global cap.
   globalDailyHallPassLimit: integer("global_daily_hall_pass_limit"),

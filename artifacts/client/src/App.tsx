@@ -353,6 +353,7 @@ function getTimeStatusColor(pass: HallPass, now: number): string {
 
 function formatTimeStatus(pass: HallPass, now: number): string {
   if (pass.status === "system_ended") return "System Ended";
+  if (pass.status === "auto_ended") return "Auto Ended";
   if (pass.status === "ended") return "Ended";
   const expiresAt =
     new Date(pass.createdAt).getTime() + pass.maxDurationMinutes * 60 * 1000;
@@ -5796,6 +5797,7 @@ function App() {
     periodCount: number;
     hallPassMaxMinutes: number;
     hallPassDefaultMinutes: number;
+    hallPassAutoEndMinutes: number;
     globalDailyHallPassLimit: number | null;
     pbisQuietTeacherDays: number;
     pbisInvisibleStudentDays: number;
@@ -5887,6 +5889,7 @@ function App() {
     periodCount: 7,
     hallPassMaxMinutes: 30,
     hallPassDefaultMinutes: 5,
+    hallPassAutoEndMinutes: 20,
     globalDailyHallPassLimit: null,
     pbisQuietTeacherDays: 5,
     pbisInvisibleStudentDays: 10,
@@ -7773,6 +7776,10 @@ function App() {
             typeof data.hallPassDefaultMinutes === "number"
               ? data.hallPassDefaultMinutes
               : 5,
+          hallPassAutoEndMinutes:
+            typeof data.hallPassAutoEndMinutes === "number"
+              ? data.hallPassAutoEndMinutes
+              : 20,
           globalDailyHallPassLimit:
             typeof data.globalDailyHallPassLimit === "number"
               ? data.globalDailyHallPassLimit
@@ -7977,6 +7984,10 @@ function App() {
           typeof data.hallPassDefaultMinutes === "number"
             ? data.hallPassDefaultMinutes
             : 5,
+        hallPassAutoEndMinutes:
+          typeof data.hallPassAutoEndMinutes === "number"
+            ? data.hallPassAutoEndMinutes
+            : 20,
         globalDailyHallPassLimit:
           typeof data.globalDailyHallPassLimit === "number"
             ? data.globalDailyHallPassLimit
@@ -13088,11 +13099,15 @@ function App() {
                   const statusClass =
                     p.status === "active"
                       ? "badge badge-active"
-                      : p.status === "system_ended"
+                      : p.status === "system_ended" || p.status === "auto_ended"
                         ? "badge badge-overdue"
                         : "badge badge-ended";
                   const statusLabel =
-                    p.status === "system_ended" ? "System Ended" : p.status;
+                    p.status === "system_ended"
+                      ? "System Ended"
+                      : p.status === "auto_ended"
+                        ? "Auto Ended"
+                        : p.status;
                   return (
                     <tr key={p.id}>
                       <td>
@@ -15630,7 +15645,13 @@ function App() {
                         <td>{p.teacherName}</td>
                         <td>{p.destination}</td>
                         <td>{p.originRoom}</td>
-                        <td>{p.status === "system_ended" ? "System Ended" : p.status}</td>
+                        <td>
+                          {p.status === "system_ended"
+                            ? "System Ended"
+                            : p.status === "auto_ended"
+                              ? "Auto Ended"
+                              : p.status}
+                        </td>
                         <td>{p.createdAt}</td>
                         <td>{p.endedAt ?? "-"}</td>
                       </tr>
@@ -26213,6 +26234,49 @@ function App() {
                             ),
                           )
                         : schoolSettings.hallPassDefaultMinutes,
+                    });
+                  }}
+                  style={{ width: "5rem" }}
+                />
+                <span style={{ color: "var(--text-subtle, #64748b)" }}>
+                  min
+                </span>
+              </div>
+            </div>
+            <div style={{ display: "grid", gap: "0.25rem" }}>
+              <span>
+                Auto-end forgotten passes after
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontWeight: "normal",
+                    marginLeft: "0.5rem",
+                  }}
+                >
+                  (a still-active pass this old is closed automatically, marked
+                  “Auto Ended,” with its end time capped here)
+                </span>
+              </span>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.75rem",
+                }}
+              >
+                <input
+                  type="number"
+                  min={1}
+                  max={240}
+                  step={1}
+                  value={schoolSettings.hallPassAutoEndMinutes}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      hallPassAutoEndMinutes: Number.isFinite(n)
+                        ? Math.max(1, Math.min(240, Math.trunc(n)))
+                        : schoolSettings.hallPassAutoEndMinutes,
                     });
                   }}
                   style={{ width: "5rem" }}
