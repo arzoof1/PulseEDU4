@@ -47,6 +47,31 @@ export async function resolveCurrentFastYear(
   return row?.y ?? schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
 }
 
+// The school's ACTIVE reporting year for FAST / Insights and every other
+// "current school year" read. This is the single replacement for the bare
+// `schoolYearLabelFor(new Date(), tz)` calls that used to race the wall clock
+// on July 1. Precedence:
+//   1. An explicit flip-activated year (school_settings.school_year_flip_active),
+//      set by the school-controlled year rollover once its flip date passes and
+//      the outgoing year's rows are re-tagged historical.
+//   2. The newest non-historical FAST data year (resolveCurrentFastYear).
+//   3. Wall clock (resolveCurrentFastYear's own fallback when a school has no
+//      current-year FAST at all).
+// The `tz` argument is accepted for call-site parity; it only matters for the
+// wall-clock fallback, which resolveCurrentFastYear handles with DEFAULT_SCHOOL_TZ.
+export async function getActiveSchoolYear(
+  schoolId: number,
+  _tz: string = DEFAULT_SCHOOL_TZ,
+): Promise<string> {
+  const [row] = await db
+    .select({ flip: schoolSettingsTable.schoolYearFlipActive })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
+  const flip = row?.flip?.trim();
+  if (flip) return flip;
+  return resolveCurrentFastYear(schoolId);
+}
+
 export interface FastHistoryEntry {
   schoolYear: string;
   pm3: number;
@@ -116,8 +141,7 @@ export async function loadFastHistory(
   if (args.studentIds.length === 0) return out;
 
   const current =
-    args.currentSchoolYear ??
-    schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+    args.currentSchoolYear ?? (await getActiveSchoolYear(args.schoolId));
   const yearsVisible =
     args.yearsVisible ?? (await loadFastHistoryYearsVisible(args.schoolId));
   const wantedYears = priorSchoolYearLabels(current, yearsVisible);
@@ -232,8 +256,7 @@ export async function loadFastFullHistory(args: {
   currentSchoolYear?: string;
 }): Promise<FastFullYearRow[]> {
   const current =
-    args.currentSchoolYear ??
-    schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+    args.currentSchoolYear ?? (await getActiveSchoolYear(args.schoolId));
 
   const rows = await db
     .select({

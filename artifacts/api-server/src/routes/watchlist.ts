@@ -88,6 +88,7 @@ import {
   isCaseInvestigator,
 } from "../lib/coreTeam.js";
 import { schoolYearLabelFor, getSchoolTimezone } from "../lib/schoolYear.js";
+import { getActiveSchoolYear } from "../lib/fastHistory.js";
 import {
   assignWitnessSeqForInteraction,
   formattedIdForStatement,
@@ -1420,7 +1421,7 @@ router.post("/watchlist/cases", async (req: Request, res: Response) => {
   // open on June 30 stays in the current year rather than spilling
   // into next year's bucket via UTC.
   const tz = await getSchoolTimezone(schoolId);
-  const yearLabel = schoolYearLabelFor(new Date(), tz);
+  const yearLabel = await getActiveSchoolYear(schoolId, tz);
   const [{ next }] = (await db.execute(sql`
     SELECT COALESCE(MAX(case_number), 0) + 1 AS "next"
       FROM interaction_cases
@@ -2546,7 +2547,7 @@ router.post(
       }
 
       const tz = await getSchoolTimezone(schoolId);
-      const yearLabel = schoolYearLabelFor(new Date(), tz);
+      const yearLabel = await getActiveSchoolYear(schoolId, tz);
       const [{ next }] = (
         await tx.execute(sql`
           SELECT COALESCE(MAX(case_number), 0) + 1 AS "next"

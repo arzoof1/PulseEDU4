@@ -62,6 +62,7 @@ import {
   getSchoolTimezone,
   schoolYearLabelFor,
 } from "../lib/schoolYear.js";
+import { getActiveSchoolYear } from "../lib/fastHistory.js";
 import Papa from "papaparse";
 import ExcelJS from "exceljs";
 
@@ -73,7 +74,7 @@ async function currentSchoolYearLabelForSchool(
   schoolId: number,
 ): Promise<string> {
   const tz = await getSchoolTimezone(schoolId).catch(() => DEFAULT_SCHOOL_TZ);
-  return schoolYearLabelFor(new Date(), tz);
+  return getActiveSchoolYear(schoolId, tz);
 }
 
 const router: IRouter = Router();

@@ -43,6 +43,7 @@ import {
   loadFastHistory,
   pickHistory,
   resolveCurrentFastYear,
+  getActiveSchoolYear,
   type FastHistoryEntry,
   type FastHistoryMap,
 } from "../lib/fastHistory.js";
@@ -500,7 +501,7 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
 
   // Current FAST school year resolved from the data, not the wall clock
   // (see the schoolYear filter on the FAST query below).
-  const currentFastYear = await resolveCurrentFastYear(schoolId);
+  const currentFastYear = await getActiveSchoolYear(schoolId);
 
   const [
     students,

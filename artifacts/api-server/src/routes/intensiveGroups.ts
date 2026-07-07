@@ -55,6 +55,7 @@ import {
 } from "../lib/coreTeam.js";
 import { renderComposerPlanPdf } from "../lib/composerPlanPdf.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
+import { getActiveSchoolYear } from "../lib/fastHistory.js";
 import {
   computeSkillProfiles,
   clusterProfilesIntoGroups,
@@ -136,7 +137,7 @@ async function probePmReadiness(schoolId: number): Promise<{
   dismissed: boolean;
   dismissedToken: string | null;
 }> {
-  const schoolYear = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+  const schoolYear = await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ);
   // Single round-trip grouped by subject. The composite index on
   // fast_item_results covers (school_id, subject, school_year, window).
   const r = await db.execute(sql`
@@ -214,10 +215,11 @@ function canViewSectionInsights(s: StaffRow, teacherStaffId: number): boolean {
   return Boolean(s.isAdmin) || isCoreTeamShared(s);
 }
 
-function pickWindow(
+async function pickWindow(
   req: Request,
   available: Array<{ schoolYear: string; window: string }>,
-): { schoolYear: string; window: string } {
+  schoolId: number,
+): Promise<{ schoolYear: string; window: string }> {
   const rawWindow = req.query.window;
   const rawSY = req.query.schoolYear;
   if (
@@ -230,7 +232,7 @@ function pickWindow(
   }
   if (available.length > 0) return available[0];
   return {
-    schoolYear: schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+    schoolYear: await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ),
     window: "pm3",
   };
 }
@@ -301,7 +303,7 @@ router.post("/intensive-groups/pm-readiness/dismiss", async (req, res) => {
   }
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
-  const schoolYear = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+  const schoolYear = await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ);
   const token = `${schoolYear}|pm3`;
   await db
     .update(schoolSettingsTable)
@@ -342,7 +344,7 @@ router.get("/intensive-groups/skillcluster-banners", async (req, res) => {
   }
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
-  const schoolYear = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+  const schoolYear = await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ);
 
   // (b) active skill-cluster plans this SY. We scan plan rows by SY
   // then filter by group recipe.mode in code because recipe is JSONB
@@ -756,7 +758,7 @@ router.get("/intensive-groups/suggest", async (req, res) => {
   }
 
   const available = await listAvailableWindows(schoolId, subject, studentIds);
-  const { schoolYear, window } = pickWindow(req, available);
+  const { schoolYear, window } = await pickWindow(req, available, schoolId);
 
   const profiles = await computeSkillProfiles({
     schoolId,
@@ -1146,7 +1148,7 @@ router.get("/intensive-groups/insights", async (req, res) => {
   const studentIds = Array.from(new Set(rosterRows.map((r) => r.studentId)));
 
   const available = await listAvailableWindows(schoolId, subject, studentIds);
-  const { schoolYear, window } = pickWindow(req, available);
+  const { schoolYear, window } = await pickWindow(req, available, schoolId);
 
   // Roster profiles for the current window.
   const profiles = await computeSkillProfiles({
@@ -1508,7 +1510,7 @@ router.post("/intensive-groups/plans", async (req, res) => {
   const schoolYear =
     typeof body.schoolYear === "string" && body.schoolYear.length > 0
       ? body.schoolYear
-      : schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+      : await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ);
   if (name.length === 0 || name.length > 120) {
     res.status(400).json({ error: "Name is required (1–120 chars)" });
     return;

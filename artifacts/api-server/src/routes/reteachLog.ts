@@ -26,6 +26,7 @@ import { and, eq, inArray, isNull, sql, desc } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
+import { getActiveSchoolYear } from "../lib/fastHistory.js";
 
 const router: IRouter = Router();
 
@@ -204,7 +205,11 @@ interface ValidatedBody {
   schoolYear: string;
 }
 
-function validateBody(req: Request, res: Response): ValidatedBody | null {
+async function validateBody(
+  req: Request,
+  res: Response,
+  schoolId: number,
+): Promise<ValidatedBody | null> {
   const b = req.body ?? {};
   const benchmarkCode = b.benchmarkCode;
   const format = b.format;
@@ -236,7 +241,7 @@ function validateBody(req: Request, res: Response): ValidatedBody | null {
   const schoolYear =
     typeof b.schoolYear === "string" && b.schoolYear.length > 0
       ? b.schoolYear
-      : schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+      : await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ);
   return {
     benchmarkCode,
     format: format as "one_on_one" | "small_group",
@@ -257,7 +262,7 @@ router.post("/reteach-log", async (req: Request, res: Response) => {
     res.status(401).json({ error: "Not authenticated" });
     return;
   }
-  const v = validateBody(req, res);
+  const v = await validateBody(req, res, schoolId);
   if (!v) return;
   const studentId = req.body?.studentId;
   if (typeof studentId !== "string" || studentId.length === 0) {
@@ -309,7 +314,7 @@ router.post("/reteach-log/bulk", async (req: Request, res: Response) => {
     res.status(401).json({ error: "Not authenticated" });
     return;
   }
-  const v = validateBody(req, res);
+  const v = await validateBody(req, res, schoolId);
   if (!v) return;
   if (v.format !== "small_group") {
     res.status(400).json({ error: "bulk endpoint requires format=small_group" });

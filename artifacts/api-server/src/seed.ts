@@ -2291,6 +2291,16 @@ export async function ensureAdminHubSchema() {
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS watchlist_iss_threshold INTEGER NOT NULL DEFAULT 1`,
   );
 
+  // School-controlled school-year rollover ("flip"). Additive; both null/off so
+  // the FAST/Insights reporting year is unchanged until a school schedules a
+  // flip. Schedules & grade promotion are unaffected (SIS-owned).
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS school_year_flip_date TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS school_year_flip_active TEXT`,
+  );
+
   // ISS daily seat capacity + soft/hard behavior on school_settings.
   await db.execute(
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS iss_daily_capacity INTEGER`,

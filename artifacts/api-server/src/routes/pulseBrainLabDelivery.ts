@@ -58,6 +58,7 @@ import { decodeWorksheetPdf } from "../lib/scanDecode.js";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
+import { getActiveSchoolYear } from "../lib/fastHistory.js";
 import { PULSE_BRAIN_LAB_LESSONS } from "../data/pulseBrainLab/index.js";
 
 const router: IRouter = Router();
@@ -294,7 +295,7 @@ router.post("/pulse-brain-lab/groups", async (req, res) => {
     res.status(400).json({ error: "Group name is required" });
     return;
   }
-  const schoolYear = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+  const schoolYear = await getActiveSchoolYear(staff.schoolId, DEFAULT_SCHOOL_TZ);
   const [group] = await db
     .insert(pulseBrainLabGroupsTable)
     .values({

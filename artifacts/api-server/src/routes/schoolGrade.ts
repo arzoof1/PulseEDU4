@@ -21,6 +21,7 @@ import {
   schoolYearLabelFor,
   getSchoolTimezone,
 } from "../lib/schoolYear.js";
+import { getActiveSchoolYear } from "../lib/fastHistory.js";
 import {
   componentsFor,
   computeGradeTotal,
@@ -111,7 +112,7 @@ function requireGradeManager(
 
 async function currentSchoolYear(schoolId: number): Promise<string> {
   const tz = await getSchoolTimezone(schoolId);
-  return schoolYearLabelFor(new Date(), tz);
+  return getActiveSchoolYear(schoolId, tz);
 }
 
 // Clamp an incoming component score to a 0..100 integer, or null.

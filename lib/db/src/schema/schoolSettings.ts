@@ -387,6 +387,19 @@ export const schoolSettingsTable = pgTable(
   fastHistoryYearsVisible: integer("fast_history_years_visible")
     .notNull()
     .default(3),
+  // ---------------------------------------------------------------------------
+  // School-controlled school-year rollover ("flip"). Replaces the wall-clock
+  // July-1 rollover for the FAST/Insights *reporting year* only — schedules and
+  // grade promotion stay owned by the SIS (RosterOne). Both nullable/off by
+  // default so behavior is unchanged until a school schedules a flip.
+  //   - schoolYearFlipDate: admin-chosen date (YYYY-MM-DD, school-local) on or
+  //     after which the reporting year advances. Null = no scheduled flip.
+  //   - schoolYearFlipActive: the year label the flip has ACTIVATED (e.g.
+  //     "26-27"), set by reconcileSchoolYearFlip once the date passes and the
+  //     outgoing year's rows are re-tagged historical. Null = not yet flipped.
+  // ---------------------------------------------------------------------------
+  schoolYearFlipDate: text("school_year_flip_date"),
+  schoolYearFlipActive: text("school_year_flip_active"),
   // Advisory pointer to the tier_presets row last applied to this
   // school. The actual flags above are still authoritative — this is
   // purely so the School Plans grid can show "Currently: Pro" badges.

@@ -4,6 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { bindObjectToSchool } from "./storage.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
+import { reconcileSchoolYearFlip } from "../lib/schoolYearFlip.js";
 
 const router: IRouter = Router();
 
@@ -1160,6 +1161,45 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     updates.ireadyAp1Cuts = clean;
   }
 
+  // School-controlled school-year "flip" date (YYYY-MM-DD, school-local) —
+  // admin/SuperUser only. Advances the FAST/Insights reporting year on/after
+  // the date; null clears/postpones. Enforced inline (this route has no
+  // route-level admin guard). Reconciled below after the row persists.
+  if ("schoolYearFlipDate" in (req.body ?? {})) {
+    const staffId = req.staffId;
+    let flipActor: typeof staffTable.$inferSelect | undefined;
+    if (staffId) {
+      const [s] = await db
+        .select()
+        .from(staffTable)
+        .where(eq(staffTable.id, staffId));
+      flipActor = s;
+    }
+    const isAdminUser = Boolean(
+      flipActor?.active && (flipActor?.isAdmin || flipActor?.isSuperUser),
+    );
+    if (!isAdminUser) {
+      res.status(403).json({
+        error: "Only an admin may schedule the school-year flip",
+      });
+      return;
+    }
+    const raw = req.body.schoolYearFlipDate;
+    if (raw === null || raw === "") {
+      updates.schoolYearFlipDate = null;
+    } else if (
+      typeof raw === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(raw.trim())
+    ) {
+      updates.schoolYearFlipDate = raw.trim();
+    } else {
+      res.status(400).json({
+        error: "schoolYearFlipDate must be YYYY-MM-DD or null",
+      });
+      return;
+    }
+  }
+
   if (Object.keys(updates).length === 0) {
     res.json(withEffective(current));
     return;
@@ -1177,6 +1217,17 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       ),
     )
     .returning();
+
+  // A flip-date change may activate or reverse the reporting-year flip and
+  // re-tag the outgoing year's FAST rows. Reconcile, then return the fresh
+  // row so the response reflects the resulting active state.
+  if ("schoolYearFlipDate" in updates) {
+    await reconcileSchoolYearFlip(schoolId);
+    const fresh = await getOrCreate(schoolId);
+    res.json(withEffective(fresh));
+    return;
+  }
+
   res.json(withEffective(updated));
 });
 

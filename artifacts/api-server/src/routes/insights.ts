@@ -67,6 +67,7 @@ import {
 import { loadAttendanceMetrics } from "../lib/attendanceMetrics.js";
 import { loadStudentGrades } from "../lib/studentMetrics.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
+import { getActiveSchoolYear } from "../lib/fastHistory.js";
 import {
   loadFastHistory,
   pickHistory,
@@ -563,7 +564,7 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
         // on separate (school_year)-keyed rows.
         eq(
           studentFastScoresTable.schoolYear,
-          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+          await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ),
         ),
       ),
     );
@@ -1764,7 +1765,7 @@ router.get("/insights/watchlist", async (req, res) => {
         // FAST Phase 1: BQ flag lives on current-SY row.
         eq(
           studentFastScoresTable.schoolYear,
-          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+          await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ),
         ),
       ),
     );
@@ -2840,7 +2841,7 @@ router.get("/insights/academics", async (req, res) => {
         // FAST Phase 1: aggregate current SY only.
         eq(
           studentFastScoresTable.schoolYear,
-          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+          await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ),
         ),
       ),
     );
@@ -3182,7 +3183,7 @@ router.get("/insights/academics/band", async (req, res) => {
         // FAST Phase 1: current SY only.
         eq(
           studentFastScoresTable.schoolYear,
-          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+          await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ),
         ),
       ),
     );
@@ -3595,7 +3596,7 @@ async function loadTrajectoryRecs(
         // FAST Phase 1: current SY only.
         eq(
           studentFastScoresTable.schoolYear,
-          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+          await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ),
         ),
       ),
     );
@@ -5491,7 +5492,7 @@ router.get("/insights/early-warning", async (req, res) => {
   const topIds = topRisk.map((r) => r.studentId);
   if (topIds.length > 0) {
     const attendance = await loadAttendanceMetrics(schoolId, topIds);
-    const sy = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+    const sy = await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ);
     const ewFastRows = await db
       .select({
         studentId: studentFastScoresTable.studentId,

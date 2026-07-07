@@ -60,6 +60,7 @@ import {
 } from "../lib/fastCutScores.js";
 import { isCoreTeam as isCoreTeamShared } from "../lib/coreTeam.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
+import { getActiveSchoolYear } from "../lib/fastHistory.js";
 
 const router: IRouter = Router();
 
@@ -331,7 +332,7 @@ router.get(
       schoolYear = available[0].schoolYear;
     } else {
       window = "pm3";
-      schoolYear = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+      schoolYear = await getActiveSchoolYear(ctx.schoolId, DEFAULT_SCHOOL_TZ);
     }
 
     const baseResponse = {
@@ -726,7 +727,7 @@ router.get(
     const schoolYear =
       typeof rawSY === "string" && rawSY.length > 0
         ? rawSY
-        : schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+        : await getActiveSchoolYear(ctx.schoolId, DEFAULT_SCHOOL_TZ);
 
     if (ctx.studentIds.length === 0) {
       res.json({
@@ -1811,7 +1812,7 @@ router.get(
     } else if (availableSchoolYears.length > 0) {
       schoolYear = availableSchoolYears[0]!;
     } else {
-      schoolYear = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+      schoolYear = await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ);
     }
 
     // One read for the whole year × subject — small (≤ 3 windows ×

@@ -50,6 +50,7 @@ import { requireSchool } from "../lib/scope.js";
 import { loadBenchmarkDescriptions } from "../lib/benchmarkText.js";
 import { isCoreTeam as isCoreTeamShared } from "../lib/coreTeam.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
+import { getActiveSchoolYear } from "../lib/fastHistory.js";
 
 const router: IRouter = Router();
 
@@ -268,7 +269,7 @@ router.get(
       }
       teacherId = t;
     }
-    const currentSY = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+    const currentSY = await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ);
     const rows = (await db.execute(sql`
       SELECT benchmark_code,
              COUNT(*)::int AS cnt,
@@ -424,7 +425,7 @@ router.post(
       res.status(400).json({ error: "Cannot log a date in the future" });
       return;
     }
-    const currentSY = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+    const currentSY = await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ);
     const deliveredSY = schoolYearLabelFor(
       new Date(`${deliveredOnRaw}T12:00:00`),
       DEFAULT_SCHOOL_TZ,
@@ -584,7 +585,7 @@ router.patch(
         res.status(400).json({ error: "Cannot log a date in the future" });
         return;
       }
-      const currentSY = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+      const currentSY = await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ);
       const deliveredSY = schoolYearLabelFor(
         new Date(`${body.deliveredOn}T12:00:00`),
         DEFAULT_SCHOOL_TZ,
@@ -794,7 +795,7 @@ router.get(
     // Mastery stitch (current SY only, FAST subjects only). Drives the
     // "weak + untaught" flag in the dashboard. Subjects with no FAST data
     // (writing/science/social_studies) simply return null mastery.
-    const currentSY = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+    const currentSY = await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ);
     const mastery = (await db.execute(sql`
       SELECT benchmark_code,
              SUM(points_earned)::int AS earned,
@@ -906,7 +907,7 @@ router.get(
         subject,
         codes: [],
         teachers: [],
-        schoolYear: schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+        schoolYear: await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ),
       });
       return;
     }
@@ -1040,7 +1041,7 @@ router.get(
     // node-postgres parameter limit on schools with hundreds of kids.
     // The (school_id, subject, school_year, benchmark_code) filter
     // already prunes hard; we filter to roster kids in JS below.
-    const currentSY = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+    const currentSY = await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ);
     const codeLiteral = `{${codeList
       .map((c) => `"${c.replace(/"/g, '\\"')}"`)
       .join(",")}}`;

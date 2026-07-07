@@ -441,10 +441,9 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
       // (rather than importing from the route) so the onboarding lib
       // stays decoupled from route handlers — same pattern as the
       // other autoChecks in this file.
-      const { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } = await import(
-        "./schoolYear.js"
-      );
-      const sy = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+      const { DEFAULT_SCHOOL_TZ } = await import("./schoolYear.js");
+      const { getActiveSchoolYear } = await import("./fastHistory.js");
+      const sy = await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ);
       const r = await db.execute(
         sql`SELECT subject, COUNT(*)::int AS c
               FROM student_fast_item_responses

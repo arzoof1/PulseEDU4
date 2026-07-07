@@ -76,6 +76,7 @@ import {
   ensureAcademicEvidenceSchema,
 } from "./seed";
 import { seedDistrictDemoExtras } from "./seedDemoExtras";
+import { reconcileAllSchoolYearFlips } from "./lib/schoolYearFlip";
 import { backfillWitnessSequences } from "./lib/witnessStatementId";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
@@ -434,6 +435,14 @@ async function runSeed(): Promise<void> {
     await seedEligibilityForSchool1();
   } catch (err) {
     logger.error({ err }, "[boot] eligibility demo seed failed");
+  }
+  // Apply any school-controlled school-year flip whose scheduled date has
+  // passed (e.g. while the server was idle). Idempotent + self-guarded per
+  // school so it can never block boot. No-op for the demo (no flip scheduled).
+  try {
+    await reconcileAllSchoolYearFlips();
+  } catch (err) {
+    logger.error({ err }, "[boot] school-year flip reconcile failed");
   }
 }
 

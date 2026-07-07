@@ -5815,6 +5815,7 @@ function App() {
     manualRosterUploadEnabled: boolean;
     strictHouseNameMatch: boolean;
     gpaEnabled: boolean;
+    schoolYearFlipDate: string | null;
     teacherFamilyMessagingEnabled: boolean;
     watchlistAbsenceThreshold: number;
     watchlistBehaviorThreshold: number;
@@ -5905,6 +5906,7 @@ function App() {
     manualRosterUploadEnabled: false,
     strictHouseNameMatch: false,
     gpaEnabled: false,
+    schoolYearFlipDate: null,
     teacherFamilyMessagingEnabled: false,
     watchlistAbsenceThreshold: 10,
     watchlistBehaviorThreshold: 3,
@@ -7846,6 +7848,10 @@ function App() {
               : false,
           gpaEnabled:
             typeof data.gpaEnabled === "boolean" ? data.gpaEnabled : false,
+          schoolYearFlipDate:
+            typeof data.schoolYearFlipDate === "string"
+              ? data.schoolYearFlipDate
+              : null,
           teacherFamilyMessagingEnabled:
             typeof data.teacherFamilyMessagingEnabled === "boolean"
               ? data.teacherFamilyMessagingEnabled
@@ -7939,10 +7945,18 @@ function App() {
     setSettingsStatus("saving");
     setSettingsError("");
     try {
+      // The school-year flip date is admin-only on the server. Only include
+      // it in the payload for admins/SuperUsers; otherwise a non-admin save
+      // (e.g. Core Team editing other fields) would 403 on that one field.
+      const canSetFlip = Boolean(authUser?.isAdmin || authUser?.isSuperUser);
+      const { schoolYearFlipDate: _flipDate, ...settingsWithoutFlip } =
+        schoolSettings;
       const res = await authFetch("/api/school-settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(schoolSettings),
+        body: JSON.stringify(
+          canSetFlip ? schoolSettings : settingsWithoutFlip,
+        ),
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
@@ -8036,6 +8050,10 @@ function App() {
             : false,
         gpaEnabled:
           typeof data.gpaEnabled === "boolean" ? data.gpaEnabled : false,
+        schoolYearFlipDate:
+          typeof data.schoolYearFlipDate === "string"
+            ? data.schoolYearFlipDate
+            : null,
         teacherFamilyMessagingEnabled:
           typeof data.teacherFamilyMessagingEnabled === "boolean"
             ? data.teacherFamilyMessagingEnabled
@@ -25972,6 +25990,54 @@ function App() {
                 </span>
               </label>
             )}
+            {new Date().getMonth() >= 7 &&
+              Boolean(authUser?.isAdmin || authUser?.isSuperUser) && (
+                <label style={{ display: "grid", gap: "0.25rem" }}>
+                  <span>
+                    School-Year Flip Date
+                    <span
+                      style={{
+                        color: "var(--text-subtle, #64748b)",
+                        fontWeight: "normal",
+                        marginLeft: "0.5rem",
+                      }}
+                    >
+                      Admin only. Optional.
+                    </span>
+                  </span>
+                  <input
+                    type="date"
+                    value={schoolSettings.schoolYearFlipDate ?? ""}
+                    onChange={(e) =>
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        schoolYearFlipDate: e.target.value
+                          ? e.target.value
+                          : null,
+                      })
+                    }
+                    style={{
+                      padding: "0.4rem 0.6rem",
+                      border: "1px solid var(--border-subtle, #e2e8f0)",
+                      borderRadius: 6,
+                      maxWidth: 220,
+                    }}
+                  />
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontSize: "0.85rem",
+                    }}
+                  >
+                    On or after this date, FAST &amp; Insights advance to the
+                    next reporting year and the outgoing year moves to the
+                    historical (prior-year) column. Schedules, rosters, and
+                    grades are unaffected — those stay owned by the SIS. Leave
+                    blank to keep the current reporting year; you can clear or
+                    postpone the date at any time to undo the flip.
+                  </span>
+                </label>
+              )}
             <label style={{ display: "grid", gap: "0.25rem" }}>
               <span>
                 Number of Periods in the School Day

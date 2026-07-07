@@ -29,6 +29,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { hasChart, SUBJECT_KEYS, type Subject } from "../lib/fastCutScores.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
+import { getActiveSchoolYear } from "../lib/fastHistory.js";
 
 const router: IRouter = Router();
 
@@ -109,7 +110,7 @@ router.get("/insights/fast-coverage", async (req, res) => {
         // were stamped with current SY by the migration.
         eq(
           studentFastScoresTable.schoolYear,
-          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+          await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ),
         ),
       ),
     )
