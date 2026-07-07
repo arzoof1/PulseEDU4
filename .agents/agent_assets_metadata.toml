@@ -528,3 +528,9 @@ id = "3ENJ1nFv90yE143-HkBkl"
 uri = "file://docs/migrations/2026-07-07-hall-pass-auto-end.pdf"
 type = "pdf"
 title = "Migration Notes — Hall Pass Auto-End (2026-07-07)"
+
+[[outputs]]
+id = "PF6IqZl3sZ8F6GZ2m6AJR"
+uri = "file://docs/migrations/2026-07-06-go-live-runbook.pdf"
+type = "pdf"
+title = "Manual Go-Live Runbook — All July 6, 2026 Changes"
