@@ -262,3 +262,52 @@ applied via direct SQL (drizzle-kit push is broken on this drizzle version — t
 app relies on the seed.ts boot migration by design). API server restarted clean;
 `GET /api/insights/watchlist` returns 200 on health and 401 unauthenticated as
 expected.
+
+## Change #7 — Auto-baseline L25 (lowest-25%) from prior-year PM3 at year start
+
+**Area:** `artifacts/api-server/src/seed.ts` (`ensureL25BaselineFromPriorPm3`),
+`artifacts/api-server/src/index.ts` (`runSeed` call order).
+
+**Goal (reported):** At the start of each school year, students should automatically
+carry an **L25** (bottom-quartile) FAST designation derived from **last year's PM3**
+scale score — with no button/preview — so the roster **BQ pill** and the Insights
+Watch List light up on day one. A district can later **upload** an official L25 list
+that **fully replaces** the baseline for the subjects in the file.
+
+**Design:**
+- Reuses `student_fast_scores.prior_year_bq` (boolean) — **no new column**. Provenance
+  needs no new field either.
+- Ranks the **lowest 25% per (current grade, subject)** within each school, ordered by
+  `prior_year_score` (the prior-year PM3 anchor): `ntile(4) … ORDER BY prior_year_score ASC`,
+  group 1.
+- Runs as an idempotent **boot one-shot** keyed by a per-(school, school-year) marker in
+  `app_one_shot_markers` (`l25_baseline_v2_<schoolId>_<sy>`). Skips a school with **no**
+  `prior_year_score` yet **without** claiming the marker, so a later boot retries once
+  prior-year PM3 is imported.
+- Called from `runSeed` right after `seedHistoricalFastIfEmpty()`.
+
+**District-upload precedence (the load-bearing subtlety):** the existing `bq_l25`
+importer is full-replace and writes a **rollback ledger row** (`fast_bq_import_batches`,
+one per committed job, `prior_json.prior` keyed by subject). That ledger is the **only**
+reliable "this subject was L25-uploaded" signal — `import_job_id` is shared by *every*
+FAST importer (`fast_prior_year`, `fast_florida`, `bq_l25`), so it cannot distinguish an
+L25 upload; and a rollback **deletes** the ledger row, releasing the subject back to the
+baseline. The baseline therefore **excludes** any subject present in a live ledger row
+(`subject NOT IN (SELECT jsonb_object_keys(prior_json->'prior') …)`) and recomputes
+everything else.
+
+**Why v2 / recompute (school-1 demo bug):** the first cut skipped a school-year whenever
+**any** `prior_year_bq` was already TRUE — which in the demo included **seed noise** that
+was *not* the true bottom quartile (~40 wrongly flagged, ~43 wrongly missing per subject in
+school 1). Result: the baseline never actually ran and school 1's L25 didn't reflect the
+lowest scorers. The `v2` marker forces a one-time recompute that **clears** stale flags on
+non-uploaded subjects, then re-flags the true bottom 25%. District uploads (ledger) are
+still preserved.
+
+**Verification:** `pnpm --filter @workspace/api-server run typecheck` passes; server
+restart runs the migration cleanly (`/api/healthz` 200). Post-recompute, school 1 shows
+**25.2% ELA / 25.3% Math** flagged and a boundary check confirms `max_flagged ≤ min_unflagged`
+per grade+subject (flagged set = the genuine lowest scorers; the only overlap is students
+sharing the exact boundary score, an inherent `ntile` tie). Code review passed.
+
+---

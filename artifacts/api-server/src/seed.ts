@@ -8419,17 +8419,22 @@ export async function ensureFeaturePlansSchema() {
 //
 // This is a BASELINE only. A district can later upload an official L25 list
 // through the `bq_l25` importer, which FULL-REPLACES prior_year_bq for the
-// subjects in the file (and snapshots the prior set for rollback). So the auto
-// baseline must never re-clobber a district upload:
-//   - Guarded by a per-(school, school_year) marker in app_one_shot_markers so
-//     it runs at most once per school-year.
-//   - If ANY prior_year_bq is already TRUE for the school's current year
-//     (a district upload OR a previous auto run already established L25), we
-//     take no action and just claim the marker.
-//   - If there is no prior_year_score data yet, we skip WITHOUT setting the
-//     marker so a later boot retries once prior-year PM3 is imported.
-// Provenance is distinguishable without a new column: auto rows keep
-// import_job_id = NULL; district-uploaded rows carry the importer's job id.
+// subjects in the file (and snapshots the prior set into fast_bq_import_batches
+// for rollback). District uploads must always win, so per school we:
+//   - Skip a school-year once its marker (l25_baseline_v2_<schoolId>_<sy>) is
+//     set, so the recompute runs at most once per school-year.
+//   - Skip WITHOUT setting the marker if there is no prior_year_score yet, so a
+//     later boot retries once prior-year PM3 is imported.
+//   - Treat a subject as OFF-LIMITS iff a LIVE fast_bq_import_batches ledger row
+//     covers it (prior_json.prior keys). The ledger is the ONLY reliable
+//     "district L25 upload" signal — import_job_id is shared by every FAST
+//     importer (fast_prior_year / fast_florida / bq_l25) so it can't identify an
+//     L25 upload; and a rollback DELETES the ledger row, releasing the subject
+//     back to this baseline.
+//   - For every non-off-limits subject, CLEAR any stale prior_year_bq (demo seed
+//     noise or a prior auto run) and then set the true bottom quartile.
+// (v1 wrongly skipped whenever ANY prior_year_bq was TRUE, which seed noise
+// tripped, so the baseline never ran — hence the v2 marker + explicit clear.)
 // Bottom quartile = ntile(4) ordered ascending by prior_year_score, group 1.
 // -----------------------------------------------------------------------------
 export async function ensureL25BaselineFromPriorPm3(): Promise<void> {
@@ -8443,29 +8448,15 @@ export async function ensureL25BaselineFromPriorPm3(): Promise<void> {
   const schools = await db.execute<{ id: number }>(sql`SELECT id FROM schools`);
   for (const { id: schoolId } of schools.rows) {
     const sy = await resolveCurrentFastYear(schoolId);
-    const marker = `l25_baseline_${schoolId}_${sy}`;
+    // v2 marker: v1 wrongly treated ANY pre-existing prior_year_bq (incl. demo
+    // seed noise) as authoritative and skipped, so the baseline never ran. v2
+    // recomputes over non-uploaded subjects; district uploads still win.
+    const marker = `l25_baseline_v2_${schoolId}_${sy}`;
 
     const existing = await db.execute<{ name: string }>(
       sql`SELECT name FROM app_one_shot_markers WHERE name = ${marker}`,
     );
     if (existing.rows.length > 0) continue;
-
-    // L25 already established for this school-year (district upload or a prior
-    // auto run) — claim the marker and leave the existing designation intact.
-    const already = await db.execute<{ n: number }>(sql`
-      SELECT COUNT(*)::int AS n
-        FROM student_fast_scores
-       WHERE school_id = ${schoolId}
-         AND school_year = ${sy}
-         AND is_historical = FALSE
-         AND prior_year_bq = TRUE
-    `);
-    if ((already.rows[0]?.n ?? 0) > 0) {
-      await db.execute(
-        sql`INSERT INTO app_one_shot_markers (name) VALUES (${marker}) ON CONFLICT DO NOTHING`,
-      );
-      continue;
-    }
 
     // No prior-year PM3 to rank on yet — retry on a later boot (no marker).
     const hasPrior = await db.execute<{ n: number }>(sql`
@@ -8478,7 +8469,30 @@ export async function ensureL25BaselineFromPriorPm3(): Promise<void> {
     `);
     if ((hasPrior.rows[0]?.n ?? 0) === 0) continue;
 
-    // Flag the lowest quartile per (current grade, subject) by prior-year PM3.
+    // A subject is OFF-LIMITS iff a district L25 upload covers it — the ONLY
+    // reliable signal is a live rollback-ledger row (import_job_id is shared by
+    // every FAST importer, so it can't distinguish an L25 upload; rollback
+    // deletes the ledger row, releasing the subject back to the baseline).
+    // Everything else (demo seed flags, a prior auto run) is fair game.
+    const uploaded = sql`(
+      SELECT jsonb_object_keys(b.prior_json->'prior')
+        FROM fast_bq_import_batches b
+       WHERE b.school_id = ${schoolId}
+         AND b.prior_json->>'schoolYear' = ${sy}
+    )`;
+
+    // 1) Clear stale flags on non-uploaded subjects (seed noise / prior auto).
+    await db.execute(sql`
+      UPDATE student_fast_scores fs
+         SET prior_year_bq = FALSE, updated_at = now()
+       WHERE fs.school_id = ${schoolId}
+         AND fs.school_year = ${sy}
+         AND fs.is_historical = FALSE
+         AND fs.prior_year_bq = TRUE
+         AND fs.subject NOT IN ${uploaded}
+    `);
+
+    // 2) Flag the lowest quartile per (current grade, subject) by prior PM3.
     await db.execute(sql`
       WITH ranked AS (
         SELECT fs.id,
@@ -8494,6 +8508,7 @@ export async function ensureL25BaselineFromPriorPm3(): Promise<void> {
            AND fs.school_year = ${sy}
            AND fs.is_historical = FALSE
            AND fs.prior_year_score IS NOT NULL
+           AND fs.subject NOT IN ${uploaded}
       )
       UPDATE student_fast_scores fs
          SET prior_year_bq = TRUE, updated_at = now()
