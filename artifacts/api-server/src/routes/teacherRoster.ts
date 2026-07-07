@@ -39,10 +39,11 @@ import {
 } from "@workspace/db";
 import { and, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
-import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 import {
   loadFastHistory,
   pickHistory,
+  resolveCurrentFastYear,
+  getActiveSchoolYear,
   type FastHistoryEntry,
   type FastHistoryMap,
 } from "../lib/fastHistory.js";
@@ -498,6 +499,10 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
   // "Today" in YYYY-MM-DD for the ISS / OSS pill lookups below.
   const today = new Date().toISOString().slice(0, 10);
 
+  // Current FAST school year resolved from the data, not the wall clock
+  // (see the schoolYear filter on the FAST query below).
+  const currentFastYear = await getActiveSchoolYear(schoolId);
+
   const [
     students,
     scores,
@@ -529,12 +534,13 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
           // FAST Phase 1: scores are now keyed by school_year. Filter
           // to current SY so prior-year backfill rows don't shadow
           // current-year rows in the per-(student, subject) map below.
-          // Legacy rows were backfilled to the current SY by the
-          // ensureFastScoresSchema migration, so this is safe.
-          eq(
-            studentFastScoresTable.schoolYear,
-            schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
-          ),
+          // Resolve the current SY from the DATA (MAX non-historical
+          // school_year), NOT the wall clock: schoolYearLabelFor rolls
+          // over on July 1, so on a frozen demo whose current year is
+          // "25-26" a July wall-clock read asks for "26-27" and finds
+          // zero rows — every current-year FAST score (incl. the BQ /
+          // bottom-quartile flag) silently disappears from the roster.
+          eq(studentFastScoresTable.schoolYear, currentFastYear),
         ),
       ),
     db

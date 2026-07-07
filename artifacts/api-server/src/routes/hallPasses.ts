@@ -6,6 +6,7 @@ import {
   staffTable,
   studentsTable,
 } from "@workspace/db";
+import { autoEndStalePasses } from "../lib/hallPassLifecycle.js";
 import { eq, and, inArray } from "drizzle-orm";
 import { loadRestroomDestinationNames } from "../lib/oneWayPass.js";
 import { config } from "../data/config";
@@ -27,6 +28,7 @@ const router: IRouter = Router();
 router.get("/hall-passes", async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
+  await autoEndStalePasses(schoolId);
   const rows = await db
     .select()
     .from(hallPassesTable)
@@ -58,6 +60,9 @@ router.get("/hall-passes", async (req, res) => {
 router.post("/hall-passes", async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
+  // Close any forgotten passes first so the "already has an active pass" check
+  // below doesn't fire on a stale row a student never ended.
+  await autoEndStalePasses(schoolId);
   const {
     studentId,
     destination,
@@ -348,12 +353,35 @@ router.patch("/hall-passes/:id", async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
   const id = Number(req.params.id);
-  const { endedAt, createdAt, editedBy } = req.body ?? {};
+  const { endedAt, createdAt } = req.body ?? {};
 
-  if (typeof editedBy !== "string" || !editedBy.includes("(Admin)")) {
+  // Editing a pass's timestamps is an admin action. Gate on the REAL
+  // authenticated role, not a client-supplied string — the client used to
+  // append "(Admin)" to `editedBy`, but that's spoofable and broke outright
+  // once the client started sending the bare display name (every save 403'd).
+  // Load the acting staff, require admin/superuser, and derive the audit
+  // `editedBy` server-side. A non-SuperUser actor whose school differs from
+  // the active school is rejected (tenant guard).
+  const actorId = req.staffId;
+  if (!actorId) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  const [actor] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.id, actorId));
+  const privileged = Boolean(
+    actor && actor.active && (actor.isAdmin || actor.isSuperUser),
+  );
+  const sameTenant = Boolean(
+    actor && (actor.isSuperUser || actor.schoolId === schoolId),
+  );
+  if (!privileged || !sameTenant) {
     res.status(403).json({ error: "Admin access required" });
     return;
   }
+  const editedBy = `${actor?.displayName ?? "Unknown"} (Admin)`;
 
   if (endedAt !== undefined && endedAt !== null && typeof endedAt !== "string") {
     res
@@ -407,7 +435,9 @@ router.patch("/hall-passes/:id", async (req, res) => {
       ? "active"
       : existing.status === "system_ended"
         ? "system_ended"
-        : "ended";
+        : existing.status === "auto_ended"
+          ? "auto_ended"
+          : "ended";
 
   const effectiveCreatedAt =
     createdAt !== undefined ? (createdAt as string) : existing.createdAt;

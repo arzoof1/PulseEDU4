@@ -25,6 +25,7 @@ import {
 } from "../seed.js";
 import { studentAccommodationsTable } from "@workspace/db";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
+import { getActiveSchoolYear } from "../lib/fastHistory.js";
 
 // Hardcoded so this bootstrap can ONLY ever reset chris.clifford's password.
 // No body, no params — calling it for anyone else is structurally impossible.
@@ -1388,7 +1389,7 @@ router.post("/seed-demo-cases", async (req, res) => {
       );
     const existingTitles = new Set(existing.map((r) => r.title));
 
-    const yearLabel = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+    const yearLabel = await getActiveSchoolYear(SCHOOL_ID, DEFAULT_SCHOOL_TZ);
 
     // ---- Pick the next case_number once, then bump per insert ----
     const [{ nextStart }] = (
@@ -1986,7 +1987,7 @@ router.post("/seed-demo-school-1", async (req, res) => {
       },
     ];
 
-    const yearLabel = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+    const yearLabel = await getActiveSchoolYear(SCHOOL_ID, DEFAULT_SCHOOL_TZ);
 
     const existing = await db
       .select({

@@ -1,4 +1,5 @@
 import { backfillWitnessSequences } from "./lib/witnessStatementId";
+import { reconcileAllSchoolYearFlips } from "./lib/schoolYearFlip";
 import { logger } from "./lib/logger";
 import {
   backfillStaffRoomLocationsAtParrottOnce,
@@ -23,6 +24,7 @@ import {
   ensureHallPassPriorityBypassColumn,
   ensureKioskCardsSchema,
   ensureKioskWelcomeSchema,
+  ensureL25BaselineFromPriorPm3,
   ensureLocationAllowedDestinationsBackfill,
   ensureOnTimeTestModeColumns,
   ensureOneWayPassSchema,
@@ -88,6 +90,7 @@ export async function runSeed(): Promise<void> {
   await seedAcademicMinutesDemoIfEmpty();
   await seedFastScoresIfEmpty();
   await seedHistoricalFastIfEmpty();
+  await ensureL25BaselineFromPriorPm3();
   await seedIreadyAndSciIfEmpty();
   await seedHousesIfEmpty();
   await seedEngagementEventsIfEmpty();
@@ -194,6 +197,11 @@ export async function runSeed(): Promise<void> {
     await seedEligibilityForSchool1();
   } catch (err) {
     logger.error({ err }, "[boot] eligibility demo seed failed");
+  }
+  try {
+    await reconcileAllSchoolYearFlips();
+  } catch (err) {
+    logger.error({ err }, "[boot] school-year flip reconcile failed");
   }
 }
 

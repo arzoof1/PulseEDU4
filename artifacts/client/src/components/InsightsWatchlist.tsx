@@ -57,6 +57,12 @@ interface Row {
   behaviorCount: number;
   tardyCount: number;
   issDayCount: number;
+  // Semester-total official days absent (null when the school has no
+  // Eligibility Hub upload — never fabricated to 0).
+  absences: number | null;
+  // True when the student trips at least one risk trigger (server-computed
+  // using the school's Watch List thresholds). Drives the default gate.
+  needsAttention: boolean;
   // Counts from the immediately-prior window of the same length —
   // used to render the "↑ N from prior" trend microcopy and the
   // "✨ New this period" badge. Always present; the server defaults
@@ -72,6 +78,9 @@ interface Row {
 
 interface Filters {
   window: WindowKey;
+  // "attention" (default) shows only students tripping ≥1 risk trigger;
+  // "all" is the "show full roster" escape hatch.
+  scope: "attention" | "all";
   customFrom: string;
   customTo: string;
   grade: string;
@@ -88,6 +97,7 @@ interface Filters {
 
 const EMPTY_FILTERS: Filters = {
   window: "30",
+  scope: "attention",
   customFrom: "",
   customTo: "",
   grade: "",
@@ -220,7 +230,27 @@ interface Props {
 // right side of each card.
 type PillarStatus = "ok" | "info" | "watch" | "high";
 
-function computePillars(r: Row): {
+// School-configurable count-based thresholds surfaced by the watchlist
+// endpoint. The client uses them so chip/pillar severity stays in step with
+// the school's tuned Watch List triggers. Fallbacks match the schema defaults.
+interface WatchlistThresholds {
+  absence: number;
+  behavior: number;
+  tardy: number;
+  iss: number;
+}
+
+const DEFAULT_THRESHOLDS: WatchlistThresholds = {
+  absence: 10,
+  behavior: 3,
+  tardy: 5,
+  iss: 1,
+};
+
+function computePillars(
+  r: Row,
+  thresholds: WatchlistThresholds,
+): {
   academic: PillarStatus;
   behavior: PillarStatus;
   attendance: PillarStatus;
@@ -231,20 +261,30 @@ function computePillars(r: Row): {
   const academic: PillarStatus =
     r.bqEla && r.bqMath ? "high" : r.bqEla || r.bqMath ? "watch" : "ok";
 
-  // Behavior: ISS days are always high; 3+ negatives high; 1-2 watch.
+  // Behavior: ISS days at/above the ISS threshold are high; behavior
+  // entries at/above the behavior threshold high; any below → watch.
   const behavior: PillarStatus =
-    r.issDayCount > 0
+    r.issDayCount >= thresholds.iss
       ? "high"
-      : r.behaviorCount >= 3
+      : r.behaviorCount >= thresholds.behavior
         ? "high"
-        : r.behaviorCount > 0
+        : r.behaviorCount > 0 || r.issDayCount > 0
           ? "watch"
           : "ok";
 
-  // Attendance proxy: tardies are the only attendance signal in the
-  // watchlist payload. 5+ in window high; 1-4 watch.
-  const attendance: PillarStatus =
-    r.tardyCount >= 5 ? "high" : r.tardyCount > 0 ? "watch" : "ok";
+  // Attendance proxy: tardies (and absences) are the attendance signals in
+  // the watchlist payload. At/above the tardy or absence threshold → high;
+  // any below → watch.
+  const attendanceHigh =
+    r.tardyCount >= thresholds.tardy ||
+    (r.absences != null && r.absences >= thresholds.absence);
+  const attendanceWatch =
+    r.tardyCount > 0 || (r.absences != null && r.absences > 0);
+  const attendance: PillarStatus = attendanceHigh
+    ? "high"
+    : attendanceWatch
+      ? "watch"
+      : "ok";
 
   // MTSS: tier 3 high, tier 2 watch, tier 1 ok.
   const mtss: PillarStatus =
@@ -344,6 +384,12 @@ export default function InsightsWatchlist({
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [rows, setRows] = useState<Row[]>([]);
   const [windowLabel, setWindowLabel] = useState("");
+  const [scopeCounts, setScopeCounts] = useState<{
+    totalInScope: number | null;
+    attentionCount: number | null;
+  }>({ totalInScope: null, attentionCount: null });
+  const [thresholds, setThresholds] =
+    useState<WatchlistThresholds>(DEFAULT_THRESHOLDS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [savedPresets, setSavedPresets] = useState<SavedPreset[]>(() =>
@@ -406,6 +452,7 @@ export default function InsightsWatchlist({
   const queryString = useMemo(() => {
     const p = new URLSearchParams();
     p.set("window", filters.window);
+    p.set("scope", filters.scope);
     if (filters.window === "custom") {
       if (filters.customFrom) p.set("from", filters.customFrom);
       if (filters.customTo) p.set("to", filters.customTo);
@@ -436,6 +483,28 @@ export default function InsightsWatchlist({
         if (cancelled) return;
         setRows(data.rows ?? []);
         setWindowLabel(data.window?.label ?? "");
+        setScopeCounts({
+          totalInScope:
+            typeof data.totalInScope === "number" ? data.totalInScope : null,
+          attentionCount:
+            typeof data.attentionCount === "number"
+              ? data.attentionCount
+              : null,
+        });
+        const t = data.thresholds;
+        setThresholds({
+          absence:
+            typeof t?.absence === "number"
+              ? t.absence
+              : DEFAULT_THRESHOLDS.absence,
+          behavior:
+            typeof t?.behavior === "number"
+              ? t.behavior
+              : DEFAULT_THRESHOLDS.behavior,
+          tardy:
+            typeof t?.tardy === "number" ? t.tardy : DEFAULT_THRESHOLDS.tardy,
+          iss: typeof t?.iss === "number" ? t.iss : DEFAULT_THRESHOLDS.iss,
+        });
       })
       .catch((e) => {
         if (cancelled) return;
@@ -553,16 +622,25 @@ export default function InsightsWatchlist({
     if (r.behaviorCount > 0) {
       out.push({
         label: `Negatives ${r.behaviorCount}`,
-        sev: r.behaviorCount >= 3 ? "high" : "watch",
+        sev: r.behaviorCount >= thresholds.behavior ? "high" : "watch",
       });
     }
     if (r.issDayCount > 0) {
-      out.push({ label: `ISS days ${r.issDayCount}`, sev: "high" });
+      out.push({
+        label: `ISS days ${r.issDayCount}`,
+        sev: r.issDayCount >= thresholds.iss ? "high" : "watch",
+      });
     }
     if (r.tardyCount > 0) {
       out.push({
         label: `Tardies ${r.tardyCount}`,
-        sev: r.tardyCount >= 5 ? "high" : "watch",
+        sev: r.tardyCount >= thresholds.tardy ? "high" : "watch",
+      });
+    }
+    if (r.absences != null && r.absences > 0) {
+      out.push({
+        label: `Absences ${r.absences}`,
+        sev: r.absences >= thresholds.absence ? "high" : "watch",
       });
     }
     if (r.bqEla) out.push({ label: "BQ ELA", sev: "high" });
@@ -641,7 +719,81 @@ export default function InsightsWatchlist({
             ? `Window: ${windowLabel}`
             : "All students you can see, sorted by top risk"}
         </span>
+        <div
+          role="radiogroup"
+          aria-label="Watch List scope"
+          style={{
+            display: "inline-flex",
+            border: "1px solid #d1d5db",
+            borderRadius: 8,
+            overflow: "hidden",
+          }}
+        >
+          {(
+            [
+              { key: "attention", label: "Needs attention" },
+              { key: "all", label: "Full roster" },
+            ] as { key: Filters["scope"]; label: string }[]
+          ).map((opt) => {
+            const active = filters.scope === opt.key;
+            const count =
+              opt.key === "attention"
+                ? scopeCounts.attentionCount
+                : scopeCounts.totalInScope;
+            return (
+              <button
+                key={opt.key}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => setFilters({ ...filters, scope: opt.key })}
+                style={{
+                  border: "none",
+                  padding: "0.3rem 0.7rem",
+                  fontSize: "0.8rem",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  background: active ? "#0d9488" : "white",
+                  color: active ? "white" : "#0d9488",
+                }}
+              >
+                {opt.label}
+                {count != null ? ` (${count})` : ""}
+              </button>
+            );
+          })}
+        </div>
       </div>
+      {filters.scope === "attention" &&
+        scopeCounts.totalInScope != null &&
+        scopeCounts.attentionCount != null &&
+        scopeCounts.totalInScope > scopeCounts.attentionCount && (
+          <p
+            style={{
+              margin: "0 0 0.5rem",
+              fontSize: "0.82rem",
+              color: "var(--text-subtle)",
+            }}
+          >
+            Showing {scopeCounts.attentionCount} student
+            {scopeCounts.attentionCount === 1 ? "" : "s"} who need attention.{" "}
+            <button
+              type="button"
+              onClick={() => setFilters({ ...filters, scope: "all" })}
+              style={{
+                border: "none",
+                background: "none",
+                padding: 0,
+                color: "#0d9488",
+                fontWeight: 600,
+                cursor: "pointer",
+                textDecoration: "underline",
+              }}
+            >
+              Show full roster ({scopeCounts.totalInScope})
+            </button>
+          </p>
+        )}
       <HowToUseHelp title="How to use the Watch List">
         <HowToSection title="What this is">
           The Watch List shows every student you can see, ranked by
@@ -1305,7 +1457,7 @@ export default function InsightsWatchlist({
                 row={r}
                 severity={rowSeverity(r)}
                 signals={rowSignals(r)}
-                pillars={computePillars(r)}
+                pillars={computePillars(r, thresholds)}
                 onOpen={() => onOpenStudent(r.studentId)}
                 onSpider={
                   onOpenSpider ? () => onOpenSpider(r.studentId) : undefined

@@ -11,6 +11,7 @@ export type SettingsTileId =
   | "school"
   | "bell-schedule"
   | "pbis-thresholds"
+  | "watchlist-thresholds"
   | "pbis-reasons"
   | "schoolFeatures"
   | "branding"

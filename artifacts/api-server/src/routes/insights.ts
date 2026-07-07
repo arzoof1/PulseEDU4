@@ -48,6 +48,7 @@ import {
   housesTable,
   attendanceCheckinsTable,
   safetyPlansTable,
+  schoolSettingsTable,
 } from "@workspace/db";
 import { and, eq, inArray, isNull, gte, lte, sql, desc, or } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -66,6 +67,7 @@ import {
 import { loadAttendanceMetrics } from "../lib/attendanceMetrics.js";
 import { loadStudentGrades } from "../lib/studentMetrics.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
+import { getActiveSchoolYear } from "../lib/fastHistory.js";
 import {
   loadFastHistory,
   pickHistory,
@@ -562,7 +564,7 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
         // on separate (school_year)-keyed rows.
         eq(
           studentFastScoresTable.schoolYear,
-          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+          await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ),
         ),
       ),
     );
@@ -1640,6 +1642,31 @@ router.get("/insights/watchlist", async (req, res) => {
   const bqEla = parseBoolFilter(req.query.bqEla);
   const bqMath = parseBoolFilter(req.query.bqMath);
 
+  // "Needs attention" gate. By default the system-driven Watch List shows
+  // ONLY students tripping at least one risk trigger; `scope=all` is the
+  // "show full roster" escape hatch. Any unrecognized value falls back to
+  // the default gated view.
+  const scope = req.query.scope === "all" ? "all" : "attention";
+
+  // School-configurable count-based trigger thresholds (Tier>=2 and FAST
+  // bottom-quartile are always-on boolean triggers, so they have no knob).
+  // Fall back to the schema defaults if the row hasn't been created yet.
+  const [settingsRow] = await db
+    .select({
+      absence: schoolSettingsTable.watchlistAbsenceThreshold,
+      behavior: schoolSettingsTable.watchlistBehaviorThreshold,
+      tardy: schoolSettingsTable.watchlistTardyThreshold,
+      iss: schoolSettingsTable.watchlistIssThreshold,
+    })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
+  const thresholds = {
+    absence: settingsRow?.absence ?? 10,
+    behavior: settingsRow?.behavior ?? 3,
+    tardy: settingsRow?.tardy ?? 5,
+    iss: settingsRow?.iss ?? 1,
+  };
+
   // Build the students base query.
   const wheres = [eq(studentsTable.schoolId, schoolId)];
   if (grade != null && Number.isFinite(grade)) {
@@ -1657,7 +1684,15 @@ router.get("/insights/watchlist", async (req, res) => {
     if (visibility.ids.size === 0) {
       // Teacher with no roster + no trusted-adult assignments — empty
       // result, short-circuit before hitting the DB.
-      res.json({ window: { ...window, from: window.from.toISOString(), to: window.to.toISOString() }, totalVisible: 0, rows: [] });
+      res.json({
+        window: { ...window, from: window.from.toISOString(), to: window.to.toISOString() },
+        scope,
+        thresholds,
+        totalInScope: 0,
+        attentionCount: 0,
+        totalVisible: 0,
+        rows: [],
+      });
       return;
     }
     wheres.push(inArray(studentsTable.studentId, [...visibility.ids]));
@@ -1678,6 +1713,10 @@ router.get("/insights/watchlist", async (req, res) => {
         label: window.label,
         days: window.days,
       },
+      scope,
+      thresholds,
+      totalInScope: 0,
+      attentionCount: 0,
       totalVisible: 0,
       rows: [],
     });
@@ -1685,6 +1724,10 @@ router.get("/insights/watchlist", async (req, res) => {
   }
 
   const studentIds = students.map((s) => s.studentId);
+  // Official days-absent (semester total from the latest Eligibility Hub
+  // upload). Students with no upload are absent from the map → null (never
+  // a fabricated 0), so they can't trip the absence trigger.
+  const attendanceMap = await loadAttendanceMetrics(schoolId, studentIds);
   const fromIso = window.from.toISOString();
   const toIso = window.to.toISOString();
   const fromDateOnly = fromIso.slice(0, 10);
@@ -1722,7 +1765,7 @@ router.get("/insights/watchlist", async (req, res) => {
         // FAST Phase 1: BQ flag lives on current-SY row.
         eq(
           studentFastScoresTable.schoolYear,
-          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+          await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ),
         ),
       ),
     );
@@ -1904,15 +1947,31 @@ router.get("/insights/watchlist", async (req, res) => {
       const behaviorCount = negCount + noteCount;
       const tardyCount = tardyByStudent.get(s.studentId) ?? 0;
       const issDayCount = issByStudent.get(s.studentId) ?? 0;
+      // Semester-total days absent (null when no Eligibility Hub upload).
+      const absences = attendanceMap.get(s.studentId)?.daysAbsent ?? null;
 
       // Build per-row flags using the same rule set as the profile.
       const flags: RiskFlag[] = [];
       if (bq.ela) flags.push({ code: "BQ_ELA", severity: "high", label: "Bottom quartile ELA" });
       if (bq.math) flags.push({ code: "BQ_MATH", severity: "high", label: "Bottom quartile Math" });
-      if (behaviorCount >= 3) flags.push({ code: "BEHAVIOR_TREND", severity: "high", label: `${behaviorCount} behavior entries` });
+      if (behaviorCount >= thresholds.behavior) flags.push({ code: "BEHAVIOR_TREND", severity: "high", label: `${behaviorCount} behavior entries` });
       else if (behaviorCount > 0) flags.push({ code: "BEHAVIOR_NOTED", severity: "watch", label: `${behaviorCount} behavior entries` });
-      if (issDayCount > 0) flags.push({ code: "ISS_RECENT", severity: "high", label: `${issDayCount} ISS day${issDayCount === 1 ? "" : "s"}` });
+      if (issDayCount >= thresholds.iss) flags.push({ code: "ISS_RECENT", severity: "high", label: `${issDayCount} ISS day${issDayCount === 1 ? "" : "s"}` });
+      if (absences != null && absences >= thresholds.absence) flags.push({ code: "ABSENCES", severity: "high", label: `${absences} days absent` });
+      if (tardyCount >= thresholds.tardy) flags.push({ code: "TARDY_TREND", severity: "watch", label: `${tardyCount} tardies` });
       if (tier >= 2) flags.push({ code: `TIER_${tier}`, severity: "watch", label: `Tier ${tier} plan` });
+
+      // "Needs attention" = trips at least one risk trigger. Tier>=2 and
+      // FAST bottom-quartile are always-on; the count-based triggers use
+      // the school-configurable thresholds above.
+      const needsAttention =
+        tier >= 2 ||
+        bq.ela ||
+        bq.math ||
+        behaviorCount >= thresholds.behavior ||
+        issDayCount >= thresholds.iss ||
+        tardyCount >= thresholds.tardy ||
+        (absences != null && absences >= thresholds.absence);
 
       const previousBehaviorCount =
         (prevPbisCountByStudent.get(s.studentId) ?? 0) +
@@ -1950,6 +2009,8 @@ router.get("/insights/watchlist", async (req, res) => {
         behaviorCount,
         tardyCount,
         issDayCount,
+        absences,
+        needsAttention,
         previousBehaviorCount,
         previousIssDayCount,
         isNewThisWindow,
@@ -1965,6 +2026,13 @@ router.get("/insights/watchlist", async (req, res) => {
       return true;
     });
 
+  // Everything matching the explicit filters is "in scope". The default
+  // gated view narrows further to only students who need attention; the
+  // "show full roster" toggle (scope=all) returns the full in-scope set.
+  const totalInScope = rows.length;
+  const attentionCount = rows.filter((r) => r.needsAttention).length;
+  const visibleRows = scope === "all" ? rows : rows.filter((r) => r.needsAttention);
+
   res.json({
     window: {
       from: window.from.toISOString(),
@@ -1972,8 +2040,12 @@ router.get("/insights/watchlist", async (req, res) => {
       label: window.label,
       days: window.days,
     },
-    totalVisible: rows.length,
-    rows,
+    scope,
+    thresholds,
+    totalInScope,
+    attentionCount,
+    totalVisible: visibleRows.length,
+    rows: visibleRows,
   });
 });
 
@@ -2769,7 +2841,7 @@ router.get("/insights/academics", async (req, res) => {
         // FAST Phase 1: aggregate current SY only.
         eq(
           studentFastScoresTable.schoolYear,
-          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+          await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ),
         ),
       ),
     );
@@ -3111,7 +3183,7 @@ router.get("/insights/academics/band", async (req, res) => {
         // FAST Phase 1: current SY only.
         eq(
           studentFastScoresTable.schoolYear,
-          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+          await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ),
         ),
       ),
     );
@@ -3524,7 +3596,7 @@ async function loadTrajectoryRecs(
         // FAST Phase 1: current SY only.
         eq(
           studentFastScoresTable.schoolYear,
-          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+          await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ),
         ),
       ),
     );
@@ -5420,7 +5492,7 @@ router.get("/insights/early-warning", async (req, res) => {
   const topIds = topRisk.map((r) => r.studentId);
   if (topIds.length > 0) {
     const attendance = await loadAttendanceMetrics(schoolId, topIds);
-    const sy = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+    const sy = await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ);
     const ewFastRows = await db
       .select({
         studentId: studentFastScoresTable.studentId,

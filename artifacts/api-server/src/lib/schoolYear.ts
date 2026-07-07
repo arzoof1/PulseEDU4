@@ -120,6 +120,28 @@ export function schoolYearLabelFor(
   return `${yy(start)}-${yy(end)}`;
 }
 
+// Advance a "YY-YY" school-year label forward by one year ("25-26" -> "26-27").
+// Used by the school-controlled year flip to compute the incoming reporting
+// year. Returns the input unchanged if it is not a valid label.
+export function nextSchoolYear(label: string): string {
+  const m = /^(\d{2})-(\d{2})$/.exec(label);
+  if (!m) return label;
+  const start = Number(m[1]) + 1;
+  const yy = (n: number) => String(n % 100).padStart(2, "0");
+  return `${yy(start)}-${yy(start + 1)}`;
+}
+
+// Rewind a "YY-YY" school-year label back by one year ("26-27" -> "25-26").
+// Used to identify the outgoing year when reversing a flip.
+export function prevSchoolYear(label: string): string {
+  const m = /^(\d{2})-(\d{2})$/.exec(label);
+  if (!m) return label;
+  const start = Number(m[1]) - 1;
+  if (start < 0) return label;
+  const yy = (n: number) => String(n % 100).padStart(2, "0");
+  return `${yy(start)}-${yy(start + 1)}`;
+}
+
 // First instant of the current school year, in the given timezone.
 // Used by year-end aggregations (AST insights, case-year filters) so
 // they bucket the boundary day correctly. Returns a Date positioned

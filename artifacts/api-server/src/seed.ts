@@ -2276,6 +2276,37 @@ export async function ensureAdminHubSchema() {
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS intervention_effectiveness_days INTEGER NOT NULL DEFAULT 14`,
   );
 
+  // Watch List (Insights) "Needs Attention" thresholds. Additive; the
+  // system-driven Watch List defaults to only students tripping >=1 of
+  // these count-based triggers (plus always-on Tier>=2 / FAST BQ).
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS watchlist_absence_threshold INTEGER NOT NULL DEFAULT 10`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS watchlist_behavior_threshold INTEGER NOT NULL DEFAULT 3`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS watchlist_tardy_threshold INTEGER NOT NULL DEFAULT 5`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS watchlist_iss_threshold INTEGER NOT NULL DEFAULT 1`,
+  );
+
+  // School-controlled school-year rollover ("flip"). Additive; both null/off so
+  // the FAST/Insights reporting year is unchanged until a school schedules a
+  // flip. Schedules & grade promotion are unaffected (SIS-owned).
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS school_year_flip_date TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS school_year_flip_active TEXT`,
+  );
+
+  // Forgotten-pass auto-end threshold (minutes). Additive; default 20.
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS hall_pass_auto_end_minutes INTEGER NOT NULL DEFAULT 20`,
+  );
+
   // ISS daily seat capacity + soft/hard behavior on school_settings.
   await db.execute(
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS iss_daily_capacity INTEGER`,
@@ -8423,6 +8454,121 @@ export async function ensureFeaturePlansSchema() {
     }
     await db.execute(
       sql`INSERT INTO app_one_shot_markers (name) VALUES (${ENTERPRISE_FOLD_MARKER}) ON CONFLICT DO NOTHING`,
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Baseline L25 (bottom-quartile) FAST designation from prior-year PM3.
+//
+// At the start of a school year a student's L25 status can be derived from last
+// year's final FAST scale score (prior_year_score, i.e. prior-year PM3). We
+// auto-flag the lowest 25% per (current grade, subject) within each school as
+// prior_year_bq = TRUE so the roster BQ pill + the Insights Watch List light up
+// on day one — before any district L25 list exists.
+//
+// This is a BASELINE only. A district can later upload an official L25 list
+// through the `bq_l25` importer, which FULL-REPLACES prior_year_bq for the
+// subjects in the file (and snapshots the prior set into fast_bq_import_batches
+// for rollback). District uploads must always win, so per school we:
+//   - Skip a school-year once its marker (l25_baseline_v2_<schoolId>_<sy>) is
+//     set, so the recompute runs at most once per school-year.
+//   - Skip WITHOUT setting the marker if there is no prior_year_score yet, so a
+//     later boot retries once prior-year PM3 is imported.
+//   - Treat a subject as OFF-LIMITS iff a LIVE fast_bq_import_batches ledger row
+//     covers it (prior_json.prior keys). The ledger is the ONLY reliable
+//     "district L25 upload" signal — import_job_id is shared by every FAST
+//     importer (fast_prior_year / fast_florida / bq_l25) so it can't identify an
+//     L25 upload; and a rollback DELETES the ledger row, releasing the subject
+//     back to this baseline.
+//   - For every non-off-limits subject, CLEAR any stale prior_year_bq (demo seed
+//     noise or a prior auto run) and then set the true bottom quartile.
+// (v1 wrongly skipped whenever ANY prior_year_bq was TRUE, which seed noise
+// tripped, so the baseline never ran — hence the v2 marker + explicit clear.)
+// Bottom quartile = ntile(4) ordered ascending by prior_year_score, group 1.
+// -----------------------------------------------------------------------------
+export async function ensureL25BaselineFromPriorPm3(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS app_one_shot_markers (
+      name text PRIMARY KEY,
+      ran_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+
+  const schools = await db.execute<{ id: number }>(sql`SELECT id FROM schools`);
+  for (const { id: schoolId } of schools.rows) {
+    const sy = await resolveCurrentFastYear(schoolId);
+    // v2 marker: v1 wrongly treated ANY pre-existing prior_year_bq (incl. demo
+    // seed noise) as authoritative and skipped, so the baseline never ran. v2
+    // recomputes over non-uploaded subjects; district uploads still win.
+    const marker = `l25_baseline_v2_${schoolId}_${sy}`;
+
+    const existing = await db.execute<{ name: string }>(
+      sql`SELECT name FROM app_one_shot_markers WHERE name = ${marker}`,
+    );
+    if (existing.rows.length > 0) continue;
+
+    // No prior-year PM3 to rank on yet — retry on a later boot (no marker).
+    const hasPrior = await db.execute<{ n: number }>(sql`
+      SELECT COUNT(*)::int AS n
+        FROM student_fast_scores
+       WHERE school_id = ${schoolId}
+         AND school_year = ${sy}
+         AND is_historical = FALSE
+         AND prior_year_score IS NOT NULL
+    `);
+    if ((hasPrior.rows[0]?.n ?? 0) === 0) continue;
+
+    // A subject is OFF-LIMITS iff a district L25 upload covers it — the ONLY
+    // reliable signal is a live rollback-ledger row (import_job_id is shared by
+    // every FAST importer, so it can't distinguish an L25 upload; rollback
+    // deletes the ledger row, releasing the subject back to the baseline).
+    // Everything else (demo seed flags, a prior auto run) is fair game.
+    const uploaded = sql`(
+      SELECT jsonb_object_keys(b.prior_json->'prior')
+        FROM fast_bq_import_batches b
+       WHERE b.school_id = ${schoolId}
+         AND b.prior_json->>'schoolYear' = ${sy}
+    )`;
+
+    // 1) Clear stale flags on non-uploaded subjects (seed noise / prior auto).
+    await db.execute(sql`
+      UPDATE student_fast_scores fs
+         SET prior_year_bq = FALSE, updated_at = now()
+       WHERE fs.school_id = ${schoolId}
+         AND fs.school_year = ${sy}
+         AND fs.is_historical = FALSE
+         AND fs.prior_year_bq = TRUE
+         AND fs.subject NOT IN ${uploaded}
+    `);
+
+    // 2) Flag the lowest quartile per (current grade, subject) by prior PM3.
+    await db.execute(sql`
+      WITH ranked AS (
+        SELECT fs.id,
+               ntile(4) OVER (
+                 PARTITION BY st.grade, fs.subject
+                 ORDER BY fs.prior_year_score ASC
+               ) AS q
+          FROM student_fast_scores fs
+          JOIN students st
+            ON st.school_id = fs.school_id
+           AND st.student_id = fs.student_id
+         WHERE fs.school_id = ${schoolId}
+           AND fs.school_year = ${sy}
+           AND fs.is_historical = FALSE
+           AND fs.prior_year_score IS NOT NULL
+           AND fs.subject NOT IN ${uploaded}
+      )
+      UPDATE student_fast_scores fs
+         SET prior_year_bq = TRUE, updated_at = now()
+        FROM ranked
+       WHERE fs.id = ranked.id
+         AND ranked.q = 1
+    `);
+
+    await db.execute(
+      sql`INSERT INTO app_one_shot_markers (name) VALUES (${marker}) ON CONFLICT DO NOTHING`,
     );
   }
 }

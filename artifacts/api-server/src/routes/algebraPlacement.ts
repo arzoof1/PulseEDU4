@@ -42,12 +42,13 @@ import {
   canSaveAlgebraPlacementOverride,
 } from "../lib/coreTeam";
 import { getSchoolTimezone, schoolYearLabelFor } from "../lib/schoolYear";
+import { getActiveSchoolYear } from "../lib/fastHistory";
 
 async function currentSchoolYearLabelForSchool(
   schoolId: number,
 ): Promise<string> {
   const tz = await getSchoolTimezone(schoolId);
-  return schoolYearLabelFor(new Date(), tz);
+  return getActiveSchoolYear(schoolId, tz);
 }
 import { bindObjectToSchool } from "./storage";
 import { renderAlgebraPlacementPdf } from "../lib/algebraPlacementPdf";

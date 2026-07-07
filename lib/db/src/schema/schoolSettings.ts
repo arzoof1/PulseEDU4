@@ -19,6 +19,14 @@ export const schoolSettingsTable = pgTable(
   hallPassDefaultMinutes: integer("hall_pass_default_minutes")
     .notNull()
     .default(5),
+  // Forgotten-pass safety net. Any pass still `active` past this many minutes
+  // is auto-ended (status `auto_ended`) on the next read, with its recorded
+  // end time capped at createdAt + this value so a pass a student simply
+  // forgot to close (e.g. the bell rang) never balloons the duration.
+  // School-configurable; default 20.
+  hallPassAutoEndMinutes: integer("hall_pass_auto_end_minutes")
+    .notNull()
+    .default(20),
   // Optional school-wide cap on the number of hall passes a student can take
   // in one school day. Null means no global cap.
   globalDailyHallPassLimit: integer("global_daily_hall_pass_limit"),
@@ -62,6 +70,33 @@ export const schoolSettingsTable = pgTable(
   pbisColdPeriodMultiple: integer("pbis_cold_period_multiple")
     .notNull()
     .default(5),
+  // -----------------------------------------------------------------
+  // Watch List (Insights) "Needs Attention" thresholds.
+  //
+  // The system-driven Watch List defaults to showing ONLY students who
+  // trip at least one risk trigger (a "needs attention" gate), with a
+  // "Show full roster" escape hatch. A student surfaces when ANY of:
+  //   - an active MTSS plan at Tier >= 2                 (always-on)
+  //   - FAST bottom-quartile in ELA or Math             (always-on)
+  //   - absences >= watchlistAbsenceThreshold  (semester total, Eligibility Hub)
+  //   - behavior entries >= watchlistBehaviorThreshold  (pbis negatives + support notes, in window)
+  //   - tardies >= watchlistTardyThreshold              (in window)
+  //   - ISS days >= watchlistIssThreshold               (in window)
+  // Tier + bottom-quartile are inherently boolean triggers, so only the
+  // count-based ones are school-configurable here.
+  // -----------------------------------------------------------------
+  watchlistAbsenceThreshold: integer("watchlist_absence_threshold")
+    .notNull()
+    .default(10),
+  watchlistBehaviorThreshold: integer("watchlist_behavior_threshold")
+    .notNull()
+    .default(3),
+  watchlistTardyThreshold: integer("watchlist_tardy_threshold")
+    .notNull()
+    .default(5),
+  watchlistIssThreshold: integer("watchlist_iss_threshold")
+    .notNull()
+    .default(1),
   // Classroom-intervention effectiveness window (days). A logged intervention
   // counts as having WORKED if the behavior it targeted does not recur for that
   // student within this many days; if it recurs inside the window it RECURRED;
@@ -360,6 +395,19 @@ export const schoolSettingsTable = pgTable(
   fastHistoryYearsVisible: integer("fast_history_years_visible")
     .notNull()
     .default(3),
+  // ---------------------------------------------------------------------------
+  // School-controlled school-year rollover ("flip"). Replaces the wall-clock
+  // July-1 rollover for the FAST/Insights *reporting year* only — schedules and
+  // grade promotion stay owned by the SIS (RosterOne). Both nullable/off by
+  // default so behavior is unchanged until a school schedules a flip.
+  //   - schoolYearFlipDate: admin-chosen date (YYYY-MM-DD, school-local) on or
+  //     after which the reporting year advances. Null = no scheduled flip.
+  //   - schoolYearFlipActive: the year label the flip has ACTIVATED (e.g.
+  //     "26-27"), set by reconcileSchoolYearFlip once the date passes and the
+  //     outgoing year's rows are re-tagged historical. Null = not yet flipped.
+  // ---------------------------------------------------------------------------
+  schoolYearFlipDate: text("school_year_flip_date"),
+  schoolYearFlipActive: text("school_year_flip_active"),
   // Advisory pointer to the tier_presets row last applied to this
   // school. The actual flags above are still authoritative — this is
   // purely so the School Plans grid can show "Currently: Pro" badges.

@@ -52,6 +52,7 @@ import {
   recordLoginSuccess,
   sendLoginRateLimited,
 } from "../lib/loginThrottle.js";
+import { autoEndStalePasses } from "../lib/hallPassLifecycle.js";
 import { loadSchoolWideDefaults } from "../lib/restroomAreas.js";
 import { getSchoolTimezone, startOfDayUtc } from "../lib/schoolYear.js";
 import { loadBrandingForSchool } from "./schoolBranding.js";
@@ -1273,6 +1274,10 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     return;
   }
   const normalizedStudentId = student.studentId;
+
+  // Close forgotten passes first so a student who never ended a prior pass
+  // isn't wrongly blocked by a stale "already has an active pass" row.
+  await autoEndStalePasses(act.schoolId);
 
   const existingActive = (await db
     .select()

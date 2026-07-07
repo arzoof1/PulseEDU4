@@ -908,24 +908,24 @@ td {
   overflow: visible !important;
 }
 
-.sticky-scroll thead th {
+/* Pin the whole <thead> as one block. This works for single-row headers and
+   for multi-row headers (e.g. the Teacher Roster's colSpan group row + the
+   sub-columns beneath) alike — no per-row offset math, and no two rows stacking
+   on top of each other.
+
+   The opaque sticky fill MUST live on the <thead> (an ancestor of the cells),
+   NEVER on the <th> itself. `.pulse-table` paints its header TEXT via
+   `background-clip: text` on each th's own background; putting a fill directly
+   on the th would be clipped to the letters and erase them (they'd render in the
+   fill color and disappear). Keeping the fill on the ancestor lets each th's
+   gradient text paint cleanly on top of it. */
+.sticky-scroll thead {
   position: sticky;
   top: 0;
   z-index: 3;
   background: var(--surface-2);
 }
-
-/* Grouped (multi-row) header variant. Tables like the Teacher Roster have a
-   two-row <thead> (a colSpan group label row on top, sub-columns beneath).
-   Pinning each <th> to top:0 would stack the two rows on top of each other, so
-   instead we pin the whole <thead> as a single block — no magic per-row offset
-   needed. The per-th sticky rule above is neutralized for this variant. */
-.sticky-scroll--group thead {
-  position: sticky;
-  top: 0;
-  z-index: 3;
-}
-.sticky-scroll--group thead th {
+.sticky-scroll thead th {
   position: static;
 }
 

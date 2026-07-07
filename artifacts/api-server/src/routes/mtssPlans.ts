@@ -44,6 +44,7 @@ import {
   parseCsvIds,
 } from "../lib/effectiveTeachers.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
+import { getActiveSchoolYear } from "../lib/fastHistory.js";
 import { loadFastHistory, pickHistory } from "../lib/fastHistory.js";
 import { DEFAULT_ACADEMIC_MINUTES_TARGET } from "../lib/academicMinutes.js";
 
@@ -899,7 +900,7 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
 
-  const currentSchoolYear = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+  const currentSchoolYear = await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ);
 
   // ---- Settings ----
   // The mastery threshold + min-windows are used ONLY to flag weak
@@ -1417,7 +1418,7 @@ router.post("/mtss-plans/fast-suggestions/dismiss", async (req, res) => {
     return;
   }
 
-  const currentSchoolYear = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+  const currentSchoolYear = await getActiveSchoolYear(schoolId, DEFAULT_SCHOOL_TZ);
 
   // Idempotent insert — unique index on
   // (school_id, student_id, benchmark_code, school_year) collapses

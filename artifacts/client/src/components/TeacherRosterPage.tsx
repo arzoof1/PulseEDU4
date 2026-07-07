@@ -33,6 +33,7 @@ import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowTo
 import { LEVEL_BG, LEVEL_FG, PmDelta, nextStopCaption } from "./FastScorePill";
 import { TeacherPicker } from "./TeacherPicker";
 import { SelfDataChatModal, FollowupReminders } from "./DataChats";
+import FastHistoryModal from "./FastHistoryModal";
 import { type TeacherOpt } from "./teacherDepartments";
 
 // Top-level tab in this page. "roster" is the original FAST PM
@@ -2550,6 +2551,11 @@ export default function TeacherRosterPage({
   // set of students still PENDING in one of this teacher's active
   // campaigns (tints the icon purple + logging counts toward the campaign).
   const [chatModal, setChatModal] = useState<string | null>(null);
+  const [fastHistModal, setFastHistModal] = useState<{
+    studentId: string;
+    studentName: string;
+    localSisId: string | null;
+  } | null>(null);
   const [pendingChatIds, setPendingChatIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -3641,6 +3647,35 @@ export default function TeacherRosterPage({
                           {pendingChatIds.has(row.studentId) ? "Chat!" : "Chat"}
                         </span>
                       </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setFastHistModal({
+                            studentId: row.studentId,
+                            studentName: `${row.firstName} ${row.lastName}`,
+                            localSisId: row.localSisId ?? null,
+                          })
+                        }
+                        title={`View FAST PM3 history for ${row.firstName} ${row.lastName}`}
+                        aria-label={`View FAST PM3 history for ${row.firstName} ${row.lastName}`}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          border: "1px solid #bfdbfe",
+                          background: "#eff6ff",
+                          color: "#1d4ed8",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          lineHeight: 1.2,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span aria-hidden="true">📖</span>
+                        <span>FAST</span>
+                      </button>
                       {sepSectionId != null && (() => {
                         const n = sepCountByStudent.get(row.studentId) ?? 0;
                         // Two-state icon per the product spec:
@@ -3921,6 +3956,15 @@ export default function TeacherRosterPage({
           studentId={chatModal}
           onClose={() => setChatModal(null)}
           onLogged={() => setChatTick((n) => n + 1)}
+        />
+      )}
+      {fastHistModal && (
+        <FastHistoryModal
+          key={fastHistModal.studentId}
+          studentId={fastHistModal.studentId}
+          studentName={fastHistModal.studentName}
+          localSisId={fastHistModal.localSisId}
+          onClose={() => setFastHistModal(null)}
         />
       )}
     </div>

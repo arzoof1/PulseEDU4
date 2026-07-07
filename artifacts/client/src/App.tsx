@@ -354,6 +354,7 @@ function getTimeStatusColor(pass: HallPass, now: number): string {
 
 function formatTimeStatus(pass: HallPass, now: number): string {
   if (pass.status === "system_ended") return "System Ended";
+  if (pass.status === "auto_ended") return "Auto Ended";
   if (pass.status === "ended") return "Ended";
   const expiresAt =
     new Date(pass.createdAt).getTime() + pass.maxDurationMinutes * 60 * 1000;
@@ -4134,10 +4135,28 @@ function NavGroup({
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
   }, []);
-  // Resolution order: mobile forces open, else contains-active wins,
-  // else user preference, else default-closed. Default-closed gives the
-  // compact sidebar the user asked for; the active group is always visible.
-  const open = isMobile || containsActive || userOpen === true;
+  // When the group NEWLY becomes the active one (the user navigated into it
+  // from elsewhere), clear any stale manual collapse so the active group is
+  // visible by default. We only reset on the false→true transition, never
+  // while the user stays on the same page — so an explicit collapse below
+  // still sticks for the current view.
+  const prevContainsActive = useRef(containsActive);
+  useEffect(() => {
+    if (containsActive && !prevContainsActive.current) {
+      setUserOpen(null);
+      try {
+        localStorage.removeItem(storageKey);
+      } catch {
+        /* ignore */
+      }
+    }
+    prevContainsActive.current = containsActive;
+  }, [containsActive, storageKey]);
+  // Resolution order: mobile forces open; an explicit user preference (open
+  // OR closed) always wins next — so re-clicking the header can collapse a
+  // group even while it holds the active page; otherwise contains-active
+  // opens it by default; otherwise default-closed for a compact sidebar.
+  const open = isMobile || (userOpen === null ? containsActive : userOpen);
   const toggle = () => {
     const next = !open;
     setUserOpen(next);
@@ -5895,6 +5914,7 @@ function App() {
     periodCount: number;
     hallPassMaxMinutes: number;
     hallPassDefaultMinutes: number;
+    hallPassAutoEndMinutes: number;
     globalDailyHallPassLimit: number | null;
     pbisQuietTeacherDays: number;
     pbisInvisibleStudentDays: number;
@@ -5914,7 +5934,12 @@ function App() {
     manualRosterUploadEnabled: boolean;
     strictHouseNameMatch: boolean;
     gpaEnabled: boolean;
+    schoolYearFlipDate: string | null;
     teacherFamilyMessagingEnabled: boolean;
+    watchlistAbsenceThreshold: number;
+    watchlistBehaviorThreshold: number;
+    watchlistTardyThreshold: number;
+    watchlistIssThreshold: number;
     // Two-tier feature flags. Defaults are TRUE so the optimistic UI
     // matches what the server returns for any school that has not yet
     // flipped anything off.
@@ -5981,6 +6006,7 @@ function App() {
     periodCount: 7,
     hallPassMaxMinutes: 30,
     hallPassDefaultMinutes: 5,
+    hallPassAutoEndMinutes: 20,
     globalDailyHallPassLimit: null,
     pbisQuietTeacherDays: 5,
     pbisInvisibleStudentDays: 10,
@@ -6000,7 +6026,12 @@ function App() {
     manualRosterUploadEnabled: false,
     strictHouseNameMatch: false,
     gpaEnabled: false,
+    schoolYearFlipDate: null,
     teacherFamilyMessagingEnabled: false,
+    watchlistAbsenceThreshold: 10,
+    watchlistBehaviorThreshold: 3,
+    watchlistTardyThreshold: 5,
+    watchlistIssThreshold: 1,
     featureFamilyComm: true,
     featurePbis: true,
     featureSchoolStore: true,
@@ -7864,6 +7895,10 @@ function App() {
             typeof data.hallPassDefaultMinutes === "number"
               ? data.hallPassDefaultMinutes
               : 5,
+          hallPassAutoEndMinutes:
+            typeof data.hallPassAutoEndMinutes === "number"
+              ? data.hallPassAutoEndMinutes
+              : 20,
           globalDailyHallPassLimit:
             typeof data.globalDailyHallPassLimit === "number"
               ? data.globalDailyHallPassLimit
@@ -7939,10 +7974,30 @@ function App() {
               : false,
           gpaEnabled:
             typeof data.gpaEnabled === "boolean" ? data.gpaEnabled : false,
+          schoolYearFlipDate:
+            typeof data.schoolYearFlipDate === "string"
+              ? data.schoolYearFlipDate
+              : null,
           teacherFamilyMessagingEnabled:
             typeof data.teacherFamilyMessagingEnabled === "boolean"
               ? data.teacherFamilyMessagingEnabled
               : false,
+          watchlistAbsenceThreshold:
+            typeof data.watchlistAbsenceThreshold === "number"
+              ? data.watchlistAbsenceThreshold
+              : 10,
+          watchlistBehaviorThreshold:
+            typeof data.watchlistBehaviorThreshold === "number"
+              ? data.watchlistBehaviorThreshold
+              : 3,
+          watchlistTardyThreshold:
+            typeof data.watchlistTardyThreshold === "number"
+              ? data.watchlistTardyThreshold
+              : 5,
+          watchlistIssThreshold:
+            typeof data.watchlistIssThreshold === "number"
+              ? data.watchlistIssThreshold
+              : 1,
           featureFamilyComm: boolOrTrue(data.featureFamilyComm),
           featurePbis: boolOrTrue(data.featurePbis),
           featureSchoolStore: boolOrTrue(data.featureSchoolStore),
@@ -8016,10 +8071,18 @@ function App() {
     setSettingsStatus("saving");
     setSettingsError("");
     try {
+      // The school-year flip date is admin-only on the server. Only include
+      // it in the payload for admins/SuperUsers; otherwise a non-admin save
+      // (e.g. Core Team editing other fields) would 403 on that one field.
+      const canSetFlip = Boolean(authUser?.isAdmin || authUser?.isSuperUser);
+      const { schoolYearFlipDate: _flipDate, ...settingsWithoutFlip } =
+        schoolSettings;
       const res = await authFetch("/api/school-settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(schoolSettings),
+        body: JSON.stringify(
+          canSetFlip ? schoolSettings : settingsWithoutFlip,
+        ),
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
@@ -8040,6 +8103,10 @@ function App() {
           typeof data.hallPassDefaultMinutes === "number"
             ? data.hallPassDefaultMinutes
             : 5,
+        hallPassAutoEndMinutes:
+          typeof data.hallPassAutoEndMinutes === "number"
+            ? data.hallPassAutoEndMinutes
+            : 20,
         globalDailyHallPassLimit:
           typeof data.globalDailyHallPassLimit === "number"
             ? data.globalDailyHallPassLimit
@@ -8113,10 +8180,30 @@ function App() {
             : false,
         gpaEnabled:
           typeof data.gpaEnabled === "boolean" ? data.gpaEnabled : false,
+        schoolYearFlipDate:
+          typeof data.schoolYearFlipDate === "string"
+            ? data.schoolYearFlipDate
+            : null,
         teacherFamilyMessagingEnabled:
           typeof data.teacherFamilyMessagingEnabled === "boolean"
             ? data.teacherFamilyMessagingEnabled
             : false,
+        watchlistAbsenceThreshold:
+          typeof data.watchlistAbsenceThreshold === "number"
+            ? data.watchlistAbsenceThreshold
+            : 10,
+        watchlistBehaviorThreshold:
+          typeof data.watchlistBehaviorThreshold === "number"
+            ? data.watchlistBehaviorThreshold
+            : 3,
+        watchlistTardyThreshold:
+          typeof data.watchlistTardyThreshold === "number"
+            ? data.watchlistTardyThreshold
+            : 5,
+        watchlistIssThreshold:
+          typeof data.watchlistIssThreshold === "number"
+            ? data.watchlistIssThreshold
+            : 1,
         featureFamilyComm: boolOrTrue(data.featureFamilyComm),
         featurePbis: boolOrTrue(data.featurePbis),
         featureSchoolStore: boolOrTrue(data.featureSchoolStore),
@@ -13130,11 +13217,15 @@ function App() {
                   const statusClass =
                     p.status === "active"
                       ? "badge badge-active"
-                      : p.status === "system_ended"
+                      : p.status === "system_ended" || p.status === "auto_ended"
                         ? "badge badge-overdue"
                         : "badge badge-ended";
                   const statusLabel =
-                    p.status === "system_ended" ? "System Ended" : p.status;
+                    p.status === "system_ended"
+                      ? "System Ended"
+                      : p.status === "auto_ended"
+                        ? "Auto Ended"
+                        : p.status;
                   return (
                     <tr key={p.id}>
                       <td>
@@ -15672,7 +15763,13 @@ function App() {
                         <td>{p.teacherName}</td>
                         <td>{p.destination}</td>
                         <td>{p.originRoom}</td>
-                        <td>{p.status === "system_ended" ? "System Ended" : p.status}</td>
+                        <td>
+                          {p.status === "system_ended"
+                            ? "System Ended"
+                            : p.status === "auto_ended"
+                              ? "Auto Ended"
+                              : p.status}
+                        </td>
                         <td>{p.createdAt}</td>
                         <td>{p.endedAt ?? "-"}</td>
                       </tr>
@@ -23277,6 +23374,14 @@ function App() {
                 group: "behavior-pbis",
               },
               {
+                id: "watchlist-thresholds",
+                icon: "👀",
+                title: "Watch List Thresholds",
+                subtitle:
+                  "Set the absence, behavior, tardy, and ISS triggers for the Insights Watch List.",
+                group: "behavior-pbis",
+              },
+              {
                 // Surfaces the existing PBIS Reasons editor (rendered as a
                 // top-level `activeSection === "pbisReasons"` page, not an
                 // in-frame tile). Clicking this tile is intercepted in the
@@ -25093,6 +25198,137 @@ function App() {
         );
       })()}
 
+      {activeSection === "settings" && canManageSettings && settingsTile === "watchlist-thresholds" && (() => {
+        const ranges = [
+          {
+            field: "watchlistAbsenceThreshold" as const,
+            label: "Days Absent trigger",
+            help: "Students with at least this many official days absent (from the latest Eligibility Hub upload) are flagged as needing attention. Default 10.",
+            min: 1,
+            max: 180,
+            unit: "days",
+          },
+          {
+            field: "watchlistBehaviorThreshold" as const,
+            label: "Behavior entries trigger",
+            help: "Students with at least this many behavior entries in the window are flagged. Default 3.",
+            min: 1,
+            max: 100,
+            unit: "entries",
+          },
+          {
+            field: "watchlistTardyThreshold" as const,
+            label: "Tardy trigger",
+            help: "Students with at least this many tardies in the window are flagged. Default 5.",
+            min: 1,
+            max: 100,
+            unit: "tardies",
+          },
+          {
+            field: "watchlistIssThreshold" as const,
+            label: "ISS days trigger",
+            help: "Students with at least this many ISS days in the window are flagged. Default 1.",
+            min: 1,
+            max: 100,
+            unit: "days",
+          },
+        ];
+        return (
+          <div className="card" style={{ marginTop: "1rem" }}>
+            <h2>Watch List Thresholds</h2>
+            <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+              These tunings decide which students appear in the Insights Watch
+              List "Needs attention" view by default. FAST bottom-quartile and
+              active Tier 2/3 plans always count as needing attention. Changes
+              save when you click "Save School Settings" below.
+            </p>
+            <div style={{ display: "grid", gap: "1rem", maxWidth: 560 }}>
+              {ranges.map((r) => (
+                <label
+                  key={r.field}
+                  style={{ display: "grid", gap: "0.25rem" }}
+                >
+                  <span>
+                    {r.label}
+                    <span
+                      style={{
+                        color: "var(--text-subtle, #64748b)",
+                        fontWeight: "normal",
+                        marginLeft: "0.5rem",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      ({r.min}–{r.max} {r.unit})
+                    </span>
+                  </span>
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontSize: "0.82rem",
+                    }}
+                  >
+                    {r.help}
+                  </span>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.75rem",
+                    }}
+                  >
+                    <input
+                      type="number"
+                      min={r.min}
+                      max={r.max}
+                      step={1}
+                      value={schoolSettings[r.field]}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        const next = Number.isFinite(n)
+                          ? Math.max(r.min, Math.min(r.max, Math.trunc(n)))
+                          : schoolSettings[r.field];
+                        setSchoolSettings({
+                          ...schoolSettings,
+                          [r.field]: next,
+                        });
+                      }}
+                      style={{ width: "6rem" }}
+                    />
+                    <span style={{ color: "var(--text-subtle, #64748b)" }}>
+                      {r.unit}
+                    </span>
+                  </div>
+                </label>
+              ))}
+              <div
+                style={{
+                  display: "flex",
+                  gap: "0.5rem",
+                  alignItems: "center",
+                  marginTop: "0.5rem",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => void saveSchoolSettings()}
+                  disabled={settingsStatus === "saving"}
+                >
+                  {settingsStatus === "saving"
+                    ? "Saving…"
+                    : "Save School Settings"}
+                </button>
+                {settingsStatus === "saved" && (
+                  <span style={{ color: "#15803d" }}>Saved.</span>
+                )}
+                {settingsStatus === "error" && (
+                  <span style={{ color: "#b91c1c" }}>{settingsError}</span>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {activeSection === "settings" && canManageSettings && settingsTile === "schoolFeatures" && (() => {
         // Two-tier feature toggles. Each row has both the SuperUser
         // gate (super_feature_*) and the admin switch (feature_*).
@@ -25786,6 +26022,69 @@ function App() {
                 </span>
               </label>
             )}
+            {Boolean(authUser?.isAdmin || authUser?.isSuperUser) && (
+              <label style={{ display: "grid", gap: "0.25rem" }}>
+                <span>
+                  School-Year Flip Date
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontWeight: "normal",
+                      marginLeft: "0.5rem",
+                    }}
+                  >
+                    Admin only. Optional.
+                  </span>
+                </span>
+                {new Date().getMonth() >= 7 && (
+                  <span
+                    style={{
+                      padding: "0.5rem 0.65rem",
+                      borderRadius: 6,
+                      background: "var(--warning-subtle, #fef3c7)",
+                      border: "1px solid var(--warning-border, #fcd34d)",
+                      color: "var(--warning-text, #92400e)",
+                      fontSize: "0.85rem",
+                    }}
+                  >
+                    A new school year has begun. When you&rsquo;re ready, set a
+                    flip date below to advance FAST &amp; Insights to the new
+                    reporting year.
+                  </span>
+                )}
+                <input
+                    type="date"
+                    value={schoolSettings.schoolYearFlipDate ?? ""}
+                    onChange={(e) =>
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        schoolYearFlipDate: e.target.value
+                          ? e.target.value
+                          : null,
+                      })
+                    }
+                    style={{
+                      padding: "0.4rem 0.6rem",
+                      border: "1px solid var(--border-subtle, #e2e8f0)",
+                      borderRadius: 6,
+                      maxWidth: 220,
+                    }}
+                  />
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontSize: "0.85rem",
+                    }}
+                  >
+                    On or after this date, FAST &amp; Insights advance to the
+                    next reporting year and the outgoing year moves to the
+                    historical (prior-year) column. Schedules, rosters, and
+                    grades are unaffected — those stay owned by the SIS. Leave
+                    blank to keep the current reporting year; you can clear or
+                    postpone the date at any time to undo the flip.
+                  </span>
+                </label>
+              )}
             <label style={{ display: "grid", gap: "0.25rem" }}>
               <span>
                 Number of Periods in the School Day
@@ -25946,6 +26245,49 @@ function App() {
                             ),
                           )
                         : schoolSettings.hallPassDefaultMinutes,
+                    });
+                  }}
+                  style={{ width: "5rem" }}
+                />
+                <span style={{ color: "var(--text-subtle, #64748b)" }}>
+                  min
+                </span>
+              </div>
+            </div>
+            <div style={{ display: "grid", gap: "0.25rem" }}>
+              <span>
+                Auto-end forgotten passes after
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontWeight: "normal",
+                    marginLeft: "0.5rem",
+                  }}
+                >
+                  (a still-active pass this old is closed automatically, marked
+                  “Auto Ended,” with its end time capped here)
+                </span>
+              </span>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.75rem",
+                }}
+              >
+                <input
+                  type="number"
+                  min={1}
+                  max={240}
+                  step={1}
+                  value={schoolSettings.hallPassAutoEndMinutes}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      hallPassAutoEndMinutes: Number.isFinite(n)
+                        ? Math.max(1, Math.min(240, Math.trunc(n)))
+                        : schoolSettings.hallPassAutoEndMinutes,
                     });
                   }}
                   style={{ width: "5rem" }}
