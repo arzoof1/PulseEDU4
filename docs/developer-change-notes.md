@@ -105,3 +105,37 @@ error message if the export fails. No server or endpoint change.
 
 **Verification:** `pnpm --filter @workspace/client run typecheck` passes; the
 authenticated export was confirmed returning CSV directly from the running server.
+
+---
+
+## Change #4 — Teacher Roster (and other) headers had "no words" after the sticky-header work
+
+**Area:** Teacher Roster column headers — and the same style of table on
+MTSS Plans Admin, Staff Directory, and Safety Plans Admin.
+- Styling: `artifacts/client/src/index.css` (`.sticky-scroll` block).
+
+**Symptom (reported):** After yesterday's sticky-header changes, the Teacher
+Roster header row showed **no visible column labels** — the words ("Student",
+"Programs", "Grade", "ELA", "Math", etc.) were effectively invisible.
+
+**Root cause:** The labels were never removed — they were made invisible by a
+color collision. These headers (`.pulse-table`) render their *text* with a
+gradient that is "clipped to the shape of the letters," which uses the header
+cell's own **background** to paint the letters. Yesterday's sticky rule added
+`background: var(--surface-2)` directly onto each header cell (`.sticky-scroll
+thead th`) so pinned headers wouldn't be see-through. That fill **overwrote the
+gradient the letters depend on**, so the text rendered in the light fill color
+and disappeared. Plain tables (e.g. the Eligibility Hub, `.table`) don't use the
+gradient-text technique, which is why the bug only showed on the gradient
+(`pulse-table`) rosters.
+
+**Fix (CSS only):** Pin the whole `<thead>` as one sticky block and put the
+opaque fill on the `<thead>` (an *ancestor* of the cells) instead of on each
+header cell. The header cells keep their gradient-text background untouched, so
+the labels paint normally *on top of* the solid header fill — and the header
+still stays pinned while rows scroll under it. This one change fixes all four
+affected tables at once (the old `.sticky-scroll--group` special case is now
+covered by the base rule). No component/markup changes.
+
+**Verification:** CSS-only change, hot-reloaded by the client dev server; header
+labels render normally while the header stays pinned on scroll.
