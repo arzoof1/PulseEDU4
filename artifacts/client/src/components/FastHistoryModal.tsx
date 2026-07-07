@@ -75,9 +75,9 @@ export default function FastHistoryModal({
   const [data, setData] = useState<FastHistoryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // Default to the scale score — this drawer exists to surface the actual PM3
-  // numbers. Pills can still be flipped to the achievement level.
-  const [pillView, setPillView] = useState<PillView>("score");
+  // Default to the achievement level. Pills can still be flipped to the scale
+  // score to surface the actual PM3 numbers.
+  const [pillView, setPillView] = useState<PillView>("level");
 
   useEffect(() => {
     let cancelled = false;
