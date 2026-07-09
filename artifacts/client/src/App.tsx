@@ -5938,6 +5938,8 @@ function App() {
     gpaEnabled: boolean;
     schoolYearFlipDate: string | null;
     teacherFamilyMessagingEnabled: boolean;
+    mfaRequiredPrivileged: boolean;
+    mfaRequiredStaff: boolean;
     watchlistAbsenceThreshold: number;
     watchlistBehaviorThreshold: number;
     watchlistTardyThreshold: number;
@@ -6032,6 +6034,8 @@ function App() {
     gpaEnabled: false,
     schoolYearFlipDate: null,
     teacherFamilyMessagingEnabled: false,
+    mfaRequiredPrivileged: false,
+    mfaRequiredStaff: false,
     watchlistAbsenceThreshold: 10,
     watchlistBehaviorThreshold: 3,
     watchlistTardyThreshold: 5,
@@ -7988,6 +7992,14 @@ function App() {
             typeof data.teacherFamilyMessagingEnabled === "boolean"
               ? data.teacherFamilyMessagingEnabled
               : false,
+          mfaRequiredPrivileged:
+            typeof data.mfaRequiredPrivileged === "boolean"
+              ? data.mfaRequiredPrivileged
+              : false,
+          mfaRequiredStaff:
+            typeof data.mfaRequiredStaff === "boolean"
+              ? data.mfaRequiredStaff
+              : false,
           watchlistAbsenceThreshold:
             typeof data.watchlistAbsenceThreshold === "number"
               ? data.watchlistAbsenceThreshold
@@ -8195,6 +8207,14 @@ function App() {
         teacherFamilyMessagingEnabled:
           typeof data.teacherFamilyMessagingEnabled === "boolean"
             ? data.teacherFamilyMessagingEnabled
+            : false,
+        mfaRequiredPrivileged:
+          typeof data.mfaRequiredPrivileged === "boolean"
+            ? data.mfaRequiredPrivileged
+            : false,
+        mfaRequiredStaff:
+          typeof data.mfaRequiredStaff === "boolean"
+            ? data.mfaRequiredStaff
             : false,
         watchlistAbsenceThreshold:
           typeof data.watchlistAbsenceThreshold === "number"
@@ -26041,6 +26061,93 @@ function App() {
                   </span>
                 </span>
               </label>
+            )}
+            {Boolean(
+              authUser?.isAdmin ||
+                authUser?.isDistrictAdmin ||
+                authUser?.isSuperUser,
+            ) && (
+              <>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: "0.5rem",
+                    padding: "0.6rem 0.75rem",
+                    border: "1px solid var(--border-subtle, #e2e8f0)",
+                    borderRadius: 6,
+                    background: "var(--surface-subtle, #f8fafc)",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={schoolSettings.mfaRequiredPrivileged}
+                    onChange={(e) =>
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        mfaRequiredPrivileged: e.target.checked,
+                      })
+                    }
+                    style={{ marginTop: "0.2rem" }}
+                  />
+                  <span style={{ display: "grid", gap: "0.15rem" }}>
+                    <span style={{ fontWeight: 600 }}>
+                      Require two-factor for admins
+                    </span>
+                    <span
+                      style={{
+                        color: "var(--text-subtle, #64748b)",
+                        fontSize: "0.85rem",
+                        fontWeight: "normal",
+                      }}
+                    >
+                      When on, SuperUsers, District Admins, and School Admins
+                      must enter an authenticator code at sign-in. Staff who
+                      haven't set up two-factor yet can still sign in and are
+                      prompted to enroll (grace period).
+                    </span>
+                  </span>
+                </label>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: "0.5rem",
+                    padding: "0.6rem 0.75rem",
+                    border: "1px solid var(--border-subtle, #e2e8f0)",
+                    borderRadius: 6,
+                    background: "var(--surface-subtle, #f8fafc)",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={schoolSettings.mfaRequiredStaff}
+                    onChange={(e) =>
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        mfaRequiredStaff: e.target.checked,
+                      })
+                    }
+                    style={{ marginTop: "0.2rem" }}
+                  />
+                  <span style={{ display: "grid", gap: "0.15rem" }}>
+                    <span style={{ fontWeight: 600 }}>
+                      Require two-factor for all staff
+                    </span>
+                    <span
+                      style={{
+                        color: "var(--text-subtle, #64748b)",
+                        fontSize: "0.85rem",
+                        fontWeight: "normal",
+                      }}
+                    >
+                      Extends the two-factor requirement to every staff member
+                      with a login (teachers, support staff, and specialist
+                      roles), with the same enroll-on-first-login grace period.
+                    </span>
+                  </span>
+                </label>
+              </>
             )}
             {Boolean(authUser?.isAdmin || authUser?.isSuperUser) && (
               <label style={{ display: "grid", gap: "0.25rem" }}>

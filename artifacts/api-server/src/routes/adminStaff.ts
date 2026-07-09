@@ -5,9 +5,19 @@ import {
   type Response,
   type NextFunction,
 } from "express";
-import { db, staffTable, housesTable, schoolsTable } from "@workspace/db";
+import {
+  db,
+  staffTable,
+  housesTable,
+  schoolsTable,
+  staffMfaRecoveryCodesTable,
+} from "@workspace/db";
 import { and, eq, asc, inArray, sql } from "drizzle-orm";
-import { staffIdFromBearerToken } from "../lib/staffBearerAuth.js";
+import {
+  staffIdFromBearerToken,
+  bumpStaffAuthTokenVersion,
+} from "../lib/staffBearerAuth.js";
+import { writeAuthAudit } from "../lib/authAudit.js";
 import { bcryptHash } from "../lib/bcrypt.js";
 import {
   getDistrictIdForSchool,
@@ -1079,6 +1089,134 @@ router.post(
       displayName: target.displayName,
       email: target.email,
     });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Staff MFA admin controls (Gate A / Section 1). Load a target staff row
+// scoped to the actor's authority (SuperUser = own district; else own school),
+// then enforce the same role hierarchy as reset-temp-password (only a
+// SuperUser may act on a SuperUser / District Admin).
+// ---------------------------------------------------------------------------
+async function loadScopedTargetStaff(
+  actor: StaffRow,
+  targetId: number,
+): Promise<StaffRow | null> {
+  const actorDistrictSchoolIds = actor.isSuperUser
+    ? await (async () => {
+        const did = await getDistrictIdForSchool(actor.schoolId);
+        return did !== null ? await getSchoolIdsForDistrict(did) : [];
+      })()
+    : null;
+  const [target] = await db
+    .select()
+    .from(staffTable)
+    .where(
+      actor.isSuperUser
+        ? and(
+            eq(staffTable.id, targetId),
+            actorDistrictSchoolIds && actorDistrictSchoolIds.length > 0
+              ? inArray(staffTable.schoolId, actorDistrictSchoolIds)
+              : sql`false`,
+          )
+        : and(
+            eq(staffTable.id, targetId),
+            eq(staffTable.schoolId, actor.schoolId),
+          ),
+    );
+  return target ?? null;
+}
+
+function mfaAdminGuardError(actor: StaffRow, target: StaffRow): string | null {
+  if (!actor.isAdmin && !actor.isSuperUser)
+    return "Only Admin or SuperUser can manage staff two-factor.";
+  if (target.isSuperUser && !actor.isSuperUser)
+    return "Only a SuperUser can act on a SuperUser.";
+  if (target.isDistrictAdmin && !actor.isSuperUser)
+    return "Only a SuperUser can act on a District Admin.";
+  return null;
+}
+
+// Force sign-out: invalidate every active session (authenticated OR mid-MFA)
+// for a target user, plus bearer tokens. Item 1.14.
+router.post(
+  "/admin/staff/:id/revoke-sessions",
+  requireAdminOrSuper(),
+  async (req: Request, res: Response) => {
+    const actor = (req as Request & { staff: StaffRow }).staff;
+    const targetId = Number(req.params.id);
+    if (!Number.isFinite(targetId)) {
+      res.status(400).json({ error: "Invalid staff id" });
+      return;
+    }
+    const target = await loadScopedTargetStaff(actor, targetId);
+    if (!target) {
+      res.status(404).json({ error: "Staff not found" });
+      return;
+    }
+    const guardErr = mfaAdminGuardError(actor, target);
+    if (guardErr) {
+      res.status(403).json({ error: guardErr });
+      return;
+    }
+    await db.execute(
+      sql`DELETE FROM user_sessions
+          WHERE (sess->>'staffId')::int = ${targetId}
+             OR (sess->>'pendingMfaStaffId')::int = ${targetId}`,
+    );
+    await bumpStaffAuthTokenVersion(targetId);
+    await writeAuthAudit({
+      action: "sessions_revoked",
+      schoolId: target.schoolId,
+      actorStaffId: actor.id,
+      actorName: actor.displayName,
+      targetStaffId: targetId,
+      ip: req.ip ?? null,
+    });
+    res.json({ ok: true });
+  },
+);
+
+// Admin reset of a locked-out user's MFA: clear the secret + enrollment and
+// delete recovery codes so they can re-enroll (or log in without MFA until a
+// policy flag requires it again). Also revokes bearer tokens.
+router.post(
+  "/admin/staff/:id/mfa-reset",
+  requireAdminOrSuper(),
+  async (req: Request, res: Response) => {
+    const actor = (req as Request & { staff: StaffRow }).staff;
+    const targetId = Number(req.params.id);
+    if (!Number.isFinite(targetId)) {
+      res.status(400).json({ error: "Invalid staff id" });
+      return;
+    }
+    const target = await loadScopedTargetStaff(actor, targetId);
+    if (!target) {
+      res.status(404).json({ error: "Staff not found" });
+      return;
+    }
+    const guardErr = mfaAdminGuardError(actor, target);
+    if (guardErr) {
+      res.status(403).json({ error: guardErr });
+      return;
+    }
+    await db
+      .update(staffTable)
+      .set({ mfaSecretEnc: null, mfaEnrolledAt: null })
+      .where(eq(staffTable.id, targetId));
+    await db
+      .delete(staffMfaRecoveryCodesTable)
+      .where(eq(staffMfaRecoveryCodesTable.staffId, targetId));
+    await bumpStaffAuthTokenVersion(targetId);
+    await writeAuthAudit({
+      action: "mfa_admin_reset",
+      schoolId: target.schoolId,
+      actorStaffId: actor.id,
+      actorName: actor.displayName,
+      targetStaffId: targetId,
+      ip: req.ip ?? null,
+    });
+    res.json({ ok: true });
   },
 );
 
