@@ -1,5 +1,11 @@
-import { Router, type IRouter, type Request } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import { db, pool, staffPasswordResetsTable, staffTable } from "@workspace/db";
+import { isStaffMfaEnabled } from "../lib/staffMfaSwitch.js";
+import { isMfaRequiredForStaff } from "../lib/mfaPolicy.js";
+import { verifyTotp } from "../lib/staffMfa.js";
+import { decryptMfaSecret } from "../lib/mfaCrypto.js";
+import { consumeRecoveryCode } from "../lib/staffMfaStore.js";
+import { writeAuthAudit } from "../lib/authAudit.js";
 import { and, eq } from "drizzle-orm";
 import {
   bumpStaffAuthTokenVersion,
@@ -28,6 +34,10 @@ import { bcryptCompare, bcryptHash } from "../lib/bcrypt.js";
 declare module "express-session" {
   interface SessionData {
     staffId?: number;
+    // Set after a correct password when the account has MFA enrolled, INSTEAD
+    // of staffId — the session is not authenticated until /auth/mfa/login-verify
+    // clears this and promotes it to staffId.
+    pendingMfaStaffId?: number;
   }
 }
 
@@ -308,6 +318,38 @@ router.post("/auth/reset-password", async (req: Request, res) => {
   res.json({ ok: true });
 });
 
+// Shared "grant the session and respond" tail used by both password login
+// (no MFA) and MFA login-verify. Regenerates the session (fixation defense),
+// sets staffId, issues CSRF + optional bearer token, returns the profile.
+function finalizeLogin(
+  req: Request,
+  res: Response,
+  staff: typeof staffTable.$inferSelect,
+  extra: Record<string, unknown> = {},
+): void {
+  req.session.regenerate((err) => {
+    if (err) {
+      res.status(500).json({ error: "Could not start session" });
+      return;
+    }
+    req.session.staffId = staff.id;
+    const csrfToken = ensureCsrfToken(req.session);
+    req.session.save(async (saveErr) => {
+      if (saveErr) {
+        res.status(500).json({ error: "Could not save session" });
+        return;
+      }
+      const authToken = await issueStaffAuthTokenIfEnabled(staff.id);
+      res.json({
+        ...publicStaff(staff),
+        csrfToken,
+        ...(authToken ? { authToken } : {}),
+        ...extra,
+      });
+    });
+  });
+}
+
 router.post("/auth/login", async (req: Request, res) => {
   const { email, password } = req.body ?? {};
 
@@ -364,26 +406,107 @@ router.post("/auth/login", async (req: Request, res) => {
     staff.previewTargetStaffId = null;
   }
 
-  req.session.regenerate((err) => {
-    if (err) {
-      res.status(500).json({ error: "Could not start session" });
+  // ---- MFA gate (Gate A / Section 1) ------------------------------------
+  // Only when the deployment master switch is on. Enrolled users are always
+  // challenged. Users whose role is REQUIRED by policy but who have not
+  // enrolled are allowed in (grace mode) and flagged to enroll. With all
+  // policy flags off and nobody enrolled, this whole block is a no-op and
+  // login behaves exactly as before.
+  if (isStaffMfaEnabled()) {
+    const enrolled = !!staff.mfaEnrolledAt && !!staff.mfaSecretEnc;
+    if (enrolled) {
+      // Do NOT authenticate yet — stash a pending id in a fresh session.
+      req.session.regenerate((err) => {
+        if (err) {
+          res.status(500).json({ error: "Could not start session" });
+          return;
+        }
+        req.session.pendingMfaStaffId = staff.id;
+        req.session.save((saveErr) => {
+          if (saveErr) {
+            res.status(500).json({ error: "Could not save session" });
+            return;
+          }
+          res.json({ requiresMfa: true });
+        });
+      });
       return;
     }
-    req.session.staffId = staff.id;
-    const csrfToken = ensureCsrfToken(req.session);
-    req.session.save(async (saveErr) => {
-      if (saveErr) {
-        res.status(500).json({ error: "Could not save session" });
-        return;
-      }
-      const authToken = await issueStaffAuthTokenIfEnabled(staff.id);
-      res.json({
-        ...publicStaff(staff),
-        csrfToken,
-        ...(authToken ? { authToken } : {}),
-      });
+    if (await isMfaRequiredForStaff(staff)) {
+      finalizeLogin(req, res, staff, { mustEnrollMfa: true });
+      return;
+    }
+  }
+
+  finalizeLogin(req, res, staff);
+});
+
+// Second step of a login when the account has MFA enrolled. Reads the pending
+// id set by /auth/login, verifies a TOTP or single-use recovery code, and only
+// then promotes the session to authenticated. Rate-limited like login itself.
+router.post("/auth/mfa/login-verify", async (req: Request, res) => {
+  const pendingId = req.session.pendingMfaStaffId;
+  if (!pendingId) {
+    res.status(401).json({ error: "no_pending_mfa" });
+    return;
+  }
+
+  const throttleId = `mfa-verify:${pendingId}`;
+  const blocked = await checkLoginAllowed(req, "staff", throttleId);
+  if (blocked) {
+    sendLoginRateLimited(res, blocked);
+    return;
+  }
+
+  const { code } = (req.body ?? {}) as { code?: unknown };
+
+  const [staff] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.id, pendingId));
+  if (!staff || !staff.active || !staff.mfaEnrolledAt || !staff.mfaSecretEnc) {
+    delete req.session.pendingMfaStaffId;
+    res.status(401).json({ error: GENERIC_LOGIN_ERROR });
+    return;
+  }
+
+  let ok = false;
+  try {
+    ok = verifyTotp(decryptMfaSecret(staff.mfaSecretEnc), code);
+  } catch {
+    ok = false;
+  }
+  if (!ok && typeof code === "string") {
+    ok = await consumeRecoveryCode(staff.id, code);
+  }
+  if (!ok) {
+    await recordLoginFailure(req, "staff", throttleId);
+    await writeAuthAudit({
+      action: "mfa_login_failure",
+      schoolId: staff.schoolId,
+      actorStaffId: staff.id,
+      actorName: staff.displayName,
+      targetStaffId: staff.id,
+      ip: clientIp(req),
     });
+    res.status(401).json({ error: "invalid_code" });
+    return;
+  }
+
+  await recordLoginSuccess(req, "staff", throttleId);
+  await db
+    .update(staffTable)
+    .set({ mfaLastUsedAt: new Date() })
+    .where(eq(staffTable.id, staff.id));
+  await writeAuthAudit({
+    action: "mfa_login_success",
+    schoolId: staff.schoolId,
+    actorStaffId: staff.id,
+    actorName: staff.displayName,
+    targetStaffId: staff.id,
+    ip: clientIp(req),
   });
+  finalizeLogin(req, res, staff);
 });
 
 router.post("/auth/logout", async (req, res) => {

@@ -29,9 +29,10 @@ export default function Login({
   const [forgotEmail, setForgotEmail] = useState("");
   const [resetPassword, setResetPassword] = useState("");
   const [resetConfirm, setResetConfirm] = useState("");
-  const [mode, setMode] = useState<"login" | "forgot" | "reset">(
+  const [mode, setMode] = useState<"login" | "forgot" | "reset" | "mfa">(
     initialResetToken ? "reset" : "login",
   );
+  const [mfaCode, setMfaCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -59,8 +60,51 @@ export default function Login({
         setError(body.error ?? `Sign-in failed (${res.status})`);
         return;
       }
-      const user: AuthUser & { authToken?: string; csrfToken?: string } =
-        await res.json();
+      const user: AuthUser & {
+        authToken?: string;
+        csrfToken?: string;
+        requiresMfa?: boolean;
+      } = await res.json();
+      if (user.requiresMfa) {
+        // Password was correct but the account has MFA — collect the code.
+        setMfaCode("");
+        setMode("mfa");
+        return;
+      }
+      if (user.authToken) setAuthToken(user.authToken);
+      if (user.csrfToken) setCsrfToken(user.csrfToken);
+      onLogin(user);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleMfaVerify(e: React.FormEvent) {
+    e.preventDefault();
+    if (mfaCode.trim().length < 6) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch("/api/auth/mfa/login-verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: mfaCode.trim() }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(
+          body.error === "invalid_code"
+            ? "That code didn't match. Try again."
+            : (body.error ?? `Verification failed (${res.status})`),
+        );
+        return;
+      }
+      const user = body as AuthUser & {
+        authToken?: string;
+        csrfToken?: string;
+      };
       if (user.authToken) setAuthToken(user.authToken);
       if (user.csrfToken) setCsrfToken(user.csrfToken);
       onLogin(user);
@@ -134,6 +178,16 @@ export default function Login({
     }
   }
 
+  const submitDisabled =
+    busy ||
+    (mode === "login" && (!email.trim() || !password)) ||
+    (mode === "forgot" && !forgotEmail.trim()) ||
+    (mode === "mfa" && mfaCode.trim().length < 6) ||
+    (mode === "reset" &&
+      (!passwordPolicyOk(resetPassword) ||
+        resetPassword !== resetConfirm ||
+        !!message));
+
   return (
     <div
       style={{
@@ -153,7 +207,9 @@ export default function Login({
             ? handleForgotPassword
             : mode === "reset"
               ? handleResetPassword
-              : handleSubmit
+              : mode === "mfa"
+                ? handleMfaVerify
+                : handleSubmit
         }
         style={{
           background: "rgba(255,255,255,0.06)",
@@ -175,7 +231,9 @@ export default function Login({
               ? "Reset your staff password"
               : mode === "reset"
                 ? "Choose a new staff password"
-                : "Sign in to continue"}
+                : mode === "mfa"
+                  ? "Enter your authentication code"
+                  : "Sign in to continue"}
           </div>
         </div>
 
@@ -228,6 +286,27 @@ export default function Login({
               special character.
             </div>
           </>
+        ) : mode === "mfa" ? (
+          <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <span style={{ fontSize: "0.85rem", opacity: 0.85 }}>
+              6-digit code or recovery code
+            </span>
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              autoFocus
+              value={mfaCode}
+              onChange={(e) => setMfaCode(e.target.value)}
+              disabled={busy}
+              placeholder="123456"
+              style={inputStyle}
+            />
+            <div style={{ fontSize: "0.8rem", opacity: 0.75 }}>
+              Open your authenticator app and enter the current code, or use a
+              recovery code.
+            </div>
+          </label>
         ) : (
           <>
             <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -290,53 +369,31 @@ export default function Login({
 
         <button
           type="submit"
-          disabled={
-            busy ||
-            (mode === "login" && (!email.trim() || !password)) ||
-            (mode === "forgot" && !forgotEmail.trim()) ||
-            (mode === "reset" &&
-              (!passwordPolicyOk(resetPassword) ||
-                resetPassword !== resetConfirm ||
-                !!message))
-          }
+          disabled={submitDisabled}
           style={{
-            background:
-              busy ||
-              (mode === "login" && (!email.trim() || !password)) ||
-              (mode === "forgot" && !forgotEmail.trim()) ||
-              (mode === "reset" &&
-                (!passwordPolicyOk(resetPassword) ||
-                  resetPassword !== resetConfirm ||
-                  !!message))
-                ? "rgba(59,130,246,0.4)"
-                : "#3b82f6",
+            background: submitDisabled ? "rgba(59,130,246,0.4)" : "#3b82f6",
             color: "#fff",
             border: "none",
             borderRadius: 8,
             padding: "0.75rem 1rem",
             fontSize: "1rem",
             fontWeight: 600,
-            cursor:
-              busy ||
-              (mode === "login" && (!email.trim() || !password)) ||
-              (mode === "forgot" && !forgotEmail.trim()) ||
-              (mode === "reset" &&
-                (!passwordPolicyOk(resetPassword) ||
-                  resetPassword !== resetConfirm ||
-                  !!message))
-                ? "not-allowed"
-                : "pointer",
+            cursor: submitDisabled ? "not-allowed" : "pointer",
           }}
         >
           {busy
             ? mode === "login"
               ? "Signing in…"
-              : "Saving…"
+              : mode === "mfa"
+                ? "Verifying…"
+                : "Saving…"
             : mode === "forgot"
               ? "Send reset link"
               : mode === "reset"
                 ? "Update password"
-                : "Sign in"}
+                : mode === "mfa"
+                  ? "Verify"
+                  : "Sign in"}
         </button>
         {mode === "login" ? (
           <button
