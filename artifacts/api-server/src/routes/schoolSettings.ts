@@ -170,6 +170,8 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     watchlistBehaviorThreshold,
     watchlistTardyThreshold,
     watchlistIssThreshold,
+    mfaRequiredPrivileged,
+    mfaRequiredStaff,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -658,6 +660,46 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.restroomAccessControlEnabled = restroomAccessControlEnabled;
+  }
+
+  // MFA enforcement policy (Gate A / Section 1) — a security control, so only
+  // Admin / District Admin / SuperUser may change it (not every settings
+  // editor). Both flags default FALSE; turning one on requires MFA at login
+  // for that tier (privileged = SuperUser/District Admin/School Admin).
+  if (mfaRequiredPrivileged !== undefined || mfaRequiredStaff !== undefined) {
+    const [actor] = req.staffId
+      ? await db
+          .select({
+            isAdmin: staffTable.isAdmin,
+            isDistrictAdmin: staffTable.isDistrictAdmin,
+            isSuperUser: staffTable.isSuperUser,
+          })
+          .from(staffTable)
+          .where(eq(staffTable.id, req.staffId))
+          .limit(1)
+      : [];
+    if (!actor || !(actor.isAdmin || actor.isDistrictAdmin || actor.isSuperUser)) {
+      res
+        .status(403)
+        .json({ error: "Only an admin can change two-factor policy." });
+      return;
+    }
+    if (mfaRequiredPrivileged !== undefined) {
+      if (typeof mfaRequiredPrivileged !== "boolean") {
+        res
+          .status(400)
+          .json({ error: "mfaRequiredPrivileged must be a boolean" });
+        return;
+      }
+      updates.mfaRequiredPrivileged = mfaRequiredPrivileged;
+    }
+    if (mfaRequiredStaff !== undefined) {
+      if (typeof mfaRequiredStaff !== "boolean") {
+        res.status(400).json({ error: "mfaRequiredStaff must be a boolean" });
+        return;
+      }
+      updates.mfaRequiredStaff = mfaRequiredStaff;
+    }
   }
   if (staffDirectoryShowCellPhone !== undefined) {
     if (typeof staffDirectoryShowCellPhone !== "boolean") {
