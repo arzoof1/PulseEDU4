@@ -6,6 +6,7 @@ type AccountMenuProps = {
   /** Full display name shown next to the avatar. */
   name: string;
   onChangePassword: () => void;
+  onManageTwoFactor?: () => void;
   onSignOut: () => void;
 };
 
@@ -19,6 +20,7 @@ export function AccountMenu({
   initials,
   name,
   onChangePassword,
+  onManageTwoFactor,
   onSignOut,
 }: AccountMenuProps) {
   const [open, setOpen] = useState(false);
@@ -71,6 +73,18 @@ export function AccountMenu({
           >
             Change password
           </button>
+          {onManageTwoFactor && (
+            <button
+              type="button"
+              className="account-menu-item"
+              onClick={() => {
+                setOpen(false);
+                onManageTwoFactor();
+              }}
+            >
+              Two-factor authentication
+            </button>
+          )}
           <button
             type="button"
             className="account-menu-item"

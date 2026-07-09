@@ -22,6 +22,7 @@ import FamilyMessagesHub from "./components/FamilyMessagesHub";
 import ParentNotificationsPanel from "./components/ParentNotificationsPanel";
 import PulloutNotificationsPanel from "./components/PulloutNotificationsPanel";
 import PulseDnaStudio from "./components/PulseDnaStudio";
+import TwoFactorSettings from "./components/TwoFactorSettings";
 import { TeacherPicker } from "./components/TeacherPicker";
 import HelpAssistant from "./components/HelpAssistant";
 import { TileHome, type Tile as TileHomeTile } from "./pages/TileHome";
@@ -5608,6 +5609,7 @@ function App() {
   >(null);
   const currentStaffUser = authUser?.displayName ?? "";
   const [showChangePw, setShowChangePw] = useState(false);
+  const [showTwoFactor, setShowTwoFactor] = useState(false);
   // Student Finder state. `null` = closed. Otherwise a discriminated
   // open-state: either { kind: "search", query } for the top-bar entry
   // point (search field shown) or { kind: "student", studentId,
@@ -11612,6 +11614,7 @@ function App() {
               setChangePwOk(false);
               setShowChangePw(true);
             }}
+            onManageTwoFactor={() => setShowTwoFactor(true)}
             onSignOut={async () => {
               await authFetch("/api/auth/logout", { method: "POST" });
               setAuthUser(null);
@@ -11766,6 +11769,10 @@ function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {showTwoFactor && (
+        <TwoFactorSettings onClose={() => setShowTwoFactor(false)} />
       )}
 
       {(() => {
