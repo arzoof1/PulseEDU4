@@ -77,6 +77,37 @@ import {
   seedWatchlistQuickEntriesIfEmpty,
   seedWatchlistSpotlightsIfMissing,
 } from "./seed";
+// Schema ensures that today only run *inside* demo-seed wrappers (e.g.
+// seedFastScoresIfEmpty calls a batch of ensures before seeding). runMigrations()
+// calls them directly so the production migrate-only path gets full schema
+// without any demo data.
+import {
+  ensureAdminHubSchema,
+  ensureAlgebraPlacementOverridesSchema,
+  ensureBenchmarkDescriptionsSchema,
+  ensureBenchmarkReteachLogSchema,
+  ensureCameraRegistrySchema,
+  ensureCaseConsistencySchema,
+  ensureCaseFootageRequestsSchema,
+  ensureCaseMentionsSchema,
+  ensureCaseOutcomeCatalogSchema,
+  ensureCaseVideoEvidencePlayersSchema,
+  ensureCaseVideoEvidenceSchema,
+  ensureDisplayLiveControlSchema,
+  ensureFastScoresSchema,
+  ensureHeartbeatNoteSchema,
+  ensureHousesSchema,
+  ensureInterventionEntriesSchema,
+  ensureMtssPlansSchema,
+  ensureOnboardingChecklistSchema,
+  ensurePbisPointMigrationsSchema,
+  ensurePulseBrainLabLessonsSchema,
+  ensureSchoolSettingsFeatureFlagsSchema,
+  ensureTicketingSchema,
+  ensureTierPresetsSchema,
+  ensureTourWalksSchema,
+  ensureToursSchema,
+} from "./seed";
 import { seedDistrictDemoExtras } from "./seedDemoExtras";
 
 // IMPORTANT: sequential, not Promise.all. seedIfEmpty() reads the schools table
@@ -205,6 +236,104 @@ export async function runSeed(): Promise<void> {
   } catch (err) {
     logger.error({ err }, "[boot] school-year flip reconcile failed");
   }
+}
+
+// Production schema-migration path (companion to the RUN_BOOT_SEED work).
+// Runs ONLY the idempotent schema ensures + real-data backfills — NEVER the
+// demo-data seeders — so bringing up RUN_BOOT_SEED=true in production applies
+// schema WITHOUT injecting demo students / schools / scores. Base tables come
+// from `drizzle-kit push` (run once via SSH on a brand-new DB); these ensures
+// are the incremental ADD COLUMN / CREATE TABLE IF NOT EXISTS top-ups on top,
+// and are safe to run on every boot of an established database.
+//
+// Each step is isolated in try/catch so one failure (logged loudly) doesn't
+// abort the rest — the ensures are idempotent and will re-attempt next boot.
+//
+// MAINTENANCE: production uses THIS path, not runSeed(). When you add a new
+// ensure*Schema/Columns/Backfill, add it here too or the column won't reach
+// production.
+export async function runMigrations(): Promise<void> {
+  const steps: Array<readonly [string, () => Promise<void>]> = [
+    ["ensureFeaturePlansColumns", ensureFeaturePlansColumns],
+    ["ensureFeaturePlansSchema", ensureFeaturePlansSchema],
+    ["ensureSchoolsTimezoneColumn", ensureSchoolsTimezoneColumn],
+    ["ensureStudentPhotoColumns", ensureStudentPhotoColumns],
+    ["ensureOnTimeTestModeColumns", ensureOnTimeTestModeColumns],
+    ["ensureHousesSchema", ensureHousesSchema],
+    ["ensureMtssPlansSchema", ensureMtssPlansSchema],
+    ["ensureSchoolSettingsFeatureFlagsSchema", ensureSchoolSettingsFeatureFlagsSchema],
+    ["ensureAdminHubSchema", ensureAdminHubSchema],
+    ["ensureTierPresetsSchema", ensureTierPresetsSchema],
+    ["ensureOnboardingChecklistSchema", ensureOnboardingChecklistSchema],
+    ["ensureFastScoresSchema", ensureFastScoresSchema],
+    ["ensureFastItemResponsesSchema", ensureFastItemResponsesSchema],
+    ["ensureBenchmarkReteachLogSchema", ensureBenchmarkReteachLogSchema],
+    ["ensureBenchmarkDescriptionsSchema", ensureBenchmarkDescriptionsSchema],
+    ["ensureBenchmarkDeliveriesSchema", ensureBenchmarkDeliveriesSchema],
+    ["ensureSchoolBenchmarksCatalogBackfill", ensureSchoolBenchmarksCatalogBackfill],
+    ["ensureAlgebraPlacementOverridesSchema", ensureAlgebraPlacementOverridesSchema],
+    ["ensureHeartbeatNoteSchema", ensureHeartbeatNoteSchema],
+    ["ensureInterventionEntriesSchema", ensureInterventionEntriesSchema],
+    ["ensureAcademicEvidenceSchema", ensureAcademicEvidenceSchema],
+    ["ensurePulseBrainLabLessonsSchema", ensurePulseBrainLabLessonsSchema],
+    ["ensurePulseBrainLabGroupsSchema", ensurePulseBrainLabGroupsSchema],
+    ["ensureClassComposerPlansSchema", ensureClassComposerPlansSchema],
+    ["ensureClassComposerSkillClusterSchema", ensureClassComposerSkillClusterSchema],
+    ["ensureWatchlistSchema", ensureWatchlistSchema],
+    ["ensureCaseMentionsSchema", ensureCaseMentionsSchema],
+    ["ensureCaseVideoEvidenceSchema", ensureCaseVideoEvidenceSchema],
+    ["ensureCaseVideoEvidencePlayersSchema", ensureCaseVideoEvidencePlayersSchema],
+    ["ensureCameraRegistrySchema", ensureCameraRegistrySchema],
+    ["ensureCaseConsistencySchema", ensureCaseConsistencySchema],
+    ["ensureCaseFootageRequestsSchema", ensureCaseFootageRequestsSchema],
+    ["ensureCaseOutcomeCatalogSchema", ensureCaseOutcomeCatalogSchema],
+    ["ensureToursSchema", ensureToursSchema],
+    ["ensureTourWalksSchema", ensureTourWalksSchema],
+    ["ensureTicketingSchema", ensureTicketingSchema],
+    ["ensureDisplayLiveControlSchema", ensureDisplayLiveControlSchema],
+    ["ensureStudentRetentionsSchema", ensureStudentRetentionsSchema],
+    ["ensureDataImporterRollbackSchema", ensureDataImporterRollbackSchema],
+    ["ensureDistrictIntegrationsSchema", ensureDistrictIntegrationsSchema],
+    ["ensurePickupSchema", ensurePickupSchema],
+    ["ensurePickupOverrideAuditSchema", ensurePickupOverrideAuditSchema],
+    ["ensureAstSchema", ensureAstSchema],
+    ["ensureKioskCardsSchema", ensureKioskCardsSchema],
+    ["ensureKioskWelcomeSchema", ensureKioskWelcomeSchema],
+    ["ensureHallPassPriorityBypassColumn", ensureHallPassPriorityBypassColumn],
+    ["ensureHallPassAllowlistSchema", ensureHallPassAllowlistSchema],
+    ["ensureOneWayPassSchema", ensureOneWayPassSchema],
+    ["ensurePbisInvisibleTierColumns", ensurePbisInvisibleTierColumns],
+    ["ensurePbisPointMigrationsSchema", ensurePbisPointMigrationsSchema],
+    ["ensureSpotlightPbisReason", ensureSpotlightPbisReason],
+    ["ensureBadgePrintEventsSchema", ensureBadgePrintEventsSchema],
+    ["ensureSchoolGradeSchema", ensureSchoolGradeSchema],
+    ["ensureEligibilitySchema", ensureEligibilitySchema],
+    ["ensureStaffPasswordResetsSchema", ensureStaffPasswordResetsSchema],
+    ["ensureMfaSchema", ensureMfaSchema],
+    ["ensureParentMessagesSchema", ensureParentMessagesSchema],
+    ["ensureCommunicationSchema", ensureCommunicationSchema],
+    ["ensureDataChatSchema", ensureDataChatSchema],
+    ["ensureSectionSupportSchema", ensureSectionSupportSchema],
+    ["ensureDataExportSchema", ensureDataExportSchema],
+    ["ensurePulseDnaVideosSchema", ensurePulseDnaVideosSchema],
+    ["ensureStudentLocalSisIdBackfill", ensureStudentLocalSisIdBackfill],
+    ["ensureStudentAccommodationsBackfill", ensureStudentAccommodationsBackfill],
+    ["ensureLocationAllowedDestinationsBackfill", ensureLocationAllowedDestinationsBackfill],
+    ["ensureL25BaselineFromPriorPm3", ensureL25BaselineFromPriorPm3],
+  ];
+  let ok = 0;
+  for (const [name, fn] of steps) {
+    try {
+      await fn();
+      ok++;
+    } catch (err) {
+      logger.error({ err, step: name }, "[migrate] schema step failed");
+    }
+  }
+  logger.info(
+    { ok, total: steps.length },
+    "[migrate] schema migration complete (no demo data seeded)",
+  );
 }
 
 export async function bootstrapCriticalColumns(): Promise<void> {
