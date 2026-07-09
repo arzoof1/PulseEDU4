@@ -1,7 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { s3BucketName, useS3ObjectStorage } from "./lib/storedObject.js";
-import { bootstrapCriticalColumns, runSeed } from "./seedRunner";
+import { bootstrapCriticalColumns, runMigrations, runSeed } from "./seedRunner";
 import { recoverSuperUserPasswordOnce } from "./seed";
 import {
   scheduledJobsEnabled,
@@ -44,6 +44,16 @@ const runBootSeed =
 // background so the platform health check sees an open port quickly. Local dev
 // keeps the historical seed-first behavior unless RUN_BOOT_SEED=false.
 const seedInBackground = isProduction && runBootSeed;
+// Demo-data seeding is SEPARATE from schema migration. In production it is OFF
+// unless SEED_DEMO_DATA=true, so RUN_BOOT_SEED=true applies schema
+// (runMigrations) WITHOUT injecting demo students / schools / scores into a
+// real database. Dev keeps demo on by default for a usable local database.
+// When false, the boot runs runMigrations() (schema only) instead of runSeed().
+const seedDemoData =
+  process.env.NODE_ENV !== "test" &&
+  (isProduction
+    ? envFlag("SEED_DEMO_DATA")
+    : process.env.SEED_DEMO_DATA !== "false");
 const runScheduledJobs =
   process.env.NODE_ENV !== "test" &&
   scheduledJobsEnabled(!isProduction);
@@ -79,11 +89,15 @@ function startListening(): void {
         );
 
       if (seedInBackground) {
-        logger.info("Starting seed in background (post-listen)");
-        runSeed()
-          .then(() => logger.info("Background seed complete"))
+        const backgroundBoot = seedDemoData ? runSeed : runMigrations;
+        logger.info(
+          { mode: seedDemoData ? "seed+demo" : "migrate-only" },
+          "Starting background DB boot (post-listen)",
+        );
+        backgroundBoot()
+          .then(() => logger.info("Background DB boot complete"))
           .catch((err: unknown) =>
-            logger.error({ err }, "Background seed failed"),
+            logger.error({ err }, "Background DB boot failed"),
           );
       }
 
@@ -115,7 +129,8 @@ if (seedInBackground) {
   );
   startListening();
 } else {
-  runSeed()
-    .catch((err: unknown) => logger.error({ err }, "Seed failed"))
+  const boot = seedDemoData ? runSeed : runMigrations;
+  boot()
+    .catch((err: unknown) => logger.error({ err }, "Boot DB step failed"))
     .finally(() => startListening());
 }

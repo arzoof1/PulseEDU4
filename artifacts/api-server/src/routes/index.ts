@@ -19,6 +19,7 @@ import kioskRouter from "./kiosk";
 import onTimeAdminRouter from "./onTimeAdmin";
 import studentIdBadgesRouter from "./studentIdBadges";
 import authRouter from "./auth";
+import authMfaRouter from "./authMfa";
 import reportsRouter from "./reports";
 import exportsRouter from "./exports";
 import listsAdminRouter from "./listsAdmin";
@@ -129,6 +130,7 @@ import {
   requireFeatureAllowingSignageSchool,
   requireFeatureForParent,
 } from "../lib/featureLicensing";
+import { requireAiFeatures } from "../lib/aiFeatures";
 
 const router: IRouter = Router();
 
@@ -156,6 +158,7 @@ router.use(locationAllowedDestinationsRouter);
 router.use(kioskRouter);
 router.use(onTimeAdminRouter);
 router.use(authRouter);
+router.use(authMfaRouter);
 router.use(reportsRouter);
 router.use(exportsRouter);
 router.use(listsAdminRouter);
@@ -232,6 +235,11 @@ router.use("/parent/messages", requireFeatureForParent("familyComm"));
 // PulseDNA studio (communication profile + AI drafting) lives under the same
 // Family Communication license. Core-Team gate is enforced inside the router.
 router.use("/pulse-dna", requireFeature("familyComm"));
+router.use("/pulse-dna", requireAiFeatures);
+// Help Assistant + all other AI surfaces share the `aiAssist` kill switch.
+router.use("/help-assistant", requireAiFeatures);
+router.use("/watchlist/cases/:id/consistency/run", requireAiFeatures);
+router.use("/watchlist/statements/:id/suggest-mentions", requireAiFeatures);
 
 // -----------------------------------------------------------------------------
 // Feature-checklist completion gates (July 2026). These modules shipped

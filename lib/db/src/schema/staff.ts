@@ -41,6 +41,18 @@ export const staffTable = pgTable("staff", {
   // Bumped on logout / password change to invalidate outstanding staff bearer
   // tokens (when STAFF_BEARER_AUTH_ENABLED). Session cookies are unaffected.
   authTokenVersion: integer("auth_token_version").notNull().default(0),
+
+  // ---- Staff MFA (Gate A / Section 1) ----
+  // All nullable + dormant: adding these changes nothing until a school or
+  // district MFA policy flag is flipped on (see school_settings / districts
+  // mfa_required_* columns and lib/mfaPolicy.ts). The TOTP secret is
+  // encrypted at rest under a DEDICATED key (MFA_ENC_KEY), never derived from
+  // SESSION_SECRET — see the Section 10.5 remediation. Null secret / null
+  // enrolled_at = the staff member has not enrolled.
+  mfaSecretEnc: text("mfa_secret_enc"),
+  mfaEnrolledAt: timestamp("mfa_enrolled_at", { withTimezone: true }),
+  mfaLastUsedAt: timestamp("mfa_last_used_at", { withTimezone: true }),
+
   displayName: text("display_name").notNull(),
 
   // Optional courtesy title / honorific (e.g. "Mr.", "Mrs.", "Ms.", "Dr.",

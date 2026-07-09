@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, FileSearch, Plus, RefreshCw, X } from "lucide-react";
 import { authFetch } from "../../lib/authToken";
+import { useFeatures } from "../../lib/features";
 import { WL_COLORS as C } from "./colors";
 
 // AI Consistency side panel — lives over the case detail page when
@@ -94,6 +95,8 @@ const DISMISS_REASONS = [
 ] as const;
 
 export default function ConsistencyPanel({ caseId, onClose, onChanged }: Props) {
+  const features = useFeatures();
+  const aiEnabled = features.has("aiAssist");
   const [tab, setTab] = useState<"open" | "dismissed" | "runs">("open");
   const [state, setState] = useState<ConsistencyState | null>(null);
   const [latestRun, setLatestRun] = useState<RunSummary | null>(null);
@@ -169,6 +172,7 @@ export default function ConsistencyPanel({ caseId, onClose, onChanged }: Props) 
   }, [latestRun, state]);
 
   const triggerRun = async () => {
+    if (!aiEnabled) return;
     setRunning(true);
     setRateLimit(null);
     try {
@@ -279,18 +283,20 @@ export default function ConsistencyPanel({ caseId, onClose, onChanged }: Props) 
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={triggerRun}
-              disabled={running}
-              className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
-              style={{ borderColor: C.line, background: C.panel, color: C.ink }}
-            >
-              <RefreshCw
-                className={`h-3.5 w-3.5 ${running ? "animate-spin" : ""}`}
-              />
-              {running ? "Running…" : "Re-run"}
-            </button>
+            {aiEnabled ? (
+              <button
+                type="button"
+                onClick={triggerRun}
+                disabled={running}
+                className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
+                style={{ borderColor: C.line, background: C.panel, color: C.ink }}
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${running ? "animate-spin" : ""}`}
+                />
+                {running ? "Running…" : "Re-run"}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={onClose}
@@ -312,6 +318,20 @@ export default function ConsistencyPanel({ caseId, onClose, onChanged }: Props) 
             }}
           >
             {rateLimit}
+          </div>
+        )}
+
+        {!aiEnabled && (
+          <div
+            className="border-b px-5 py-2 text-xs"
+            style={{
+              borderColor: C.line,
+              background: C.warnSoft,
+              color: C.warn,
+            }}
+          >
+            AI features are disabled by district policy. Historical consistency
+            data is shown read-only; new AI runs are not available.
           </div>
         )}
 

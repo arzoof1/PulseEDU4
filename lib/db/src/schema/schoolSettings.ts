@@ -685,6 +685,24 @@ export const schoolSettingsTable = pgTable(
   superFeatureSafetyPlans: boolean("super_feature_safety_plans")
     .notNull()
     .default(true),
+  // Master per-school AI kill switch (Help Assistant, PulseDNA, watchlist
+  // consistency, mention suggest, tour translation). Defaults TRUE so
+  // existing schools are unaffected until district policy flips it off.
+  featureAiAssist: boolean("feature_ai_assist").notNull().default(true),
+  superFeatureAiAssist: boolean("super_feature_ai_assist")
+    .notNull()
+    .default(true),
+  // Per-school MFA enforcement policy (Gate A / Section 1). BOTH default
+  // FALSE so shipping the MFA system is a no-op — no staff member is
+  // challenged until a school admin (or the district, see districts table)
+  // turns a tier on. Two tiers because the staff schema has no distinct
+  // teacher/AP/support role flags: "privileged" = SuperUser / District Admin
+  // / School Admin (items 1.1-1.3); "staff" = every other login-holding role
+  // (items 1.4-1.6). Resolved (ORed with district policy) in lib/mfaPolicy.ts.
+  mfaRequiredPrivileged: boolean("mfa_required_privileged")
+    .notNull()
+    .default(false),
+  mfaRequiredStaff: boolean("mfa_required_staff").notNull().default(false),
   },
   (t) => ({
     schoolIdUnique: uniqueIndex("school_settings_school_id_unique").on(

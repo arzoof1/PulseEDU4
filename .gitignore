@@ -55,3 +55,8 @@ Thumbs.db
 !.env.production.example
 !.env.development
 
+# Internal security deliverables (remediation tracker, security docs, etc.).
+# Kept OUT of the repo/git history on purpose — these describe the app's
+# vulnerabilities and architecture and must not ship in the codebase.
+deliverables/
+

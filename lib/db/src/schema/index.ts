@@ -150,3 +150,5 @@ export * from "./parentMessages";
 export * from "./pulseDna";
 export * from "./eligibility";
 export * from "./dataExportAuditLog";
+export * from "./staffMfaRecoveryCodes";
+export * from "./authAuditLog";
