@@ -1354,6 +1354,59 @@ export async function ensureDataExportSchema() {
   );
 }
 
+// Staff MFA (Gate A / Section 1) — additive + dormant. Creates the nullable
+// staff MFA columns, the two-tier enforcement flags on school_settings +
+// districts (all default FALSE, so nothing is enforced until deliberately
+// turned on), and the recovery-code + auth-audit tables. Every statement is
+// idempotent (ADD COLUMN / CREATE TABLE / CREATE INDEX IF NOT EXISTS), so it
+// is safe to run on every boot. Wired into BOTH bootstrapCriticalColumns()
+// (runs pre-listen, so the login path never sees a missing column) and
+// runSeed() (dev path).
+export async function ensureMfaSchema(): Promise<void> {
+  for (const stmt of [
+    `ALTER TABLE staff ADD COLUMN IF NOT EXISTS mfa_secret_enc TEXT`,
+    `ALTER TABLE staff ADD COLUMN IF NOT EXISTS mfa_enrolled_at TIMESTAMPTZ`,
+    `ALTER TABLE staff ADD COLUMN IF NOT EXISTS mfa_last_used_at TIMESTAMPTZ`,
+    `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS mfa_required_privileged BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS mfa_required_staff BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE districts ADD COLUMN IF NOT EXISTS mfa_required_privileged BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE districts ADD COLUMN IF NOT EXISTS mfa_required_staff BOOLEAN NOT NULL DEFAULT FALSE`,
+  ]) {
+    await db.execute(sql.raw(stmt));
+  }
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS staff_mfa_recovery_codes (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL,
+      code_hash TEXT NOT NULL,
+      used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS staff_mfa_recovery_codes_staff_idx ON staff_mfa_recovery_codes (staff_id)`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS auth_audit_log (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER,
+      action TEXT NOT NULL,
+      actor_staff_id INTEGER,
+      actor_name TEXT,
+      target_staff_id INTEGER,
+      ip TEXT,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS auth_audit_log_created_idx ON auth_audit_log (created_at)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS auth_audit_log_actor_idx ON auth_audit_log (actor_staff_id)`,
+  );
+}
+
 export async function ensureMtssPlansSchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS student_mtss_plans (

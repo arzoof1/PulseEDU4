@@ -26,6 +26,14 @@ export const districtsTable = pgTable("districts", {
   brandDocuments: boolean("brand_documents").notNull().default(true),
   brandFooter: boolean("brand_footer").notNull().default(false),
   brandWatermark: boolean("brand_watermark").notNull().default(false),
+  // District-wide MFA enforcement (Gate A / item 1.8). ORed with each
+  // school's own policy in lib/mfaPolicy.ts, so a district can require MFA
+  // for a tier across every school without touching per-school rows. Both
+  // default FALSE — dormant until deliberately enabled.
+  mfaRequiredPrivileged: boolean("mfa_required_privileged")
+    .notNull()
+    .default(false),
+  mfaRequiredStaff: boolean("mfa_required_staff").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

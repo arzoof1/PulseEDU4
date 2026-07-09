@@ -26,6 +26,7 @@ import {
   ensureKioskWelcomeSchema,
   ensureL25BaselineFromPriorPm3,
   ensureLocationAllowedDestinationsBackfill,
+  ensureMfaSchema,
   ensureOnTimeTestModeColumns,
   ensureOneWayPassSchema,
   ensureParentMessagesSchema,
@@ -135,6 +136,7 @@ export async function runSeed(): Promise<void> {
   await ensureSchoolGradeSchema();
   await ensureEligibilitySchema();
   await ensureStaffPasswordResetsSchema();
+  await ensureMfaSchema();
   await ensureSchoolsTimezoneColumn();
   await ensureStudentPhotoColumns();
   await ensureOnTimeTestModeColumns();
@@ -212,6 +214,7 @@ export async function bootstrapCriticalColumns(): Promise<void> {
     await ensureOnTimeTestModeColumns();
     await ensureParentMessagesSchema();
     await ensurePulseDnaVideosSchema();
+    await ensureMfaSchema();
   } catch (err) {
     logger.error({ err }, "[boot] critical column bootstrap failed");
     throw err;
