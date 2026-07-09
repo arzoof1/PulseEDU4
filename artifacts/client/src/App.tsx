@@ -5999,6 +5999,8 @@ function App() {
     superFeatureSchoolGrade: boolean;
     featureSafetyPlans: boolean;
     superFeatureSafetyPlans: boolean;
+    featureAiAssist: boolean;
+    superFeatureAiAssist: boolean;
   }>({
     schoolName: "",
     fromName: "",
@@ -6088,6 +6090,8 @@ function App() {
     superFeatureSchoolGrade: true,
     featureSafetyPlans: true,
     superFeatureSafetyPlans: true,
+    featureAiAssist: true,
+    superFeatureAiAssist: true,
   });
   const [settingsStatus, setSettingsStatus] = useState<
     "idle" | "saving" | "saved" | "error"
@@ -8062,6 +8066,8 @@ function App() {
           superFeatureSchoolGrade: boolOrTrue(data.superFeatureSchoolGrade),
           featureSafetyPlans: boolOrTrue(data.featureSafetyPlans),
           superFeatureSafetyPlans: boolOrTrue(data.superFeatureSafetyPlans),
+          featureAiAssist: boolOrTrue(data.featureAiAssist),
+          superFeatureAiAssist: boolOrTrue(data.superFeatureAiAssist),
         }),
       )
       .catch((err) => console.error("Failed to load school settings:", err));
@@ -8264,6 +8270,8 @@ function App() {
         superFeatureSchoolGrade: boolOrTrue(data.superFeatureSchoolGrade),
         featureSafetyPlans: boolOrTrue(data.featureSafetyPlans),
         superFeatureSafetyPlans: boolOrTrue(data.superFeatureSafetyPlans),
+        featureAiAssist: boolOrTrue(data.featureAiAssist),
+        superFeatureAiAssist: boolOrTrue(data.superFeatureAiAssist),
       });
       setSettingsStatus("saved");
       setTimeout(() => setSettingsStatus("idle"), 2000);
@@ -10579,6 +10587,8 @@ function App() {
     ParentPortal:
       schoolSettings.featureParentPortal &&
       schoolSettings.superFeatureParentPortal,
+    AiAssist:
+      schoolSettings.featureAiAssist && schoolSettings.superFeatureAiAssist,
   };
   const allBaseNavSections: NavSection[] = [
     { key: "hallPasses", label: "Hall Passes", icon: IconDoor },
@@ -10876,6 +10886,7 @@ function App() {
   const brainLabVis = useFeatureVisible("brainLab");
   const schoolGradeVis = useFeatureVisible("schoolGrade");
   const safetyPlansVis = useFeatureVisible("safetyPlans");
+  const aiAssistVis = useFeatureVisible("aiAssist");
   const renderGatedNavItem = (
     s: NavSection,
     vis: { visible: boolean; locked: boolean },
@@ -12409,6 +12420,7 @@ function App() {
               >
                 {effectiveFeatures.FamilyComm &&
                   isCoreTeamMember &&
+                  aiAssistVis.visible &&
                   renderNavItem({
                     key: "pulseDnaStudio",
                     label: "PulseDNA Studio",
@@ -23976,6 +23988,7 @@ function App() {
 
       {activeSection === "pulseDnaStudio" &&
         effectiveFeatures.FamilyComm &&
+        effectiveFeatures.AiAssist &&
         isCoreTeamMember && <PulseDnaStudio />}
 
       {activeSection === "parentNotifications" && canManageSettings && (
@@ -26403,7 +26416,9 @@ function App() {
         }}
       />
       </main>
-      <HelpAssistant />
+      <FeatureGate feature="aiAssist" label="AI Assistance">
+        <HelpAssistant />
+      </FeatureGate>
     </div>
     </RoleProvider>
   );

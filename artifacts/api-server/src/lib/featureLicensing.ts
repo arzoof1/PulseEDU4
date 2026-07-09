@@ -14,6 +14,7 @@ import {
   staffTable,
 } from "@workspace/db";
 import { verifyParentAuthToken } from "./authToken.js";
+import { isAiGloballyEnabled } from "./aiGlobalSwitch.js";
 
 // =============================================================================
 // Feature licensing — server-side helpers
@@ -87,6 +88,7 @@ export type FeatureSpec = {
     | "superFeatureGradebook"
     | "superFeatureSchoolGrade"
     | "superFeatureSafetyPlans"
+    | "superFeatureAiAssist"
     | null;
   quotas: QuotaSpec[];
   // Staff-pilot eligibility. Default (undefined) = pilotable. Set FALSE
@@ -381,6 +383,15 @@ export const FEATURE_KEYS: FeatureSpec[] = [
     schoolSettingsKey: "superFeatureSafetyPlans",
     quotas: [],
   },
+  {
+    key: "aiAssist",
+    label: "AI Assistance",
+    description:
+      "Master switch for AI-powered features: Help Assistant, PulseDNA drafting, watchlist consistency checks, mention suggestions, and tour page translation. Disable when district policy or DPA review requires AI off.",
+    schoolSettingsKey: "superFeatureAiAssist",
+    pilotable: false,
+    quotas: [],
+  },
 ];
 
 export const FEATURE_KEY_SET = new Set(FEATURE_KEYS.map((f) => f.key));
@@ -531,6 +542,12 @@ export async function loadEffectiveFeatures(
     const showUpsell = override?.showUpsell ?? false;
 
     map[spec.key] = { enabled, showUpsell, quotas };
+  }
+
+  // Deployment kill switch: force aiAssist off for every school when the
+  // env master switch is off, so `/api/me/features` matches route gates.
+  if (!isAiGloballyEnabled() && map.aiAssist) {
+    map.aiAssist = { ...map.aiAssist, enabled: false, showUpsell: false };
   }
 
   perReq.set(schoolId, map);

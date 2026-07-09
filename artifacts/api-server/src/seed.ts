@@ -10402,6 +10402,7 @@ export async function ensureEligibilitySchema(): Promise<void> {
     "gradebook",
     "school_grade",
     "safety_plans",
+    "ai_assist",
   ]) {
     await db.execute(
       sql.raw(
@@ -10449,7 +10450,8 @@ export async function ensureEligibilitySchema(): Promise<void> {
       'brainLab',    COALESCE(features->'brainLab',    'true'::jsonb),
       'gradebook',   COALESCE(features->'gradebook',   'true'::jsonb),
       'schoolGrade', COALESCE(features->'schoolGrade', 'true'::jsonb),
-      'safetyPlans', COALESCE(features->'safetyPlans', 'true'::jsonb)
+      'safetyPlans', COALESCE(features->'safetyPlans', 'true'::jsonb),
+      'aiAssist',    COALESCE(features->'aiAssist',    'true'::jsonb)
     )
   `);
 }

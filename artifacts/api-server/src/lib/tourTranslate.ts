@@ -6,6 +6,7 @@ import type {
   TourTranslation,
 } from "@workspace/db";
 import { logger } from "./logger.js";
+import { isAiGloballyEnabled } from "./aiGlobalSwitch.js";
 
 // ---------------------------------------------------------------------------
 // School Tours — on-demand machine translation of the public brag page.
@@ -127,6 +128,7 @@ export async function translateTourContent(
   content: TranslatableTourContent,
   lang: SupportedTargetLang,
 ): Promise<TourTranslation | null> {
+  if (!isAiGloballyEnabled()) return null;
   const sourceHash = hashTourContent(content);
   const strings = collectStrings(content);
   // Nothing to translate (page is effectively empty) — cache an identity

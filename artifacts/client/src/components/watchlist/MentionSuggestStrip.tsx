@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { authFetch } from "../../lib/authToken";
+import { useFeatures } from "../../lib/features";
 
 // Below-the-textarea hint: "We think this also references: X, Y."
 // Calls /watchlist/statements/:id/suggest-mentions on a debounce after
@@ -24,11 +25,13 @@ export default function MentionSuggestStrip({
   body,
   onInsert,
 }: Props) {
+  const features = useFeatures();
+  const aiEnabled = features.has("aiAssist");
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    if (!statementId || body.trim().length < 25) {
+    if (!aiEnabled || !statementId || body.trim().length < 25) {
       setSuggestions([]);
       return;
     }
@@ -46,10 +49,10 @@ export default function MentionSuggestStrip({
       }
     }, 1500);
     return () => window.clearTimeout(t);
-  }, [statementId, body]);
+  }, [aiEnabled, statementId, body]);
 
   const visible = suggestions.filter((s) => !dismissed.has(s.studentId));
-  if (!statementId || visible.length === 0) return null;
+  if (!aiEnabled || !statementId || visible.length === 0) return null;
 
   return (
     <div

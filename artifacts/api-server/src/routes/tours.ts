@@ -64,6 +64,7 @@ import { mergePdfs } from "../lib/mergePdfs.js";
 import { genUrlSafeToken } from "../lib/urlSafeToken.js";
 import QRCode from "qrcode";
 import { logger } from "../lib/logger.js";
+import { isAiAssistEnabledForSchool } from "../lib/aiFeatures.js";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
@@ -707,6 +708,7 @@ async function generateAndCacheTranslation(
   const existing = inflightTranslations.get(key);
   if (existing) return existing;
   const work = (async () => {
+    if (!(await isAiAssistEnabledForSchool(schoolId))) return null;
     const translated = await translateTourContent(source, lang);
     if (!translated) return null;
     try {

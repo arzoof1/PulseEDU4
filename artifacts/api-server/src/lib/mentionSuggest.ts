@@ -8,6 +8,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "./logger";
+import { isAiGloballyEnabled } from "./aiGlobalSwitch.js";
 
 let _client: Anthropic | null = null;
 function getClient(): Anthropic {
@@ -43,6 +44,7 @@ export async function suggestMentions(opts: {
   roster: MentionSuggestRosterRow[];
   already: Set<string>;
 }): Promise<MentionSuggestion[]> {
+  if (!isAiGloballyEnabled()) return [];
   const { body, roster, already } = opts;
   // Strip existing chip tokens so the model focuses on free-text refs.
   const cleaned = body.replace(/@\[[^|\]]+\|([A-Za-z0-9_-]+)\]/g, (_m, sid) => {
