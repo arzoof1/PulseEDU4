@@ -177,7 +177,11 @@ import DataManagementHub from "./components/DataManagementHub";
 import SchoolSwitcher from "./components/SchoolSwitcher";
 import SchoolBrandingPanel from "./components/SchoolBrandingPanel";
 import { useSchoolBranding } from "./lib/branding";
-import { authFetch, setMfaEnrollmentRequiredHandler } from "./lib/authToken";
+import {
+  authFetch,
+  setMfaEnrollmentRequiredHandler,
+  clearMfaEnrollmentBlocked,
+} from "./lib/authToken";
 import {
   AreaChart,
   Area,
@@ -7586,6 +7590,7 @@ function App() {
   // user's status resolves — otherwise a fresh sign-in could mount the
   // dashboard (and 403-crash) before we know they must enroll.
   useEffect(() => {
+    clearMfaEnrollmentBlocked();
     setMfaChecked(false);
     loadMfaStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps

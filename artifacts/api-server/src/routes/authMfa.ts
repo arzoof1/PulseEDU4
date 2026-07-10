@@ -4,7 +4,7 @@ import { db, staffTable, staffMfaRecoveryCodesTable } from "@workspace/db";
 import { logger } from "../lib/logger.js";
 import { isStaffMfaEnabled } from "../lib/staffMfaSwitch.js";
 import { encryptMfaSecret, decryptMfaSecret } from "../lib/mfaCrypto.js";
-import { isMfaRequiredForStaff } from "../lib/mfaPolicy.js";
+import { isMfaRequiredForStaffCached } from "../lib/mfaPolicyCache.js";
 import { writeAuthAudit } from "../lib/authAudit.js";
 import {
   generateTotpSecret,
@@ -64,7 +64,11 @@ router.get("/auth/mfa/status", async (req, res) => {
   }
   const enrolled = !!staff.mfaEnrolledAt;
   const [required, recoveryCodesRemaining] = await Promise.all([
-    isMfaRequiredForStaff(staff),
+    // Use the SAME cached resolver the enrollment gate uses, so the client's
+    // "am I required?" answer can never disagree with what the server actually
+    // enforces (a divergence would let the dashboard mount while every route
+    // 403s — the white-screen bug this replaced).
+    isMfaRequiredForStaffCached(staff),
     enrolled ? countUnusedRecoveryCodes(staff.id) : Promise.resolve(0),
   ]);
   res.json({ enrolled, required, recoveryCodesRemaining });

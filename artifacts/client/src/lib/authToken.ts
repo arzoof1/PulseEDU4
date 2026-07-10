@@ -24,6 +24,25 @@ export function setMfaEnrollmentRequiredHandler(
   mfaEnrollmentRequiredHandler = handler;
 }
 
+// Sticky, authoritative "this user is being blocked pending MFA enrollment"
+// flag. Set the moment ANY request comes back 403 mfa_enrollment_required —
+// i.e. driven by what the server actually enforces, not by a separate status
+// lookup that could disagree. The MfaEnrollmentBoundary reads it: if a render
+// crashes while this is set (e.g. a view choked on a 403 body before the
+// enrollment wall could take over), the boundary shows the enrollment screen
+// instead of a white screen.
+let mfaEnrollmentBlocked = false;
+
+export function isMfaEnrollmentBlocked(): boolean {
+  return mfaEnrollmentBlocked;
+}
+
+// Reset on auth change so a stale block from a previous session can't
+// false-trigger the enrollment fallback for the next user.
+export function clearMfaEnrollmentBlocked(): void {
+  mfaEnrollmentBlocked = false;
+}
+
 export function setAuthToken(token: string | null | undefined) {
   inMemoryAuthToken = token && token.length > 0 ? token : null;
 }
@@ -109,9 +128,11 @@ export async function authFetch(
         res = await doFetch();
       }
     } else if (body?.error === "mfa_enrollment_required") {
-      // Server is enforcing MFA enrollment — let the app raise the blocking
-      // modal. Return the 403 unchanged so the calling code still fails; it is
-      // the modal, not this request, that unblocks the user.
+      // Server is enforcing MFA enrollment — record it authoritatively and let
+      // the app raise the blocking modal. Return the 403 unchanged so the
+      // calling code still fails; it is the modal, not this request, that
+      // unblocks the user.
+      mfaEnrollmentBlocked = true;
       mfaEnrollmentRequiredHandler?.();
     }
   }
