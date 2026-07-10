@@ -872,6 +872,30 @@ router.patch(
             ),
       )
       .returning(STAFF_SELECT);
+
+    // Audit any change to a role / capability / active flag (item 3.6). Only
+    // security-relevant fields are recorded — routine edits (room, title, house)
+    // are intentionally left out so the security log stays signal, not noise.
+    const roleChanges: Record<string, { from: unknown; to: unknown }> = {};
+    for (const field of ALL_BOOL_FIELDS) {
+      const before = (target as Record<string, unknown>)[field];
+      const after = (updates as Record<string, unknown>)[field];
+      if (field in updates && before !== after) {
+        roleChanges[field] = { from: before, to: after };
+      }
+    }
+    if (Object.keys(roleChanges).length > 0) {
+      await writeAuthAudit({
+        action: "role_changed",
+        schoolId: target.schoolId,
+        actorStaffId: actor.id,
+        actorName: actor.displayName,
+        targetStaffId: targetId,
+        ip: req.ip ?? null,
+        payload: { targetName: target.displayName, changes: roleChanges },
+      });
+    }
+
     res.json(updated);
   },
 );
@@ -967,6 +991,15 @@ router.post(
         ...updates,
       })
       .returning(STAFF_SELECT);
+    await writeAuthAudit({
+      action: "staff_created",
+      schoolId: row.schoolId ?? targetSchoolId,
+      actorStaffId: actor.id,
+      actorName: actor.displayName,
+      targetStaffId: row.id,
+      ip: req.ip ?? null,
+      payload: { email: normEmail, displayName: displayName.trim() },
+    });
     res.status(201).json(row);
   },
 );
@@ -1074,6 +1107,15 @@ router.post(
       .update(staffTable)
       .set({ passwordHash })
       .where(eq(staffTable.id, targetId));
+    await writeAuthAudit({
+      action: "admin_password_reset",
+      schoolId: target.schoolId,
+      actorStaffId: actor.id,
+      actorName: actor.displayName,
+      targetStaffId: targetId,
+      ip: req.ip ?? null,
+      payload: { targetName: target.displayName, mode: "set_password" },
+    });
 
     res.json({ ok: true });
   },
@@ -1172,6 +1214,15 @@ router.post(
       .update(staffTable)
       .set({ passwordHash })
       .where(eq(staffTable.id, targetId));
+    await writeAuthAudit({
+      action: "admin_password_reset",
+      schoolId: target.schoolId,
+      actorStaffId: actor.id,
+      actorName: actor.displayName,
+      targetStaffId: targetId,
+      ip: req.ip ?? null,
+      payload: { targetName: target.displayName, mode: "temp_password" },
+    });
 
     res.json({
       ok: true,

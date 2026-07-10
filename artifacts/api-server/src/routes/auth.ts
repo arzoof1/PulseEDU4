@@ -291,7 +291,12 @@ router.post("/auth/reset-password", async (req: Request, res) => {
   }
 
   const [staff] = await db
-    .select({ id: staffTable.id, active: staffTable.active })
+    .select({
+      id: staffTable.id,
+      active: staffTable.active,
+      schoolId: staffTable.schoolId,
+      displayName: staffTable.displayName,
+    })
     .from(staffTable)
     .where(eq(staffTable.id, parsed.staffId));
   if (!staff || !staff.active) {
@@ -314,6 +319,15 @@ router.post("/auth/reset-password", async (req: Request, res) => {
     .update(staffPasswordResetsTable)
     .set({ status: "used", usedAt: new Date(), usedIp: clientIp(req) })
     .where(eq(staffPasswordResetsTable.id, resetRow.id));
+  await writeAuthAudit({
+    action: "password_reset_completed",
+    schoolId: staff.schoolId,
+    actorStaffId: staff.id,
+    actorName: staff.displayName,
+    targetStaffId: staff.id,
+    ip: clientIp(req),
+    payload: { via: "reset_link" },
+  });
 
   res.json({ ok: true });
 });
@@ -378,6 +392,18 @@ router.post("/auth/login", async (req: Request, res) => {
 
   if (!staff || !staff.active) {
     await recordLoginFailure(req, "staff", normalizedEmail);
+    await writeAuthAudit({
+      action: "login_failure",
+      schoolId: staff?.schoolId ?? null,
+      actorStaffId: staff?.id ?? null,
+      actorName: staff?.displayName ?? null,
+      targetStaffId: staff?.id ?? null,
+      ip: clientIp(req),
+      payload: {
+        email: normalizedEmail,
+        reason: staff ? "inactive_account" : "unknown_account",
+      },
+    });
     res.status(401).json({ error: GENERIC_LOGIN_ERROR });
     return;
   }
@@ -385,6 +411,15 @@ router.post("/auth/login", async (req: Request, res) => {
   const ok = await bcryptCompare(password, staff.passwordHash);
   if (!ok) {
     await recordLoginFailure(req, "staff", normalizedEmail);
+    await writeAuthAudit({
+      action: "login_failure",
+      schoolId: staff.schoolId,
+      actorStaffId: staff.id,
+      actorName: staff.displayName,
+      targetStaffId: staff.id,
+      ip: clientIp(req),
+      payload: { email: normalizedEmail, reason: "bad_password" },
+    });
     res.status(401).json({ error: GENERIC_LOGIN_ERROR });
     return;
   }
@@ -433,11 +468,29 @@ router.post("/auth/login", async (req: Request, res) => {
       return;
     }
     if (await isMfaRequiredForStaff(staff)) {
+      await writeAuthAudit({
+        action: "login_success",
+        schoolId: staff.schoolId,
+        actorStaffId: staff.id,
+        actorName: staff.displayName,
+        targetStaffId: staff.id,
+        ip: clientIp(req),
+        payload: { mfa: false, mustEnrollMfa: true },
+      });
       finalizeLogin(req, res, staff, { mustEnrollMfa: true });
       return;
     }
   }
 
+  await writeAuthAudit({
+    action: "login_success",
+    schoolId: staff.schoolId,
+    actorStaffId: staff.id,
+    actorName: staff.displayName,
+    targetStaffId: staff.id,
+    ip: clientIp(req),
+    payload: { mfa: false },
+  });
   finalizeLogin(req, res, staff);
 });
 
@@ -513,6 +566,21 @@ router.post("/auth/logout", async (req, res) => {
   const staffId = req.session.staffId ?? req.staffId ?? null;
   if (staffId) {
     await bumpStaffAuthTokenVersion(staffId);
+    const [who] = await db
+      .select({
+        name: staffTable.displayName,
+        schoolId: staffTable.schoolId,
+      })
+      .from(staffTable)
+      .where(eq(staffTable.id, staffId));
+    await writeAuthAudit({
+      action: "logout",
+      schoolId: who?.schoolId ?? req.schoolId ?? null,
+      actorStaffId: staffId,
+      actorName: who?.name ?? null,
+      targetStaffId: staffId,
+      ip: clientIp(req),
+    });
   }
 
   req.session.destroy((err) => {
@@ -570,6 +638,14 @@ router.post("/auth/change-password", async (req: Request, res) => {
     .where(eq(staffTable.id, staffId));
 
   await bumpStaffAuthTokenVersion(staffId);
+  await writeAuthAudit({
+    action: "password_changed",
+    schoolId: staff.schoolId,
+    actorStaffId: staff.id,
+    actorName: staff.displayName,
+    targetStaffId: staff.id,
+    ip: clientIp(req),
+  });
 
   res.json({ ok: true });
 });
@@ -761,6 +837,15 @@ router.post("/auth/reset", async (req: Request, res) => {
     .update(staffPasswordResetsTable)
     .set({ status: "used", usedAt: new Date(), usedIp: clientIp(req) })
     .where(eq(staffPasswordResetsTable.id, resetRow.id));
+  await writeAuthAudit({
+    action: "password_reset_completed",
+    schoolId: staff.schoolId,
+    actorStaffId: staff.id,
+    actorName: staff.displayName,
+    targetStaffId: staff.id,
+    ip: clientIp(req),
+    payload: { via: "reset_link" },
+  });
 
   req.session.regenerate((err) => {
     if (err) {
