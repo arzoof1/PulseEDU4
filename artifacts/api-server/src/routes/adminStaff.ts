@@ -11,8 +11,10 @@ import {
   housesTable,
   schoolsTable,
   staffMfaRecoveryCodesTable,
+  authAuditLogTable,
 } from "@workspace/db";
-import { and, eq, asc, inArray, sql } from "drizzle-orm";
+import { and, eq, asc, desc, inArray, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import {
   staffIdFromBearerToken,
   bumpStaffAuthTokenVersion,
@@ -58,6 +60,26 @@ function requireAdminOrSuper() {
       return;
     }
     if (!staff.isAdmin && !staff.isSuperUser && !staff.capStaffRoles) {
+      res.status(403).json({ error: "Admin access required" });
+      return;
+    }
+    (req as Request & { staff: StaffRow }).staff = staff;
+    next();
+  };
+}
+
+// Security-log viewer gate: any privileged role (Admin / District Admin /
+// SuperUser). Broader than requireAdminOrSuper (which guards staff mutations)
+// because a District Admin — who has no isAdmin flag of their own — must be
+// able to read the audit trail for a school they've switched into.
+function requirePrivileged() {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const staff = await loadStaff(req);
+    if (!staff) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    if (!staff.isAdmin && !staff.isDistrictAdmin && !staff.isSuperUser) {
       res.status(403).json({ error: "Admin access required" });
       return;
     }
@@ -369,6 +391,74 @@ router.get(
       .where(eq(staffTable.schoolId, schoolId))
       .orderBy(asc(staffTable.displayName));
     res.json(rows);
+  },
+);
+
+// Security Events viewer (Section 3 — Logging & Monitoring). Read-only view of
+// the authentication / privileged-action audit trail (auth_audit_log), written
+// by the auth + MFA flows via writeAuthAudit. Scoped to the ACTIVE school
+// (req.schoolId) exactly like the staff roster above — a SuperUser switches
+// schools to view another, and no row from another tenant is ever returned.
+router.get(
+  "/admin/audit-log",
+  requirePrivileged(),
+  async (req: Request, res: Response) => {
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(400).json({ error: "No active school" });
+      return;
+    }
+
+    // limit: default 100, clamped to [1, 500]. action: optional exact filter.
+    const parsedLimit = Number.parseInt(String(req.query.limit ?? ""), 10);
+    const limit = Number.isFinite(parsedLimit)
+      ? Math.min(Math.max(parsedLimit, 1), 500)
+      : 100;
+    const action =
+      typeof req.query.action === "string" && req.query.action.trim()
+        ? req.query.action.trim()
+        : null;
+
+    const target = alias(staffTable, "audit_target");
+    const whereClause = action
+      ? and(
+          eq(authAuditLogTable.schoolId, schoolId),
+          eq(authAuditLogTable.action, action),
+        )
+      : eq(authAuditLogTable.schoolId, schoolId);
+
+    const [events, actionRows] = await Promise.all([
+      db
+        .select({
+          id: authAuditLogTable.id,
+          action: authAuditLogTable.action,
+          actorStaffId: authAuditLogTable.actorStaffId,
+          actorName: authAuditLogTable.actorName,
+          targetStaffId: authAuditLogTable.targetStaffId,
+          targetName: target.displayName,
+          ip: authAuditLogTable.ip,
+          payload: authAuditLogTable.payload,
+          createdAt: authAuditLogTable.createdAt,
+        })
+        .from(authAuditLogTable)
+        .leftJoin(target, eq(target.id, authAuditLogTable.targetStaffId))
+        .where(whereClause)
+        .orderBy(desc(authAuditLogTable.createdAt))
+        .limit(limit),
+      // Distinct action names for the client's filter dropdown (small table).
+      db
+        .selectDistinct({ action: authAuditLogTable.action })
+        .from(authAuditLogTable)
+        .where(eq(authAuditLogTable.schoolId, schoolId)),
+    ]);
+
+    res.json({
+      events,
+      actions: actionRows
+        .map((r) => r.action)
+        .filter((a): a is string => !!a)
+        .sort(),
+    });
   },
 );
 

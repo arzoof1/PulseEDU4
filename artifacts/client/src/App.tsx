@@ -83,6 +83,7 @@ import DataChatsAdminPage, {
   DataChatQueueModal,
 } from "./components/DataChats";
 import FeatureLicensingAdminPage from "./components/featureLicensing/FeatureLicensingAdminPage";
+import SecurityEvents from "./components/SecurityEvents";
 import SuperUserHomeRollups from "./components/districtOverview/SuperUserHomeRollups";
 import DistrictOverviewRollups from "./components/districtOverview/DistrictOverviewRollups";
 import AuditHealthPanel from "./components/districtOverview/AuditHealthPanel";
@@ -3994,7 +3995,7 @@ const INSIGHTS_TILES: InsightsTile[] = [
 // pbisReports etc. all live under Recognition because that's where their
 // nav items render. Keep this in sync with the sidebar JSX below.
 const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
-  administration: ["superUserHome", "featureLicensing", "districtAdmin"],
+  administration: ["superUserHome", "featureLicensing", "districtAdmin", "securityEvents"],
   insights: ["insights", "insightsWatchlist", "myWatchList", "studentProfile", "classComposer", "contactRate"],
   recognition: [
     "pbis",
@@ -5792,6 +5793,7 @@ function App() {
     | "superUserHome"
     | "featureLicensing"
     | "districtAdmin"
+    | "securityEvents"
     | "insights"
     | "insightsWatchlist"
     | "myWatchList"
@@ -12222,6 +12224,11 @@ function App() {
                 {renderNavItem({
                   key: "districtAdmin",
                   label: "District Overview",
+                  icon: IconClipboard,
+                })}
+                {renderNavItem({
+                  key: "securityEvents",
+                  label: "Security Events",
                   icon: IconClipboard,
                 })}
               </NavGroup>
@@ -24473,6 +24480,12 @@ function App() {
         <MyInterventionsPage
           onBack={() => setActiveSection("logIntervention")}
         />
+      )}
+
+      {activeSection === "securityEvents" && canActAsDistrict && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <SecurityEvents />
+        </div>
       )}
 
       {activeSection === "districtAdmin" && canActAsDistrict && (
