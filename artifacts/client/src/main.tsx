@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import MfaEnrollmentBoundary from "./components/MfaEnrollmentBoundary";
 import Kiosk from "./Kiosk";
 import KioskViewer from "./KioskViewer";
 import KioskCodeMirror from "./KioskCodeMirror";
@@ -70,5 +71,9 @@ createRoot(document.getElementById("root")!).render(
     : isScan ? <ScannerApp />
     : isSmsPolicy ? <SmsPolicyPage />
     : isSign ? <SignApp />
-    : <App />,
+    : (
+        <MfaEnrollmentBoundary>
+          <App />
+        </MfaEnrollmentBoundary>
+      ),
 );
