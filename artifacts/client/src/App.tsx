@@ -11688,62 +11688,6 @@ function App() {
         </div>
       </header>
 
-      {mfaStatus?.required && !mfaStatus.enrolled && !mfaBannerDismissed && (
-        <div
-          role="status"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            padding: "10px 16px",
-            background: "#fff7ed",
-            borderBottom: "1px solid #fed7aa",
-            color: "#9a3412",
-            fontSize: 14,
-          }}
-        >
-          <span aria-hidden="true" style={{ fontSize: 16 }}>
-            🔒
-          </span>
-          <span style={{ flex: 1 }}>
-            Two-factor authentication is required for your role. Set it up now
-            to keep your account secure.
-          </span>
-          <button
-            type="button"
-            onClick={() => setShowTwoFactor(true)}
-            style={{
-              border: "none",
-              background: "#ea580c",
-              color: "#fff",
-              borderRadius: 6,
-              padding: "6px 12px",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-            }}
-          >
-            Set up two-factor
-          </button>
-          <button
-            type="button"
-            aria-label="Dismiss reminder"
-            onClick={() => setMfaBannerDismissed(true)}
-            style={{
-              border: "none",
-              background: "transparent",
-              color: "#9a3412",
-              fontSize: 18,
-              lineHeight: 1,
-              cursor: "pointer",
-            }}
-          >
-            ×
-          </button>
-        </div>
-      )}
-
       {showStudentFinder && (
         <StudentFinderModal
           onClose={() => setStudentFinder(null)}
@@ -12693,6 +12637,74 @@ function App() {
       })()}
 
       <main className="app-main" key={navHomeTick}>
+
+      {/* Grace-mode MFA nudge: shown when the signed-in user's role is
+          required by policy but they haven't enrolled yet. Sits at the top of
+          the content column (not the app-shell grid, which is a 2-col grid —
+          a bare child there lands in the 240px sidebar cell). Dismiss is
+          session-only; it reappears next sign-in until 2FA is set up. */}
+      {mfaStatus?.required && !mfaStatus.enrolled && !mfaBannerDismissed && (
+        <div
+          role="status"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            margin: "0 0 16px",
+            padding: "12px 16px",
+            background: "#fff7ed",
+            border: "1px solid #fed7aa",
+            borderRadius: 8,
+            color: "#9a3412",
+            fontSize: 14,
+            lineHeight: 1.4,
+          }}
+        >
+          <span aria-hidden="true" style={{ fontSize: 18, lineHeight: 1 }}>
+            🔒
+          </span>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <strong>Two-factor authentication is required for your role.</strong>{" "}
+            Set it up now to keep your account secure.
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowTwoFactor(true)}
+            style={{
+              border: "none",
+              background: "#ea580c",
+              color: "#fff",
+              borderRadius: 6,
+              padding: "7px 14px",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              flexShrink: 0,
+            }}
+          >
+            Set up two-factor
+          </button>
+          <button
+            type="button"
+            aria-label="Dismiss reminder"
+            title="Dismiss"
+            onClick={() => setMfaBannerDismissed(true)}
+            style={{
+              border: "none",
+              background: "transparent",
+              color: "#9a3412",
+              fontSize: 20,
+              lineHeight: 1,
+              cursor: "pointer",
+              padding: "0 2px",
+              flexShrink: 0,
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* "Kiosk active on this device" banner — surfaces the still-live
           kiosk token (if any) so a teacher who flipped to the staff app
