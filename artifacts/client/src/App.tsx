@@ -5621,6 +5621,13 @@ function App() {
     enrolled: boolean;
     required: boolean;
   } | null>(null);
+  // Whether the MFA status check has completed for the current user. We do NOT
+  // mount the dashboard until this is true: a required-but-unenrolled user's
+  // data loads all 403, and some views crash rendering the error body. Gating
+  // on this lets us short-circuit to the enrollment screen instead of ever
+  // mounting (and crashing) the dashboard. Reset on each user change; set true
+  // in loadMfaStatus's finally so a 404/error still lets the app through.
+  const [mfaChecked, setMfaChecked] = useState(false);
   // Student Finder state. `null` = closed. Otherwise a discriminated
   // open-state: either { kind: "search", query } for the top-bar entry
   // point (search field shown) or { kind: "student", studentId,
@@ -7504,6 +7511,7 @@ function App() {
   const loadMfaStatus = () => {
     if (!authUser) {
       setMfaStatus(null);
+      setMfaChecked(true);
       return;
     }
     authFetch("/api/auth/mfa/status")
@@ -7515,7 +7523,11 @@ function App() {
             : null,
         ),
       )
-      .catch(() => setMfaStatus(null));
+      .catch(() => setMfaStatus(null))
+      // Always mark the check complete — a 404 (feature off) or a network
+      // error must not wedge the app on the loading gate; those users simply
+      // fall through to the dashboard (mfaStatus stays null → not blocked).
+      .finally(() => setMfaChecked(true));
   };
 
   const loadHallPasses = () => {
@@ -7569,9 +7581,12 @@ function App() {
     }
   }, [authUser?.id]);
 
-  // Pull the MFA status whenever the signed-in user changes, so a
-  // required-but-unenrolled user gets the mandatory enrollment modal.
+  // Re-check MFA status whenever the signed-in user changes. Reset mfaChecked
+  // FIRST so the dashboard is gated behind the loading screen until the new
+  // user's status resolves — otherwise a fresh sign-in could mount the
+  // dashboard (and 403-crash) before we know they must enroll.
   useEffect(() => {
+    setMfaChecked(false);
     loadMfaStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser?.id]);
@@ -11040,6 +11055,35 @@ function App() {
     );
   }
 
+  // ---- MFA enrollment wall (Gate A / Section 1) -------------------------
+  // Do NOT render the dashboard until we know this user's MFA status: while
+  // unknown we show the loading screen, and if their role requires two-factor
+  // but they haven't enrolled we render ONLY the enrollment screen. The
+  // dashboard fires dozens of data loads that the server 403s for a blocked
+  // user, and some views crash rendering the error body — so it must never
+  // mount for them. On completion the modal reloads for a clean bootstrap.
+  if (!mfaChecked) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "var(--text-subtle, #64748b)",
+          fontFamily: "system-ui, sans-serif",
+        }}
+      >
+        Loading…
+      </div>
+    );
+  }
+  if (mfaStatus?.required && !mfaStatus.enrolled) {
+    return (
+      <TwoFactorSettings forced onClose={() => window.location.reload()} />
+    );
+  }
+
   // -----------------------------------------------------------------
   // TILE HOME — full-screen launcher. Renders BEFORE the normal app
   // shell so it can take over the entire viewport (no sidebar, no
@@ -11845,15 +11889,10 @@ function App() {
         </div>
       )}
 
-      {mfaStatus?.required && !mfaStatus.enrolled ? (
-        // Mandatory: role requires MFA and the user hasn't enrolled. The server
-        // is already blocking every non-enrollment route, so this modal is the
-        // only way forward. `forced` makes it non-dismissable and its onClose
-        // fires ONLY after enrollment completes — at which point we hard-reload
-        // so the app re-bootstraps cleanly (feature-licensing and other calls
-        // that were 403'd during the block are re-fetched from scratch).
-        <TwoFactorSettings forced onClose={() => window.location.reload()} />
-      ) : showTwoFactor ? (
+      {/* Voluntary 2FA management from the account menu. The MANDATORY
+          (forced) case is handled by a top-level early return above, before
+          the dashboard mounts — so this only covers the opt-in path. */}
+      {showTwoFactor && (
         <TwoFactorSettings
           onClose={() => {
             setShowTwoFactor(false);
@@ -11861,7 +11900,7 @@ function App() {
             loadMfaStatus();
           }}
         />
-      ) : null}
+      )}
 
       {(() => {
         // Phase 1A nav restructure — Hall Pass + Tardy Pass are LOCKED at
