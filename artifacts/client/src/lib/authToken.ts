@@ -10,6 +10,20 @@ import {
 
 let inMemoryAuthToken: string | null = null;
 
+// Notified when any API call is rejected with 403 { error:
+// "mfa_enrollment_required" } — i.e. the server is forcing this user to set up
+// two-factor before they can use the app. App.tsx registers a handler that
+// surfaces the blocking enrollment modal. Kept here (the single fetch choke
+// point) so EVERY request path triggers it, including for users who were
+// already signed in when an admin flipped the policy on.
+let mfaEnrollmentRequiredHandler: (() => void) | null = null;
+
+export function setMfaEnrollmentRequiredHandler(
+  handler: (() => void) | null,
+): void {
+  mfaEnrollmentRequiredHandler = handler;
+}
+
 export function setAuthToken(token: string | null | undefined) {
   inMemoryAuthToken = token && token.length > 0 ? token : null;
 }
@@ -94,6 +108,11 @@ export async function authFetch(
       if (await refreshStaffSession()) {
         res = await doFetch();
       }
+    } else if (body?.error === "mfa_enrollment_required") {
+      // Server is enforcing MFA enrollment — let the app raise the blocking
+      // modal. Return the 403 unchanged so the calling code still fails; it is
+      // the modal, not this request, that unblocks the user.
+      mfaEnrollmentRequiredHandler?.();
     }
   }
 

@@ -7,6 +7,9 @@ import router from "./routes";
 import { corsMiddleware } from "./lib/corsConfig.js";
 import { resolvePublicAppOrigin } from "./lib/publicAppUrl.js";
 import { csrfProtectionMiddleware } from "./lib/csrf.js";
+import { isStaffMfaEnabled } from "./lib/staffMfaSwitch.js";
+import { isMfaRequiredForStaffCached } from "./lib/mfaPolicyCache.js";
+import { mfaEnrollmentGate } from "./lib/mfaEnrollmentGate.js";
 import { logger } from "./lib/logger";
 import {
   isStaffBearerAuthEnabled,
@@ -19,6 +22,11 @@ declare global {
   namespace Express {
     interface Request {
       staffId?: number | null;
+      // Set by the global auth middleware when this staff's role is required
+      // by MFA policy but they have not enrolled. The mfaEnrollmentGate reads
+      // it to block all non-enrollment routes. Fail-open: any resolution error
+      // leaves it false (a transient DB blip must not wall the whole app).
+      mfaEnrollmentRequired?: boolean;
       // Parent identity for HeartBEAT parent-portal routes. Resolved by a
       // router-level middleware inside parentAuth.ts (NOT by the global
       // staff middleware below) so the two identity systems stay isolated.
@@ -308,6 +316,7 @@ app.use(async (req, _res, next) => {
     }
   }
   req.staffId = sid;
+  req.mfaEnrollmentRequired = false;
 
   // Resolve the active school for this request. For non-SuperUsers it is
   // strictly the staff's home school (session override is ignored). For
@@ -324,12 +333,32 @@ app.use(async (req, _res, next) => {
           schoolId: staffTable.schoolId,
           activeSchoolOverride: staffTable.activeSchoolOverride,
           isSuperUser: staffTable.isSuperUser,
+          isDistrictAdmin: staffTable.isDistrictAdmin,
+          isAdmin: staffTable.isAdmin,
+          mfaEnrolledAt: staffTable.mfaEnrolledAt,
           active: staffTable.active,
         })
         .from(staffTable)
         .where(eq(staffTable.id, sid));
       if (staff && staff.active) {
         req.homeSchoolId = staff.schoolId;
+
+        // MFA enrollment gate (Gate A / Section 1). Flag the request when this
+        // staff's role is required by policy but they have not enrolled, so
+        // mfaEnrollmentGate can block everything except the enrollment/sign-out
+        // routes. Computed here (before the school-active early-returns below)
+        // so it is set on every code path. Cheap short-circuits keep this off
+        // the hot path for the common cases: the master switch being off or an
+        // already-enrolled account both skip the policy lookup entirely; only
+        // un-enrolled users pay it, and the result is cached per school+tier.
+        if (isStaffMfaEnabled() && !staff.mfaEnrolledAt) {
+          req.mfaEnrollmentRequired = await isMfaRequiredForStaffCached({
+            isSuperUser: staff.isSuperUser,
+            isDistrictAdmin: staff.isDistrictAdmin,
+            isAdmin: staff.isAdmin,
+            schoolId: staff.schoolId,
+          });
+        }
         // Persisted on the staff row (not the session) so bearer-token
         // requests inside the Replit preview iframe — where session cookies
         // are blocked — keep the SuperUser's switch active across reloads.
@@ -421,6 +450,10 @@ app.use(async (req, _res, next) => {
 });
 
 app.use("/api", csrfProtectionMiddleware);
+// Runs after CSRF (so enrollment POSTs still validate a token) and before the
+// route table: a not-yet-enrolled required user is 403'd on everything except
+// the enrollment + sign-out routes.
+app.use("/api", mfaEnrollmentGate);
 app.use("/api", router);
 
 // -----------------------------------------------------------------------------

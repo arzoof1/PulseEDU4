@@ -177,7 +177,7 @@ import DataManagementHub from "./components/DataManagementHub";
 import SchoolSwitcher from "./components/SchoolSwitcher";
 import SchoolBrandingPanel from "./components/SchoolBrandingPanel";
 import { useSchoolBranding } from "./lib/branding";
-import { authFetch } from "./lib/authToken";
+import { authFetch, setMfaEnrollmentRequiredHandler } from "./lib/authToken";
 import {
   AreaChart,
   Area,
@@ -5610,18 +5610,17 @@ function App() {
   const currentStaffUser = authUser?.displayName ?? "";
   const [showChangePw, setShowChangePw] = useState(false);
   const [showTwoFactor, setShowTwoFactor] = useState(false);
-  // Staff MFA nudge state. `mfaStatus` is fetched from /auth/mfa/status
-  // (server resolves required = role+school+district policy, enrolled =
-  // has a set-up authenticator). When required && !enrolled we show a soft,
-  // dismissable "set up two-factor" banner + an attention dot on the account
-  // menu. Dismiss is session-only (reappears next login) so the grace nudge
-  // keeps light pressure without blocking work. Endpoint 404s when the
-  // deployment master switch is off → we store null and show nothing.
+  // Staff MFA state. `mfaStatus` is fetched from /auth/mfa/status (server
+  // resolves required = role+school+district policy, enrolled = has a set-up
+  // authenticator). When required && !enrolled the server ALSO blocks every
+  // non-enrollment API route (403 mfa_enrollment_required), so the client
+  // shows a mandatory, non-dismissable enrollment modal — there is no grace
+  // period. Endpoint 404s when the deployment master switch is off → we store
+  // null and show nothing.
   const [mfaStatus, setMfaStatus] = useState<{
     enrolled: boolean;
     required: boolean;
   } | null>(null);
-  const [mfaBannerDismissed, setMfaBannerDismissed] = useState(false);
   // Student Finder state. `null` = closed. Otherwise a discriminated
   // open-state: either { kind: "search", query } for the top-bar entry
   // point (search field shown) or { kind: "student", studentId,
@@ -7570,14 +7569,24 @@ function App() {
     }
   }, [authUser?.id]);
 
-  // Pull the MFA nudge signal whenever the signed-in user changes. Resetting
-  // the session-only dismiss on a new sign-in means each login re-surfaces the
-  // reminder until the user actually enrolls.
+  // Pull the MFA status whenever the signed-in user changes, so a
+  // required-but-unenrolled user gets the mandatory enrollment modal.
   useEffect(() => {
-    setMfaBannerDismissed(false);
     loadMfaStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser?.id]);
+
+  // Register the global 403-mfa_enrollment_required handler. The fetch layer
+  // fires it when the server blocks a request pending enrollment; we re-pull
+  // status (which flips `required` on), raising the blocking modal — this is
+  // what catches users who were already signed in when the policy was flipped.
+  // A ref keeps the latest loadMfaStatus without re-registering each render.
+  const loadMfaStatusRef = useRef(loadMfaStatus);
+  loadMfaStatusRef.current = loadMfaStatus;
+  useEffect(() => {
+    setMfaEnrollmentRequiredHandler(() => loadMfaStatusRef.current());
+    return () => setMfaEnrollmentRequiredHandler(null);
+  }, []);
 
   useEffect(() => {
     if (!authUser) return;
@@ -11836,16 +11845,23 @@ function App() {
         </div>
       )}
 
-      {showTwoFactor && (
+      {mfaStatus?.required && !mfaStatus.enrolled ? (
+        // Mandatory: role requires MFA and the user hasn't enrolled. The server
+        // is already blocking every non-enrollment route, so this modal is the
+        // only way forward. `forced` makes it non-dismissable and its onClose
+        // fires ONLY after enrollment completes — at which point we hard-reload
+        // so the app re-bootstraps cleanly (feature-licensing and other calls
+        // that were 403'd during the block are re-fetched from scratch).
+        <TwoFactorSettings forced onClose={() => window.location.reload()} />
+      ) : showTwoFactor ? (
         <TwoFactorSettings
           onClose={() => {
             setShowTwoFactor(false);
-            // Re-pull status so the nudge clears immediately after enrolling
-            // (or reappears if the user disabled 2FA from the same modal).
+            // Re-pull status so an enrolled/disabled change is reflected.
             loadMfaStatus();
           }}
         />
-      )}
+      ) : null}
 
       {(() => {
         // Phase 1A nav restructure — Hall Pass + Tardy Pass are LOCKED at
@@ -12637,74 +12653,6 @@ function App() {
       })()}
 
       <main className="app-main" key={navHomeTick}>
-
-      {/* Grace-mode MFA nudge: shown when the signed-in user's role is
-          required by policy but they haven't enrolled yet. Sits at the top of
-          the content column (not the app-shell grid, which is a 2-col grid —
-          a bare child there lands in the 240px sidebar cell). Dismiss is
-          session-only; it reappears next sign-in until 2FA is set up. */}
-      {mfaStatus?.required && !mfaStatus.enrolled && !mfaBannerDismissed && (
-        <div
-          role="status"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            margin: "0 0 16px",
-            padding: "12px 16px",
-            background: "#fff7ed",
-            border: "1px solid #fed7aa",
-            borderRadius: 8,
-            color: "#9a3412",
-            fontSize: 14,
-            lineHeight: 1.4,
-          }}
-        >
-          <span aria-hidden="true" style={{ fontSize: 18, lineHeight: 1 }}>
-            🔒
-          </span>
-          <span style={{ flex: 1, minWidth: 0 }}>
-            <strong>Two-factor authentication is required for your role.</strong>{" "}
-            Set it up now to keep your account secure.
-          </span>
-          <button
-            type="button"
-            onClick={() => setShowTwoFactor(true)}
-            style={{
-              border: "none",
-              background: "#ea580c",
-              color: "#fff",
-              borderRadius: 6,
-              padding: "7px 14px",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-              flexShrink: 0,
-            }}
-          >
-            Set up two-factor
-          </button>
-          <button
-            type="button"
-            aria-label="Dismiss reminder"
-            title="Dismiss"
-            onClick={() => setMfaBannerDismissed(true)}
-            style={{
-              border: "none",
-              background: "transparent",
-              color: "#9a3412",
-              fontSize: 20,
-              lineHeight: 1,
-              cursor: "pointer",
-              padding: "0 2px",
-              flexShrink: 0,
-            }}
-          >
-            ×
-          </button>
-        </div>
-      )}
 
       {/* "Kiosk active on this device" banner — surfaces the still-live
           kiosk token (if any) so a teacher who flipped to the staff app
