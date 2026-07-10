@@ -21,9 +21,9 @@ type AuditEvent = {
 
 type AuditResponse = { events: AuditEvent[]; actions: string[] };
 
-// "mfa_login_success" -> "Mfa login success"
+// "mfa_login_success" -> "MFA login success"
 function humanizeAction(action: string): string {
-  const s = action.replace(/_/g, " ");
+  const s = action.replace(/_/g, " ").replace(/\bmfa\b/gi, "MFA");
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 

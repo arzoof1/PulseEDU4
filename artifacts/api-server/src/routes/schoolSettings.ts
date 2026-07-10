@@ -6,6 +6,7 @@ import { bindObjectToSchool } from "./storage.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { reconcileSchoolYearFlip } from "../lib/schoolYearFlip.js";
 import { clearMfaPolicyCache } from "../lib/mfaPolicyCache.js";
+import { writeAuthAudit } from "../lib/authAudit.js";
 
 const router: IRouter = Router();
 
@@ -1281,6 +1282,27 @@ router.put("/school-settings", async (req, res): Promise<void> => {
   // the enrollment gate's cache TTL — drop the cached decisions now.
   if ("mfaRequiredPrivileged" in updates || "mfaRequiredStaff" in updates) {
     clearMfaPolicyCache();
+    const [actor] = req.staffId
+      ? await db
+          .select({ name: staffTable.displayName })
+          .from(staffTable)
+          .where(eq(staffTable.id, req.staffId))
+      : [];
+    await writeAuthAudit({
+      action: "mfa_policy_changed",
+      schoolId,
+      actorStaffId: req.staffId ?? null,
+      actorName: actor?.name ?? null,
+      ip: req.ip ?? null,
+      payload: {
+        ...("mfaRequiredPrivileged" in updates
+          ? { mfaRequiredPrivileged: updated?.mfaRequiredPrivileged }
+          : {}),
+        ...("mfaRequiredStaff" in updates
+          ? { mfaRequiredStaff: updated?.mfaRequiredStaff }
+          : {}),
+      },
+    });
   }
 
   // A flip-date change may activate or reverse the reporting-year flip and
