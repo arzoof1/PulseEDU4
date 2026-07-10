@@ -5,6 +5,7 @@ import { requireSchool } from "../lib/scope.js";
 import { bindObjectToSchool } from "./storage.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { reconcileSchoolYearFlip } from "../lib/schoolYearFlip.js";
+import { clearMfaPolicyCache } from "../lib/mfaPolicyCache.js";
 
 const router: IRouter = Router();
 
@@ -1275,6 +1276,12 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       ),
     )
     .returning();
+
+  // A change to the MFA policy flags must take effect immediately, not after
+  // the enrollment gate's cache TTL — drop the cached decisions now.
+  if ("mfaRequiredPrivileged" in updates || "mfaRequiredStaff" in updates) {
+    clearMfaPolicyCache();
+  }
 
   // A flip-date change may activate or reverse the reporting-year flip and
   // re-tag the outgoing year's FAST rows. Reconcile, then return the fresh

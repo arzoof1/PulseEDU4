@@ -12,7 +12,13 @@ type Status = {
   recoveryCodesRemaining: number;
 };
 
-type Props = { onClose: () => void };
+type Props = {
+  onClose: () => void;
+  // "Forced" mode: the user's role requires MFA and they haven't enrolled, so
+  // the server is blocking the app until they do. The modal becomes
+  // non-dismissable (no ✕, no backdrop/Escape close) and explains why.
+  forced?: boolean;
+};
 
 const overlay: React.CSSProperties = {
   position: "fixed",
@@ -41,7 +47,7 @@ const errorBox: React.CSSProperties = {
   marginBottom: 10,
 };
 
-export default function TwoFactorSettings({ onClose }: Props) {
+export default function TwoFactorSettings({ onClose, forced }: Props) {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<Status | null>(null);
   const [unavailable, setUnavailable] = useState(false);
@@ -77,12 +83,13 @@ export default function TwoFactorSettings({ onClose }: Props) {
   }, [loadStatus]);
 
   useEffect(() => {
+    if (forced) return; // no Escape-to-close while enrollment is mandatory
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, forced]);
 
   const messageFor = (err: string, status: number): string => {
     if (err === "invalid_code")
@@ -180,7 +187,12 @@ export default function TwoFactorSettings({ onClose }: Props) {
   const stop = (e: React.MouseEvent) => e.stopPropagation();
 
   return (
-    <div role="dialog" aria-modal="true" style={overlay} onClick={onClose}>
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={overlay}
+      onClick={forced ? undefined : onClose}
+    >
       <div style={card} onClick={stop}>
         <div
           style={{
@@ -191,10 +203,30 @@ export default function TwoFactorSettings({ onClose }: Props) {
           }}
         >
           <h3 style={{ margin: 0 }}>Two-factor authentication</h3>
-          <button type="button" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
+          {!forced && (
+            <button type="button" onClick={onClose} aria-label="Close">
+              ✕
+            </button>
+          )}
         </div>
+
+        {forced && (
+          <div
+            role="alert"
+            style={{
+              background: "#fff7ed",
+              color: "#9a3412",
+              padding: 10,
+              borderRadius: 6,
+              fontSize: 13,
+              marginBottom: 12,
+              lineHeight: 1.4,
+            }}
+          >
+            Two-factor authentication is required for your role. Set it up now
+            to continue using PulseEDU.
+          </div>
+        )}
 
         {error && (
           <div role="alert" style={errorBox}>
@@ -233,7 +265,16 @@ export default function TwoFactorSettings({ onClose }: Props) {
               <button type="button" onClick={copyCodes}>
                 Copy codes
               </button>
-              <button type="button" onClick={() => setRecoveryCodes(null)}>
+              <button
+                type="button"
+                onClick={() => {
+                  // In forced mode, enrollment is now complete — close so the
+                  // parent re-checks status and lifts the block. Otherwise just
+                  // return to the management view.
+                  if (forced) onClose();
+                  else setRecoveryCodes(null);
+                }}
+              >
                 Done
               </button>
             </div>
