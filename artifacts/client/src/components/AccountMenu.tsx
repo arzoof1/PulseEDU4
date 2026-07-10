@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 type AccountMenuProps = {
   /** Initials shown in the avatar circle (a photo may replace this later). */
@@ -7,7 +7,18 @@ type AccountMenuProps = {
   name: string;
   onChangePassword: () => void;
   onManageTwoFactor?: () => void;
+  /** When true, show an attention dot (2FA required for this role but not yet
+   *  enrolled) on the trigger and next to the Two-factor item. */
+  twoFactorAttention?: boolean;
   onSignOut: () => void;
+};
+
+const ATTENTION_DOT_STYLE: CSSProperties = {
+  display: "inline-block",
+  width: 8,
+  height: 8,
+  borderRadius: "50%",
+  background: "#ea580c",
 };
 
 /**
@@ -21,6 +32,7 @@ export function AccountMenu({
   name,
   onChangePassword,
   onManageTwoFactor,
+  twoFactorAttention,
   onSignOut,
 }: AccountMenuProps) {
   const [open, setOpen] = useState(false);
@@ -60,6 +72,13 @@ export function AccountMenu({
         <span className="account-menu-kebab" aria-hidden="true">
           ⋮
         </span>
+        {twoFactorAttention && (
+          <span
+            aria-label="Two-factor setup required"
+            title="Two-factor authentication setup required"
+            style={{ ...ATTENTION_DOT_STYLE, marginLeft: 2 }}
+          />
+        )}
       </button>
       {open && (
         <div className="account-menu-panel">
@@ -81,8 +100,15 @@ export function AccountMenu({
                 setOpen(false);
                 onManageTwoFactor();
               }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                justifyContent: "space-between",
+              }}
             >
-              Two-factor authentication
+              <span>Two-factor authentication</span>
+              {twoFactorAttention && <span style={ATTENTION_DOT_STYLE} />}
             </button>
           )}
           <button

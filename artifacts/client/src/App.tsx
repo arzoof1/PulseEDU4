@@ -5610,6 +5610,18 @@ function App() {
   const currentStaffUser = authUser?.displayName ?? "";
   const [showChangePw, setShowChangePw] = useState(false);
   const [showTwoFactor, setShowTwoFactor] = useState(false);
+  // Staff MFA nudge state. `mfaStatus` is fetched from /auth/mfa/status
+  // (server resolves required = role+school+district policy, enrolled =
+  // has a set-up authenticator). When required && !enrolled we show a soft,
+  // dismissable "set up two-factor" banner + an attention dot on the account
+  // menu. Dismiss is session-only (reappears next login) so the grace nudge
+  // keeps light pressure without blocking work. Endpoint 404s when the
+  // deployment master switch is off → we store null and show nothing.
+  const [mfaStatus, setMfaStatus] = useState<{
+    enrolled: boolean;
+    required: boolean;
+  } | null>(null);
+  const [mfaBannerDismissed, setMfaBannerDismissed] = useState(false);
   // Student Finder state. `null` = closed. Otherwise a discriminated
   // open-state: either { kind: "search", query } for the top-bar entry
   // point (search field shown) or { kind: "student", studentId,
@@ -7486,6 +7498,27 @@ function App() {
       .catch(() => setStaffUsers([]));
   }, [authUser?.id]);
 
+  // Refreshes the staff-MFA nudge signal. Any non-OK response (401 when the
+  // session is gone, 404 when STAFF_MFA_ENABLED is off) collapses to null so
+  // the banner/dot simply don't render. Called on auth change and after the
+  // enrollment modal closes so the nudge clears the moment 2FA is set up.
+  const loadMfaStatus = () => {
+    if (!authUser) {
+      setMfaStatus(null);
+      return;
+    }
+    authFetch("/api/auth/mfa/status")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { enrolled?: boolean; required?: boolean } | null) =>
+        setMfaStatus(
+          data && typeof data.enrolled === "boolean"
+            ? { enrolled: !!data.enrolled, required: !!data.required }
+            : null,
+        ),
+      )
+      .catch(() => setMfaStatus(null));
+  };
+
   const loadHallPasses = () => {
     authFetch("/api/hall-passes")
       .then((res) => res.json())
@@ -7535,6 +7568,15 @@ function App() {
     } else {
       clearFeatures();
     }
+  }, [authUser?.id]);
+
+  // Pull the MFA nudge signal whenever the signed-in user changes. Resetting
+  // the session-only dismiss on a new sign-in means each login re-surfaces the
+  // reminder until the user actually enrolls.
+  useEffect(() => {
+    setMfaBannerDismissed(false);
+    loadMfaStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser?.id]);
 
   useEffect(() => {
@@ -11635,6 +11677,9 @@ function App() {
               setShowChangePw(true);
             }}
             onManageTwoFactor={() => setShowTwoFactor(true)}
+            twoFactorAttention={
+              !!mfaStatus?.required && !mfaStatus.enrolled
+            }
             onSignOut={async () => {
               await authFetch("/api/auth/logout", { method: "POST" });
               setAuthUser(null);
@@ -11642,6 +11687,62 @@ function App() {
           />
         </div>
       </header>
+
+      {mfaStatus?.required && !mfaStatus.enrolled && !mfaBannerDismissed && (
+        <div
+          role="status"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            padding: "10px 16px",
+            background: "#fff7ed",
+            borderBottom: "1px solid #fed7aa",
+            color: "#9a3412",
+            fontSize: 14,
+          }}
+        >
+          <span aria-hidden="true" style={{ fontSize: 16 }}>
+            🔒
+          </span>
+          <span style={{ flex: 1 }}>
+            Two-factor authentication is required for your role. Set it up now
+            to keep your account secure.
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowTwoFactor(true)}
+            style={{
+              border: "none",
+              background: "#ea580c",
+              color: "#fff",
+              borderRadius: 6,
+              padding: "6px 12px",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            Set up two-factor
+          </button>
+          <button
+            type="button"
+            aria-label="Dismiss reminder"
+            onClick={() => setMfaBannerDismissed(true)}
+            style={{
+              border: "none",
+              background: "transparent",
+              color: "#9a3412",
+              fontSize: 18,
+              lineHeight: 1,
+              cursor: "pointer",
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {showStudentFinder && (
         <StudentFinderModal
@@ -11792,7 +11893,14 @@ function App() {
       )}
 
       {showTwoFactor && (
-        <TwoFactorSettings onClose={() => setShowTwoFactor(false)} />
+        <TwoFactorSettings
+          onClose={() => {
+            setShowTwoFactor(false);
+            // Re-pull status so the nudge clears immediately after enrolling
+            // (or reappears if the user disabled 2FA from the same modal).
+            loadMfaStatus();
+          }}
+        />
       )}
 
       {(() => {
