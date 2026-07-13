@@ -25,6 +25,7 @@ import {
   getDistrictIdForSchool,
   getSchoolIdsForDistrict,
 } from "../lib/scope";
+import { verifyPrivilegedReauth } from "../lib/privilegedReauth.js";
 import { generateAndHashTempPassword } from "../lib/tempPassword";
 import { bindObjectToSchool } from "./storage.js";
 
@@ -591,7 +592,8 @@ router.patch(
       res.status(400).json({ error: "Invalid staff id" });
       return;
     }
-    const updates: Record<string, unknown> = pickBoolUpdates(req.body);
+    const boolUpdates = pickBoolUpdates(req.body);
+    const updates: Record<string, unknown> = { ...boolUpdates };
     // Optional string field: defaultRoom. Empty string clears it (NULL).
     const body = (req.body ?? {}) as Record<string, unknown>;
     if ("defaultRoom" in body) {
@@ -692,6 +694,16 @@ router.patch(
     }
 
     const actor = (req as Request & { staff: StaffRow }).staff;
+    if (Object.keys(boolUpdates).length > 0) {
+      const reauth = await verifyPrivilegedReauth(
+        actor,
+        body.reauth as { currentPassword?: unknown; code?: unknown } | undefined,
+      );
+      if (!reauth.ok) {
+        res.status(reauth.status).json({ error: reauth.error });
+        return;
+      }
+    }
 
     // Core-Team-without-full-authority actors are admitted to this PATCH ONLY
     // to delegate the four data-import caps. Strip every other field BEFORE the
