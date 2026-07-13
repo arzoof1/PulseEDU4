@@ -24,6 +24,7 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
+import { hasFreshPrivilegedReauth } from "../lib/privilegedReauth.js";
 import * as ExcelJS from "exceljs";
 import {
   getDataset,
@@ -230,6 +231,12 @@ router.post("/exports/download", async (req, res) => {
   const staff = await loadActor(req);
   if (!staff) {
     res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  // Step-up reauth (Section 1.15): a full-dataset export is the primary
+  // student-PII exfil surface, so require a recent privileged step-up.
+  if (!hasFreshPrivilegedReauth(req.session)) {
+    res.status(403).json({ error: "reauth_required" });
     return;
   }
   const parsed = bodySchema.safeParse(req.body);

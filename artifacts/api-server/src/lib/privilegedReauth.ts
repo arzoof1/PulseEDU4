@@ -73,3 +73,10 @@ export async function verifyPrivilegedReauth(
 
   return { ok: true };
 }
+
+// The step-up window helper lives in a DB-free module so it stays unit-testable
+// without DATABASE_URL. Re-exported here so callers have a single import point.
+export {
+  PRIVILEGED_REAUTH_WINDOW_MS,
+  hasFreshPrivilegedReauth,
+} from "./privilegedReauthWindow.js";

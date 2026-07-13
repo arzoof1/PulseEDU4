@@ -72,6 +72,11 @@ declare module "express-session" {
     // authorize→callback round-trip so the callback can scope the roster
     // lookup to a SINGLE tenant (identifiers are not globally unique).
     studentSsoSchoolId?: number;
+    // Epoch-ms of the staff's last successful privileged step-up reauth
+    // (Section 1.15). Sensitive actions (bulk export, Safety Plan viewing)
+    // require this to be within PRIVILEGED_REAUTH_WINDOW_MS. Set by
+    // POST /api/auth/reauth; checked via hasFreshPrivilegedReauth().
+    privilegedReauthAt?: number;
   }
 }
 

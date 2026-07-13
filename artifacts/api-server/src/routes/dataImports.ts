@@ -63,6 +63,7 @@ import {
   schoolYearLabelFor,
 } from "../lib/schoolYear.js";
 import { getActiveSchoolYear } from "../lib/fastHistory.js";
+import { hasFreshPrivilegedReauth } from "../lib/privilegedReauth.js";
 import Papa from "papaparse";
 import ExcelJS from "exceljs";
 
@@ -1109,6 +1110,11 @@ router.get("/data-imports/jobs", requireImporter(), async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get("/data-imports/export", requireImporter(), async (req, res) => {
   const staff = (req as Request & { staff: StaffRow }).staff;
+  // Step-up reauth (Section 1.15): roster/behavior/FAST exports are student PII.
+  if (!hasFreshPrivilegedReauth(req.session)) {
+    res.status(403).json({ error: "reauth_required" });
+    return;
+  }
   const kindRaw = typeof req.query.kind === "string" ? req.query.kind : "";
   const SUPPORTED = new Set([
     "rosters",

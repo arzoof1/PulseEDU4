@@ -25,7 +25,10 @@ import {
   getDistrictIdForSchool,
   getSchoolIdsForDistrict,
 } from "../lib/scope";
-import { verifyPrivilegedReauth } from "../lib/privilegedReauth.js";
+import {
+  verifyPrivilegedReauth,
+  hasFreshPrivilegedReauth,
+} from "../lib/privilegedReauth.js";
 import { generateAndHashTempPassword } from "../lib/tempPassword";
 import { bindObjectToSchool } from "./storage.js";
 
@@ -471,6 +474,11 @@ router.get(
   requireAdminOrSuper(),
   async (req: Request, res: Response) => {
     const actor = (req as Request & { staff: StaffRow }).staff;
+    // Step-up reauth (Section 1.15): bulk roster export is a PII-exfil surface.
+    if (!hasFreshPrivilegedReauth(req.session)) {
+      res.status(403).json({ error: "reauth_required" });
+      return;
+    }
     const canSeeCell =
       actor.isAdmin || actor.isDistrictAdmin || actor.isSuperUser;
 

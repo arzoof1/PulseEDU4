@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import {
+  usePrivilegedReauth,
+  fetchWithReauth,
+} from "../lib/usePrivilegedReauth";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 import StudentPhoto from "./StudentPhoto";
 
@@ -370,6 +374,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
   const [savingId, setSavingId] = useState<number | null>(null);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
+  const { ensureReauth, reauthModal } = usePrivilegedReauth();
   const [showAddStaff, setShowAddStaff] = useState(false);
   const [showAddRole, setShowAddRole] = useState(false);
   const [accessTarget, setAccessTarget] = useState<StaffRow | null>(null);
@@ -635,9 +640,10 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
     setExporting(true);
     setError("");
     try {
-      const res = await authFetch(
-        `/api/admin/staff/export.csv?status=${staffScope}`,
+      const res = await fetchWithReauth(ensureReauth, () =>
+        authFetch(`/api/admin/staff/export.csv?status=${staffScope}`),
       );
+      if (!res) return; // step-up cancelled
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || `Export failed (${res.status})`);
@@ -662,6 +668,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
 
   return (
     <div className="card" style={{ marginTop: "1rem" }}>
+      {reauthModal}
       <div
         style={{
           display: "flex",

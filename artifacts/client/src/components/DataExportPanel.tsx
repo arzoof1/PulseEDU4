@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { authFetch } from "../lib/authToken";
+import {
+  usePrivilegedReauth,
+  fetchWithReauth,
+} from "../lib/usePrivilegedReauth";
 import { TeacherPicker } from "./TeacherPicker";
 import type { TeacherOpt } from "./teacherDepartments";
 
@@ -201,6 +205,7 @@ export default function DataExportPanel({
 
   const [downloading, setDownloading] = useState(false);
   const [downloadErr, setDownloadErr] = useState<string | null>(null);
+  const { ensureReauth, reauthModal } = usePrivilegedReauth();
 
   const handleDownload = async () => {
     const params = new URLSearchParams();
@@ -244,7 +249,8 @@ export default function DataExportPanel({
     setDownloadErr(null);
     setDownloading(true);
     try {
-      const resp = await authFetch(url);
+      const resp = await fetchWithReauth(ensureReauth, () => authFetch(url));
+      if (!resp) return; // step-up cancelled
       if (!resp.ok) {
         let msg = `Export failed (${resp.status})`;
         try {
@@ -322,6 +328,7 @@ export default function DataExportPanel({
 
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
+      {reauthModal}
       <h2 style={{ marginTop: 0 }}>Export data</h2>
       <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
         Download your school's current data as a CSV. Use filters to narrow
