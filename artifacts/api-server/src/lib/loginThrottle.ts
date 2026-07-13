@@ -8,10 +8,14 @@ export type LoginScope = "staff" | "parent";
 export const LOGIN_RATE_LIMIT_MESSAGE =
   "Too many sign-in attempts. Try again later.";
 
-const WINDOW_MS = Number(process.env.LOGIN_RATE_WINDOW_MS ?? 15 * 60 * 1000);
+// Exported so the login route can raise a security alert (Section 3.2) the
+// moment a per-account or per-IP failure count crosses the lockout threshold.
+export const WINDOW_MS = Number(
+  process.env.LOGIN_RATE_WINDOW_MS ?? 15 * 60 * 1000,
+);
 const LOCKOUT_MS = Number(process.env.LOGIN_LOCKOUT_MS ?? 15 * 60 * 1000);
-const MAX_PER_IP = Number(process.env.LOGIN_RATE_MAX_PER_IP ?? 60);
-const MAX_PER_EMAIL = Number(process.env.LOGIN_RATE_MAX_PER_EMAIL ?? 8);
+export const MAX_PER_IP = Number(process.env.LOGIN_RATE_MAX_PER_IP ?? 60);
+export const MAX_PER_EMAIL = Number(process.env.LOGIN_RATE_MAX_PER_EMAIL ?? 8);
 
 export const PARENT_LOGIN_MAX_BCRYPT_CHECKS = Number(
   process.env.PARENT_LOGIN_MAX_BCRYPT_CHECKS ?? 5,
@@ -127,10 +131,12 @@ export function sendLoginRateLimited(
   res.status(429).json({ error: LOGIN_RATE_LIMIT_MESSAGE });
 }
 
-async function bumpFailureKey(key: string): Promise<void> {
+// Returns the new failure count for this key within the current window.
+async function bumpFailureKey(key: string): Promise<number> {
   await ensureLoginThrottleTable();
   const now = new Date();
   const max = maxForKey(key);
+  let resultCount = 1;
 
   await db.transaction(async (tx) => {
     const [row] = await tx
@@ -145,6 +151,7 @@ async function bumpFailureKey(key: string): Promise<void> {
         windowStart: now,
         lockedUntil: null,
       });
+      resultCount = 1;
       return;
     }
 
@@ -170,20 +177,26 @@ async function bumpFailureKey(key: string): Promise<void> {
         lockedUntil,
       })
       .where(eq(loginThrottleTable.throttleKey, key));
+    resultCount = failCount;
   });
+  return resultCount;
 }
 
+// Records a failed attempt against both the IP and email keys and returns the
+// resulting counts, so the caller can alert when a threshold is crossed.
 export async function recordLoginFailure(
   req: Request,
   scope: LoginScope,
   normalizedEmail: string,
-): Promise<void> {
+): Promise<{ ipCount: number; emailCount: number }> {
   const ip = clientIp(req);
   try {
-    await bumpFailureKey(ipKey(scope, ip));
-    await bumpFailureKey(emailKey(scope, normalizedEmail));
+    const ipCount = await bumpFailureKey(ipKey(scope, ip));
+    const emailCount = await bumpFailureKey(emailKey(scope, normalizedEmail));
+    return { ipCount, emailCount };
   } catch (err) {
     logger.warn({ err, scope }, "login throttle failure record failed");
+    return { ipCount: 0, emailCount: 0 };
   }
 }
 
