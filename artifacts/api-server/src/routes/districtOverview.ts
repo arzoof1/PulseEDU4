@@ -17,6 +17,8 @@ import {
 import { eq, and, inArray, sql, isNull, desc } from "drizzle-orm";
 import { canActAsDistrict } from "../lib/scope";
 import { getDistrictIdForSchool } from "../lib/scope";
+import { clearMfaPolicyCache } from "../lib/mfaPolicyCache";
+import { writeAuthAudit } from "../lib/authAudit";
 
 const router: IRouter = Router();
 
@@ -826,6 +828,102 @@ router.get("/superuser/cross-district-reports", async (req, res) => {
   });
 
   res.json({ windowDays: 7, crossDistrict, perDistrict });
+});
+
+// ---------------------------------------------------------------------------
+// District-wide MFA policy (Section 1.8). Lets a District Admin require MFA
+// across their WHOLE district — either for privileged roles only or for all
+// staff. Scoped to the caller's own district (resolved from their schoolId),
+// so a District Admin can never touch another district's policy. Enforcement
+// already ORs these district flags with per-school flags in lib/mfaPolicy.ts;
+// this just exposes read/write. Changing a flag clears the policy cache so it
+// takes effect immediately, and is audited (mfa_policy_changed, district scope).
+// ---------------------------------------------------------------------------
+router.get("/district-admin/mfa-policy", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!canActAsDistrict(staff)) {
+    res.status(403).json({ error: "District Admin access required" });
+    return;
+  }
+  const districtId = await getDistrictIdForSchool(staff.schoolId);
+  if (districtId === null) {
+    res.status(409).json({ error: "Caller is not assigned to a district" });
+    return;
+  }
+  const [district] = await db
+    .select({
+      id: districtsTable.id,
+      name: districtsTable.name,
+      mfaRequiredPrivileged: districtsTable.mfaRequiredPrivileged,
+      mfaRequiredStaff: districtsTable.mfaRequiredStaff,
+    })
+    .from(districtsTable)
+    .where(eq(districtsTable.id, districtId));
+  if (!district) {
+    res.status(404).json({ error: "District not found" });
+    return;
+  }
+  res.json(district);
+});
+
+router.put("/district-admin/mfa-policy", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!canActAsDistrict(staff)) {
+    res.status(403).json({ error: "District Admin access required" });
+    return;
+  }
+  const districtId = await getDistrictIdForSchool(staff.schoolId);
+  if (districtId === null) {
+    res.status(409).json({ error: "Caller is not assigned to a district" });
+    return;
+  }
+  const body = (req.body ?? {}) as {
+    mfaRequiredPrivileged?: unknown;
+    mfaRequiredStaff?: unknown;
+  };
+  const updates: { mfaRequiredPrivileged?: boolean; mfaRequiredStaff?: boolean } =
+    {};
+  if (body.mfaRequiredPrivileged !== undefined) {
+    if (typeof body.mfaRequiredPrivileged !== "boolean") {
+      res.status(400).json({ error: "mfaRequiredPrivileged must be a boolean" });
+      return;
+    }
+    updates.mfaRequiredPrivileged = body.mfaRequiredPrivileged;
+  }
+  if (body.mfaRequiredStaff !== undefined) {
+    if (typeof body.mfaRequiredStaff !== "boolean") {
+      res.status(400).json({ error: "mfaRequiredStaff must be a boolean" });
+      return;
+    }
+    updates.mfaRequiredStaff = body.mfaRequiredStaff;
+  }
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No MFA policy fields provided" });
+    return;
+  }
+  const [updated] = await db
+    .update(districtsTable)
+    .set(updates)
+    .where(eq(districtsTable.id, districtId))
+    .returning({
+      id: districtsTable.id,
+      name: districtsTable.name,
+      mfaRequiredPrivileged: districtsTable.mfaRequiredPrivileged,
+      mfaRequiredStaff: districtsTable.mfaRequiredStaff,
+    });
+  // Invalidate cached policy decisions so enforcement flips on the next request.
+  clearMfaPolicyCache();
+  await writeAuthAudit({
+    action: "mfa_policy_changed",
+    schoolId: staff.schoolId,
+    actorStaffId: staff.id,
+    actorName: staff.displayName,
+    ip: req.ip ?? null,
+    payload: { scope: "district", districtId, ...updates },
+  });
+  res.json(updated);
 });
 
 export default router;
