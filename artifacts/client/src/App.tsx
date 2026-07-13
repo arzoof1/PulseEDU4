@@ -24625,6 +24625,30 @@ function App() {
                       Confirm this export was expected.
                     </>
                   );
+                } else if (n.type === "security_api_volume") {
+                  body = (
+                    <>
+                      ⚡ <strong>Unusually high API volume</strong> —{" "}
+                      <strong>{p.count}</strong> requests in {p.windowMinutes}{" "}
+                      min from{" "}
+                      {p.scope === "account" ? (
+                        <>an account</>
+                      ) : (
+                        <>IP <strong>{p.ip}</strong></>
+                      )}
+                      . Review for scripted abuse or a runaway integration.
+                    </>
+                  );
+                } else if (n.type === "security_impossible_travel") {
+                  body = (
+                    <>
+                      🌍 <strong>Impossible travel</strong> — this account
+                      signed in from two locations{" "}
+                      <strong>{p.distanceKm} km</strong> apart just{" "}
+                      {p.minutesApart} min apart (implied {p.impliedKmh} km/h).
+                      Possible account takeover — review immediately.
+                    </>
+                  );
                 } else {
                   body = (
                     <code style={{ fontSize: "0.85rem" }}>

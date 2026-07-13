@@ -22,6 +22,7 @@ import {
   WINDOW_MS,
 } from "../lib/loginThrottle.js";
 import { raiseSecurityAlert } from "../lib/securityAlerts.js";
+import { detectImpossibleTravelOnLogin } from "../lib/geoAnomaly.js";
 import {
   buildStaffPasswordResetUrl,
   sendStaffPasswordResetEmail,
@@ -345,6 +346,9 @@ function finalizeLogin(
   staff: typeof staffTable.$inferSelect,
   extra: Record<string, unknown> = {},
 ): void {
+  // Impossible-travel detection (3.4): best-effort, fire-and-forget so it never
+  // delays or blocks the login. Runs on every completed staff login.
+  void detectImpossibleTravelOnLogin(req, staff);
   req.session.regenerate((err) => {
     if (err) {
       res.status(500).json({ error: "Could not start session" });

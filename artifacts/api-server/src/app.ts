@@ -10,6 +10,7 @@ import { csrfProtectionMiddleware } from "./lib/csrf.js";
 import { isStaffMfaEnabled } from "./lib/staffMfaSwitch.js";
 import { isMfaRequiredForStaffCached } from "./lib/mfaPolicyCache.js";
 import { mfaEnrollmentGate } from "./lib/mfaEnrollmentGate.js";
+import { apiUsageAlertMiddleware } from "./lib/apiUsageMonitor.js";
 import { logger } from "./lib/logger";
 import {
   isStaffBearerAuthEnabled,
@@ -455,6 +456,10 @@ app.use(async (req, _res, next) => {
 });
 
 app.use("/api", csrfProtectionMiddleware);
+// Excessive-API-usage monitor (3.3): counts requests per account/IP and alerts
+// on abnormal volume. Placed before the enrollment gate so even a flood of
+// gate-blocked requests still counts toward the volume threshold.
+app.use("/api", apiUsageAlertMiddleware);
 // Runs after CSRF (so enrollment POSTs still validate a token) and before the
 // route table: a not-yet-enrolled required user is 403'd on everything except
 // the enrollment + sign-out routes.
