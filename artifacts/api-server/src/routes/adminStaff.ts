@@ -29,6 +29,7 @@ import {
   verifyPrivilegedReauth,
   hasFreshPrivilegedReauth,
 } from "../lib/privilegedReauth.js";
+import { raiseSecurityAlert } from "../lib/securityAlerts.js";
 import { generateAndHashTempPassword } from "../lib/tempPassword";
 import { bindObjectToSchool } from "./storage.js";
 
@@ -913,6 +914,20 @@ router.patch(
         targetStaffId: targetId,
         ip: req.ip ?? null,
         payload: { targetName: target.displayName, changes: roleChanges },
+      });
+      // Security alert (3.6): notify admins of the role/access change with a
+      // human-readable before→after summary.
+      const changesSummary = Object.entries(roleChanges)
+        .map(([k, v]) => `${k}: ${v.from ? "on" : "off"}→${v.to ? "on" : "off"}`)
+        .join(", ");
+      await raiseSecurityAlert({
+        schoolId: target.schoolId,
+        type: "security_role_changed",
+        payload: {
+          actorName: actor.displayName,
+          targetName: target.displayName,
+          changesSummary,
+        },
       });
     }
 

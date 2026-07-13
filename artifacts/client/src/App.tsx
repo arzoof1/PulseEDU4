@@ -24594,6 +24594,37 @@ function App() {
                       don't have to pick on every activation.
                     </>
                   );
+                } else if (n.type === "security_failed_logins") {
+                  body = (
+                    <>
+                      🔒 <strong>{p.failCount} failed sign-in attempts</strong>{" "}
+                      {p.scope === "ip" ? (
+                        <>from IP <strong>{p.ip}</strong></>
+                      ) : (
+                        <>for <strong>{p.email}</strong></>
+                      )}{" "}
+                      in the last {p.windowMinutes} min —{" "}
+                      {p.scope === "ip" ? "that IP" : "the account"} is now
+                      temporarily locked. Review for a possible brute-force
+                      attempt.
+                    </>
+                  );
+                } else if (n.type === "security_role_changed") {
+                  body = (
+                    <>
+                      🛡️ <strong>{p.actorName}</strong> changed roles/access for{" "}
+                      <strong>{p.targetName}</strong> — {p.changesSummary}.
+                    </>
+                  );
+                } else if (n.type === "security_data_export") {
+                  body = (
+                    <>
+                      📤 <strong>{p.actorName}</strong> exported{" "}
+                      <strong>{p.rowCount}</strong> rows from the{" "}
+                      <strong>{p.datasetKey}</strong> dataset ({p.format}).
+                      Confirm this export was expected.
+                    </>
+                  );
                 } else {
                   body = (
                     <code style={{ fontSize: "0.85rem" }}>

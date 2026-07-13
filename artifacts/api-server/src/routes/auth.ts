@@ -17,7 +17,11 @@ import {
   recordLoginFailure,
   recordLoginSuccess,
   sendLoginRateLimited,
+  MAX_PER_EMAIL,
+  MAX_PER_IP,
+  WINDOW_MS,
 } from "../lib/loginThrottle.js";
+import { raiseSecurityAlert } from "../lib/securityAlerts.js";
 import {
   buildStaffPasswordResetUrl,
   sendStaffPasswordResetEmail,
@@ -410,7 +414,11 @@ router.post("/auth/login", async (req: Request, res) => {
 
   const ok = await bcryptCompare(password, staff.passwordHash);
   if (!ok) {
-    await recordLoginFailure(req, "staff", normalizedEmail);
+    const { ipCount, emailCount } = await recordLoginFailure(
+      req,
+      "staff",
+      normalizedEmail,
+    );
     await writeAuthAudit({
       action: "login_failure",
       schoolId: staff.schoolId,
@@ -420,6 +428,24 @@ router.post("/auth/login", async (req: Request, res) => {
       ip: clientIp(req),
       payload: { email: normalizedEmail, reason: "bad_password" },
     });
+    // Security alert (3.2): fire once, exactly when the account or IP crosses
+    // the lockout threshold — after that the attempt is blocked upstream, so
+    // the count can't climb again this window (natural dedup).
+    if (emailCount === MAX_PER_EMAIL || ipCount === MAX_PER_IP) {
+      const byIp = ipCount === MAX_PER_IP && emailCount !== MAX_PER_EMAIL;
+      await raiseSecurityAlert({
+        schoolId: staff.schoolId,
+        type: "security_failed_logins",
+        payload: {
+          email: normalizedEmail,
+          ip: clientIp(req),
+          scope: byIp ? "ip" : "account",
+          failCount: byIp ? ipCount : emailCount,
+          threshold: byIp ? MAX_PER_IP : MAX_PER_EMAIL,
+          windowMinutes: Math.round(WINDOW_MS / 60000),
+        },
+      });
+    }
     res.status(401).json({ error: GENERIC_LOGIN_ERROR });
     return;
   }
