@@ -34,9 +34,15 @@ export async function detectImpossibleTravelOnLogin(
       (typeof req.headers["x-forwarded-for"] === "string"
         ? req.headers["x-forwarded-for"].split(",")[0].trim()
         : req.ip) ?? null;
-    // Prefer trusted edge-provided geo (accurate, city-level) when the app is
-    // fronted by a geo-CDN; otherwise fall back to server-side IP geolocation.
-    const cur = geoFromRequest(req) ?? geoFromIp(ip);
+    // Edge geo headers (CloudFront/Cloudflare/Vercel) are only trustworthy when
+    // the app actually sits behind that edge — the edge sets them and strips any
+    // client-supplied copies. On a bare origin they are client-spoofable, so we
+    // trust them ONLY when the operator opts in (TRUST_EDGE_GEO_HEADERS=1, set
+    // when a geo-CDN is deployed). By default we use non-spoofable server-side
+    // IP geolocation, which cannot be forged by the caller.
+    const edgeGeo =
+      process.env.TRUST_EDGE_GEO_HEADERS === "1" ? geoFromRequest(req) : null;
+    const cur = edgeGeo ?? geoFromIp(ip);
     const now = Date.now();
     const prev = lastLoginByStaff.get(staff.id);
 
