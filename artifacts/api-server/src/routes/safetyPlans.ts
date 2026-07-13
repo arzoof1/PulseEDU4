@@ -33,6 +33,7 @@ import {
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { canEditSafetyPlan } from "../lib/coreTeam.js";
+import { hasFreshPrivilegedReauth } from "../lib/privilegedReauth.js";
 
 const router: IRouter = Router();
 
@@ -224,6 +225,12 @@ router.get(
     const staff = await loadStaff(req);
     if (!staff) {
       res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    // Step-up reauth (Section 1.15): viewing a student's Safety Plan is a
+    // highly sensitive read. One step-up covers a short window (see helper).
+    if (!hasFreshPrivilegedReauth(req.session)) {
+      res.status(403).json({ error: "reauth_required" });
       return;
     }
     const schoolId = requireSchool(req, res);

@@ -9,6 +9,10 @@
 // log is reachable from a separate admin screen.
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import {
+  usePrivilegedReauth,
+  fetchWithReauth,
+} from "../lib/usePrivilegedReauth";
 
 interface SafetyPlanItem {
   label: string;
@@ -56,6 +60,7 @@ export default function SafetyPlanEditor({
   const [endDate, setEndDate] = useState("");
   const [status, setStatus] = useState<"active" | "inactive">("active");
   const [newItemLabel, setNewItemLabel] = useState("");
+  const { ensureReauth, reauthModal } = usePrivilegedReauth();
 
   useEffect(() => {
     let cancelled = false;
@@ -63,10 +68,19 @@ export default function SafetyPlanEditor({
       setLoading(true);
       setError(null);
       try {
-        const [libR, planR] = await Promise.all([
-          authFetch("/api/safety-plans/library"),
-          authFetch(`/api/safety-plans/student/${encodeURIComponent(studentId)}`),
-        ]);
+        // Viewing a Safety Plan is step-up gated (Section 1.15): the plan GET
+        // 403s until a recent reauth, so prompt + retry; cancel closes the editor.
+        const libR = await authFetch("/api/safety-plans/library");
+        const planR = await fetchWithReauth(ensureReauth, () =>
+          authFetch(
+            `/api/safety-plans/student/${encodeURIComponent(studentId)}`,
+          ),
+        );
+        if (cancelled) return;
+        if (!planR) {
+          onClose();
+          return;
+        }
         if (!libR.ok) throw new Error(`Library load failed (${libR.status})`);
         if (!planR.ok) throw new Error(`Plan load failed (${planR.status})`);
         const libJ = (await libR.json()) as { items: LibraryItem[] };
@@ -213,6 +227,7 @@ export default function SafetyPlanEditor({
         if (e.target === e.currentTarget) onClose();
       }}
     >
+      {reauthModal}
       <div
         style={{
           background: "white",

@@ -17,6 +17,10 @@ import {
   consumeRecoveryCode,
   countUnusedRecoveryCodes,
 } from "../lib/staffMfaStore.js";
+import {
+  verifyPrivilegedReauth,
+  PRIVILEGED_REAUTH_WINDOW_MS,
+} from "../lib/privilegedReauth.js";
 
 // Staff MFA enrollment + management (Gate A / Section 1, Slice 2). These
 // endpoints let a staff member VOLUNTARILY enroll in TOTP MFA and manage
@@ -216,6 +220,46 @@ router.post("/auth/mfa/recovery-codes/regenerate", async (req, res) => {
     ip: clientIp(req),
   });
   res.json({ recoveryCodes: codes });
+});
+
+// Privileged step-up reauthentication (Section 1.15). Verifies the current
+// password (+ MFA/recovery code when enrolled) and opens a short-lived window
+// on the session, so sensitive actions (bulk export, Safety Plan viewing) can
+// require a RECENT step-up without prompting on every request. Deliberately
+// NOT under the /auth/mfa switch gate above: it must work for password-only
+// (unenrolled) accounts too.
+router.post("/auth/reauth", async (req, res) => {
+  if (!req.staffId) {
+    res.status(401).json({ error: "unauthenticated" });
+    return;
+  }
+  const staff = await loadStaff(req.staffId);
+  if (!staff || !staff.active) {
+    res.status(401).json({ error: "unauthenticated" });
+    return;
+  }
+  const result = await verifyPrivilegedReauth(staff, req.body);
+  if (!result.ok) {
+    res.status(result.status).json({ error: result.error });
+    return;
+  }
+  req.session.privilegedReauthAt = Date.now();
+  await new Promise<void>((resolve, reject) =>
+    req.session.save((err) => (err ? reject(err) : resolve())),
+  );
+  await writeAuthAudit({
+    action: "privileged_reauth",
+    schoolId: staff.schoolId,
+    actorStaffId: staff.id,
+    actorName: staff.displayName,
+    targetStaffId: staff.id,
+    ip: clientIp(req),
+  });
+  res.json({
+    ok: true,
+    reauthAt: req.session.privilegedReauthAt,
+    windowMs: PRIVILEGED_REAUTH_WINDOW_MS,
+  });
 });
 
 export default router;
