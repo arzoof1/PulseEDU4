@@ -56,15 +56,18 @@ function num(v: unknown): number | null {
   return null;
 }
 
-// Best-effort viewer geo from CDN edge headers. Returns null if the edge did
-// not attach coordinates (detection then stays dormant for that login).
+// Best-effort viewer geo from TRUSTED CDN edge headers only. These are set by
+// the edge (CloudFront / Cloudflare / Vercel), which strips any client-supplied
+// copies, so they are not spoofable. We deliberately do NOT read a generic
+// client-controllable header here — for a security control that would let an
+// attacker forge their apparent location. Returns null when no edge attached
+// coordinates (the caller then falls back to server-side IP geolocation).
 export function geoFromRequest(req: Request): GeoPoint | null {
   const h = req.headers;
   const pairs: Array<[unknown, unknown]> = [
     [h["cloudfront-viewer-latitude"], h["cloudfront-viewer-longitude"]],
     [h["cf-iplatitude"], h["cf-iplongitude"]],
     [h["x-vercel-ip-latitude"], h["x-vercel-ip-longitude"]],
-    [h["x-geo-latitude"], h["x-geo-longitude"]],
   ];
   for (const [rawLat, rawLon] of pairs) {
     const lat = num(rawLat);
