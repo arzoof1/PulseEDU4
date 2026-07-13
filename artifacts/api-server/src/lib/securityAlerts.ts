@@ -13,7 +13,9 @@ import { logger } from "./logger.js";
 export type SecurityAlertType =
   | "security_failed_logins"
   | "security_role_changed"
-  | "security_data_export";
+  | "security_data_export"
+  | "security_api_volume"
+  | "security_impossible_travel";
 
 export async function raiseSecurityAlert(input: {
   schoolId: number | null | undefined;
