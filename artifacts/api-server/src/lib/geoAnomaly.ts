@@ -8,6 +8,7 @@ import {
   isImpossibleTravel,
   geoFromRequest,
 } from "./geoAnomalyMath.js";
+import { geoFromIp } from "./geoipResolve.js";
 
 // Impossible-travel / geo-anomaly detection on login (Section 3.4). If the same
 // account signs in from two locations whose separation could not be covered in
@@ -29,11 +30,13 @@ export async function detectImpossibleTravelOnLogin(
   staff: { id: number; schoolId: number | null },
 ): Promise<void> {
   try {
-    const cur = geoFromRequest(req);
     const ip =
       (typeof req.headers["x-forwarded-for"] === "string"
         ? req.headers["x-forwarded-for"].split(",")[0].trim()
         : req.ip) ?? null;
+    // Prefer trusted edge-provided geo (accurate, city-level) when the app is
+    // fronted by a geo-CDN; otherwise fall back to server-side IP geolocation.
+    const cur = geoFromRequest(req) ?? geoFromIp(ip);
     const now = Date.now();
     const prev = lastLoginByStaff.get(staff.id);
 

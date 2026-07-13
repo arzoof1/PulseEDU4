@@ -115,6 +115,11 @@ async function buildAll() {
       // loads from node_modules where the data/ folder lives.
       "pdfkit",
       "fontkit",
+      // geoip-lite loads its ~binary .dat GeoIP database from its own
+      // node_modules/geoip-lite/data dir at runtime; bundling would leave the
+      // data behind (same failure mode as pdfkit's .afm fonts). Externalize so
+      // it resolves the DB from node_modules on the server.
+      "geoip-lite",
     ],
     sourcemap: "linked",
     plugins: [
