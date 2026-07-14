@@ -34,6 +34,11 @@ export const districtsTable = pgTable("districts", {
     .notNull()
     .default(false),
   mfaRequiredStaff: boolean("mfa_required_staff").notNull().default(false),
+  // Parent-portal MFA requirement (item 1.7). Dormant by default; when enabled
+  // for a district, parents who have enrolled TOTP are challenged at login.
+  // Enforced enrollment for not-yet-enrolled parents is a documented rollout
+  // follow-up (needs a parent forced-enrollment gate to avoid a login deadlock).
+  mfaRequiredParent: boolean("mfa_required_parent").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

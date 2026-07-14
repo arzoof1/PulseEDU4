@@ -839,6 +839,19 @@ router.get("/superuser/cross-district-reports", async (req, res) => {
 // this just exposes read/write. Changing a flag clears the policy cache so it
 // takes effect immediately, and is audited (mfa_policy_changed, district scope).
 // ---------------------------------------------------------------------------
+// Parent-MFA requirement column (item 1.7). Production does not auto-run
+// migrations, so self-heal the column on first use (once per process) exactly
+// like the Section 3.8 audit-chain columns — otherwise the SELECT below would
+// reference a column that does not exist yet.
+let parentMfaColumnEnsured = false;
+async function ensureParentMfaColumn(): Promise<void> {
+  if (parentMfaColumnEnsured) return;
+  await db.execute(
+    sql`ALTER TABLE districts ADD COLUMN IF NOT EXISTS mfa_required_parent BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  parentMfaColumnEnsured = true;
+}
+
 router.get("/district-admin/mfa-policy", async (req, res) => {
   const staff = await loadStaff(req, res);
   if (!staff) return;
@@ -851,12 +864,14 @@ router.get("/district-admin/mfa-policy", async (req, res) => {
     res.status(409).json({ error: "Caller is not assigned to a district" });
     return;
   }
+  await ensureParentMfaColumn();
   const [district] = await db
     .select({
       id: districtsTable.id,
       name: districtsTable.name,
       mfaRequiredPrivileged: districtsTable.mfaRequiredPrivileged,
       mfaRequiredStaff: districtsTable.mfaRequiredStaff,
+      mfaRequiredParent: districtsTable.mfaRequiredParent,
     })
     .from(districtsTable)
     .where(eq(districtsTable.id, districtId));
@@ -882,9 +897,13 @@ router.put("/district-admin/mfa-policy", async (req, res) => {
   const body = (req.body ?? {}) as {
     mfaRequiredPrivileged?: unknown;
     mfaRequiredStaff?: unknown;
+    mfaRequiredParent?: unknown;
   };
-  const updates: { mfaRequiredPrivileged?: boolean; mfaRequiredStaff?: boolean } =
-    {};
+  const updates: {
+    mfaRequiredPrivileged?: boolean;
+    mfaRequiredStaff?: boolean;
+    mfaRequiredParent?: boolean;
+  } = {};
   if (body.mfaRequiredPrivileged !== undefined) {
     if (typeof body.mfaRequiredPrivileged !== "boolean") {
       res.status(400).json({ error: "mfaRequiredPrivileged must be a boolean" });
@@ -899,10 +918,18 @@ router.put("/district-admin/mfa-policy", async (req, res) => {
     }
     updates.mfaRequiredStaff = body.mfaRequiredStaff;
   }
+  if (body.mfaRequiredParent !== undefined) {
+    if (typeof body.mfaRequiredParent !== "boolean") {
+      res.status(400).json({ error: "mfaRequiredParent must be a boolean" });
+      return;
+    }
+    updates.mfaRequiredParent = body.mfaRequiredParent;
+  }
   if (Object.keys(updates).length === 0) {
     res.status(400).json({ error: "No MFA policy fields provided" });
     return;
   }
+  await ensureParentMfaColumn();
   const [updated] = await db
     .update(districtsTable)
     .set(updates)
@@ -912,6 +939,7 @@ router.put("/district-admin/mfa-policy", async (req, res) => {
       name: districtsTable.name,
       mfaRequiredPrivileged: districtsTable.mfaRequiredPrivileged,
       mfaRequiredStaff: districtsTable.mfaRequiredStaff,
+      mfaRequiredParent: districtsTable.mfaRequiredParent,
     });
   // Invalidate cached policy decisions so enforcement flips on the next request.
   clearMfaPolicyCache();
