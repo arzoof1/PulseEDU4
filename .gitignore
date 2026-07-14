@@ -63,3 +63,6 @@ deliverables/
 
 # Playwright MCP screenshot/snapshot cache (local testing)
 .playwright-mcp/
+
+# District security documentation package (confidential — same rationale as deliverables/)
+tracker docs/
