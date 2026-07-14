@@ -64,6 +64,8 @@ import {
 } from "../lib/schoolYear.js";
 import { getActiveSchoolYear } from "../lib/fastHistory.js";
 import { hasFreshPrivilegedReauth } from "../lib/privilegedReauth.js";
+import { writeAuthAudit } from "../lib/authAudit.js";
+import { evaluateImportApproval } from "../lib/importApproval.js";
 import Papa from "papaparse";
 import ExcelJS from "exceljs";
 
@@ -5280,6 +5282,98 @@ function requireManualRosterUploadEnabled() {
   };
 }
 
+// Roster-import approval / segregation of duties (Section 15.5). Production
+// does not auto-run migrations, so self-heal the setting column on first use.
+let importApprovalColumnEnsured = false;
+async function ensureImportApprovalColumn(): Promise<void> {
+  if (importApprovalColumnEnsured) return;
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS import_requires_approval BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  importApprovalColumnEnsured = true;
+}
+
+// Gate the roster COMMIT: when a school requires approval, the request must name
+// a different administrator as approver, validated server-side. Runs before the
+// commit handler, so an unapproved import is rejected before any data is written.
+function requireImportApproval() {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    await ensureImportApprovalColumn();
+    // Read the flag via raw SQL: the column is intentionally NOT in the Drizzle
+    // schema (broad .select() reads of school_settings would otherwise reference
+    // a column that prod hasn't migrated yet). COALESCE guards a fresh DB.
+    const settingRows = (
+      await db.execute(
+        sql`SELECT COALESCE(import_requires_approval, FALSE) AS requires_approval FROM school_settings WHERE school_id = ${schoolId}`,
+      )
+    ).rows as { requires_approval: boolean }[];
+    const requiresApproval = Boolean(settingRows[0]?.requires_approval);
+
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const uploaderStaffId = staff.id;
+
+    const rawApprover = (req.body as { approval?: { approvedByStaffId?: unknown } })
+      ?.approval?.approvedByStaffId;
+    const approverStaffId =
+      typeof rawApprover === "number" && Number.isInteger(rawApprover)
+        ? rawApprover
+        : null;
+
+    // Only resolve the approver from the DB when it could matter.
+    let approverIsAdmin = false;
+    if (requiresApproval && approverStaffId != null) {
+      const [approver] = await db
+        .select({
+          isAdmin: staffTable.isAdmin,
+          isSuperUser: staffTable.isSuperUser,
+          active: staffTable.active,
+        })
+        .from(staffTable)
+        .where(
+          and(
+            eq(staffTable.id, approverStaffId),
+            eq(staffTable.schoolId, schoolId),
+          ),
+        );
+      approverIsAdmin = Boolean(
+        approver &&
+          approver.active &&
+          (approver.isAdmin || approver.isSuperUser),
+      );
+    }
+
+    const decision = evaluateImportApproval({
+      requiresApproval,
+      approverStaffId,
+      approverIsAdmin,
+      uploaderStaffId,
+    });
+    if (!decision.allowed) {
+      res.status(403).json({
+        error: decision.reason,
+        detail:
+          "This school requires a second administrator to approve roster imports. Provide approval.approvedByStaffId naming a different admin.",
+      });
+      return;
+    }
+
+    // Record the dual-control approval in the tamper-evident audit trail.
+    if (requiresApproval && approverStaffId != null) {
+      void writeAuthAudit({
+        action: "roster_import_approved",
+        schoolId,
+        actorStaffId: uploaderStaffId,
+        actorName: staff.displayName,
+        ip: req.ip ?? null,
+        payload: { approverStaffId },
+      });
+    }
+    next();
+  };
+}
+
 router.post(
   "/data-imports/rosters/preview",
   requireImporter(),
@@ -5287,11 +5381,64 @@ router.post(
   requireManualRosterUploadEnabled(),
   makePreviewHandler("rosters", ROSTERS_CONFIG),
 );
+// Read/toggle the roster-import approval requirement for the active school
+// (Section 15.5). Raw SQL for the same reason as the middleware above.
+router.get(
+  "/data-imports/approval-policy",
+  requireImporter(),
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    await ensureImportApprovalColumn();
+    const rows = (
+      await db.execute(
+        sql`SELECT COALESCE(import_requires_approval, FALSE) AS requires_approval FROM school_settings WHERE school_id = ${schoolId}`,
+      )
+    ).rows as { requires_approval: boolean }[];
+    res.json({ importRequiresApproval: Boolean(rows[0]?.requires_approval) });
+  },
+);
+router.put(
+  "/data-imports/approval-policy",
+  requireImporter(),
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    if (!staff.isAdmin && !staff.isSuperUser) {
+      res.status(403).json({ error: "Admin access required" });
+      return;
+    }
+    const val = (req.body as { importRequiresApproval?: unknown })
+      ?.importRequiresApproval;
+    if (typeof val !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "importRequiresApproval must be a boolean" });
+      return;
+    }
+    await ensureImportApprovalColumn();
+    await db.execute(
+      sql`UPDATE school_settings SET import_requires_approval = ${val} WHERE school_id = ${schoolId}`,
+    );
+    void writeAuthAudit({
+      action: "import_approval_policy_changed",
+      schoolId,
+      actorStaffId: staff.id,
+      actorName: staff.displayName,
+      ip: req.ip ?? null,
+      payload: { importRequiresApproval: val },
+    });
+    res.json({ importRequiresApproval: val });
+  },
+);
+
 router.post(
   "/data-imports/rosters/commit",
   requireImporter(),
   requireImportKind("rosters"),
   requireManualRosterUploadEnabled(),
+  requireImportApproval(),
   makeCommitHandler("rosters", ROSTERS_CONFIG),
 );
 router.post(
