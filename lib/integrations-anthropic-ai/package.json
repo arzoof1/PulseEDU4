@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.95.1"
+    "@anthropic-ai/sdk": "^0.111.0"
   },
   "devDependencies": {
     "@types/node": "catalog:"
