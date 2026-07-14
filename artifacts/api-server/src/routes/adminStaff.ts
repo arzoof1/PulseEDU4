@@ -538,6 +538,82 @@ router.get(
   },
 );
 
+// Export the school's authentication / privileged-action audit trail as a CSV
+// (Section 2.5). Every row carries the required fields — timestamp, action,
+// actor, target, IP, and details — for a real privileged action. Privileged +
+// step-up-reauth gated like the audit viewer and the roster export.
+router.get(
+  "/admin/audit-log/export.csv",
+  requirePrivileged(),
+  async (req: Request, res: Response) => {
+    if (!hasFreshPrivilegedReauth(req.session)) {
+      res.status(403).json({ error: "reauth_required" });
+      return;
+    }
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(400).json({ error: "No active school" });
+      return;
+    }
+    const target = alias(staffTable, "audit_export_target");
+    const rows = await db
+      .select({
+        id: authAuditLogTable.id,
+        createdAt: authAuditLogTable.createdAt,
+        action: authAuditLogTable.action,
+        actorStaffId: authAuditLogTable.actorStaffId,
+        actorName: authAuditLogTable.actorName,
+        targetStaffId: authAuditLogTable.targetStaffId,
+        targetName: target.displayName,
+        ip: authAuditLogTable.ip,
+        payload: authAuditLogTable.payload,
+      })
+      .from(authAuditLogTable)
+      .leftJoin(target, eq(target.id, authAuditLogTable.targetStaffId))
+      .where(eq(authAuditLogTable.schoolId, schoolId))
+      .orderBy(desc(authAuditLogTable.createdAt))
+      .limit(5000);
+
+    const header = [
+      "ID",
+      "Timestamp (UTC)",
+      "Action",
+      "Actor ID",
+      "Actor",
+      "Target ID",
+      "Target",
+      "IP",
+      "Details",
+    ];
+    const lines = [header.map(csvCell).join(",")];
+    for (const r of rows) {
+      lines.push(
+        [
+          String(r.id),
+          r.createdAt ? new Date(r.createdAt).toISOString() : "",
+          r.action,
+          r.actorStaffId != null ? String(r.actorStaffId) : "",
+          r.actorName ?? "",
+          r.targetStaffId != null ? String(r.targetStaffId) : "",
+          r.targetName ?? "",
+          r.ip ?? "",
+          r.payload ? JSON.stringify(r.payload) : "",
+        ]
+          .map(csvCell)
+          .join(","),
+      );
+    }
+    const csv = "﻿" + lines.join("\r\n") + "\r\n";
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="security-audit-log-${stamp}.csv"`,
+    );
+    res.send(csv);
+  },
+);
+
 // Export the full staff roster as a CSV (opens in Excel). Same scoping as the
 // list endpoint: the active school only (SuperUsers switch schools to export
 // another). Cell phone is admin-gated (admin / district admin / super only).
