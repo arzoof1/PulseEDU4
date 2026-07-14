@@ -15,6 +15,7 @@ import {
 import { and, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { authenticator } from "otplib";
 import { encryptSecret, decryptSecret } from "../lib/secretCrypto.js";
+import { writeAuthAudit } from "../lib/authAudit.js";
 
 // otplib defaults to a 1-step window. Bump to allow ±1 step (≈±30s) of clock
 // skew on the parent's phone — same tolerance every major site uses.
@@ -169,6 +170,14 @@ router.post("/parent-auth/login", async (req: Request, res) => {
       .update(parentsTable)
       .set({ lastLoginAt: new Date() })
       .where(eq(parentsTable.id, parent.id));
+
+    // Parent-portal audit trail (Section 13.6).
+    void writeAuthAudit({
+      action: "parent_login",
+      schoolId: parent.schoolId,
+      ip: req.ip ?? null,
+      payload: { parentId: parent.id, email: normalizedEmail },
+    });
 
     req.session.regenerate((err) => {
       if (err) {
@@ -478,6 +487,14 @@ router.post("/parent-auth/accept-invite", async (req, res) => {
       acceptedParentId: parentId,
     })
     .where(eq(parentInvitesTable.id, invite.id));
+
+  // Parent-portal audit trail (Section 13.6): a new/activated portal account.
+  void writeAuthAudit({
+    action: "parent_invite_accepted",
+    schoolId: invite.schoolId,
+    ip: req.ip ?? null,
+    payload: { parentId, studentId: invite.studentId },
+  });
 
   // Auto-sign-in so the parent lands on their dashboard immediately.
   const [parent] = await db
@@ -853,6 +870,14 @@ router.post("/parent-auth/reset", async (req, res) => {
     .set({ passwordHash, lastLoginAt: new Date() })
     .where(eq(parentsTable.id, parentId));
 
+  // Parent-portal audit trail (Section 13.6).
+  void writeAuthAudit({
+    action: "parent_password_reset",
+    schoolId: parent.schoolId,
+    ip: req.ip ?? null,
+    payload: { parentId },
+  });
+
   // Auto-sign-in so the parent lands on their dashboard — same pattern
   // as accept-invite. Clear any pre-existing staff session bits.
   req.session.regenerate((err) => {
@@ -917,6 +942,13 @@ router.post("/parent-auth/change-password", async (req, res) => {
     .update(parentsTable)
     .set({ passwordHash })
     .where(eq(parentsTable.id, pid));
+  // Parent-portal audit trail (Section 13.6).
+  void writeAuthAudit({
+    action: "parent_password_changed",
+    schoolId: parent.schoolId,
+    ip: req.ip ?? null,
+    payload: { parentId: pid },
+  });
   res.json({ ok: true });
 });
 
@@ -1009,7 +1041,7 @@ router.post("/parent-auth/totp/confirm", async (req, res) => {
     });
     return;
   }
-  await db
+  const [enrolled] = await db
     .update(parentsTable)
     .set({
       // Encrypted at rest with an app-key derivative; the raw secret only
@@ -1017,7 +1049,15 @@ router.post("/parent-auth/totp/confirm", async (req, res) => {
       totpSecret: encryptSecret(secret),
       totpEnabledAt: new Date(),
     })
-    .where(eq(parentsTable.id, auth.pid));
+    .where(eq(parentsTable.id, auth.pid))
+    .returning({ schoolId: parentsTable.schoolId });
+  // Parent-portal audit trail (Section 13.6).
+  void writeAuthAudit({
+    action: "parent_totp_enrolled",
+    schoolId: enrolled?.schoolId ?? null,
+    ip: req.ip ?? null,
+    payload: { parentId: auth.pid },
+  });
   res.json({ ok: true, enabled: true });
 });
 
@@ -1063,6 +1103,13 @@ router.post("/parent-auth/totp/disable", async (req, res) => {
     .update(parentsTable)
     .set({ totpSecret: null, totpEnabledAt: null })
     .where(eq(parentsTable.id, auth.pid));
+  // Parent-portal audit trail (Section 13.6).
+  void writeAuthAudit({
+    action: "parent_totp_disabled",
+    schoolId: parent.schoolId,
+    ip: req.ip ?? null,
+    payload: { parentId: auth.pid },
+  });
   res.json({ ok: true, enabled: false });
 });
 
