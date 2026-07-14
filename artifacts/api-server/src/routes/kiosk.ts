@@ -28,6 +28,7 @@ import {
 } from "@workspace/db";
 import { renderKioskCardsPdf } from "../lib/kioskCardsPdf.js";
 import { encryptSecret, decryptSecret } from "../lib/secretCrypto.js";
+import { writeAuthAudit } from "../lib/authAudit.js";
 import {
   renderTeacherBadgesPdf,
   type TeacherBadgeInput,
@@ -3022,10 +3023,18 @@ router.get("/kiosk/my-pin", requireStaff, async (req, res) => {
     return;
   }
   try {
-    res.json({
-      pin: decryptSecret(row.pinEncrypted, KIOSK_PIN_PURPOSE),
-      status: "ok",
+    const pin = decryptSecret(row.pinEncrypted, KIOSK_PIN_PURPOSE);
+    // Secret-access audit logging (Section 11.5): record every read of a stored
+    // encrypted secret. Best-effort; recorded in the tamper-evident trail.
+    void writeAuthAudit({
+      action: "secret_accessed",
+      schoolId: staff.schoolId,
+      actorStaffId: staff.id,
+      actorName: staff.displayName,
+      ip: req.ip ?? null,
+      payload: { secretType: "kiosk_pin", targetStaffId: staff.id },
     });
+    res.json({ pin, status: "ok" });
   } catch (err) {
     // A decrypt failure (e.g. SESSION_SECRET rotated since issuance) is not
     // fatal — the badge still works on the kiosk. Treat it like a legacy

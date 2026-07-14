@@ -1,0 +1,39 @@
+# Static Application Security Testing (Section 16.3). GitHub CodeQL scans the
+# JavaScript/TypeScript source for security vulnerabilities on every PR, on push
+# to main, and weekly. Findings surface in the repo's Security > Code scanning
+# tab for triage.
+name: CodeQL (SAST)
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "0 6 * * 2" # Tuesdays 06:00 UTC
+
+jobs:
+  analyze:
+    name: Analyze (javascript-typescript)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          # JS/TS needs no compilation for CodeQL — skip the build step so the
+          # scan is fast and does not depend on the monorepo build succeeding.
+          build-mode: none
+          queries: security-and-quality
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript-typescript"
