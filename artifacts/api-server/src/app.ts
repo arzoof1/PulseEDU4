@@ -11,6 +11,7 @@ import { isStaffMfaEnabled } from "./lib/staffMfaSwitch.js";
 import { isMfaRequiredForStaffCached } from "./lib/mfaPolicyCache.js";
 import { mfaEnrollmentGate } from "./lib/mfaEnrollmentGate.js";
 import { apiUsageAlertMiddleware } from "./lib/apiUsageMonitor.js";
+import { resolveActiveSchoolId } from "./lib/tenantScope.js";
 import { logger } from "./lib/logger";
 import {
   isStaffBearerAuthEnabled,
@@ -373,8 +374,8 @@ app.use(async (req, _res, next) => {
         // active before honoring any school context. Soft-deactivated
         // (active=false) schools or districts must not be able to act
         // as the request's tenant; otherwise existing sessions keep
-        // reading/writing under a "retired" tenant. We let the request
-        // through with req.schoolId=null; downstream route guards
+        // reading/writing under a "retired" tenant. When inactive we let the
+        // request through with req.schoolId=null; downstream route guards
         // already 4xx on missing school.
         const [homeSchoolActive] = await db
           .select({
@@ -387,29 +388,31 @@ app.use(async (req, _res, next) => {
             eq(districtsTable.id, schoolsTable.districtId),
           )
           .where(eq(schoolsTable.id, staff.schoolId));
+        const homeSchoolActiveOk = Boolean(
+          homeSchoolActive && homeSchoolActive.schoolActive,
+        );
+        const homeDistrictActiveOk = Boolean(
+          homeSchoolActive && homeSchoolActive.districtActive,
+        );
+
+        // Only look up the override target when a SuperUser actually holds a
+        // differing, persisted override and the home school is active — this
+        // preserves the previous "no extra DB work in the common case" pattern.
+        // D6 defense-in-depth / Phase 5 District Switcher: a cross-district
+        // override is honored only when ALLOW_CROSS_DISTRICT_SUPERUSER=1; a
+        // stale row must never silently leak another tenant's data. Both the
+        // override school AND its district must be active.
+        let overrideExists = false;
+        let overrideSchoolActive = false;
+        let overrideDistrictActive = false;
+        let overrideSameDistrict = false;
         if (
-          !homeSchoolActive ||
-          !homeSchoolActive.schoolActive ||
-          !homeSchoolActive.districtActive
+          homeSchoolActiveOk &&
+          homeDistrictActiveOk &&
+          staff.isSuperUser &&
+          override &&
+          override !== staff.schoolId
         ) {
-          req.schoolId = null;
-          next();
-          return;
-        }
-        if (staff.isSuperUser && override && override !== staff.schoolId) {
-          // D6 defense-in-depth: validate the override still points at an
-          // active school. Phase 5 District Switcher: when
-          // ALLOW_CROSS_DISTRICT_SUPERUSER=1 a cross-district override is
-          // permitted (the operator has opted into the cross-district
-          // control tier). Without the flag we still hard-refuse cross-
-          // district overrides — even a stale row in activeSchoolOverride
-          // from before the gate landed must not silently leak data.
-          const crossDistrict =
-            process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
-          // Architect-flagged (Phase 5): previously this only validated
-          // the override school was active, not its district. Mirror the
-          // home-school check above and require districts.active=true on
-          // the override target before honoring it.
           const [overrideSchool] = await db
             .select({
               districtId: schoolsTable.districtId,
@@ -426,27 +429,38 @@ app.use(async (req, _res, next) => {
             .select({ districtId: schoolsTable.districtId })
             .from(schoolsTable)
             .where(eq(schoolsTable.id, staff.schoolId));
-          const sameDistrict =
+          overrideExists = Boolean(overrideSchool);
+          overrideSchoolActive = Boolean(
+            overrideSchool && overrideSchool.schoolActive,
+          );
+          overrideDistrictActive = Boolean(
+            overrideSchool && overrideSchool.districtActive,
+          );
+          overrideSameDistrict = Boolean(
             overrideSchool &&
-            homeSchool &&
-            overrideSchool.districtId === homeSchool.districtId;
-          if (
-            overrideSchool &&
-            overrideSchool.schoolActive &&
-            overrideSchool.districtActive &&
-            (sameDistrict || crossDistrict)
-          ) {
-            req.schoolId = override;
-            req.isSchoolSwitched = true;
-          } else {
-            // Stale, cross-district (when gate off), or inactive override
-            // — fall back to home school. (Home school is already known
-            // active here.)
-            req.schoolId = staff.schoolId;
-          }
-        } else {
-          req.schoolId = staff.schoolId;
+              homeSchool &&
+              overrideSchool.districtId === homeSchool.districtId,
+          );
         }
+
+        // Pure, unit-tested tenant decision (Section 5.2, tenantScope.ts). Keeps
+        // the single most security-critical branch — which tenant a request acts
+        // under — in one testable place.
+        const resolution = resolveActiveSchoolId({
+          isSuperUser: Boolean(staff.isSuperUser),
+          homeSchoolId: staff.schoolId,
+          homeSchoolActive: homeSchoolActiveOk,
+          homeDistrictActive: homeDistrictActiveOk,
+          override,
+          overrideExists,
+          overrideSchoolActive,
+          overrideDistrictActive,
+          overrideSameDistrict,
+          allowCrossDistrict:
+            process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1",
+        });
+        req.schoolId = resolution.schoolId;
+        req.isSchoolSwitched = resolution.isSchoolSwitched;
       }
     } catch (err) {
       logger.warn({ err }, "schoolId middleware lookup failed");
