@@ -19,7 +19,10 @@ import {
   staffIdFromBearerToken,
   bumpStaffAuthTokenVersion,
 } from "../lib/staffBearerAuth.js";
-import { writeAuthAudit } from "../lib/authAudit.js";
+import {
+  writeAuthAudit,
+  ensureAuthAuditChainColumns,
+} from "../lib/authAudit.js";
 import { verifyChain } from "../lib/authAuditChain.js";
 import { bcryptHash } from "../lib/bcrypt.js";
 import {
@@ -481,40 +484,57 @@ router.get(
       return;
     }
 
-    const rows = await db
-      .select({
-        id: authAuditLogTable.id,
-        schoolId: authAuditLogTable.schoolId,
-        action: authAuditLogTable.action,
-        actorStaffId: authAuditLogTable.actorStaffId,
-        actorName: authAuditLogTable.actorName,
-        targetStaffId: authAuditLogTable.targetStaffId,
-        ip: authAuditLogTable.ip,
-        payload: authAuditLogTable.payload,
-        createdAt: authAuditLogTable.createdAt,
-        prevHash: authAuditLogTable.prevHash,
-        entryHash: authAuditLogTable.entryHash,
-      })
-      .from(authAuditLogTable)
-      .orderBy(asc(authAuditLogTable.id));
+    try {
+      // Self-heal on a DB that predates 3.8 (prod runs without boot
+      // migrations) so the query below never references a missing column.
+      await ensureAuthAuditChainColumns();
 
-    const result = verifyChain(
-      rows.map((r) => ({
-        id: r.id,
-        schoolId: r.schoolId,
-        action: r.action,
-        actorStaffId: r.actorStaffId,
-        actorName: r.actorName,
-        targetStaffId: r.targetStaffId,
-        ip: r.ip,
-        payload: r.payload,
-        createdAtISO: r.createdAt.toISOString(),
-        prevHash: r.prevHash,
-        entryHash: r.entryHash,
-      })),
-    );
+      const rows = await db
+        .select({
+          id: authAuditLogTable.id,
+          schoolId: authAuditLogTable.schoolId,
+          action: authAuditLogTable.action,
+          actorStaffId: authAuditLogTable.actorStaffId,
+          actorName: authAuditLogTable.actorName,
+          targetStaffId: authAuditLogTable.targetStaffId,
+          ip: authAuditLogTable.ip,
+          payload: authAuditLogTable.payload,
+          createdAt: authAuditLogTable.createdAt,
+          prevHash: authAuditLogTable.prevHash,
+          entryHash: authAuditLogTable.entryHash,
+        })
+        .from(authAuditLogTable)
+        .orderBy(asc(authAuditLogTable.id));
 
-    res.json({ ...result, totalRows: rows.length });
+      const result = verifyChain(
+        rows.map((r) => ({
+          id: r.id,
+          schoolId: r.schoolId,
+          action: r.action,
+          actorStaffId: r.actorStaffId,
+          actorName: r.actorName,
+          targetStaffId: r.targetStaffId,
+          ip: r.ip,
+          payload: r.payload,
+          createdAtISO: r.createdAt.toISOString(),
+          prevHash: r.prevHash,
+          entryHash: r.entryHash,
+        })),
+      );
+
+      res.json({ ...result, totalRows: rows.length });
+    } catch (err) {
+      // Chain not yet provisioned (e.g. no DDL privilege to add columns).
+      // Degrade cleanly rather than 500 — the first successful audit write
+      // provisions the columns and this endpoint then verifies normally.
+      res.status(503).json({
+        ok: null,
+        pending: true,
+        error: "audit_chain_unavailable",
+        detail:
+          "Audit chain columns are being provisioned; retry after the next audited action.",
+      });
+    }
   },
 );
 
