@@ -1405,6 +1405,14 @@ export async function ensureMfaSchema(): Promise<void> {
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS auth_audit_log_actor_idx ON auth_audit_log (actor_staff_id)`,
   );
+  // Tamper-evidence hash chain (Section 3.8). Idempotent top-up so existing
+  // deployments gain the columns; legacy rows keep NULL hashes and remain valid.
+  await db.execute(
+    sql`ALTER TABLE auth_audit_log ADD COLUMN IF NOT EXISTS prev_hash TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE auth_audit_log ADD COLUMN IF NOT EXISTS entry_hash TEXT`,
+  );
 }
 
 export async function ensureMtssPlansSchema() {

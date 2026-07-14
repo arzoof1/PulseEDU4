@@ -32,6 +32,11 @@ export const authAuditLogTable = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    // Tamper-evidence hash chain (Section 3.8). prevHash links to the prior
+    // row's entryHash; entryHash commits to this row's canonical content.
+    // Nullable so rows written before 3.8 shipped remain valid (legacy).
+    prevHash: text("prev_hash"),
+    entryHash: text("entry_hash"),
   },
   (t) => ({
     createdIdx: index("auth_audit_log_created_idx").on(t.createdAt),

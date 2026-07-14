@@ -60,3 +60,6 @@ Thumbs.db
 # vulnerabilities and architecture and must not ship in the codebase.
 deliverables/
 
+
+# Playwright MCP screenshot/snapshot cache (local testing)
+.playwright-mcp/

@@ -20,6 +20,7 @@ import {
   bumpStaffAuthTokenVersion,
 } from "../lib/staffBearerAuth.js";
 import { writeAuthAudit } from "../lib/authAudit.js";
+import { verifyChain } from "../lib/authAuditChain.js";
 import { bcryptHash } from "../lib/bcrypt.js";
 import {
   getDistrictIdForSchool,
@@ -464,6 +465,56 @@ router.get(
         .filter((a): a is string => !!a)
         .sort(),
     });
+  },
+);
+
+// Verify the tamper-evidence hash chain over the entire auth audit log
+// (Section 3.8). Returns aggregate integrity only — no row content — so it is
+// safe for any privileged admin to run without exposing cross-school events.
+// Step-up reauth gated like the other sensitive audit/export actions.
+router.get(
+  "/admin/audit-log/verify",
+  requirePrivileged(),
+  async (req: Request, res: Response) => {
+    if (!hasFreshPrivilegedReauth(req.session)) {
+      res.status(401).json({ error: "reauth_required" });
+      return;
+    }
+
+    const rows = await db
+      .select({
+        id: authAuditLogTable.id,
+        schoolId: authAuditLogTable.schoolId,
+        action: authAuditLogTable.action,
+        actorStaffId: authAuditLogTable.actorStaffId,
+        actorName: authAuditLogTable.actorName,
+        targetStaffId: authAuditLogTable.targetStaffId,
+        ip: authAuditLogTable.ip,
+        payload: authAuditLogTable.payload,
+        createdAt: authAuditLogTable.createdAt,
+        prevHash: authAuditLogTable.prevHash,
+        entryHash: authAuditLogTable.entryHash,
+      })
+      .from(authAuditLogTable)
+      .orderBy(asc(authAuditLogTable.id));
+
+    const result = verifyChain(
+      rows.map((r) => ({
+        id: r.id,
+        schoolId: r.schoolId,
+        action: r.action,
+        actorStaffId: r.actorStaffId,
+        actorName: r.actorName,
+        targetStaffId: r.targetStaffId,
+        ip: r.ip,
+        payload: r.payload,
+        createdAtISO: r.createdAt.toISOString(),
+        prevHash: r.prevHash,
+        entryHash: r.entryHash,
+      })),
+    );
+
+    res.json({ ...result, totalRows: rows.length });
   },
 );
 
