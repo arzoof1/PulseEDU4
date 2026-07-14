@@ -4,6 +4,7 @@ import {
   db,
   parentInvitesTable,
   parentsTable,
+  parentStudentsTable,
   studentsTable,
   schoolSettingsTable,
   schoolsTable,
@@ -15,6 +16,7 @@ import {
   sendParentInviteEmail,
 } from "../lib/parentInviteEmail.js";
 import { logger } from "../lib/logger.js";
+import { writeAuthAudit } from "../lib/authAudit.js";
 import {
   checkParentAccountQuota,
   enforceParentAccountQuota,
@@ -41,6 +43,20 @@ async function requireAdmin(req: any, res: any): Promise<boolean> {
     return false;
   }
   return true;
+}
+
+// Resolve the acting admin's id + display name for the audit trail. Cheap
+// single-row lookup; callers have already passed requireAdmin().
+async function loadActor(
+  req: any,
+): Promise<{ id: number; displayName: string | null }> {
+  const sid = req.staffId ?? null;
+  if (!sid) return { id: 0, displayName: null };
+  const [staff] = await db
+    .select({ id: staffTable.id, displayName: staffTable.displayName })
+    .from(staffTable)
+    .where(eq(staffTable.id, sid));
+  return staff ?? { id: sid, displayName: null };
 }
 
 const INVITE_TTL_DAYS = 14;
@@ -625,7 +641,159 @@ router.post("/admin/parent-invites/:id/revoke", async (req, res) => {
         eq(parentInvitesTable.schoolId, schoolId),
       ),
     );
+  const actor = await loadActor(req);
+  void writeAuthAudit({
+    action: "parent_invite_revoked",
+    schoolId,
+    actorStaffId: actor.id,
+    actorName: actor.displayName,
+    ip: req.ip ?? null,
+    payload: { inviteId },
+  });
   res.json({ ok: true });
+});
+
+// -----------------------------------------------------------------------------
+// Parent access revocation & custody controls (Section 13.2 / 13.4 / 13.7).
+//
+// These give admins the "revoke a guardian's access immediately, and log it"
+// capability the district review requires. Access enforcement itself is
+// unchanged and already correct: every parent-facing read re-checks (a) the
+// parent_students link and (b) parents.active, so deactivating the account or
+// removing a link denies access across the whole portal on the next request.
+// See lib/parentAccess.ts (canParentAccessStudent) + its unit tests.
+// -----------------------------------------------------------------------------
+
+function parentIdParam(req: any, res: any): number | null {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid parent id" });
+    return null;
+  }
+  return id;
+}
+
+// POST /api/admin/parents/:id/revoke — deactivate a parent portal account.
+// Takes effect immediately for the (default) session-cookie portal: the next
+// /me check destroys the session. Legacy bearer tokens expire within 12h.
+router.post("/admin/parents/:id/revoke", async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(400).json({ error: "No active school" });
+    return;
+  }
+  const parentId = parentIdParam(req, res);
+  if (parentId == null) return;
+  const reason =
+    typeof req.body?.reason === "string" ? req.body.reason.slice(0, 500) : null;
+
+  const updated = await db
+    .update(parentsTable)
+    .set({ active: false })
+    .where(
+      and(eq(parentsTable.id, parentId), eq(parentsTable.schoolId, schoolId)),
+    )
+    .returning({ id: parentsTable.id, email: parentsTable.email });
+  if (updated.length === 0) {
+    res.status(404).json({ error: "Parent not found in this school" });
+    return;
+  }
+  const actor = await loadActor(req);
+  void writeAuthAudit({
+    action: "parent_access_revoked",
+    schoolId,
+    actorStaffId: actor.id,
+    actorName: actor.displayName,
+    ip: req.ip ?? null,
+    payload: { parentId, email: updated[0].email, reason },
+  });
+  res.json({ ok: true, parentId, active: false });
+});
+
+// POST /api/admin/parents/:id/restore — re-activate a previously revoked account.
+router.post("/admin/parents/:id/restore", async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(400).json({ error: "No active school" });
+    return;
+  }
+  const parentId = parentIdParam(req, res);
+  if (parentId == null) return;
+
+  const updated = await db
+    .update(parentsTable)
+    .set({ active: true })
+    .where(
+      and(eq(parentsTable.id, parentId), eq(parentsTable.schoolId, schoolId)),
+    )
+    .returning({ id: parentsTable.id, email: parentsTable.email });
+  if (updated.length === 0) {
+    res.status(404).json({ error: "Parent not found in this school" });
+    return;
+  }
+  const actor = await loadActor(req);
+  void writeAuthAudit({
+    action: "parent_access_restored",
+    schoolId,
+    actorStaffId: actor.id,
+    actorName: actor.displayName,
+    ip: req.ip ?? null,
+    payload: { parentId, email: updated[0].email },
+  });
+  res.json({ ok: true, parentId, active: true });
+});
+
+// DELETE /api/admin/parents/:id/students/:studentId — remove a guardian's link
+// to one student (custody restriction, 13.2). The parent keeps their account and
+// any other students, but loses all access to this student on the next request.
+router.delete("/admin/parents/:id/students/:studentId", async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(400).json({ error: "No active school" });
+    return;
+  }
+  const parentId = parentIdParam(req, res);
+  if (parentId == null) return;
+  const studentId = Number(req.params.studentId);
+  if (!Number.isInteger(studentId) || studentId <= 0) {
+    res.status(400).json({ error: "Invalid student id" });
+    return;
+  }
+
+  // Confirm the parent belongs to the acting admin's school before mutating.
+  const [parent] = await db
+    .select({ id: parentsTable.id })
+    .from(parentsTable)
+    .where(
+      and(eq(parentsTable.id, parentId), eq(parentsTable.schoolId, schoolId)),
+    );
+  if (!parent) {
+    res.status(404).json({ error: "Parent not found in this school" });
+    return;
+  }
+
+  const removed = await db
+    .delete(parentStudentsTable)
+    .where(
+      and(
+        eq(parentStudentsTable.parentId, parentId),
+        eq(parentStudentsTable.studentId, studentId),
+      ),
+    )
+    .returning({ id: parentStudentsTable.id });
+  const actor = await loadActor(req);
+  void writeAuthAudit({
+    action: "parent_student_unlinked",
+    schoolId,
+    actorStaffId: actor.id,
+    actorName: actor.displayName,
+    ip: req.ip ?? null,
+    payload: { parentId, studentId, removed: removed.length },
+  });
+  res.json({ ok: true, parentId, studentId, removed: removed.length });
 });
 
 export default router;
