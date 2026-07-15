@@ -8,6 +8,7 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { encryptedText } from "./_encrypted";
 
 // Watchlist interactions — every logged "thing that happened between students"
 // that the Core Team wants to keep eyes on. Distinct from disciplinary
@@ -37,9 +38,9 @@ export const interactionsTable = pgTable(
     severity: integer("severity").notNull().default(1),
     location: text("location").notNull().default(""),
     // Short headline (≤ 280 chars). Required.
-    summary: text("summary").notNull(),
+    summary: encryptedText("summary").notNull(),
     // Optional longer narrative.
-    detail: text("detail").notNull().default(""),
+    detail: encryptedText("detail").notNull().default(""),
     // Optional link to a case. NULL = "loose" interaction.
     caseId: integer("case_id"),
     loggedByStaffId: integer("logged_by_staff_id"),
@@ -92,7 +93,7 @@ export const interactionParticipantsTable = pgTable(
     // 'direct' | 'target' | 'instigator' | 'rumor' | 'witness' |
     // 'peripheral' | 'deescalator'
     role: text("role").notNull(),
-    notes: text("notes").notNull().default(""),
+    notes: encryptedText("notes").notNull().default(""),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

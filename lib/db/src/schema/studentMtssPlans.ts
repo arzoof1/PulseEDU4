@@ -7,6 +7,7 @@ import {
   index,
   boolean,
 } from "drizzle-orm/pg-core";
+import { encryptedText } from "./_encrypted";
 
 // student_mtss_plans — MTSS intervention plans owned by the MTSS
 // coordinator and the wider "core team" (admin, Behavior Specialist,
@@ -32,12 +33,12 @@ export const studentMtssPlansTable = pgTable(
     // pbisEntries patterns). Multi-tenancy: a (studentId, schoolId) pair
     // is what's actually unique, not studentId alone.
     studentId: text("student_id").notNull(),
-    title: text("title").notNull(),
-    goals: text("goals").notNull().default(""),
+    title: encryptedText("title").notNull(),
+    goals: encryptedText("goals").notNull().default(""),
     tier: integer("tier").notNull().default(2),
     pointRangeMin: integer("point_range_min"),
     pointRangeMax: integer("point_range_max"),
-    notes: text("notes").notNull().default(""),
+    notes: encryptedText("notes").notNull().default(""),
     // Tier 2 sub-type for the daily form: 'cico' | 'group' | NULL.
     // NULL means the plan hasn't picked a sub-type yet (allowed for
     // Tier 1/3 plans). Teachers see this as locked; Core Team can edit.

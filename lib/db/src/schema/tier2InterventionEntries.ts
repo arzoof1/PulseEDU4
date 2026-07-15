@@ -6,6 +6,7 @@ import {
   timestamp,
   index,
 } from "drizzle-orm/pg-core";
+import { encryptedText } from "./_encrypted";
 
 // Tier 2 daily intervention log. One row per (student, teacher, day) —
 // every teacher on the student's schedule who is responsible for the
@@ -33,7 +34,7 @@ export const tier2InterventionEntriesTable = pgTable(
     // 'cico' | 'group'
     subType: text("sub_type").notNull(),
     trustedAdultInterventionId: integer("trusted_adult_intervention_id"),
-    notes: text("notes").notNull().default(""),
+    notes: encryptedText("notes").notNull().default(""),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
