@@ -57,6 +57,8 @@ declare global {
       impersonatorDisplayName?: string | null;
     }
   }
+
+
 }
 
 declare module "express-session" {
@@ -131,20 +133,20 @@ app.use(
     // strict in production and disabled locally to avoid breaking dev UX.
     contentSecurityPolicy: isProduction
       ? {
-          useDefaults: true,
-          directives: {
-            "default-src": ["'self'"],
-            "base-uri": ["'self'"],
-            "object-src": ["'none'"],
-            "frame-ancestors": frameAncestors(),
-            "form-action": ["'self'"],
-            "img-src": ["'self'", "data:", "blob:", "https:"],
-            "media-src": ["'self'", "data:", "blob:", "https:"],
-            "connect-src": ["'self'", ...csvEnv("CSP_CONNECT_SRC")],
-            "script-src": ["'self'"],
-            "style-src": ["'self'", "'unsafe-inline'"],
-          },
-        }
+        useDefaults: true,
+        directives: {
+          "default-src": ["'self'"],
+          "base-uri": ["'self'"],
+          "object-src": ["'none'"],
+          "frame-ancestors": frameAncestors(),
+          "form-action": ["'self'"],
+          "img-src": ["'self'", "data:", "blob:", "https:"],
+          "media-src": ["'self'", "data:", "blob:", "https:"],
+          "connect-src": ["'self'", ...csvEnv("CSP_CONNECT_SRC")],
+          "script-src": ["'self'"],
+          "style-src": ["'self'", "'unsafe-inline'"],
+        },
+      }
       : false,
     crossOriginEmbedderPolicy: false,
     // frame-ancestors is more precise than X-Frame-Options for this app's
@@ -152,9 +154,9 @@ app.use(
     frameguard: false,
     hsts: isProduction
       ? {
-          maxAge: 15552000,
-          includeSubDomains: true,
-        }
+        maxAge: 15552000,
+        includeSubDomains: true,
+      }
       : false,
     referrerPolicy: { policy: "strict-origin-when-cross-origin" },
   }),
@@ -438,8 +440,8 @@ app.use(async (req, _res, next) => {
           );
           overrideSameDistrict = Boolean(
             overrideSchool &&
-              homeSchool &&
-              overrideSchool.districtId === homeSchool.districtId,
+            homeSchool &&
+            overrideSchool.districtId === homeSchool.districtId,
           );
         }
 
