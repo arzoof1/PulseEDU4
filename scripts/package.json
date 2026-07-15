@@ -22,7 +22,7 @@
   "devDependencies": {
     "@types/node": "catalog:",
     "docx": "^9.7.1",
-    "puppeteer": "^25.0.2",
+    "puppeteer": "^25.3.0",
     "tsx": "catalog:"
   },
   "dependencies": {
