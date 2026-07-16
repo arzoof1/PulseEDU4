@@ -43,7 +43,10 @@ function ensureLoginThrottleTable(): Promise<void> {
   return tableReady;
 }
 
-function clientIp(req: Request): string {
+// Proxy-aware client IP. Relies on `app.set("trust proxy", 1)` so
+// req.ip reflects the trusted proxy's view of the client rather than a
+// raw, attacker-spoofable X-Forwarded-For header.
+export function clientIp(req: Request): string {
   const ip = req.ip?.trim();
   return ip && ip.length > 0 ? ip : "unknown";
 }
@@ -80,6 +83,9 @@ function retryAfterSeconds(lockedUntil: Date): number {
 
 async function checkKey(
   key: string,
+  max: number = maxForKey(key),
+  windowMs: number = WINDOW_MS,
+  lockoutMs: number = LOCKOUT_MS,
 ): Promise<LoginThrottleBlocked | null> {
   const row = await loadRow(key);
   if (!row) return null;
@@ -90,9 +96,8 @@ async function checkKey(
   }
 
   const windowAge = now - row.windowStart.getTime();
-  const max = maxForKey(key);
-  if (windowAge <= WINDOW_MS && row.failCount >= max) {
-    const lockedUntil = new Date(now + LOCKOUT_MS);
+  if (windowAge <= windowMs && row.failCount >= max) {
+    const lockedUntil = new Date(now + lockoutMs);
     await db
       .update(loginThrottleTable)
       .set({ lockedUntil })
@@ -132,10 +137,14 @@ export function sendLoginRateLimited(
 }
 
 // Returns the new failure count for this key within the current window.
-async function bumpFailureKey(key: string): Promise<number> {
+async function bumpFailureKey(
+  key: string,
+  max: number = maxForKey(key),
+  windowMs: number = WINDOW_MS,
+  lockoutMs: number = LOCKOUT_MS,
+): Promise<number> {
   await ensureLoginThrottleTable();
   const now = new Date();
-  const max = maxForKey(key);
   let resultCount = 1;
 
   await db.transaction(async (tx) => {
@@ -157,7 +166,7 @@ async function bumpFailureKey(key: string): Promise<number> {
 
     let failCount = row.failCount;
     let windowStart = row.windowStart;
-    if (now.getTime() - windowStart.getTime() > WINDOW_MS) {
+    if (now.getTime() - windowStart.getTime() > windowMs) {
       failCount = 1;
       windowStart = now;
     } else {
@@ -166,7 +175,7 @@ async function bumpFailureKey(key: string): Promise<number> {
 
     let lockedUntil = row.lockedUntil;
     if (failCount >= max) {
-      lockedUntil = new Date(now.getTime() + LOCKOUT_MS);
+      lockedUntil = new Date(now.getTime() + lockoutMs);
     }
 
     await tx
@@ -197,6 +206,69 @@ export async function recordLoginFailure(
   } catch (err) {
     logger.warn({ err, scope }, "login throttle failure record failed");
     return { ipCount: 0, emailCount: 0 };
+  }
+}
+
+// ---------------------------------------------------------------------
+// Generic, DB-backed throttle primitives.
+//
+// These reuse the same `login_throttle` table (an arbitrary text PK) so
+// callers outside the login flow — e.g. the unauthenticated kiosk PIN
+// endpoint — can persist a failure counter that survives restarts and
+// is shared across processes. Use a distinct key prefix per caller
+// (e.g. "kioskpin:<schoolId>:<staffId>") to avoid collisions with the
+// login IP/email keys.
+
+export type ThrottleParams = {
+  /** Fail count within the window at/after which the key is locked. */
+  max: number;
+  /** Sliding window (ms) over which failures accumulate. */
+  windowMs?: number;
+  /** Lockout duration (ms) applied once `max` is reached. */
+  lockoutMs?: number;
+};
+
+/** Returns block info if `key` is currently rate-limited / locked out. */
+export async function checkThrottleKey(
+  key: string,
+  params: ThrottleParams,
+): Promise<LoginThrottleBlocked | null> {
+  return checkKey(
+    key,
+    params.max,
+    params.windowMs ?? WINDOW_MS,
+    params.lockoutMs ?? LOCKOUT_MS,
+  );
+}
+
+/** Records a failure against `key`, returning the resulting count. */
+export async function recordThrottleKeyFailure(
+  key: string,
+  params: ThrottleParams,
+): Promise<number> {
+  try {
+    return await bumpFailureKey(
+      key,
+      params.max,
+      params.windowMs ?? WINDOW_MS,
+      params.lockoutMs ?? LOCKOUT_MS,
+    );
+  } catch (err) {
+    logger.warn({ err, key }, "throttle failure record failed");
+    return 0;
+  }
+}
+
+/** Clears the counter/lockout for `key` (e.g. after a successful use). */
+export async function clearThrottleKey(key: string): Promise<void> {
+  await ensureLoginThrottleTable();
+  try {
+    await db
+      .update(loginThrottleTable)
+      .set({ failCount: 0, lockedUntil: null, windowStart: new Date() })
+      .where(eq(loginThrottleTable.throttleKey, key));
+  } catch (err) {
+    logger.warn({ err, key }, "throttle clear failed");
   }
 }
 

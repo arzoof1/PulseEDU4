@@ -66,3 +66,6 @@ deliverables/
 
 # District security documentation package (confidential — same rationale as deliverables/)
 tracker docs/
+
+# Throwaway local pentest env (isolated DB)
+.env.pentest

@@ -23,23 +23,14 @@ import {
   sectionRosterTable,
   academicWorkSamplesTable,
 } from "@workspace/db";
-import { verifyParentAuthToken } from "../lib/authToken.js";
+import { requireActiveParent } from "../lib/parentAuthMiddleware.js";
 import { streamObjectToResponse } from "./storage.js";
 import { academicEvidenceEnabled } from "../lib/academicEvidenceGate.js";
 
 const router: IRouter = Router();
 
-router.use(async (req, _res, next) => {
-  let pid: number | null = req.session.parentId ?? null;
-  if (!pid) {
-    const auth = req.headers.authorization;
-    if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      pid = verifyParentAuthToken(auth.slice(7).trim());
-    }
-  }
-  req.parentId = pid;
-  next();
-});
+// Resolve req.parentId AND enforce parents.active=true on every request (F02).
+router.use(requireActiveParent);
 
 interface OwnedStudent {
   fleid: string;

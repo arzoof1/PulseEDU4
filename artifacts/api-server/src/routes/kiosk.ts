@@ -52,6 +52,10 @@ import {
   recordLoginFailure,
   recordLoginSuccess,
   sendLoginRateLimited,
+  clientIp,
+  checkThrottleKey,
+  recordThrottleKeyFailure,
+  clearThrottleKey,
 } from "../lib/loginThrottle.js";
 import { autoEndStalePasses } from "../lib/hallPassLifecycle.js";
 import { loadSchoolWideDefaults } from "../lib/restroomAreas.js";
@@ -2777,63 +2781,79 @@ router.post("/kiosk/activate-by-pin", async (req, res) => {
     return;
   }
 
-  // Abuse control: PIN endpoint is unauthenticated and a bcrypt
-  // miss is expensive. Throttle per source IP. (See PIN_THROTTLE_*.)
-  const clientIp =
-    (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ??
-    req.ip ??
-    "unknown";
-  if (isPinThrottled(clientIp)) {
-    res
-      .status(429)
-      .json({
-        error:
-          "Too many PIN attempts from this device. Wait a minute and try again, or use the QR code on your card.",
-      });
+  // PIN is per-school; require an explicit schoolId so the bcrypt scan
+  // is scoped to a single tenant. Omitting it used to fan out a bcrypt
+  // scan across EVERY school (letting an attacker brute all schools at
+  // once), so we now reject the request outright.
+  if (typeof bodySchoolId !== "number" || !Number.isInteger(bodySchoolId)) {
+    res.status(400).json({ error: "schoolId is required" });
+    return;
+  }
+  const schoolId = bodySchoolId;
+
+  // Abuse control: the PIN endpoint is unauthenticated and a bcrypt
+  // miss is expensive.
+  //
+  // 1) Per-source-IP throttle. Uses the proxy-aware req.ip (via
+  //    `trust proxy`), NOT the raw X-Forwarded-For header, so an
+  //    attacker cannot mint a fresh bucket by spoofing the header.
+  // 2) Per-target lockout, keyed on the school PIN-namespace and
+  //    INDEPENDENT of source IP, so rotating IPs cannot lift the
+  //    ceiling on how many PINs can be guessed against a school. Both
+  //    counters are DB-backed (login_throttle table) so they survive
+  //    restarts and are shared across processes.
+  const ip = clientIp(req);
+  const ipKey = `kioskpin-ip:${ip}`;
+  const targetKey = `kioskpin:${schoolId}`;
+
+  const ipBlocked = await checkThrottleKey(ipKey, {
+    max: PIN_THROTTLE_MAX_FAILS,
+    windowMs: PIN_THROTTLE_WINDOW_MS,
+    lockoutMs: PIN_THROTTLE_WINDOW_MS,
+  });
+  if (ipBlocked) {
+    res.setHeader("Retry-After", String(ipBlocked.retryAfterSec));
+    res.status(429).json({
+      error:
+        "Too many PIN attempts from this device. Wait a minute and try again, or use the QR code on your card.",
+    });
     return;
   }
 
-  // PIN is per-school. We REQUIRE an unambiguous match to preserve
-  // tenant isolation: if the caller provided a schoolId we scan only
-  // that school; otherwise we scan all schools and accept only a
-  // single live match. Multiple cross-school matches → 409 with a
-  // hint to use the QR token (which is globally unique).
-  let schoolIds: number[] = [];
-  if (typeof bodySchoolId === "number" && Number.isInteger(bodySchoolId)) {
-    schoolIds = [bodySchoolId];
-  } else {
-    const allSchools = await db
-      .select({ id: schoolsTable.id })
-      .from(schoolsTable);
-    schoolIds = allSchools.map((s) => s.id);
+  const targetBlocked = await checkThrottleKey(targetKey, {
+    max: PIN_TARGET_MAX_FAILS,
+    windowMs: PIN_TARGET_WINDOW_MS,
+    lockoutMs: PIN_TARGET_LOCKOUT_MS,
+  });
+  if (targetBlocked) {
+    res.setHeader("Retry-After", String(targetBlocked.retryAfterSec));
+    res.status(429).json({
+      error:
+        "Too many PIN attempts for this school. Try again later, or use the QR code on your card.",
+    });
+    return;
   }
 
-  const matches: Array<typeof kioskEnrollTokensTable.$inferSelect> = [];
-  for (const sid of schoolIds) {
-    // eslint-disable-next-line no-await-in-loop
-    const m = await findEnrollTokenByPin(sid, pin);
-    if (m) matches.push(m);
-    if (matches.length > 1) break;
-  }
-  if (matches.length === 0) {
-    recordPinFailure(clientIp);
+  const match = await findEnrollTokenByPin(schoolId, pin);
+  if (!match) {
+    // Bump BOTH the per-IP and per-target counters. The per-target
+    // counter is what stops header-rotation brute force.
+    await recordThrottleKeyFailure(ipKey, {
+      max: PIN_THROTTLE_MAX_FAILS,
+      windowMs: PIN_THROTTLE_WINDOW_MS,
+      lockoutMs: PIN_THROTTLE_WINDOW_MS,
+    });
+    await recordThrottleKeyFailure(targetKey, {
+      max: PIN_TARGET_MAX_FAILS,
+      windowMs: PIN_TARGET_WINDOW_MS,
+      lockoutMs: PIN_TARGET_LOCKOUT_MS,
+    });
     res.status(401).json({
       error:
         "PIN not recognized — check the digits or ask an admin to reissue.",
     });
     return;
   }
-  if (matches.length > 1) {
-    // Ambiguous across schools — refuse rather than guess. Caller
-    // should re-attempt with explicit schoolId, or scan the QR.
-    res.status(409).json({
-      error:
-        "That PIN is in use at more than one school. Scan the QR code on your card instead, or contact your admin.",
-      ambiguous: true,
-    });
-    return;
-  }
-  const match = matches[0];
   const [teacher] = await db
     .select()
     .from(staffTable)
@@ -2842,6 +2862,10 @@ router.post("/kiosk/activate-by-pin", async (req, res) => {
     res.status(401).json({ error: "Teacher account is inactive — ask an admin to reissue." });
     return;
   }
+
+  // Successful PIN match: clear the per-target lockout counter so a
+  // legitimate activation doesn't leave the school throttled.
+  await clearThrottleKey(targetKey);
   const { deviceLabel, deviceFingerprint } = cleanDeviceFields(req);
   await activateForTeacher({
     teacher,
@@ -3278,31 +3302,26 @@ async function issueEnrollToken(args: {
   return { rawToken, rawPin, tokenId };
 }
 
-// Simple in-memory PIN attempt throttle. Per-IP bucket of recent
-// failures; once a bucket exceeds the cap inside the window we refuse
-// further attempts from that IP. Resets on process restart — fine for
-// Phase 1 (the API server runs as a single process). If we ever
-// scale horizontally this should move to Redis.
+// PIN attempt throttle tuning. Counters are DB-backed via the shared
+// login_throttle table (see lib/loginThrottle.ts) so they survive
+// process restarts and are shared across multiple API processes.
+//
+// Two independent dimensions:
+//   * per source IP  — modest burst cap (uses proxy-aware req.ip).
+//   * per target     — a HARD ceiling on failed guesses against a
+//                      single school's PIN namespace, independent of
+//                      source IP, so header/IP rotation cannot lift it.
 const PIN_THROTTLE_WINDOW_MS = 60 * 1000;
 const PIN_THROTTLE_MAX_FAILS = 8;
-const pinFailures = new Map<string, number[]>();
-function recordPinFailure(ip: string): boolean {
-  const now = Date.now();
-  const arr = (pinFailures.get(ip) ?? []).filter(
-    (t) => now - t < PIN_THROTTLE_WINDOW_MS,
-  );
-  arr.push(now);
-  pinFailures.set(ip, arr);
-  return arr.length >= PIN_THROTTLE_MAX_FAILS;
-}
-function isPinThrottled(ip: string): boolean {
-  const now = Date.now();
-  const arr = (pinFailures.get(ip) ?? []).filter(
-    (t) => now - t < PIN_THROTTLE_WINDOW_MS,
-  );
-  pinFailures.set(ip, arr);
-  return arr.length >= PIN_THROTTLE_MAX_FAILS;
-}
+const PIN_TARGET_WINDOW_MS = Number(
+  process.env.KIOSK_PIN_TARGET_WINDOW_MS ?? 15 * 60 * 1000,
+);
+const PIN_TARGET_MAX_FAILS = Number(
+  process.env.KIOSK_PIN_TARGET_MAX_FAILS ?? 20,
+);
+const PIN_TARGET_LOCKOUT_MS = Number(
+  process.env.KIOSK_PIN_TARGET_LOCKOUT_MS ?? 15 * 60 * 1000,
+);
 
 // ---- Admin: printable card PDF -------------------------------------
 // Two modes, controlled by request body:

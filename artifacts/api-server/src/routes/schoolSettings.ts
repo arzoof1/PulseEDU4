@@ -111,9 +111,64 @@ router.get("/school-settings", async (req, res) => {
   res.json(withEffective(row));
 });
 
+// Fields a non-admin may change here — each ALSO carries its own per-field
+// role check below (e.g. a PBIS coordinator adjusting intervention windows).
+// Every other setting is admin-only. Without this base gate, any authenticated
+// staff member (incl. a plain teacher) could persist the ungated fields
+// (schoolName, hall-pass limits, kiosk welcome text, security toggles, ...).
+const NON_ADMIN_SETTINGS_FIELDS = new Set<string>([
+  "interventionEffectivenessDays",
+  "pbisNegativeAffectsTotal",
+  "schoolStoreInventoryMode",
+  "issDailyCapacity",
+  "issCapacityBehavior",
+]);
+
 router.put("/school-settings", async (req, res): Promise<void> => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
+  // Base authorization: school settings is an admin surface. Non-admins are
+  // permitted only when every submitted field is in the coordinator allowlist
+  // (the per-field checks below then enforce the exact role). This closes the
+  // broken-access-control gap where ungated fields were writable by any staff.
+  {
+    const actorId = req.staffId;
+    let actor:
+      | {
+          isAdmin: boolean | null;
+          isDistrictAdmin: boolean | null;
+          isSuperUser: boolean | null;
+          active: boolean | null;
+        }
+      | undefined;
+    if (actorId) {
+      [actor] = await db
+        .select({
+          isAdmin: staffTable.isAdmin,
+          isDistrictAdmin: staffTable.isDistrictAdmin,
+          isSuperUser: staffTable.isSuperUser,
+          active: staffTable.active,
+        })
+        .from(staffTable)
+        .where(eq(staffTable.id, actorId));
+    }
+    const isSettingsAdmin = Boolean(
+      actor &&
+        actor.active &&
+        (actor.isAdmin || actor.isDistrictAdmin || actor.isSuperUser),
+    );
+    if (!isSettingsAdmin) {
+      const disallowed = Object.keys(req.body ?? {}).filter(
+        (k) => !NON_ADMIN_SETTINGS_FIELDS.has(k),
+      );
+      if (disallowed.length > 0) {
+        res
+          .status(403)
+          .json({ error: "Only a school admin may change school settings." });
+        return;
+      }
+    }
+  }
   const current = await getOrCreate(schoolId);
   const {
     schoolName,

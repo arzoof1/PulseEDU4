@@ -674,8 +674,13 @@ function parentIdParam(req: any, res: any): number | null {
 }
 
 // POST /api/admin/parents/:id/revoke — deactivate a parent portal account.
-// Takes effect immediately for the (default) session-cookie portal: the next
-// /me check destroys the session. Legacy bearer tokens expire within 12h.
+// Takes effect immediately: (1) parents.active=false, which the shared
+// requireActiveParent middleware now re-checks on EVERY parent data route
+// (F02), so both cookie- and bearer-authenticated read traffic fails closed
+// on the next request; AND (2) we proactively delete the guardian's live
+// server-side session rows so a still-valid cookie can't be replayed even
+// once. Legacy 12h bearer tokens have no server-side row to delete and no
+// version column to bump, but the active=false gate blocks them too.
 router.post("/admin/parents/:id/revoke", async (req, res) => {
   if (!(await requireAdmin(req, res))) return;
   const schoolId = req.schoolId;
@@ -699,6 +704,24 @@ router.post("/admin/parents/:id/revoke", async (req, res) => {
     res.status(404).json({ error: "Parent not found in this school" });
     return;
   }
+
+  // Kill any live sessions for this parent so a valid cookie stops working
+  // immediately, not just on the next active=false re-check. connect-pg-simple
+  // owns the `user_sessions` table (sid / sess json / expire); the parent id
+  // lives at sess->>'parentId'. This is a best-effort purge — failure is
+  // logged but does not block the revocation, because the active=false gate
+  // above already denies access on every subsequent request.
+  try {
+    await db.execute(
+      sql`delete from "user_sessions" where (sess->>'parentId')::int = ${parentId}`,
+    );
+  } catch (err) {
+    logger.warn(
+      { err, parentId },
+      "failed to purge parent sessions on revoke (active=false gate still applies)",
+    );
+  }
+
   const actor = await loadActor(req);
   void writeAuthAudit({
     action: "parent_access_revoked",
