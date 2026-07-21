@@ -11,6 +11,8 @@ export const modules: ModuleMap = {
   "./components/mockups/hub-viz/StandardSpine.tsx": () => import("../components/mockups/hub-viz/StandardSpine.tsx"),
   "./components/mockups/hub-viz/TeacherHeat.tsx": () => import("../components/mockups/hub-viz/TeacherHeat.tsx"),
   "./components/mockups/hub-viz/TopMovers.tsx": () => import("../components/mockups/hub-viz/TopMovers.tsx"),
+  "./components/mockups/watchlist-hub/Hub.tsx": () => import("../components/mockups/watchlist-hub/Hub.tsx"),
+  "./components/mockups/watchlist-hub/Network.tsx": () => import("../components/mockups/watchlist-hub/Network.tsx"),
   "./components/mockups/pulse-screens/DotMigration.tsx": () => import("../components/mockups/pulse-screens/DotMigration.tsx"),
   "./components/mockups/pulse-screens/HousesPbis.tsx": () => import("../components/mockups/pulse-screens/HousesPbis.tsx"),
   "./components/mockups/pulse-screens/MyWatchList.tsx": () => import("../components/mockups/pulse-screens/MyWatchList.tsx"),
@@ -20,7 +22,5 @@ export const modules: ModuleMap = {
   "./components/mockups/pulse-screens/StudentTimeline.tsx": () => import("../components/mockups/pulse-screens/StudentTimeline.tsx"),
   "./components/mockups/pulse-screens/TransitionMatrix.tsx": () => import("../components/mockups/pulse-screens/TransitionMatrix.tsx"),
   "./components/mockups/pulse-screens/TwoTowerFlow.tsx": () => import("../components/mockups/pulse-screens/TwoTowerFlow.tsx"),
-  "./components/mockups/pulse-screens/WatchListRedesign.tsx": () => import("../components/mockups/pulse-screens/WatchListRedesign.tsx"),
-  "./components/mockups/watchlist-hub/Hub.tsx": () => import("../components/mockups/watchlist-hub/Hub.tsx"),
-  "./components/mockups/watchlist-hub/Network.tsx": () => import("../components/mockups/watchlist-hub/Network.tsx")
+  "./components/mockups/pulse-screens/WatchListRedesign.tsx": () => import("../components/mockups/pulse-screens/WatchListRedesign.tsx")
 };

@@ -908,7 +908,14 @@ function EnrollConfirmScreen({
     } | null;
   }>;
 }) {
-  const [room, setRoom] = useState(previewRoom ?? "");
+  // Only pre-commit the server's preview room when it's actually one of the
+  // activatable options. Otherwise start empty so the "Yes, activate for X"
+  // button can never offer a room the server will reject (defense in depth —
+  // the API already nulls an invalid preview, but a stale response or another
+  // caller must not be able to resurrect the "not a valid kiosk room" loop).
+  const [room, setRoom] = useState(
+    previewRoom && locations.includes(previewRoom) ? previewRoom : "",
+  );
   const sortedRooms = useMemo(
     () => [...locations].sort((a, b) => a.localeCompare(b)),
     [locations],

@@ -1877,19 +1877,6 @@ async function activateForTeacher(args: {
       .select()
       .from(staffDefaultsTable)
       .where(eq(staffDefaultsTable.staffId, teacher.id));
-    // Resolve the preview room with the SAME fallback chain as
-    // resolveActivation (kiosk default-room picker → admin staff-editor
-    // room). Without the staff.default_room fallback, a teacher whose
-    // room was only set in the staff editor gets previewRoom:null here,
-    // the client can't auto-confirm, and the QR/PIN scan drops to the
-    // manual room-entry screen — even though the password sign-in path
-    // (which calls resolveActivation) already knows the room. This kept
-    // the four sign-in methods from agreeing on the room assignment.
-    const previewRoom =
-      (room && room.trim()) ||
-      defaultRow?.defaultLocationName?.trim() ||
-      teacher.defaultRoom?.trim() ||
-      null;
     // Ship the valid origin rooms too, so when manual entry IS needed
     // (no default configured, or a sub) the QR/PIN confirm screen can
     // render the SAME searchable room picker as the password sign-in
@@ -1906,6 +1893,27 @@ async function activateForTeacher(args: {
           ),
         )
     ).map((l) => l.name);
+    // Resolve the preview room with the SAME fallback chain as
+    // resolveActivation (kiosk default-room picker → admin staff-editor
+    // room), but only PRESENT it as a preset when it is actually an
+    // activatable origin room. A saved default that isn't a valid kiosk
+    // room (a renamed/deactivated location, or a room only ever set in the
+    // staff editor and never added as an origin) must NOT be previewed:
+    // the client would otherwise auto-activate — or pre-fill the "Yes,
+    // activate for X" button — with a room the activation endpoint then
+    // rejects as "not a valid kiosk room", stranding the user in that
+    // error loop. Nulling it here makes the confirm screen fall back to
+    // the searchable picker of valid rooms, mirroring resolveActivation's
+    // own needs_room fallback on the password path (kiosk.ts ~316).
+    const rawPreviewRoom =
+      (room && room.trim()) ||
+      defaultRow?.defaultLocationName?.trim() ||
+      teacher.defaultRoom?.trim() ||
+      null;
+    const previewRoom =
+      rawPreviewRoom && locations.includes(rawPreviewRoom)
+        ? rawPreviewRoom
+        : null;
     res.status(200).json({
       requiresConfirm: true,
       staffId: teacher.id,
