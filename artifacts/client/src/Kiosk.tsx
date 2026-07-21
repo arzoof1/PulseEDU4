@@ -33,6 +33,11 @@ interface AllowedRow {
 
 const TOKEN_KEY = "pulseed.kiosk.token";
 const DEVICE_ID_KEY = "pulseed.kiosk.device_id";
+// Last school chosen on the "6-digit code" tab of this device. The PIN
+// endpoint requires an explicit schoolId (tenant-scoped bcrypt scan), and
+// a fixed classroom kiosk lives in one school — so we remember the pick
+// and pre-select it next time, making PIN activation a single-tap repeat.
+const SCHOOL_ID_KEY = "pulseed.kiosk.school_id";
 
 function getStoredToken(): string | null {
   try {
@@ -98,6 +103,10 @@ type Phase =
       kind: "enrollConfirm";
       method: "enroll" | "pin";
       credential: string; // raw token OR pin
+      // Tenant the PIN was validated against. Carried so the confirm step
+      // re-sends the same schoolId that activate-by-pin requires. Null for
+      // the enroll/QR path (its token is globally unique — no schoolId).
+      schoolId: number | null;
       staffId: number;
       staffName: string;
       previewRoom: string | null;
@@ -304,6 +313,7 @@ export default function Kiosk() {
     credential: string,
     method: "enroll" | "pin" = "enroll",
     room?: string,
+    schoolId?: number | null,
   ): Promise<{ ok: boolean; error?: string }> {
     const path =
       method === "enroll"
@@ -316,6 +326,9 @@ export default function Kiosk() {
     };
     if (method === "enroll") body.enrollToken = credential;
     else body.pin = credential;
+    // PIN activation is tenant-scoped — the server requires schoolId.
+    if (method === "pin" && typeof schoolId === "number")
+      body.schoolId = schoolId;
     if (room) body.room = room;
     try {
       const res = await fetch(path, {
@@ -345,6 +358,8 @@ export default function Kiosk() {
           };
           if (method === "enroll") confirmBody.enrollToken = credential;
           else confirmBody.pin = credential;
+          if (method === "pin" && typeof schoolId === "number")
+            confirmBody.schoolId = schoolId;
           const confirmRes = await fetch(path, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -366,6 +381,7 @@ export default function Kiosk() {
             kind: "enrollConfirm",
             method,
             credential,
+            schoolId: schoolId ?? null,
             staffId: data.staffId,
             staffName: data.staffName,
             previewRoom: data.previewRoom ?? null,
@@ -387,6 +403,7 @@ export default function Kiosk() {
           kind: "enrollConfirm",
           method,
           credential,
+          schoolId: schoolId ?? null,
           staffId: data.staffId,
           staffName: data.staffName,
           previewRoom: data.previewRoom ?? null,
@@ -471,6 +488,8 @@ export default function Kiosk() {
             if (phase.method === "enroll")
               body.enrollToken = phase.credential;
             else body.pin = phase.credential;
+            if (phase.method === "pin" && typeof phase.schoolId === "number")
+              body.schoolId = phase.schoolId;
             const path =
               phase.method === "enroll"
                 ? "/api/kiosk/activate-by-enrollment"
@@ -598,6 +617,7 @@ function ActivationEntry({
     credential: string,
     method: "enroll" | "pin",
     room?: string,
+    schoolId?: number | null,
   ) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const [tab, setTab] = useState<"camera" | "scan" | "pin" | "password">(
@@ -692,6 +712,7 @@ function CameraScan({
     credential: string,
     method: "enroll" | "pin",
     room?: string,
+    schoolId?: number | null,
   ) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const [open, setOpen] = useState(false);
@@ -823,35 +844,116 @@ function PinEntry({
     credential: string,
     method: "enroll" | "pin",
     room?: string,
+    schoolId?: number | null,
   ) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [schools, setSchools] = useState<Array<{ id: number; name: string }>>(
+    [],
+  );
+  const [schoolsLoading, setSchoolsLoading] = useState(true);
+  const [schoolsError, setSchoolsError] = useState("");
+  // Pre-select the school this device used last time (a classroom kiosk is
+  // fixed to one school), so repeat PIN activations are a single tap.
+  const [selectedSchoolId, setSelectedSchoolId] = useState<number | null>(
+    () => {
+      try {
+        const raw = localStorage.getItem(SCHOOL_ID_KEY);
+        const n = raw ? Number(raw) : NaN;
+        return Number.isInteger(n) ? n : null;
+      } catch {
+        return null;
+      }
+    },
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/kiosk/schools");
+        if (!res.ok) throw new Error(`Failed to load schools (${res.status})`);
+        const data = await res.json();
+        if (cancelled) return;
+        const list: Array<{ id: number; name: string }> = Array.isArray(data)
+          ? data.filter(
+              (s) =>
+                typeof s?.id === "number" && typeof s?.name === "string",
+            )
+          : [];
+        setSchools(list);
+        // Keep a remembered pick only if it's still a real school; otherwise
+        // auto-select when there's exactly one (the common single-tenant case).
+        setSelectedSchoolId((prev) => {
+          if (prev != null && list.some((s) => s.id === prev)) return prev;
+          if (list.length === 1) return list[0].id;
+          return null;
+        });
+      } catch (err) {
+        if (!cancelled)
+          setSchoolsError(
+            err instanceof Error ? err.message : "Could not load schools",
+          );
+      } finally {
+        if (!cancelled) setSchoolsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (selectedSchoolId == null) {
+      setError("Select your school first");
+      return;
+    }
     if (!/^\d{6}$/.test(pin)) {
       setError("PIN must be 6 digits");
       return;
     }
     setBusy(true);
     setError("");
-    const result = await onBeginEnroll(pin, "pin");
-    if (!result.ok) setError(result.error ?? "Activation failed");
+    const result = await onBeginEnroll(pin, "pin", undefined, selectedSchoolId);
+    if (result.ok) {
+      // Remember the school for next time on this device.
+      try {
+        localStorage.setItem(SCHOOL_ID_KEY, String(selectedSchoolId));
+      } catch {
+        // localStorage unavailable (private mode) — not fatal, just no memory.
+      }
+    } else {
+      setError(result.error ?? "Activation failed");
+    }
     setBusy(false);
   }
+
+  const canSubmit = !busy && pin.length === 6 && selectedSchoolId != null;
+
   return (
     <form
       onSubmit={submit}
       style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
     >
+      <Field label="Your school">
+        <SchoolPicker
+          schools={schools}
+          value={selectedSchoolId}
+          onSelect={setSelectedSchoolId}
+          disabled={busy}
+          loading={schoolsLoading}
+        />
+      </Field>
+      {schoolsError && <ErrorBox>{schoolsError}</ErrorBox>}
       <Field label="6-digit code from your activation card">
         <input
           type="text"
           inputMode="numeric"
           pattern="\d{6}"
           maxLength={6}
-          autoFocus
           value={pin}
           onChange={(e) =>
             setPin(e.target.value.replace(/\D/g, "").slice(0, 6))
@@ -869,12 +971,174 @@ function PinEntry({
       {error && <ErrorBox>{error}</ErrorBox>}
       <button
         type="submit"
-        disabled={busy || pin.length !== 6}
-        style={primaryBtn(busy || pin.length !== 6)}
+        disabled={!canSubmit}
+        style={primaryBtn(!canSubmit)}
       >
         {busy ? "Checking…" : "Activate this kiosk"}
       </button>
     </form>
+  );
+}
+
+// Dark-themed searchable school picker for the kiosk PIN tab. Type to filter
+// (scales to 50-100+ schools without scrolling); pick by click, arrow keys, or
+// Enter. Purely a selector — it can only commit a real school id from the list.
+function SchoolPicker({
+  schools,
+  value,
+  onSelect,
+  disabled,
+  loading,
+}: {
+  schools: Array<{ id: number; name: string }>;
+  value: number | null;
+  onSelect: (id: number) => void;
+  disabled?: boolean;
+  loading?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [activeIdx, setActiveIdx] = useState(0);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const selected = schools.find((s) => s.id === value) ?? null;
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? schools.filter((s) => s.name.toLowerCase().includes(q))
+    : schools;
+
+  const displayLabel = loading
+    ? "Loading schools…"
+    : selected
+    ? selected.name
+    : "Select your school";
+
+  function choose(id: number) {
+    onSelect(id);
+    setOpen(false);
+    setQuery("");
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!open && (e.key === "ArrowDown" || e.key === "Enter")) {
+      setOpen(true);
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.min(i + 1, filtered.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const pick = filtered[activeIdx];
+      if (pick) choose(pick.id);
+    } else if (e.key === "Escape") {
+      setOpen(false);
+      setQuery("");
+    }
+  }
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <input
+        type="text"
+        role="combobox"
+        aria-expanded={open}
+        autoComplete="off"
+        disabled={disabled || loading}
+        value={open ? query : displayLabel}
+        placeholder="Type to search schools…"
+        onFocus={() => {
+          setOpen(true);
+          setQuery("");
+          setActiveIdx(0);
+        }}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setOpen(true);
+          setActiveIdx(0);
+        }}
+        onKeyDown={onKeyDown}
+        style={{
+          ...inputStyle,
+          color: selected || open ? "#fff" : "rgba(255,255,255,0.55)",
+          cursor: disabled || loading ? "not-allowed" : "text",
+        }}
+      />
+      {open && !loading && (
+        <ul
+          role="listbox"
+          style={{
+            position: "absolute",
+            zIndex: 60,
+            top: "calc(100% + 4px)",
+            left: 0,
+            right: 0,
+            maxHeight: 240,
+            overflowY: "auto",
+            margin: 0,
+            padding: "0.25rem 0",
+            listStyle: "none",
+            background: "#0f172a",
+            color: "#fff",
+            border: "1px solid rgba(255,255,255,0.2)",
+            borderRadius: 8,
+            boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
+          }}
+        >
+          {filtered.length === 0 && (
+            <li
+              style={{
+                padding: "0.55rem 0.8rem",
+                color: "rgba(255,255,255,0.6)",
+                fontSize: "0.9rem",
+              }}
+            >
+              No matching school
+            </li>
+          )}
+          {filtered.map((s, idx) => {
+            const isSelected = s.id === value;
+            const isActive = idx === activeIdx;
+            return (
+              <li
+                key={s.id}
+                role="option"
+                aria-selected={isSelected}
+                onMouseEnter={() => setActiveIdx(idx)}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  choose(s.id);
+                }}
+                style={{
+                  padding: "0.55rem 0.8rem",
+                  cursor: "pointer",
+                  fontSize: "0.95rem",
+                  background: isActive ? "rgba(59,130,246,0.35)" : "transparent",
+                  fontWeight: isSelected ? 700 : 400,
+                }}
+              >
+                {s.name}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
   );
 }
 

@@ -2781,6 +2781,22 @@ router.post("/kiosk/activate-by-enrollment", async (req, res) => {
   });
 });
 
+// Public, unauthenticated list of active schools, used ONLY to populate
+// the kiosk's "6-digit code" tab school picker. A teacher standing at a
+// fresh device has no session, so the frontend has no other way to learn
+// which tenant's PIN namespace to scope the (schoolId-required) bcrypt
+// scan to. Returns just id + name — school names are public, and this
+// leaks nothing that helps a PIN brute force: the per-school + per-IP
+// throttles on activate-by-pin are the real defense and are untouched.
+router.get("/kiosk/schools", async (_req, res) => {
+  const schools = await db
+    .select({ id: schoolsTable.id, name: schoolsTable.name })
+    .from(schoolsTable)
+    .where(eq(schoolsTable.active, true))
+    .orderBy(asc(schoolsTable.name));
+  res.json(schools);
+});
+
 router.post("/kiosk/activate-by-pin", async (req, res) => {
   const { pin, room, replaceExisting, confirm, schoolId: bodySchoolId } =
     req.body ?? {};
