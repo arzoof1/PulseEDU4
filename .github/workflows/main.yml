@@ -27,6 +27,7 @@ jobs:
             git pull origin main
 
             echo "==> Fetching .env files from AWS Secrets Manager (via instance role)"
+            unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
             
             aws secretsmanager get-secret-value \
                 --secret-id pulseedu/frontend/env \
