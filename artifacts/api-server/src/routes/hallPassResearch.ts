@@ -12,6 +12,7 @@ import {
   studentsTable,
   classSectionsTable,
   sectionRosterTable,
+  tardiesTable,
 } from "@workspace/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -140,10 +141,22 @@ export function quarterWindow(
   }
 }
 
-function parseQuarter(v: unknown): QuarterKey {
-  return v === "Q1" || v === "Q2" || v === "Q3" || v === "Q4"
-    ? v
-    : "all";
+// Multi-select quarters: ?quarters=Q1,Q2 (SEM 1 = Q1+Q2, SEM 2 = Q3+Q4 are
+// client-side shortcuts for the same thing). Empty / invalid / all-four
+// collapses to the whole school year. Legacy ?quarter=Q1 still accepted.
+function parseQuarters(v: unknown, legacy: unknown): QuarterKey[] {
+  const raw = typeof v === "string" && v ? v : String(legacy ?? "");
+  const qs = Array.from(
+    new Set(
+      raw
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s): s is "Q1" | "Q2" | "Q3" | "Q4" =>
+          ["Q1", "Q2", "Q3", "Q4"].includes(s),
+        ),
+    ),
+  );
+  return qs.length === 0 || qs.length === 4 ? [] : qs;
 }
 
 // Bell-schedule period a pass started in, from its checkout instant.
@@ -301,7 +314,7 @@ router.get(
       res.status(400).json({ error: "studentId is required" });
       return;
     }
-    const quarter = parseQuarter(req.query.quarter);
+    const quarters = parseQuarters(req.query.quarters, req.query.quarter);
 
     const visibility = await getVisibleStudentIds(staff, schoolId);
     const [student] = await db
@@ -354,7 +367,14 @@ router.get(
       today,
     );
     const yearWin = quarterWindow(startYear, "all");
-    const qWin = quarterWindow(startYear, quarter);
+    // Selected window(s): whole year when no quarters chosen, otherwise the
+    // union of the chosen quarters (possibly disjoint, e.g. Q1+Q3).
+    const wins =
+      quarters.length === 0
+        ? [yearWin]
+        : quarters.map((q) => quarterWindow(startYear, q));
+    const inSelected = (day: string) =>
+      wins.some((w) => day >= w.from && day <= w.to);
 
     // The acting teacher's own sections that contain this student:
     // (owner = me, non-planning) ⨝ section_roster(student).
@@ -390,18 +410,39 @@ router.get(
         });
     }
 
+    // Tardies for the searched student — recorded directly against a
+    // period at logging time, so no bell-schedule attribution is needed.
+    const tardies = await db
+      .select()
+      .from(tardiesTable)
+      .where(
+        and(
+          eq(tardiesTable.schoolId, schoolId),
+          eq(tardiesTable.studentId, student.studentId),
+        ),
+      );
+
     // Per-period aggregation for the searched student.
     type Agg = {
       todayCount: number;
       historicCount: number;
       myLostMin: number;
       myQuarterCount: number;
+      tardyYearCount: number;
+      myTardyCount: number;
     };
     const agg = new Map<number, Agg>();
     const ensure = (p: number): Agg => {
       let a = agg.get(p);
       if (!a) {
-        a = { todayCount: 0, historicCount: 0, myLostMin: 0, myQuarterCount: 0 };
+        a = {
+          todayCount: 0,
+          historicCount: 0,
+          myLostMin: 0,
+          myQuarterCount: 0,
+          tardyYearCount: 0,
+          myTardyCount: 0,
+        };
         agg.set(p, a);
       }
       return a;
@@ -418,14 +459,43 @@ router.get(
       const a = ensure(period);
       if (day === today) a.todayCount += 1;
       if (inYear && day !== today) a.historicCount += 1;
-      if (
-        myByPeriod.has(period) &&
-        day >= qWin.from &&
-        day <= qWin.to
-      ) {
+      if (myByPeriod.has(period) && inSelected(day)) {
         a.myQuarterCount += 1;
         if (lost != null) a.myLostMin += lost;
       }
+    }
+
+    // Fold tardies into the same per-period cells. Year total for every
+    // cell; the teacher-of-record cells additionally get "tardies to MY
+    // class" scoped to the selected quarter window(s).
+    type TardyOut = {
+      id: number;
+      period: number | null;
+      day: string | null;
+      createdAt: string;
+      reason: string;
+      entryType: string;
+    };
+    const tardyRows: TardyOut[] = [];
+    for (const t of tardies) {
+      const day = tzDay(t.createdAt, tz);
+      const period = /^\d+$/.test(t.period.trim())
+        ? Number(t.period.trim())
+        : null;
+      const inYear = day != null && day >= yearWin.from && day <= yearWin.to;
+      if (inYear)
+        tardyRows.push({
+          id: t.id,
+          period,
+          day,
+          createdAt: t.createdAt,
+          reason: t.reason,
+          entryType: t.entryType,
+        });
+      if (period == null || day == null) continue;
+      const a = ensure(period);
+      if (inYear) a.tardyYearCount += 1;
+      if (myByPeriod.has(period) && inSelected(day)) a.myTardyCount += 1;
     }
 
     // Class average lost minutes for each of my periods (quarter window):
@@ -459,7 +529,7 @@ router.get(
       let total = 0;
       for (const r of rows) {
         const day = tzDay(r.createdAt, tz);
-        if (!day || day < qWin.from || day > qWin.to) continue;
+        if (!day || !inSelected(day)) continue;
         if (periodForIso(windows, r.createdAt, tz) !== period) continue;
         const m = hallPassLostMinutes(r.createdAt, r.endedAt);
         if (m != null) total += m;
@@ -486,14 +556,17 @@ router.get(
           myLostMin: mine ? (a?.myLostMin ?? 0) : null,
           myQuarterPassCount: mine ? (a?.myQuarterCount ?? 0) : null,
           classAvgLostMin: mine ? (classAvgByPeriod.get(p) ?? 0) : null,
+          tardyYearCount: a?.tardyYearCount ?? 0,
+          myTardyCount: mine ? (a?.myTardyCount ?? 0) : null,
         };
       });
 
     res.json({
       student,
-      quarter,
-      quarterWindow: qWin,
+      quarters,
+      windows: wins,
       periods,
+      tardies: tardyRows,
       totals: {
         lostMin: totalLostMin,
         days: daysFromMinutes(totalLostMin, periodLen),
@@ -508,6 +581,9 @@ router.get(
         maxDurationMinutes: p.maxDurationMinutes,
         createdAt: p.createdAt,
         endedAt: p.endedAt,
+        // School-local day, so client-side window filters agree with the
+        // server's quarter attribution (no UTC-midnight drift).
+        day: tzDay(p.createdAt, tz),
         period: periodForIso(windows, p.createdAt, tz),
         lostMin: hallPassLostMinutes(p.createdAt, p.endedAt),
       })),

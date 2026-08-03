@@ -38,6 +38,17 @@ interface PeriodCell {
   myLostMin: number | null;
   myQuarterPassCount: number | null;
   classAvgLostMin: number | null;
+  tardyYearCount: number;
+  myTardyCount: number | null;
+}
+
+interface ResearchTardy {
+  id: number;
+  period: number | null;
+  day: string | null;
+  createdAt: string;
+  reason: string;
+  entryType: string;
 }
 
 interface ResearchPass {
@@ -49,15 +60,20 @@ interface ResearchPass {
   maxDurationMinutes: number;
   createdAt: string;
   endedAt: string | null;
+  day: string | null;
   period: number | null;
   lostMin: number | null;
 }
 
+type QuarterKey = "Q1" | "Q2" | "Q3" | "Q4";
+const ALL_QUARTERS: QuarterKey[] = ["Q1", "Q2", "Q3", "Q4"];
+
 interface Summary {
   student: RosterStudent;
-  quarter: string;
-  quarterWindow: { from: string; to: string };
+  quarters: QuarterKey[];
+  windows: { from: string; to: string }[];
   periods: PeriodCell[];
+  tardies: ResearchTardy[];
   totals: { lostMin: number; days: number | null; periodLen: number | null };
   passes: ResearchPass[];
 }
@@ -135,9 +151,10 @@ export default function TeacherHallPassResearch() {
   const [roster, setRoster] = useState<RosterStudent[]>([]);
   const [rosterTotal, setRosterTotal] = useState<RosterTotal | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [quarter, setQuarter] = useState<"all" | "Q1" | "Q2" | "Q3" | "Q4">(
-    "all",
-  );
+  // Multi-select quarters. Empty = whole school year. SEM 1 / SEM 2 are
+  // shortcuts that toggle Q1+Q2 / Q3+Q4; all four selected snaps back to
+  // Year so the highlight always reads cleanly.
+  const [quarters, setQuarters] = useState<QuarterKey[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -173,8 +190,11 @@ export default function TeacherHallPassResearch() {
     const myReq = ++reqIdRef.current;
     setLoading(true);
     setError("");
+    const qs = quarters.length
+      ? `&quarters=${quarters.join(",")}`
+      : "";
     authFetch(
-      `/api/hall-passes/research/summary?studentId=${encodeURIComponent(selectedId)}&quarter=${quarter}`,
+      `/api/hall-passes/research/summary?studentId=${encodeURIComponent(selectedId)}${qs}`,
     )
       .then(async (r) => {
         if (!r.ok) {
@@ -195,7 +215,26 @@ export default function TeacherHallPassResearch() {
       .finally(() => {
         if (myReq === reqIdRef.current) setLoading(false);
       });
-  }, [selectedId, quarter]);
+  }, [selectedId, quarters]);
+
+  const normalizeQuarters = (next: QuarterKey[]): QuarterKey[] =>
+    next.length === 4 ? [] : ALL_QUARTERS.filter((q) => next.includes(q));
+
+  const toggleQuarter = (q: QuarterKey) =>
+    setQuarters((prev) =>
+      normalizeQuarters(
+        prev.includes(q) ? prev.filter((x) => x !== q) : [...prev, q],
+      ),
+    );
+
+  const toggleSem = (pair: QuarterKey[]) =>
+    setQuarters((prev) => {
+      const has = pair.every((q) => prev.includes(q));
+      const next = has
+        ? prev.filter((q) => !pair.includes(q))
+        : Array.from(new Set([...prev, ...pair]));
+      return normalizeQuarters(next);
+    });
 
   const historyPasses = useMemo(() => {
     if (!summary) return [];
@@ -209,14 +248,21 @@ export default function TeacherHallPassResearch() {
     });
   }, [summary, fromDate, toDate]);
 
+  const inWindows = (day: string | null, wins: { from: string; to: string }[]) =>
+    day != null && wins.some((w) => day >= w.from && day <= w.to);
+
   const expandedPasses = useMemo(() => {
     if (!summary || expandedPeriod == null) return [];
-    const w = summary.quarterWindow;
-    return summary.passes.filter((p) => {
-      if (p.period !== expandedPeriod) return false;
-      const day = p.createdAt.slice(0, 10);
-      return day >= w.from && day <= w.to;
-    });
+    return summary.passes.filter(
+      (p) => p.period === expandedPeriod && inWindows(p.day, summary.windows),
+    );
+  }, [summary, expandedPeriod]);
+
+  const expandedTardies = useMemo(() => {
+    if (!summary || expandedPeriod == null) return [];
+    return summary.tardies.filter(
+      (t) => t.period === expandedPeriod && inWindows(t.day, summary.windows),
+    );
   }, [summary, expandedPeriod]);
 
   const headerLostMin = summary
@@ -232,7 +278,14 @@ export default function TeacherHallPassResearch() {
       : "";
   const periodLen = summary?.totals.periodLen ?? rosterTotal?.periodLen ?? null;
 
-  const quarterLabel = quarter === "all" ? "school year" : quarter;
+  const quarterLabel =
+    quarters.length === 0
+      ? "school year"
+      : quarters.length === 2 && quarters[0] === "Q1" && quarters[1] === "Q2"
+        ? "SEM 1"
+        : quarters.length === 2 && quarters[0] === "Q3" && quarters[1] === "Q4"
+          ? "SEM 2"
+          : quarters.join(" + ");
 
   return (
     <>
@@ -362,7 +415,7 @@ export default function TeacherHallPassResearch() {
               clearSelection();
               setFromDate("");
               setToDate("");
-              setQuarter("all");
+              setQuarters([]);
             }}
             style={{ padding: "0.45rem 0.9rem", fontSize: "0.85rem" }}
           >
@@ -399,9 +452,10 @@ export default function TeacherHallPassResearch() {
             style={{ fontSize: "0.8rem", color: "#64748b", marginBottom: 12 }}
           >
             <Dot color="#16a34a" value={1} title="" size={16} /> today ·{" "}
-            <Dot color="#7c3aed" value={9} title="" size={16} /> this school
-            year · highlighted cells are periods where this student is in YOUR
-            class
+            <Dot color="#7c3aed" value={9} title="" size={16} /> passes ·{" "}
+            <Dot color="#f59e0b" value={2} title="" size={16} /> tardies ·
+            highlighted cells are periods where this student is in YOUR class
+            (their circles follow the Year/Q/SEM selection)
           </div>
           {summary.periods.length === 0 ? (
             <div style={{ color: "#64748b" }}>
@@ -487,6 +541,19 @@ export default function TeacherHallPassResearch() {
                             : `${c.historicCount + c.todayCount} pass(es) this school year in period ${c.period}`
                         }
                       />
+                      <Dot
+                        color="#f59e0b"
+                        value={
+                          mine && c.myTardyCount != null
+                            ? c.myTardyCount
+                            : c.tardyYearCount
+                        }
+                        title={
+                          mine
+                            ? `${c.myTardyCount} tardy(ies) to your class this ${quarterLabel}`
+                            : `${c.tardyYearCount} tardy(ies) this school year in period ${c.period}`
+                        }
+                      />
                       {mine && (
                         <span
                           title={`Instructional minutes missed from your class this ${quarterLabel}`}
@@ -518,31 +585,46 @@ export default function TeacherHallPassResearch() {
                           }}
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {(["all", "Q1", "Q2", "Q3", "Q4"] as const).map(
-                            (q) => (
-                              <button
-                                key={q}
-                                type="button"
-                                onClick={() => setQuarter(q)}
-                                style={{
-                                  padding: "0.15rem 0.5rem",
-                                  fontSize: "0.72rem",
-                                  borderRadius: 6,
-                                  border:
-                                    quarter === q
-                                      ? "1px solid #7c3aed"
-                                      : "1px solid #cbd5e1",
-                                  background:
-                                    quarter === q ? "#7c3aed" : "white",
-                                  color: quarter === q ? "white" : "#475569",
-                                  cursor: "pointer",
-                                  fontWeight: 600,
-                                }}
-                              >
-                                {q === "all" ? "Year" : q}
-                              </button>
-                            ),
-                          )}
+                          {(
+                            [
+                              { label: "Year", active: quarters.length === 0, onClick: () => setQuarters([]) },
+                              ...ALL_QUARTERS.map((q) => ({
+                                label: q,
+                                active: quarters.includes(q),
+                                onClick: () => toggleQuarter(q),
+                              })),
+                              {
+                                label: "SEM 1",
+                                active: quarters.includes("Q1") && quarters.includes("Q2"),
+                                onClick: () => toggleSem(["Q1", "Q2"]),
+                              },
+                              {
+                                label: "SEM 2",
+                                active: quarters.includes("Q3") && quarters.includes("Q4"),
+                                onClick: () => toggleSem(["Q3", "Q4"]),
+                              },
+                            ] as const
+                          ).map((b) => (
+                            <button
+                              key={b.label}
+                              type="button"
+                              onClick={b.onClick}
+                              style={{
+                                padding: "0.15rem 0.5rem",
+                                fontSize: "0.72rem",
+                                borderRadius: 6,
+                                border: b.active
+                                  ? "1px solid #7c3aed"
+                                  : "1px solid #cbd5e1",
+                                background: b.active ? "#7c3aed" : "white",
+                                color: b.active ? "white" : "#475569",
+                                cursor: "pointer",
+                                fontWeight: 600,
+                              }}
+                            >
+                              {b.label}
+                            </button>
+                          ))}
                         </div>
                         <div
                           style={{
@@ -581,7 +663,8 @@ export default function TeacherHallPassResearch() {
                 {expandedPasses.length} pass
                 {expandedPasses.length === 1 ? "" : "es"},{" "}
                 {expandedPasses.reduce((a, p) => a + (p.lostMin ?? 0), 0)} min
-                lost
+                lost · {expandedTardies.length} tard
+                {expandedTardies.length === 1 ? "y" : "ies"}
               </div>
               {expandedPasses.length === 0 ? (
                 <div style={{ color: "#64748b", marginTop: 6 }}>
@@ -622,6 +705,53 @@ export default function TeacherHallPassResearch() {
                     ))}
                   </tbody>
                 </table>
+              )}
+              {expandedTardies.length > 0 && (
+                <>
+                  <div
+                    style={{
+                      fontWeight: 700,
+                      color: "#b45309",
+                      marginTop: 10,
+                    }}
+                  >
+                    Tardies to this period ({quarterLabel})
+                  </div>
+                  <table
+                    style={{
+                      width: "100%",
+                      borderCollapse: "collapse",
+                      fontSize: "0.85rem",
+                      marginTop: 6,
+                    }}
+                  >
+                    <thead style={{ color: "#64748b", textAlign: "left" }}>
+                      <tr>
+                        <th style={{ padding: "0.3rem 0.5rem" }}>Date</th>
+                        <th style={{ padding: "0.3rem 0.5rem" }}>Reason</th>
+                        <th style={{ padding: "0.3rem 0.5rem" }}>Type</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {expandedTardies.map((t) => (
+                        <tr
+                          key={t.id}
+                          style={{ borderTop: "1px solid #fde68a" }}
+                        >
+                          <td style={{ padding: "0.3rem 0.5rem" }}>
+                            {fmtDateTime(t.createdAt)}
+                          </td>
+                          <td style={{ padding: "0.3rem 0.5rem" }}>
+                            {t.reason}
+                          </td>
+                          <td style={{ padding: "0.3rem 0.5rem" }}>
+                            {t.entryType}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
               )}
             </div>
           )}
