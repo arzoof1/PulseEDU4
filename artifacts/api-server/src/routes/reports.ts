@@ -473,17 +473,16 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
   });
 });
 
-// School-wide hall pass report for a single day. Admin / ESE only.
+// School-wide hall pass report for a single day.
 //   GET /api/reports/hall-passes?date=YYYY-MM-DD  (default: today UTC)
 // Returns: totals + top-10 lists (student takers, student lost minutes,
 // teacher granters, destinations).
+// Open to ALL active staff (was admin/ESE-only): teachers now get the
+// Hall Pass Reports hub too. This report is aggregate-only (counts and
+// top-10s, no per-pass drill-down); the per-student Research surface that
+// exposes individual pass history remains roster-scoped for teachers via
+// routes/hallPassResearch.ts.
 router.get("/reports/hall-passes", requireStaff, async (req, res) => {
-  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
-    .staff;
-  if (!staff.isSuperUser && !staff.isAdmin && !staff.isEseCoordinator) {
-    res.status(403).json({ error: "Admin or ESE coordinator only" });
-    return;
-  }
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
   const dateRaw = req.query.date ? String(req.query.date) : todayIsoDate();

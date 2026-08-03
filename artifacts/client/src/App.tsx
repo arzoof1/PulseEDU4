@@ -86,6 +86,7 @@ import SuperUserHomeRollups from "./components/districtOverview/SuperUserHomeRol
 import DistrictOverviewRollups from "./components/districtOverview/DistrictOverviewRollups";
 import AuditHealthPanel from "./components/districtOverview/AuditHealthPanel";
 import CrossDistrictReports from "./components/districtOverview/CrossDistrictReports";
+import TeacherHallPassResearch from "./components/TeacherHallPassResearch";
 import BulkOverridesPanel from "./components/districtOverview/BulkOverridesPanel";
 import {
   clearFeatures,
@@ -7595,7 +7596,7 @@ function App() {
 
   const hpReportReqIdRef = useRef(0);
   const loadHpReport = async () => {
-    if (!authUser || (!authUser.isAdmin && !authUser.isSuperUser && !authUser.isEseCoordinator)) return;
+    if (!authUser) return;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(hpReportDate)) {
       setHpReportError("Pick a valid date.");
       setHpReportData(null);
@@ -7627,36 +7628,14 @@ function App() {
 
   // Auto-reload hall pass report when its tab is open and the date changes.
   useEffect(() => {
-    if (
-      activeSection === "hallPasses" &&
-      hpView === "reports" &&
-      authUser &&
-      (authUser.isAdmin || authUser.isSuperUser || authUser.isEseCoordinator)
-    ) {
+    if (activeSection === "hallPasses" && hpView === "reports" && authUser) {
       loadHpReport();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSection, hpView, hpReportDate, authUser?.id]);
 
-  // Force hpView back to "overview" if the current user lacks admin/ESE access
-  // (e.g., after sign-out/sign-in within same SPA session).
-  useEffect(() => {
-    if (
-      authUser &&
-      !authUser.isAdmin &&
-      !authUser.isSuperUser &&
-      !authUser.isEseCoordinator &&
-      hpView === "reports"
-    ) {
-      setHpView("overview");
-    }
-  }, [
-    authUser?.id,
-    authUser?.isAdmin,
-    authUser?.isSuperUser,
-    authUser?.isEseCoordinator,
-    hpView,
-  ]);
+  // Hall Pass Reports is open to all staff now (teachers get a
+  // roster-scoped Research view), so no force-back is needed on role change.
 
   // On sign-in, default the Hall Passes scope to "mine" for teachers and
   // "all" for admins. Users can still flip the toggle either way after.
@@ -12493,10 +12472,7 @@ function App() {
           Hall Pass Mgmt.
         </RoleSection>
       </HowToUseHelp>
-      {(authUser?.isAdmin ||
-        authUser?.isSuperUser ||
-        authUser?.isEseCoordinator ||
-        isCoreTeamMember) && (
+      {authUser && (
         <div className="card no-print" style={{ paddingTop: "0.75rem", paddingBottom: "0.75rem" }}>
           <button
             type="button"
@@ -12506,21 +12482,17 @@ function App() {
           >
             Create
           </button>
-          {(authUser?.isAdmin ||
-            authUser?.isSuperUser ||
-            authUser?.isEseCoordinator) && (
-            <button
-              type="button"
-              onClick={() => {
-                setHpView("reports");
-                setHpReportSection("hub");
-              }}
-              disabled={hpView === "reports"}
-              style={{ marginRight: "0.25rem" }}
-            >
-              Reports
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => {
+              setHpView("reports");
+              setHpReportSection("hub");
+            }}
+            disabled={hpView === "reports"}
+            style={{ marginRight: "0.25rem" }}
+          >
+            Reports
+          </button>
           {isCoreTeamMember && (
             <button
               type="button"
@@ -13428,7 +13400,7 @@ function App() {
       <CompanionQueuePanel user={authUser} />
 
       </>)}
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "hub" && (() => {
+      {hpView === "reports" && authUser && hpReportSection === "hub" && (() => {
         type ReportTool = {
           key: "overview" | "byDay" | "ytd" | "research";
           label: string;
@@ -13525,7 +13497,7 @@ function App() {
         );
       })()}
 
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "overview" && (() => {
+      {hpView === "reports" && authUser && hpReportSection === "overview" && (() => {
         // Build a time series of concurrently-active passes for the selected day,
         // every 15 minutes from 7:00 AM to 4:00 PM local time.
         const [yy, mm, dd] = hpOverviewDate.split("-").map((n) => parseInt(n, 10));
@@ -13904,7 +13876,7 @@ function App() {
         );
       })()}
 
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "ytd" && (() => {
+      {hpView === "reports" && authUser && hpReportSection === "ytd" && (() => {
         const today = new Date();
         const studentGrade = new Map<string, number>();
         for (const s of students) studentGrade.set(s.studentId, s.grade);
@@ -14929,7 +14901,15 @@ function App() {
         );
       })()}
 
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "byDay" && (<>
+      {/* Teacher-facing Research: roster-scoped, served by dedicated
+          endpoints (never the whole-school pass list). Admin/SuperUser/ESE
+          keep the original school-wide Research above. */}
+      {hpView === "reports" &&
+        authUser &&
+        !(authUser.isAdmin || authUser.isSuperUser || authUser.isEseCoordinator) &&
+        hpReportSection === "research" && <TeacherHallPassResearch />}
+
+      {hpView === "reports" && authUser && hpReportSection === "byDay" && (<>
         <div
           style={{
             borderTopLeftRadius: "var(--radius-lg, 8px)",

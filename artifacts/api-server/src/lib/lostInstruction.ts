@@ -110,7 +110,9 @@ export function hallPassLostMinutes(
 const minuteFmtCache = new Map<string, Intl.DateTimeFormat>();
 
 // Minutes-since-midnight of an ISO instant in the given IANA timezone.
-function tzMinutesOfDay(iso: string, tz: string): number | null {
+// Exported so hall-pass research can attribute a pass to the bell-schedule
+// period it started in, using the same clock math as tardy lost minutes.
+export function tzMinutesOfDay(iso: string, tz: string): number | null {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
   let fmt = minuteFmtCache.get(tz);
