@@ -540,3 +540,10 @@ id = "-XIk3PahlkG-jpiukU8tR"
 uri = "file://docs/migrations/2026-07-05_to_07-complete-go-live-runbook.pdf"
 type = "pdf"
 title = "Complete Go-Live Runbook — July 5–7, 2026 (all sessions)"
+
+[[outputs]]
+id = "S_j2yDEegkn4Us7gw46px"
+uri = "file://attached_assets/generated/ClassLink_RosterServer_Data_Request.docx"
+type = "word_document"
+title = "ClassLink RosterServer Data Request"
+description = "Word document listing exactly what to request from the district via ClassLink RosterServer (OneRoster), plus the two supplemental items (bell schedule times, parent contact info if not in the share)."
