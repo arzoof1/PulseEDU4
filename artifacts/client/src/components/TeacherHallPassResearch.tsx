@@ -292,7 +292,7 @@ export default function TeacherHallPassResearch() {
             }}
           >
             Student (your roster)
-            <StudentPicker<RosterStudent>
+            <StudentPicker
               mode="local"
               items={roster}
               selectedKey={selectedId ?? undefined}
