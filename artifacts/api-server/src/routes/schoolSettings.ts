@@ -1215,6 +1215,44 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     }
   }
 
+  // First day of school (YYYY-MM-DD, school-local) — admin/SuperUser only,
+  // enforced inline like the flip date (no route-level admin guard here).
+  // Drives YTD reporting windows; null = Aug-1 fallback.
+  if ("firstDayOfSchool" in (req.body ?? {})) {
+    const staffId = req.staffId;
+    let actor: typeof staffTable.$inferSelect | undefined;
+    if (staffId) {
+      const [s] = await db
+        .select()
+        .from(staffTable)
+        .where(eq(staffTable.id, staffId));
+      actor = s;
+    }
+    const isAdminUser = Boolean(
+      actor?.active && (actor?.isAdmin || actor?.isSuperUser),
+    );
+    if (!isAdminUser) {
+      res.status(403).json({
+        error: "Only an admin may set the first day of school",
+      });
+      return;
+    }
+    const raw = req.body.firstDayOfSchool;
+    if (raw === null || raw === "") {
+      updates.firstDayOfSchool = null;
+    } else if (
+      typeof raw === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(raw.trim())
+    ) {
+      updates.firstDayOfSchool = raw.trim();
+    } else {
+      res.status(400).json({
+        error: "firstDayOfSchool must be YYYY-MM-DD or null",
+      });
+      return;
+    }
+  }
+
   if (Object.keys(updates).length === 0) {
     res.json(withEffective(current));
     return;

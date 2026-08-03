@@ -13,6 +13,7 @@ import {
   classSectionsTable,
   sectionRosterTable,
   tardiesTable,
+  schoolSettingsTable,
 } from "@workspace/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -117,19 +118,44 @@ function effectiveStartYear(passDays: string[], today: string): number {
 
 export type QuarterKey = "all" | "Q1" | "Q2" | "Q3" | "Q4";
 
+// Admin-set first student day of the school year (school_settings). Null
+// when unset — callers fall back to the Aug-1 convention.
+export async function loadFirstDayOfSchool(
+  schoolId: number,
+): Promise<string | null> {
+  const [row] = await db
+    .select({ firstDay: schoolSettingsTable.firstDayOfSchool })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId))
+    .limit(1);
+  const v = row?.firstDay?.trim();
+  return v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
+}
+
+// The school year's opening day: the admin-set first day of school when it
+// belongs to this school year, otherwise the Aug-1 convention.
+function yearOpenDay(startYear: number, firstDay: string | null): string {
+  return firstDay && schoolYearStartYear(firstDay) === startYear
+    ? firstDay
+    : `${startYear}-08-01`;
+}
+
 // Approximate quarter windows for a school year starting in `startYear`.
 // Quarter calendar dates are not configured anywhere in school settings
-// today, so these are fixed, documented approximations (Q1 Aug 1–Oct 15,
-// Q2 Oct 16–Dec 31, Q3 Jan 1–Mar 15, Q4 Mar 16–Jul 31).
+// today, so these are fixed, documented approximations (Q2 Oct 16–Dec 31,
+// Q3 Jan 1–Mar 15, Q4 Mar 16–Jul 31). The year/Q1 start honors the
+// admin-set first day of school when present.
 export function quarterWindow(
   startYear: number,
   q: QuarterKey,
+  firstDay: string | null = null,
 ): { from: string; to: string } {
   const y = startYear;
   const n = startYear + 1;
+  const open = yearOpenDay(startYear, firstDay);
   switch (q) {
     case "Q1":
-      return { from: `${y}-08-01`, to: `${y}-10-15` };
+      return { from: open, to: `${y}-10-15` };
     case "Q2":
       return { from: `${y}-10-16`, to: `${y}-12-31` };
     case "Q3":
@@ -137,7 +163,7 @@ export function quarterWindow(
     case "Q4":
       return { from: `${n}-03-16`, to: `${n}-07-31` };
     default:
-      return { from: `${y}-08-01`, to: `${n}-07-31` };
+      return { from: open, to: `${n}-07-31` };
   }
 }
 
@@ -274,7 +300,8 @@ router.get(
       .map((p) => tzDay(p.createdAt, tz))
       .filter((d): d is string => d != null);
     const startYear = effectiveStartYear(passDays, today);
-    const win = quarterWindow(startYear, "all");
+    const firstDay = await loadFirstDayOfSchool(schoolId);
+    const win = quarterWindow(startYear, "all", firstDay);
     let lostMin = 0;
     const counted = new Set<string>();
     for (const p of passes) {
@@ -292,6 +319,130 @@ router.get(
       days: daysFromMinutes(lostMin, periodLen),
       periodLen,
       studentCount: counted.size,
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /hall-passes/research/report-feed — school-year pass feed for the
+// Overview + YTD report charts. Visibility-scoped: teachers get ONLY their
+// own students' passes (core team / admins get the whole school via full
+// visibility). The window starts on the admin-set first day of school
+// (fallback Aug 1). `scoped: true` tells the client to label the charts
+// "your students".
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/hall-passes/research/report-feed",
+  requireStaff,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: Staff }).staff;
+    const visibility = await getVisibleStudentIds(staff, schoolId);
+    const tz = await getSchoolTimezone(schoolId);
+    const today = tzDay(new Date(), tz)!;
+
+    let studentIds: string[] | null = null; // null = all (full visibility)
+    if (!visibility.full) {
+      studentIds = Array.from(visibility.ids);
+      if (studentIds.length === 0) {
+        // Shape-stable empty response with a deterministic window start so
+        // the client's YTD axis still begins on the right day.
+        const firstDayEmpty = await loadFirstDayOfSchool(schoolId);
+        const winEmpty = quarterWindow(
+          effectiveStartYear([], today),
+          "all",
+          firstDayEmpty,
+        );
+        res.json({
+          firstDay: winEmpty.from,
+          scoped: true,
+          passes: [],
+          students: [],
+        });
+        return;
+      }
+    }
+    const passes = await db
+      .select({
+        id: hallPassesTable.id,
+        studentId: hallPassesTable.studentId,
+        destination: hallPassesTable.destination,
+        teacherName: hallPassesTable.teacherName,
+        status: hallPassesTable.status,
+        maxDurationMinutes: hallPassesTable.maxDurationMinutes,
+        createdAt: hallPassesTable.createdAt,
+        endedAt: hallPassesTable.endedAt,
+      })
+      .from(hallPassesTable)
+      .where(
+        studentIds
+          ? and(
+              eq(hallPassesTable.schoolId, schoolId),
+              inArray(hallPassesTable.studentId, studentIds),
+            )
+          : eq(hallPassesTable.schoolId, schoolId),
+      );
+    const passDays = passes
+      .map((p) => tzDay(p.createdAt, tz))
+      .filter((d): d is string => d != null);
+    const startYear = effectiveStartYear(passDays, today);
+    const firstDay = await loadFirstDayOfSchool(schoolId);
+    const win = quarterWindow(startYear, "all", firstDay);
+
+    // Grades for the YTD by-grade chart — resolved server-side so the
+    // client never needs a school-wide roster for this.
+    const sids = Array.from(new Set(passes.map((p) => p.studentId)));
+    const gradeById = new Map<string, number>();
+    let feedStudents: {
+      studentId: string;
+      firstName: string;
+      lastName: string;
+      grade: number;
+      localSisId: string | null;
+    }[] = [];
+    if (sids.length) {
+      feedStudents = await db
+        .select({
+          studentId: studentsTable.studentId,
+          firstName: studentsTable.firstName,
+          lastName: studentsTable.lastName,
+          grade: studentsTable.grade,
+          localSisId: studentsTable.localSisId,
+        })
+        .from(studentsTable)
+        .where(
+          and(
+            eq(studentsTable.schoolId, schoolId),
+            inArray(studentsTable.studentId, sids),
+          ),
+        );
+      for (const s of feedStudents) gradeById.set(s.studentId, s.grade);
+    }
+
+    const out = [];
+    for (const p of passes) {
+      const day = tzDay(p.createdAt, tz);
+      if (!day || day < win.from || day > win.to) continue;
+      out.push({
+        id: p.id,
+        studentId: p.studentId,
+        grade: gradeById.get(p.studentId) ?? null,
+        destination: p.destination,
+        teacherName: p.teacherName,
+        status: p.status,
+        maxDurationMinutes: p.maxDurationMinutes,
+        createdAt: p.createdAt,
+        endedAt: p.endedAt,
+        day,
+      });
+    }
+    res.json({
+      firstDay: win.from,
+      scoped: !visibility.full,
+      passes: out,
+      students: feedStudents,
     });
   },
 );
@@ -366,13 +517,14 @@ router.get(
         .filter((d): d is string => d != null),
       today,
     );
-    const yearWin = quarterWindow(startYear, "all");
+    const firstDay = await loadFirstDayOfSchool(schoolId);
+    const yearWin = quarterWindow(startYear, "all", firstDay);
     // Selected window(s): whole year when no quarters chosen, otherwise the
     // union of the chosen quarters (possibly disjoint, e.g. Q1+Q3).
     const wins =
       quarters.length === 0
         ? [yearWin]
-        : quarters.map((q) => quarterWindow(startYear, q));
+        : quarters.map((q) => quarterWindow(startYear, q, firstDay));
     const inSelected = (day: string) =>
       wins.some((w) => day >= w.from && day <= w.to);
 

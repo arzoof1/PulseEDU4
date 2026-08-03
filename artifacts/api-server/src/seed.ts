@@ -2300,6 +2300,11 @@ export async function ensureAdminHubSchema() {
   await db.execute(
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS school_year_flip_active TEXT`,
   );
+  // First student day of the school year (admin-set, YYYY-MM-DD). Null =
+  // fall back to the Aug-1 convention in YTD windows.
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS first_day_of_school TEXT`,
+  );
 
   // Forgotten-pass auto-end threshold (minutes). Additive; default 20.
   await db.execute(

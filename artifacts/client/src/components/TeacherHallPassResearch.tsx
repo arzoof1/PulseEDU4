@@ -448,14 +448,44 @@ export default function TeacherHallPassResearch() {
             Passes by period —{" "}
             {`${summary.student.firstName} ${summary.student.lastName}`}
           </h3>
+          {/* Real totals for THIS student (not legend examples). */}
+          {(() => {
+            const todayTotal = summary.periods.reduce(
+              (n, c) => n + c.todayCount,
+              0,
+            );
+            const passTotal = summary.passes.filter((p) =>
+              inWindows(p.day, summary.windows),
+            ).length;
+            const tardyTotal = summary.tardies.filter((t) =>
+              inWindows(t.day, summary.windows),
+            ).length;
+            return (
+              <div
+                style={{
+                  fontSize: "0.85rem",
+                  color: "#334155",
+                  marginBottom: 4,
+                  fontWeight: 600,
+                }}
+              >
+                {summary.student.firstName}&rsquo;s totals:{" "}
+                <Dot color="#16a34a" value={todayTotal} title="" size={16} />{" "}
+                {todayTotal === 1 ? "pass" : "passes"} today ·{" "}
+                <Dot color="#7c3aed" value={passTotal} title="" size={16} />{" "}
+                {passTotal === 1 ? "pass" : "passes"} ·{" "}
+                <Dot color="#f59e0b" value={tardyTotal} title="" size={16} />{" "}
+                {tardyTotal === 1 ? "tardy" : "tardies"} in the selected
+                Year/Q/SEM window
+              </div>
+            );
+          })()}
           <div
             style={{ fontSize: "0.8rem", color: "#64748b", marginBottom: 12 }}
           >
-            <Dot color="#16a34a" value={1} title="" size={16} /> today ·{" "}
-            <Dot color="#7c3aed" value={9} title="" size={16} /> passes ·{" "}
-            <Dot color="#f59e0b" value={2} title="" size={16} /> tardies ·
-            highlighted cells are periods where this student is in YOUR class
-            (their circles follow the Year/Q/SEM selection)
+            Key: green = today, purple = passes, amber = tardies. Highlighted
+            cells are periods where this student is in YOUR class (their
+            circles follow the Year/Q/SEM selection).
           </div>
           {summary.periods.length === 0 ? (
             <div style={{ color: "#64748b" }}>

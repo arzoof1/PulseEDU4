@@ -408,6 +408,10 @@ export const schoolSettingsTable = pgTable(
   // ---------------------------------------------------------------------------
   schoolYearFlipDate: text("school_year_flip_date"),
   schoolYearFlipActive: text("school_year_flip_active"),
+  // First student day of the school year (YYYY-MM-DD, school-local),
+  // admin-set. Drives YTD windows (e.g. hall-pass reporting) instead of the
+  // hardcoded Aug-1 convention. Null = fall back to Aug 1.
+  firstDayOfSchool: text("first_day_of_school"),
   // Advisory pointer to the tier_presets row last applied to this
   // school. The actual flags above are still authoritative — this is
   // purely so the School Plans grid can show "Currently: Pro" badges.

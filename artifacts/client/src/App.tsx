@@ -5581,8 +5581,33 @@ function App() {
   const [hpReportDate, setHpReportDate] = useState<string>(() =>
     new Date().toISOString().slice(0, 10),
   );
+  interface HpFeedPass {
+    id: number;
+    studentId: string;
+    grade: number | null;
+    destination: string;
+    teacherName: string;
+    status: string;
+    maxDurationMinutes: number;
+    createdAt: string;
+    endedAt: string | null;
+    day: string;
+  }
+  interface HpFeed {
+    firstDay: string | null;
+    scoped: boolean;
+    passes: HpFeedPass[];
+    students: {
+      studentId: string;
+      firstName: string;
+      lastName: string;
+      grade: number;
+      localSisId: string | null;
+    }[];
+  }
   interface HpReportData {
     date: string;
+    scoped?: boolean;
     asOf: string;
     totalPasses: number;
     totalLostMinutes: number;
@@ -5603,6 +5628,9 @@ function App() {
     topDestinations: Array<{ destination: string; count: number }>;
   }
   const [hpReportData, setHpReportData] = useState<HpReportData | null>(null);
+  // School-year pass feed powering Overview + YTD — visibility-scoped on
+  // the server (teachers only ever receive their own students' passes).
+  const [hpFeed, setHpFeed] = useState<HpFeed | null>(null);
   const [hpReportLoading, setHpReportLoading] = useState(false);
   const [hpReportError, setHpReportError] = useState("");
   const [activeSection, setActiveSection] = useState<
@@ -5819,6 +5847,7 @@ function App() {
     strictHouseNameMatch: boolean;
     gpaEnabled: boolean;
     schoolYearFlipDate: string | null;
+    firstDayOfSchool: string | null;
     teacherFamilyMessagingEnabled: boolean;
     watchlistAbsenceThreshold: number;
     watchlistBehaviorThreshold: number;
@@ -5911,6 +5940,7 @@ function App() {
     strictHouseNameMatch: false,
     gpaEnabled: false,
     schoolYearFlipDate: null,
+    firstDayOfSchool: null,
     teacherFamilyMessagingEnabled: false,
     watchlistAbsenceThreshold: 10,
     watchlistBehaviorThreshold: 3,
@@ -7626,6 +7656,26 @@ function App() {
     }
   };
 
+  // Load the scoped Overview/YTD pass feed whenever the reports hub opens.
+  useEffect(() => {
+    if (!(activeSection === "hallPasses" && hpView === "reports" && authUser)) {
+      return;
+    }
+    let cancelled = false;
+    authFetch("/api/hall-passes/research/report-feed")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: HpFeed | null) => {
+        if (!cancelled) setHpFeed(d);
+      })
+      .catch(() => {
+        if (!cancelled) setHpFeed(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection, hpView, authUser?.id]);
+
   // Auto-reload hall pass report when its tab is open and the date changes.
   useEffect(() => {
     if (activeSection === "hallPasses" && hpView === "reports" && authUser) {
@@ -7838,6 +7888,10 @@ function App() {
             typeof data.schoolYearFlipDate === "string"
               ? data.schoolYearFlipDate
               : null,
+          firstDayOfSchool:
+            typeof data.firstDayOfSchool === "string"
+              ? data.firstDayOfSchool
+              : null,
           teacherFamilyMessagingEnabled:
             typeof data.teacherFamilyMessagingEnabled === "boolean"
               ? data.teacherFamilyMessagingEnabled
@@ -7935,8 +7989,11 @@ function App() {
       // it in the payload for admins/SuperUsers; otherwise a non-admin save
       // (e.g. Core Team editing other fields) would 403 on that one field.
       const canSetFlip = Boolean(authUser?.isAdmin || authUser?.isSuperUser);
-      const { schoolYearFlipDate: _flipDate, ...settingsWithoutFlip } =
-        schoolSettings;
+      const {
+        schoolYearFlipDate: _flipDate,
+        firstDayOfSchool: _firstDay,
+        ...settingsWithoutFlip
+      } = schoolSettings;
       const res = await authFetch("/api/school-settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -8043,6 +8100,10 @@ function App() {
         schoolYearFlipDate:
           typeof data.schoolYearFlipDate === "string"
             ? data.schoolYearFlipDate
+            : null,
+        firstDayOfSchool:
+          typeof data.firstDayOfSchool === "string"
+            ? data.firstDayOfSchool
             : null,
         teacherFamilyMessagingEnabled:
           typeof data.teacherFamilyMessagingEnabled === "boolean"
@@ -13511,7 +13572,12 @@ function App() {
             d.getDate() === today.getDate()
           );
         };
-        const todaysPasses = hallPasses.filter((p) => isSameLocalDay(p.createdAt));
+        void isSameLocalDay;
+        // Server-scoped feed: teachers only receive their own students'
+        // passes; the school-local `day` avoids UTC-midnight drift.
+        const todaysPasses = (hpFeed?.passes ?? []).filter(
+          (p) => p.day === dayStr,
+        );
         const buckets: { label: string; t: number; count: number }[] = [];
         const base = new Date(today);
         base.setHours(7, 0, 0, 0);
@@ -13565,6 +13631,11 @@ function App() {
                 }}
               >
                 Overview
+                {hpFeed?.scoped && (
+                  <span style={{ marginLeft: "0.75rem", fontSize: "0.85rem", color: "#64748b", fontWeight: 400 }}>
+                    your students only
+                  </span>
+                )}
                 <input
                   type="date"
                   value={hpOverviewDate}
@@ -13671,7 +13742,7 @@ function App() {
               const counts = new Map<string, number>();
               let totalMs = 0;
               let endedCount = 0;
-              for (const p of hallPasses) {
+              for (const p of hpFeed?.passes ?? []) {
                 if (p.destination) {
                   counts.set(p.destination, (counts.get(p.destination) || 0) + 1);
                 }
@@ -13878,14 +13949,24 @@ function App() {
 
       {hpView === "reports" && authUser && hpReportSection === "ytd" && (() => {
         const today = new Date();
+        // Server-scoped feed: teachers only ever receive their own
+        // students' passes; grades and names come with the feed so no
+        // school-wide roster is needed here.
+        const feedPasses = hpFeed?.passes ?? [];
+        const feedStudents = hpFeed?.students ?? [];
         const studentGrade = new Map<string, number>();
-        for (const s of students) studentGrade.set(s.studentId, s.grade);
-        const grades = Array.from(new Set(students.map((s) => s.grade))).sort(
-          (a, b) => a - b,
-        );
+        for (const s of feedStudents) studentGrade.set(s.studentId, s.grade);
+        const grades = Array.from(
+          new Set(feedStudents.map((s) => s.grade)),
+        ).sort((a, b) => a - b);
         const gradeColors = ["#0f766e", "#0e7490", "#6366f1", "#7c3aed", "#0ea5e9", "#a855f7"];
 
-        const yearStart = new Date(today.getFullYear(), 0, 1);
+        // YTD starts on the school's configured first day of school
+        // (server fallback: Aug 1 of the school year).
+        const firstDay = hpFeed?.firstDay ?? null;
+        const yearStart = firstDay
+          ? new Date(`${firstDay}T00:00:00`)
+          : new Date(today.getFullYear(), 0, 1);
         const dayMs = 24 * 60 * 60 * 1000;
         const days: { key: string; label: string; t: number }[] = [];
         for (let t = yearStart.getTime(); t <= today.getTime(); t += dayMs) {
@@ -13906,14 +13987,10 @@ function App() {
         const indexByKey = new Map(days.map((d, i) => [d.key, i]));
 
         let totalYtd = 0;
-        for (const p of hallPasses) {
-          const dt = new Date(p.createdAt);
-          if (dt.getFullYear() !== today.getFullYear()) continue;
-          if (dt.getTime() > today.getTime() + dayMs) continue;
-          const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-          const idx = indexByKey.get(key);
+        for (const p of feedPasses) {
+          const idx = indexByKey.get(p.day);
           if (idx == null) continue;
-          const g = studentGrade.get(p.studentId);
+          const g = p.grade ?? studentGrade.get(p.studentId);
           if (g == null) continue;
           series[idx][`G${g}`] = (series[idx][`G${g}`] as number) + 1;
           totalYtd++;
@@ -13952,7 +14029,10 @@ function App() {
               >
                 Year to Date Summary
                 <span style={{ marginLeft: "0.75rem", fontSize: "0.85rem", color: "#64748b", fontWeight: 400 }}>
-                  {today.getFullYear()}
+                  {firstDay
+                    ? `since ${new Date(`${firstDay}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`
+                    : today.getFullYear()}
+                  {hpFeed?.scoped ? " · your students only" : ""}
                 </span>
               </h2>
             </div>
@@ -14017,7 +14097,7 @@ function App() {
                 string,
                 { name: string; grade: number }
               >();
-              for (const s of students) {
+              for (const s of feedStudents) {
                 studentInfo.set(s.studentId, {
                   name: `${s.firstName} ${s.lastName}`,
                   grade: s.grade,
@@ -14026,9 +14106,7 @@ function App() {
 
               const byGrade = new Map<number, number>();
               const byStudent = new Map<string, number>();
-              for (const p of hallPasses) {
-                const dt = new Date(p.createdAt);
-                if (dt.getFullYear() !== today.getFullYear()) continue;
+              for (const p of feedPasses) {
                 const info = studentInfo.get(p.studentId);
                 if (!info) continue;
                 byGrade.set(info.grade, (byGrade.get(info.grade) || 0) + 1);
@@ -14206,7 +14284,7 @@ function App() {
                   localSisId: string | null;
                 }
               >();
-              for (const s of students) {
+              for (const s of feedStudents) {
                 studentInfo.set(s.studentId, {
                   first: s.firstName,
                   last: s.lastName,
@@ -14218,9 +14296,7 @@ function App() {
                 string,
                 { passes: number; autoEnded: number; lostMin: number }
               >();
-              for (const p of hallPasses) {
-                const dt = new Date(p.createdAt);
-                if (dt.getFullYear() !== today.getFullYear()) continue;
+              for (const p of feedPasses) {
                 if (!studentInfo.has(p.studentId)) continue;
                 const cur = stats.get(p.studentId) || {
                   passes: 0,
@@ -14990,6 +15066,7 @@ function App() {
               <div style={{ marginBottom: "0.5rem", fontSize: "0.85rem", color: "#555" }}>
                 Reporting on {hpReportData.date} (as of{" "}
                 {new Date(hpReportData.asOf).toLocaleString()})
+                {hpReportData.scoped ? " · your students only" : ""}
               </div>
               <div className="stat-grid" style={{ marginBottom: "1rem" }}>
                 <div className="stat-card">
@@ -26054,6 +26131,48 @@ function App() {
                   </span>
                 </label>
               )}
+            {Boolean(authUser?.isAdmin || authUser?.isSuperUser) && (
+              <label style={{ display: "grid", gap: "0.25rem" }}>
+                <span>
+                  First Day of School
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontWeight: "normal",
+                      marginLeft: "0.5rem",
+                    }}
+                  >
+                    Admin only. Optional.
+                  </span>
+                </span>
+                <input
+                  type="date"
+                  value={schoolSettings.firstDayOfSchool ?? ""}
+                  onChange={(e) =>
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      firstDayOfSchool: e.target.value ? e.target.value : null,
+                    })
+                  }
+                  style={{
+                    padding: "0.4rem 0.6rem",
+                    border: "1px solid var(--border-subtle, #e2e8f0)",
+                    borderRadius: 6,
+                    maxWidth: 220,
+                  }}
+                />
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  The first student day of the current school year.
+                  Year-to-date reporting (e.g. Hall Pass reports) starts on
+                  this date. Leave blank to use August 1.
+                </span>
+              </label>
+            )}
             <label style={{ display: "grid", gap: "0.25rem" }}>
               <span>
                 Number of Periods in the School Day
