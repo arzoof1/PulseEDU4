@@ -40,6 +40,16 @@ interface PeriodCell {
   classAvgLostMin: number | null;
   tardyYearCount: number;
   myTardyCount: number | null;
+  // Core Team extras (null for teachers).
+  windowPassCount?: number | null;
+  windowLostMin?: number | null;
+  windowTardyCount?: number | null;
+  absenceCount?: number | null;
+  schedule?: {
+    courseName: string | null;
+    teacherName: string;
+    room: string | null;
+  } | null;
 }
 
 interface ResearchTardy {
@@ -70,12 +80,35 @@ const ALL_QUARTERS: QuarterKey[] = ["Q1", "Q2", "Q3", "Q4"];
 
 interface Summary {
   student: RosterStudent;
+  coreTeam?: boolean;
   quarters: QuarterKey[];
   windows: { from: string; to: string }[];
   periods: PeriodCell[];
   tardies: ResearchTardy[];
   totals: { lostMin: number; days: number | null; periodLen: number | null };
   passes: ResearchPass[];
+}
+
+interface SchoolPeriod {
+  period: number;
+  lengthMin: number | null;
+  enrolled: number;
+  passCount: number;
+  avgPerDay: number;
+  per100Students: number | null;
+  lostMin: number;
+  tardyCount: number;
+  absenceCount: number;
+  destinations: { name: string; count: number }[];
+  teachers: { name: string; passes: number; lostMin: number }[];
+}
+
+interface SchoolSummary {
+  quarters: QuarterKey[];
+  windows: { from: string; to: string }[];
+  dayCount: number;
+  periodLen: number | null;
+  periods: SchoolPeriod[];
 }
 
 interface RosterTotal {
@@ -147,9 +180,54 @@ function Dot({
   );
 }
 
-export default function TeacherHallPassResearch() {
+// Simple horizontal bar for the Core Team per-period graphs.
+function Bar({
+  value,
+  max,
+  color,
+}: {
+  value: number;
+  max: number;
+  color: string;
+}) {
+  const pct = max > 0 ? Math.max(2, (value / max) * 100) : 0;
+  return (
+    <div
+      style={{
+        flex: 1,
+        background: "#f1f5f9",
+        borderRadius: 4,
+        height: 16,
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          width: `${value === 0 ? 0 : pct}%`,
+          height: "100%",
+          background: color,
+          borderRadius: 4,
+        }}
+      />
+    </div>
+  );
+}
+
+export default function TeacherHallPassResearch({
+  coreTeam = false,
+}: {
+  // Core Team (+ guidance / social worker / dean): unlocks the school-wide
+  // dashboard before a search and the full-schedule student view after.
+  coreTeam?: boolean;
+}) {
   const [roster, setRoster] = useState<RosterStudent[]>([]);
   const [rosterTotal, setRosterTotal] = useState<RosterTotal | null>(null);
+  const [schoolSummary, setSchoolSummary] = useState<SchoolSummary | null>(
+    null,
+  );
+  const [expandedSchoolPeriod, setExpandedSchoolPeriod] = useState<
+    number | null
+  >(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Multi-select quarters. Empty = whole school year. SEM 1 / SEM 2 are
   // shortcuts that toggle Q1+Q2 / Q3+Q4; all four selected snaps back to
@@ -174,6 +252,15 @@ export default function TeacherHallPassResearch() {
       .catch(() => setRosterTotal(null));
   }, []);
 
+  useEffect(() => {
+    if (!coreTeam) return;
+    const qs = quarters.length ? `?quarters=${quarters.join(",")}` : "";
+    authFetch(`/api/hall-passes/research/school-summary${qs}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setSchoolSummary(d))
+      .catch(() => setSchoolSummary(null));
+  }, [coreTeam, quarters]);
+
   const clearSelection = () => {
     // Invalidate any in-flight summary fetch so a late response can't
     // repopulate the view for a no-longer-selected student.
@@ -181,6 +268,7 @@ export default function TeacherHallPassResearch() {
     setSelectedId(null);
     setSummary(null);
     setExpandedPeriod(null);
+    setExpandedSchoolPeriod(null);
     setError("");
     setLoading(false);
   };
@@ -432,14 +520,346 @@ export default function TeacherHallPassResearch() {
             </span>
           )}
         </div>
+        {coreTeam && (
+          <div
+            style={{
+              display: "flex",
+              gap: 6,
+              flexWrap: "wrap",
+              marginTop: "0.75rem",
+              alignItems: "center",
+            }}
+          >
+            <span style={{ fontSize: "0.8rem", color: "#64748b" }}>
+              Window:
+            </span>
+            {(
+              [
+                {
+                  label: "Year",
+                  active: quarters.length === 0,
+                  onClick: () => setQuarters([]),
+                },
+                ...ALL_QUARTERS.map((q) => ({
+                  label: q,
+                  active: quarters.includes(q),
+                  onClick: () => toggleQuarter(q),
+                })),
+                {
+                  label: "SEM 1",
+                  active: quarters.includes("Q1") && quarters.includes("Q2"),
+                  onClick: () => toggleSem(["Q1", "Q2"]),
+                },
+                {
+                  label: "SEM 2",
+                  active: quarters.includes("Q3") && quarters.includes("Q4"),
+                  onClick: () => toggleSem(["Q3", "Q4"]),
+                },
+              ] as const
+            ).map((b) => (
+              <button
+                key={b.label}
+                type="button"
+                onClick={b.onClick}
+                style={{
+                  padding: "0.25rem 0.7rem",
+                  fontSize: "0.8rem",
+                  borderRadius: 6,
+                  border: b.active ? "1px solid #7c3aed" : "1px solid #cbd5e1",
+                  background: b.active ? "#7c3aed" : "white",
+                  color: b.active ? "white" : "#475569",
+                  cursor: "pointer",
+                  fontWeight: 600,
+                }}
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
+        )}
         {!summary && !loading && !error && (
           <div style={{ color: "#64748b", marginTop: "0.75rem" }}>
-            Search a student from your roster to see their pass history, a
-            period-by-period breakdown, and how much of YOUR class they have
-            missed on passes.
+            {coreTeam
+              ? "The school-wide picture is below. Search any student to zoom in on their full schedule, passes, tardies, and absences."
+              : "Search a student from your roster to see their pass history, a period-by-period breakdown, and how much of YOUR class they have missed on passes."}
           </div>
         )}
       </div>
+
+      {/* Core Team, before a search: school-wide per-period dashboard */}
+      {coreTeam && !summary && schoolSummary && (
+        <div className="card">
+          <h3 style={{ margin: "0 0 0.25rem", color: "#4c1d95" }}>
+            School-wide by period · {quarterLabel}
+          </h3>
+          <div style={{ fontSize: "0.8rem", color: "#64748b", marginBottom: 12 }}>
+            Averages use {schoolSummary.dayCount.toLocaleString()} school days
+            (days with at least one pass) in the selected window. Tap a period
+            for the teacher and destination breakdown.
+          </div>
+          {schoolSummary.periods.length === 0 ? (
+            <div style={{ color: "#64748b" }}>
+              No default bell schedule is configured, so passes can't be
+              matched to periods yet.
+            </div>
+          ) : (
+            <>
+              {/* Top-3 lost-time callout */}
+              {(() => {
+                const top = [...schoolSummary.periods]
+                  .sort((a, b) => b.lostMin - a.lostMin)
+                  .slice(0, 3)
+                  .filter((p) => p.lostMin > 0);
+                if (top.length === 0) return null;
+                return (
+                  <div
+                    style={{
+                      background: "#fef2f2",
+                      border: "1px solid #fecaca",
+                      borderRadius: 10,
+                      padding: "0.6rem 0.9rem",
+                      marginBottom: 12,
+                      fontSize: "0.9rem",
+                      color: "#991b1b",
+                      fontWeight: 600,
+                    }}
+                  >
+                    Biggest lost-instruction periods:{" "}
+                    {top
+                      .map(
+                        (p) =>
+                          `Period ${p.period} (${p.lostMin.toLocaleString()} min)`,
+                      )
+                      .join(" · ")}
+                  </div>
+                );
+              })()}
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 10,
+                  alignItems: "stretch",
+                }}
+              >
+                {schoolSummary.periods.map((p) => (
+                  <div
+                    key={p.period}
+                    onClick={() =>
+                      setExpandedSchoolPeriod((x) =>
+                        x === p.period ? null : p.period,
+                      )
+                    }
+                    style={{
+                      border: "1px solid #e2e8f0",
+                      background: "white",
+                      borderRadius: 10,
+                      padding: "0.7rem 0.9rem",
+                      minWidth: 170,
+                      cursor: "pointer",
+                      boxShadow:
+                        expandedSchoolPeriod === p.period
+                          ? "0 0 0 3px #ddd6fe"
+                          : undefined,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: "0.8rem",
+                        fontWeight: 700,
+                        color: "#5b21b6",
+                        marginBottom: 4,
+                      }}
+                    >
+                      Period {p.period}
+                      {p.lengthMin != null ? ` · ${p.lengthMin} min` : ""}
+                    </div>
+                    <div style={{ fontSize: "1.4rem", fontWeight: 800 }}>
+                      {p.passCount.toLocaleString()}{" "}
+                      <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "#64748b" }}>
+                        passes
+                      </span>
+                    </div>
+                    <div style={{ fontSize: "0.78rem", color: "#334155" }}>
+                      {p.avgPerDay} per school day
+                      {p.per100Students != null &&
+                        ` · ${p.per100Students} per 100 students`}
+                    </div>
+                    <div
+                      style={{
+                        marginTop: 6,
+                        display: "inline-flex",
+                        background: "#dc2626",
+                        color: "white",
+                        fontWeight: 800,
+                        borderRadius: 999,
+                        padding: "0.2rem 0.6rem",
+                        fontSize: "0.78rem",
+                      }}
+                    >
+                      {p.lostMin.toLocaleString()} min lost
+                    </div>
+                    <div
+                      style={{
+                        marginTop: 4,
+                        fontSize: "0.75rem",
+                        color: "#64748b",
+                      }}
+                    >
+                      {p.tardyCount.toLocaleString()} tardies ·{" "}
+                      {p.absenceCount.toLocaleString()} absences · tap for
+                      details
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Per-period drill-down: teachers + destination mix */}
+              {expandedSchoolPeriod != null &&
+                (() => {
+                  const p = schoolSummary.periods.find(
+                    (x) => x.period === expandedSchoolPeriod,
+                  );
+                  if (!p) return null;
+                  return (
+                    <div
+                      style={{
+                        marginTop: 12,
+                        border: "1px solid #ddd6fe",
+                        borderRadius: 10,
+                        padding: "0.75rem 0.9rem",
+                        background: "#faf5ff",
+                      }}
+                    >
+                      <div style={{ fontWeight: 700, color: "#5b21b6" }}>
+                        Period {p.period} · {quarterLabel} —{" "}
+                        {p.passCount.toLocaleString()} passes,{" "}
+                        {p.lostMin.toLocaleString()} min lost
+                      </div>
+                      {p.destinations.length > 0 && (
+                        <div style={{ marginTop: 8, fontSize: "0.85rem" }}>
+                          <strong>Where they go:</strong>{" "}
+                          {p.destinations
+                            .map((d) => `${d.name} (${d.count})`)
+                            .join(" · ")}
+                        </div>
+                      )}
+                      {p.teachers.length === 0 ? (
+                        <div style={{ color: "#64748b", marginTop: 6 }}>
+                          No passes in this period for the selected window.
+                        </div>
+                      ) : (
+                        <table
+                          style={{
+                            width: "100%",
+                            borderCollapse: "collapse",
+                            fontSize: "0.85rem",
+                            marginTop: 8,
+                          }}
+                        >
+                          <thead style={{ color: "#64748b", textAlign: "left" }}>
+                            <tr>
+                              <th style={{ padding: "0.3rem 0.5rem" }}>
+                                Teacher (who activated the pass)
+                              </th>
+                              <th style={{ padding: "0.3rem 0.5rem" }}>Passes</th>
+                              <th style={{ padding: "0.3rem 0.5rem" }}>
+                                Minutes lost
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {p.teachers.map((t) => (
+                              <tr
+                                key={t.name}
+                                style={{ borderTop: "1px solid #e9d5ff" }}
+                              >
+                                <td style={{ padding: "0.3rem 0.5rem" }}>
+                                  {t.name}
+                                </td>
+                                <td style={{ padding: "0.3rem 0.5rem" }}>
+                                  {t.passes.toLocaleString()}
+                                </td>
+                                <td style={{ padding: "0.3rem 0.5rem" }}>
+                                  {t.lostMin.toLocaleString()}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  );
+                })()}
+
+              {/* Absence + tardy graphs by period */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns:
+                    "repeat(auto-fit, minmax(260px, 1fr))",
+                  gap: 16,
+                  marginTop: 16,
+                }}
+              >
+                {(
+                  [
+                    {
+                      title: "Absences by period",
+                      color: "#0ea5e9",
+                      get: (p: SchoolPeriod) => p.absenceCount,
+                    },
+                    {
+                      title: "Tardies by period",
+                      color: "#f59e0b",
+                      get: (p: SchoolPeriod) => p.tardyCount,
+                    },
+                  ] as const
+                ).map((g) => {
+                  const max = Math.max(
+                    ...schoolSummary.periods.map((p) => g.get(p)),
+                    0,
+                  );
+                  return (
+                    <div key={g.title}>
+                      <div
+                        style={{
+                          fontWeight: 700,
+                          color: "#334155",
+                          marginBottom: 6,
+                          fontSize: "0.9rem",
+                        }}
+                      >
+                        {g.title} · {quarterLabel}
+                      </div>
+                      {schoolSummary.periods.map((p) => (
+                        <div
+                          key={p.period}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            marginBottom: 4,
+                            fontSize: "0.8rem",
+                          }}
+                        >
+                          <span style={{ width: 34, color: "#64748b" }}>
+                            P{p.period}
+                          </span>
+                          <Bar value={g.get(p)} max={max} color={g.color} />
+                          <span style={{ width: 44, textAlign: "right" }}>
+                            {g.get(p).toLocaleString()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* 3 — Period dot graph */}
       {summary && (
@@ -502,12 +922,29 @@ export default function TeacherHallPassResearch() {
               }}
             >
               {summary.periods.map((c) => {
-                const mine = c.isMine;
+                const ct = !!summary.coreTeam;
+                // Core Team: every cell is a full, clickable card (no "your
+                // class" highlighting — the whole schedule is in scope).
+                const mine = !ct && c.isMine;
+                const big = mine || ct;
+                const label = ct
+                  ? [
+                      c.schedule?.courseName,
+                      c.schedule?.teacherName,
+                      c.schedule?.room ? `Rm ${c.schedule.room}` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
+                  : "";
+                const schoolAvg = ct
+                  ? schoolSummary?.periods.find((p) => p.period === c.period)
+                      ?.avgPerDay
+                  : undefined;
                 return (
                   <div
                     key={c.period}
                     onClick={
-                      mine
+                      big
                         ? () =>
                             setExpandedPeriod((p) =>
                               p === c.period ? null : c.period,
@@ -520,9 +957,9 @@ export default function TeacherHallPassResearch() {
                         : "1px solid #e2e8f0",
                       background: mine ? "#f5f3ff" : "white",
                       borderRadius: 10,
-                      padding: mine ? "0.75rem 0.9rem" : "0.55rem 0.7rem",
-                      minWidth: mine ? 210 : 96,
-                      cursor: mine ? "pointer" : "default",
+                      padding: big ? "0.75rem 0.9rem" : "0.55rem 0.7rem",
+                      minWidth: big ? 210 : 96,
+                      cursor: big ? "pointer" : "default",
                       boxShadow:
                         expandedPeriod === c.period
                           ? "0 0 0 3px #ddd6fe"
@@ -533,17 +970,36 @@ export default function TeacherHallPassResearch() {
                       style={{
                         fontSize: "0.75rem",
                         fontWeight: 700,
-                        color: mine ? "#5b21b6" : "#64748b",
+                        color: big ? "#5b21b6" : "#64748b",
                         marginBottom: 6,
                         whiteSpace: "nowrap",
                         overflow: "hidden",
                         textOverflow: "ellipsis",
-                        maxWidth: mine ? 190 : 90,
+                        maxWidth: big ? 190 : 90,
                       }}
                     >
                       Period {c.period}
                       {mine && c.courseName ? ` · ${c.courseName}` : ""}
                       {mine && " (your class)"}
+                      {ct && label && (
+                        <div
+                          style={{
+                            fontWeight: 600,
+                            color: "#64748b",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                          title={label}
+                        >
+                          {label}
+                        </div>
+                      )}
+                      {ct && !label && (
+                        <div style={{ fontWeight: 600, color: "#94a3b8" }}>
+                          no class on file
+                        </div>
+                      )}
                     </div>
                     <div
                       style={{
@@ -561,29 +1017,56 @@ export default function TeacherHallPassResearch() {
                       <Dot
                         color="#7c3aed"
                         value={
-                          mine && c.myQuarterPassCount != null
-                            ? c.myQuarterPassCount
-                            : c.historicCount + c.todayCount
+                          ct
+                            ? (c.windowPassCount ?? 0)
+                            : mine && c.myQuarterPassCount != null
+                              ? c.myQuarterPassCount
+                              : c.historicCount + c.todayCount
                         }
                         title={
-                          mine
-                            ? `${c.myQuarterPassCount} pass(es) from your class this ${quarterLabel}`
-                            : `${c.historicCount + c.todayCount} pass(es) this school year in period ${c.period}`
+                          ct
+                            ? `${c.windowPassCount ?? 0} pass(es) this ${quarterLabel} in period ${c.period}`
+                            : mine
+                              ? `${c.myQuarterPassCount} pass(es) from your class this ${quarterLabel}`
+                              : `${c.historicCount + c.todayCount} pass(es) this school year in period ${c.period}`
                         }
                       />
                       <Dot
                         color="#f59e0b"
                         value={
-                          mine && c.myTardyCount != null
-                            ? c.myTardyCount
-                            : c.tardyYearCount
+                          ct
+                            ? (c.windowTardyCount ?? 0)
+                            : mine && c.myTardyCount != null
+                              ? c.myTardyCount
+                              : c.tardyYearCount
                         }
                         title={
-                          mine
-                            ? `${c.myTardyCount} tardy(ies) to your class this ${quarterLabel}`
-                            : `${c.tardyYearCount} tardy(ies) this school year in period ${c.period}`
+                          ct
+                            ? `${c.windowTardyCount ?? 0} tardy(ies) this ${quarterLabel} to period ${c.period}`
+                            : mine
+                              ? `${c.myTardyCount} tardy(ies) to your class this ${quarterLabel}`
+                              : `${c.tardyYearCount} tardy(ies) this school year in period ${c.period}`
                         }
                       />
+                      {ct && (
+                        <span
+                          title={`Instructional minutes missed in period ${c.period} this ${quarterLabel}`}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            background: "#dc2626",
+                            color: "white",
+                            fontWeight: 800,
+                            borderRadius: 999,
+                            padding: "0.3rem 0.7rem",
+                            fontSize: "0.85rem",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {c.windowLostMin ?? 0} min lost
+                        </span>
+                      )}
                       {mine && (
                         <span
                           title={`Instructional minutes missed from your class this ${quarterLabel}`}
@@ -671,6 +1154,86 @@ export default function TeacherHallPassResearch() {
                         </div>
                       </>
                     )}
+                    {ct && (
+                      <div
+                        style={{
+                          marginTop: 6,
+                          fontSize: "0.72rem",
+                          color: "#64748b",
+                        }}
+                      >
+                        {schoolAvg != null
+                          ? `school avg: ${schoolAvg} passes/day this period`
+                          : ""}
+                        {c.absenceCount != null &&
+                          `${schoolAvg != null ? " · " : ""}${c.absenceCount} absence${c.absenceCount === 1 ? "" : "s"}`}{" "}
+                        · tap for details
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Core Team: this student's absences + tardies by period */}
+          {summary.coreTeam && summary.periods.length > 0 && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+                gap: 16,
+                marginTop: 16,
+              }}
+            >
+              {(
+                [
+                  {
+                    title: "Absences by period",
+                    color: "#0ea5e9",
+                    get: (c: PeriodCell) => c.absenceCount ?? 0,
+                  },
+                  {
+                    title: "Tardies by period",
+                    color: "#f59e0b",
+                    get: (c: PeriodCell) => c.windowTardyCount ?? 0,
+                  },
+                ] as const
+              ).map((g) => {
+                const max = Math.max(...summary.periods.map((c) => g.get(c)), 0);
+                return (
+                  <div key={g.title}>
+                    <div
+                      style={{
+                        fontWeight: 700,
+                        color: "#334155",
+                        marginBottom: 6,
+                        fontSize: "0.9rem",
+                      }}
+                    >
+                      {summary.student.firstName}&rsquo;s {g.title.toLowerCase()}{" "}
+                      · {quarterLabel}
+                    </div>
+                    {summary.periods.map((c) => (
+                      <div
+                        key={c.period}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          marginBottom: 4,
+                          fontSize: "0.8rem",
+                        }}
+                      >
+                        <span style={{ width: 34, color: "#64748b" }}>
+                          P{c.period}
+                        </span>
+                        <Bar value={g.get(c)} max={max} color={g.color} />
+                        <span style={{ width: 44, textAlign: "right" }}>
+                          {g.get(c).toLocaleString()}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 );
               })}

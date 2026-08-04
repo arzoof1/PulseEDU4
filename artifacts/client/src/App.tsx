@@ -9808,6 +9808,16 @@ function App() {
     authUser?.isSchoolPsychologist === true ||
     authUser?.isCoreTeam === true ||
     authUser?.isConfidentialSecretary === true;
+  // Hall Pass Research school-wide gate — mirrors canResearchSchoolwide()
+  // in lib/coreTeam.ts: Core Team plus guidance/school counselor, social
+  // worker, and dean of students. Unlocks the school-wide research
+  // dashboard + whole-school student search in Hall Passes → Reports.
+  const canResearchSchoolwideClient =
+    isCoreTeamMember ||
+    authUser?.isGuidanceCounselor === true ||
+    authUser?.isCounselor === true ||
+    authUser?.isSocialWorker === true ||
+    authUser?.isDean === true;
   // Pickup-tag management gate — mirrors canManagePickup() in
   // lib/coreTeam.ts. Admin / Core Team (BS, MTSS, school psych,
   // district admin, super) / counselor (school OR guidance) /
@@ -14977,13 +14987,14 @@ function App() {
         );
       })()}
 
-      {/* Teacher-facing Research: roster-scoped, served by dedicated
-          endpoints (never the whole-school pass list). Admin/SuperUser/ESE
-          keep the original school-wide Research above. */}
-      {hpView === "reports" &&
-        authUser &&
-        !(authUser.isAdmin || authUser.isSuperUser || authUser.isEseCoordinator) &&
-        hpReportSection === "research" && <TeacherHallPassResearch />}
+      {/* Research: roster-scoped for teachers; Core Team (+ guidance /
+          social worker / dean) get the school-wide dashboard + whole-school
+          student search. Admin/SuperUser/ESE also keep the original raw
+          pass-list Research above. Served by dedicated endpoints (never the
+          whole-school pass list). */}
+      {hpView === "reports" && authUser && hpReportSection === "research" && (
+        <TeacherHallPassResearch coreTeam={canResearchSchoolwideClient} />
+      )}
 
       {hpView === "reports" && authUser && hpReportSection === "byDay" && (<>
         <div

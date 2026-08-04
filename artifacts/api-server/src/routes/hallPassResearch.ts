@@ -14,6 +14,8 @@ import {
   sectionRosterTable,
   tardiesTable,
   schoolSettingsTable,
+  staffDefaultsTable,
+  studentAttendanceDayTable,
 } from "@workspace/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -25,6 +27,7 @@ import {
   type PeriodWindow,
 } from "../lib/lostInstruction.js";
 import { getSchoolTimezone } from "../lib/schoolYear.js";
+import { canResearchSchoolwide } from "../lib/coreTeam.js";
 
 // Hall Pass Research — roster-scoped student pass research for teachers.
 //
@@ -37,6 +40,20 @@ import { getSchoolTimezone } from "../lib/schoolYear.js";
 type Staff = typeof staffTable.$inferSelect;
 
 const router: IRouter = Router();
+
+// Visibility for research endpoints: anyone who passes the school-wide
+// research gate (Core Team + guidance/counselor/social worker/dean) sees
+// the whole school; everyone else keeps their normal roster visibility.
+// Keeps the gate and the student search/summary scope from disagreeing
+// (e.g. a dean seeing school-wide aggregates but failing student search).
+async function researchVisibility(
+  staff: Staff,
+  schoolId: number,
+): Promise<{ full: boolean; ids: Set<string> }> {
+  if (canResearchSchoolwide(staff)) return { full: true, ids: new Set() };
+  return getVisibleStudentIds(staff, schoolId);
+}
+
 
 async function loadStaff(req: Request, res: Response): Promise<Staff | null> {
   const staffId = req.staffId;
@@ -227,7 +244,7 @@ router.get(
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
     const staff = (req as Request & { staff: Staff }).staff;
-    const visibility = await getVisibleStudentIds(staff, schoolId);
+    const visibility = await researchVisibility(staff, schoolId);
     const base = db
       .select({
         studentId: studentsTable.studentId,
@@ -269,7 +286,7 @@ router.get(
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
     const staff = (req as Request & { staff: Staff }).staff;
-    const visibility = await getVisibleStudentIds(staff, schoolId);
+    const visibility = await researchVisibility(staff, schoolId);
     const tz = await getSchoolTimezone(schoolId);
     const today = tzDay(new Date(), tz)!;
 
@@ -339,7 +356,7 @@ router.get(
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
     const staff = (req as Request & { staff: Staff }).staff;
-    const visibility = await getVisibleStudentIds(staff, schoolId);
+    const visibility = await researchVisibility(staff, schoolId);
     const tz = await getSchoolTimezone(schoolId);
     const today = tzDay(new Date(), tz)!;
 
@@ -448,6 +465,198 @@ router.get(
 );
 
 // ---------------------------------------------------------------------------
+// GET /hall-passes/research/school-summary?quarters=Q1,Q2 — Core Team only.
+// School-wide per-period roll-up: passes, average passes per school day,
+// passes per 100 enrolled students, lost instructional minutes, tardies,
+// period-marked absences, destination mix, and a per-teacher drill-down
+// (teacher attribution = the pass's recorded activating teacher).
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/hall-passes/research/school-summary",
+  requireStaff,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: Staff }).staff;
+    if (!canResearchSchoolwide(staff)) {
+      res.status(403).json({ error: "Core Team access required" });
+      return;
+    }
+    const quarters = parseQuarters(req.query.quarters, req.query.quarter);
+    const tz = await getSchoolTimezone(schoolId);
+    const windows = await loadDefaultPeriodWindows(schoolId);
+    const today = tzDay(new Date(), tz)!;
+
+    const passes = await db
+      .select({
+        studentId: hallPassesTable.studentId,
+        destination: hallPassesTable.destination,
+        teacherName: hallPassesTable.teacherName,
+        createdAt: hallPassesTable.createdAt,
+        endedAt: hallPassesTable.endedAt,
+      })
+      .from(hallPassesTable)
+      .where(eq(hallPassesTable.schoolId, schoolId));
+
+    const passDays = passes
+      .map((p) => tzDay(p.createdAt, tz))
+      .filter((d): d is string => d != null);
+    const startYear = effectiveStartYear(passDays, today);
+    const firstDay = await loadFirstDayOfSchool(schoolId);
+    const wins =
+      quarters.length === 0
+        ? [quarterWindow(startYear, "all", firstDay)]
+        : quarters.map((q) => quarterWindow(startYear, q, firstDay));
+    const inSelected = (day: string) =>
+      wins.some((w) => day >= w.from && day <= w.to);
+
+    // Per-period enrollment (distinct rostered students in non-planning
+    // sections of that period) — the "per 100 students" denominator.
+    const enrollRows = await db
+      .select({
+        period: classSectionsTable.period,
+        studentId: sectionRosterTable.studentId,
+      })
+      .from(classSectionsTable)
+      .innerJoin(
+        sectionRosterTable,
+        eq(sectionRosterTable.sectionId, classSectionsTable.id),
+      )
+      .where(
+        and(
+          eq(classSectionsTable.schoolId, schoolId),
+          eq(classSectionsTable.isPlanning, false),
+          eq(sectionRosterTable.schoolId, schoolId),
+        ),
+      );
+    const enrolledByPeriod = new Map<number, Set<string>>();
+    for (const r of enrollRows) {
+      if (r.period == null) continue;
+      let s = enrolledByPeriod.get(r.period);
+      if (!s) enrolledByPeriod.set(r.period, (s = new Set()));
+      s.add(r.studentId);
+    }
+
+    type PAgg = {
+      passCount: number;
+      lostMin: number;
+      destinations: Map<string, number>;
+      teachers: Map<string, { passes: number; lostMin: number }>;
+    };
+    const agg = new Map<number, PAgg>();
+    const ensure = (p: number): PAgg => {
+      let a = agg.get(p);
+      if (!a) {
+        a = {
+          passCount: 0,
+          lostMin: 0,
+          destinations: new Map(),
+          teachers: new Map(),
+        };
+        agg.set(p, a);
+      }
+      return a;
+    };
+    // "School days" denominator: distinct school-local days that saw at
+    // least one pass anywhere in the school within the selected window(s).
+    // Robust against frozen demo data and holidays (no wall-clock counting).
+    const activeDays = new Set<string>();
+    for (const p of passes) {
+      const day = tzDay(p.createdAt, tz);
+      if (!day || !inSelected(day)) continue;
+      activeDays.add(day);
+      const period = periodForIso(windows, p.createdAt, tz);
+      if (period == null) continue;
+      const a = ensure(period);
+      a.passCount += 1;
+      const lost = hallPassLostMinutes(p.createdAt, p.endedAt);
+      if (lost != null) a.lostMin += lost;
+      const dest = (p.destination ?? "Unknown").trim() || "Unknown";
+      a.destinations.set(dest, (a.destinations.get(dest) ?? 0) + 1);
+      const tName = (p.teacherName ?? "Unknown").trim() || "Unknown";
+      let t = a.teachers.get(tName);
+      if (!t) a.teachers.set(tName, (t = { passes: 0, lostMin: 0 }));
+      t.passes += 1;
+      if (lost != null) t.lostMin += lost;
+    }
+    const dayCount = activeDays.size;
+
+    // Tardies per period (recorded against a period at log time).
+    const tardies = await db
+      .select({ period: tardiesTable.period, createdAt: tardiesTable.createdAt })
+      .from(tardiesTable)
+      .where(eq(tardiesTable.schoolId, schoolId));
+    const tardyByPeriod = new Map<number, number>();
+    for (const t of tardies) {
+      const day = tzDay(t.createdAt, tz);
+      if (!day || !inSelected(day)) continue;
+      const period = /^\d+$/.test(t.period.trim())
+        ? Number(t.period.trim())
+        : null;
+      if (period == null) continue;
+      tardyByPeriod.set(period, (tardyByPeriod.get(period) ?? 0) + 1);
+    }
+
+    // Period-marked absences from official attendance records.
+    const attRows = await db
+      .select({
+        day: studentAttendanceDayTable.day,
+        absentPeriods: studentAttendanceDayTable.absentPeriods,
+      })
+      .from(studentAttendanceDayTable)
+      .where(eq(studentAttendanceDayTable.schoolId, schoolId));
+    const absencesByPeriod = new Map<number, number>();
+    for (const r of attRows) {
+      const day = typeof r.day === "string" ? r.day : String(r.day);
+      if (!inSelected(day)) continue;
+      for (const p of r.absentPeriods ?? []) {
+        absencesByPeriod.set(p, (absencesByPeriod.get(p) ?? 0) + 1);
+      }
+    }
+
+    const periods = Array.from(windows.keys())
+      .sort((a, b) => a - b)
+      .map((p) => {
+        const w = windows.get(p)!;
+        const a = agg.get(p);
+        const enrolled = enrolledByPeriod.get(p)?.size ?? 0;
+        const passCount = a?.passCount ?? 0;
+        return {
+          period: p,
+          lengthMin: w.lengthMin,
+          enrolled,
+          passCount,
+          avgPerDay:
+            dayCount > 0 ? Math.round((passCount / dayCount) * 10) / 10 : 0,
+          per100Students:
+            enrolled > 0
+              ? Math.round((passCount / enrolled) * 100 * 10) / 10
+              : null,
+          lostMin: a?.lostMin ?? 0,
+          tardyCount: tardyByPeriod.get(p) ?? 0,
+          absenceCount: absencesByPeriod.get(p) ?? 0,
+          destinations: Array.from(a?.destinations ?? [])
+            .map(([name, count]) => ({ name, count }))
+            .sort((x, y) => y.count - x.count)
+            .slice(0, 5),
+          teachers: Array.from(a?.teachers ?? [])
+            .map(([name, v]) => ({ name, ...v }))
+            .sort((x, y) => y.lostMin - x.lostMin),
+        };
+      });
+
+    res.json({
+      quarters,
+      windows: wins,
+      dayCount,
+      periodLen: avgPeriodLength(windows),
+      periods,
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
 // GET /hall-passes/research/summary?studentId=&quarter=all|Q1..Q4
 // One searched student: pass history + per-period dot graph + the acting
 // teacher's teacher-of-record cells (lost minutes vs class average).
@@ -467,7 +676,7 @@ router.get(
     }
     const quarters = parseQuarters(req.query.quarters, req.query.quarter);
 
-    const visibility = await getVisibleStudentIds(staff, schoolId);
+    const visibility = await researchVisibility(staff, schoolId);
     const [student] = await db
       .select({
         studentId: studentsTable.studentId,
@@ -562,6 +771,78 @@ router.get(
         });
     }
 
+    // Core Team extras: the student's FULL schedule (every teacher's
+    // section, with teacher name + default hall-pass room), plus per-period
+    // lost minutes / window counts across ALL periods and period-marked
+    // absences. Teachers keep the original roster-scoped shape untouched.
+    const coreTeam = canResearchSchoolwide(staff);
+    const scheduleByPeriod = new Map<
+      number,
+      { courseName: string | null; teacherName: string; room: string | null }
+    >();
+    if (coreTeam) {
+      const allSections = await db
+        .select({
+          period: classSectionsTable.period,
+          courseName: classSectionsTable.courseName,
+          teacherName: staffTable.displayName,
+          room: staffDefaultsTable.defaultLocationName,
+        })
+        .from(classSectionsTable)
+        .innerJoin(
+          sectionRosterTable,
+          eq(sectionRosterTable.sectionId, classSectionsTable.id),
+        )
+        .innerJoin(
+          staffTable,
+          eq(staffTable.id, classSectionsTable.teacherStaffId),
+        )
+        .leftJoin(
+          staffDefaultsTable,
+          eq(staffDefaultsTable.staffId, classSectionsTable.teacherStaffId),
+        )
+        .where(
+          and(
+            eq(classSectionsTable.schoolId, schoolId),
+            eq(classSectionsTable.isPlanning, false),
+            eq(sectionRosterTable.schoolId, schoolId),
+            eq(sectionRosterTable.studentId, student.studentId),
+          ),
+        );
+      for (const s of allSections) {
+        if (s.period != null && !scheduleByPeriod.has(s.period)) {
+          scheduleByPeriod.set(s.period, {
+            courseName: s.courseName,
+            teacherName: s.teacherName,
+            room: s.room ?? null,
+          });
+        }
+      }
+    }
+    // Period-marked absences for this student in the selected window(s).
+    const absencesByPeriod = new Map<number, number>();
+    if (coreTeam) {
+      const attRows = await db
+        .select({
+          day: studentAttendanceDayTable.day,
+          absentPeriods: studentAttendanceDayTable.absentPeriods,
+        })
+        .from(studentAttendanceDayTable)
+        .where(
+          and(
+            eq(studentAttendanceDayTable.schoolId, schoolId),
+            eq(studentAttendanceDayTable.studentId, student.studentId),
+          ),
+        );
+      for (const r of attRows) {
+        const day = typeof r.day === "string" ? r.day : String(r.day);
+        if (!inSelected(day)) continue;
+        for (const p of r.absentPeriods ?? []) {
+          absencesByPeriod.set(p, (absencesByPeriod.get(p) ?? 0) + 1);
+        }
+      }
+    }
+
     // Tardies for the searched student — recorded directly against a
     // period at logging time, so no bell-schedule attribution is needed.
     const tardies = await db
@@ -582,6 +863,9 @@ router.get(
       myQuarterCount: number;
       tardyYearCount: number;
       myTardyCount: number;
+      windowCount: number;
+      windowLostMin: number;
+      windowTardyCount: number;
     };
     const agg = new Map<number, Agg>();
     const ensure = (p: number): Agg => {
@@ -594,6 +878,9 @@ router.get(
           myQuarterCount: 0,
           tardyYearCount: 0,
           myTardyCount: 0,
+          windowCount: 0,
+          windowLostMin: 0,
+          windowTardyCount: 0,
         };
         agg.set(p, a);
       }
@@ -611,6 +898,10 @@ router.get(
       const a = ensure(period);
       if (day === today) a.todayCount += 1;
       if (inYear && day !== today) a.historicCount += 1;
+      if (inSelected(day)) {
+        a.windowCount += 1;
+        if (lost != null) a.windowLostMin += lost;
+      }
       if (myByPeriod.has(period) && inSelected(day)) {
         a.myQuarterCount += 1;
         if (lost != null) a.myLostMin += lost;
@@ -647,6 +938,7 @@ router.get(
       if (period == null || day == null) continue;
       const a = ensure(period);
       if (inYear) a.tardyYearCount += 1;
+      if (inSelected(day)) a.windowTardyCount += 1;
       if (myByPeriod.has(period) && inSelected(day)) a.myTardyCount += 1;
     }
 
@@ -698,6 +990,7 @@ router.get(
         const w = windows.get(p)!;
         const a = agg.get(p);
         const mine = myByPeriod.get(p);
+        const sched = coreTeam ? scheduleByPeriod.get(p) : undefined;
         return {
           period: p,
           lengthMin: w.lengthMin,
@@ -710,11 +1003,24 @@ router.get(
           classAvgLostMin: mine ? (classAvgByPeriod.get(p) ?? 0) : null,
           tardyYearCount: a?.tardyYearCount ?? 0,
           myTardyCount: mine ? (a?.myTardyCount ?? 0) : null,
+          // Core Team extras (null/absent for teachers).
+          windowPassCount: coreTeam ? (a?.windowCount ?? 0) : null,
+          windowLostMin: coreTeam ? (a?.windowLostMin ?? 0) : null,
+          windowTardyCount: coreTeam ? (a?.windowTardyCount ?? 0) : null,
+          absenceCount: coreTeam ? (absencesByPeriod.get(p) ?? 0) : null,
+          schedule: sched
+            ? {
+                courseName: sched.courseName,
+                teacherName: sched.teacherName,
+                room: sched.room,
+              }
+            : null,
         };
       });
 
     res.json({
       student,
+      coreTeam,
       quarters,
       windows: wins,
       periods,
