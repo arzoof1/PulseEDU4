@@ -350,6 +350,36 @@ export default function TeacherHallPassResearch({
     });
   };
 
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfError, setPdfError] = useState("");
+  const printPdf = async () => {
+    if (!summary || pdfBusy) return;
+    setPdfBusy(true);
+    setPdfError("");
+    try {
+      const qs = windowQs ? `&${windowQs}` : "";
+      const r = await authFetch(
+        `/api/hall-passes/research/summary-pdf?studentId=${encodeURIComponent(summary.student.studentId)}${qs}`,
+      );
+      if (!r.ok) throw new Error("Could not generate the PDF.");
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `hall-pass-research-${summary.student.localSisId ?? "student"}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } catch (e) {
+      setPdfError(
+        e instanceof Error ? e.message : "Could not generate the PDF.",
+      );
+    } finally {
+      setPdfBusy(false);
+    }
+  };
+
   const historyPasses = useMemo(() => {
     if (!summary) return [];
     const fromMs = fromDate
@@ -946,10 +976,42 @@ export default function TeacherHallPassResearch({
       {/* 3 — Period dot graph */}
       {showStudent && summary && (
         <div className="card">
-          <h3 style={{ margin: "0 0 0.25rem", color: "#4c1d95" }}>
-            Passes by period —{" "}
-            {`${summary.student.firstName} ${summary.student.lastName}`}
-          </h3>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "0.75rem",
+              flexWrap: "wrap",
+            }}
+          >
+            <h3 style={{ margin: "0 0 0.25rem", color: "#4c1d95" }}>
+              Passes by period —{" "}
+              {`${summary.student.firstName} ${summary.student.lastName}`}
+            </h3>
+            <button
+              type="button"
+              disabled={pdfBusy}
+              onClick={printPdf}
+              style={{
+                padding: "0.4rem 0.9rem",
+                fontSize: "0.85rem",
+                borderRadius: 6,
+                border: "1px solid #7c3aed",
+                background: pdfBusy ? "#ede9fe" : "#7c3aed",
+                color: pdfBusy ? "#7c3aed" : "white",
+                fontWeight: 600,
+                cursor: pdfBusy ? "default" : "pointer",
+              }}
+            >
+              {pdfBusy ? "Preparing PDF…" : "Print (PDF)"}
+            </button>
+          </div>
+          {pdfError && (
+            <div style={{ color: "#dc2626", fontSize: "0.85rem" }}>
+              {pdfError}
+            </div>
+          )}
           {/* Real totals for THIS student (not legend examples). */}
           {(() => {
             const todayTotal = summary.periods.reduce(

@@ -26,6 +26,7 @@ import {
   tzMinutesOfDay,
   type PeriodWindow,
 } from "../lib/lostInstruction.js";
+import PDFDocument from "pdfkit";
 import { getSchoolTimezone } from "../lib/schoolYear.js";
 import { canResearchSchoolwide } from "../lib/coreTeam.js";
 
@@ -708,19 +709,15 @@ router.get(
 // teacher's teacher-of-record cells (lost minutes vs class average).
 // ---------------------------------------------------------------------------
 
-router.get(
-  "/hall-passes/research/summary",
-  requireStaff,
-  async (req, res) => {
-    const schoolId = requireSchool(req, res);
-    if (!schoolId) return;
-    const staff = (req as Request & { staff: Staff }).staff;
-    const studentIdRaw = String(req.query.studentId ?? "").trim();
-    if (!studentIdRaw) {
-      res.status(400).json({ error: "studentId is required" });
-      return;
-    }
-    const quarters = parseQuarters(req.query.quarters, req.query.quarter);
+// Shared builder for the per-student research summary — used by BOTH the
+// JSON endpoint and the printable PDF so the two can never drift.
+async function buildStudentSummary(
+  schoolId: number,
+  staff: Staff,
+  studentIdRaw: string,
+  q: Record<string, unknown>,
+) {
+    const quarters = parseQuarters(q.quarters, q.quarter);
 
     const visibility = await researchVisibility(staff, schoolId);
     const [student] = await db
@@ -744,8 +741,11 @@ router.get(
       !student ||
       (!visibility.full && !visibility.ids.has(student.studentId))
     ) {
-      res.status(404).json({ error: "No matching student" });
-      return;
+      return {
+        ok: false as const,
+        status: 404,
+        error: "No matching student",
+      };
     }
 
     const tz = await getSchoolTimezone(schoolId);
@@ -777,13 +777,12 @@ router.get(
     // Selected window(s): whole year when no quarters chosen, otherwise the
     // union of the chosen quarters (possibly disjoint, e.g. Q1+Q3).
     const range =
-      presetWindow(today, req.query.preset) ??
-      parseDateRange(req.query.from, req.query.to);
+      presetWindow(today, q.preset) ?? parseDateRange(q.from, q.to);
     const wins = range
       ? [range]
       : quarters.length === 0
         ? [yearWin]
-        : quarters.map((q) => quarterWindow(startYear, q, firstDay));
+        : quarters.map((qq) => quarterWindow(startYear, qq, firstDay));
     const inSelected = (day: string) =>
       wins.some((w) => day >= w.from && day <= w.to);
 
@@ -1068,34 +1067,327 @@ router.get(
         };
       });
 
-    res.json({
-      student,
-      coreTeam,
-      quarters,
-      windows: wins,
-      periods,
-      tardies: tardyRows,
-      totals: {
-        lostMin: totalLostMin,
-        days: daysFromMinutes(totalLostMin, periodLen),
-        periodLen,
+    return {
+      ok: true as const,
+      payload: {
+        student,
+        coreTeam,
+        quarters,
+        windows: wins,
+        periods,
+        tardies: tardyRows,
+        totals: {
+          lostMin: totalLostMin,
+          days: daysFromMinutes(totalLostMin, periodLen),
+          periodLen,
+        },
+        passes: passes.map((p) => ({
+          id: p.id,
+          originRoom: p.originRoom,
+          destination: p.destination,
+          status: p.status,
+          isTardyReturn: p.isTardyReturn,
+          maxDurationMinutes: p.maxDurationMinutes,
+          createdAt: p.createdAt,
+          endedAt: p.endedAt,
+          // School-local day, so client-side window filters agree with the
+          // server's quarter attribution (no UTC-midnight drift).
+          day: tzDay(p.createdAt, tz),
+          period: periodForIso(windows, p.createdAt, tz),
+          lostMin: hallPassLostMinutes(p.createdAt, p.endedAt),
+        })),
       },
-      passes: passes.map((p) => ({
-        id: p.id,
-        originRoom: p.originRoom,
-        destination: p.destination,
-        status: p.status,
-        isTardyReturn: p.isTardyReturn,
-        maxDurationMinutes: p.maxDurationMinutes,
-        createdAt: p.createdAt,
-        endedAt: p.endedAt,
-        // School-local day, so client-side window filters agree with the
-        // server's quarter attribution (no UTC-midnight drift).
-        day: tzDay(p.createdAt, tz),
-        period: periodForIso(windows, p.createdAt, tz),
-        lostMin: hallPassLostMinutes(p.createdAt, p.endedAt),
-      })),
+    };
+}
+
+router.get(
+  "/hall-passes/research/summary",
+  requireStaff,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: Staff }).staff;
+    const studentIdRaw = String(req.query.studentId ?? "").trim();
+    if (!studentIdRaw) {
+      res.status(400).json({ error: "studentId is required" });
+      return;
+    }
+    const result = await buildStudentSummary(
+      schoolId,
+      staff,
+      studentIdRaw,
+      req.query as Record<string, unknown>,
+    );
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+    res.json(result.payload);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /hall-passes/research/summary-pdf?studentId=&quarters|preset|from/to
+// Printable one-pager of the Student lookup view. Same visibility rules and
+// the same builder as the JSON endpoint (parity by construction).
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/hall-passes/research/summary-pdf",
+  requireStaff,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: Staff }).staff;
+    const studentIdRaw = String(req.query.studentId ?? "").trim();
+    if (!studentIdRaw) {
+      res.status(400).json({ error: "studentId is required" });
+      return;
+    }
+    const result = await buildStudentSummary(
+      schoolId,
+      staff,
+      studentIdRaw,
+      req.query as Record<string, unknown>,
+    );
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+    const d = result.payload;
+    const tz = await getSchoolTimezone(schoolId);
+
+    // Human window label (mirrors the client's quarterLabel). An explicit
+    // from/to range (no preset) prints the actual date span.
+    const preset = typeof req.query.preset === "string" ? req.query.preset : "";
+    const explicitRange =
+      ["today", "week", "month"].includes(preset)
+        ? null
+        : parseDateRange(req.query.from, req.query.to);
+    const windowLabel =
+      preset === "today"
+        ? "Today"
+        : preset === "week"
+          ? "This week"
+          : preset === "month"
+            ? "This month"
+            : explicitRange
+              ? `${explicitRange.from} to ${explicitRange.to}`
+              : d.quarters.length === 0
+              ? "School year"
+              : d.quarters.length === 2 &&
+                  d.quarters[0] === "Q1" &&
+                  d.quarters[1] === "Q2"
+                ? "Semester 1"
+                : d.quarters.length === 2 &&
+                    d.quarters[0] === "Q3" &&
+                    d.quarters[1] === "Q4"
+                  ? "Semester 2"
+                  : d.quarters.join(" + ");
+
+    const inWins = (day: string | null) =>
+      day != null && d.windows.some((w) => day >= w.from && day <= w.to);
+    const windowPasses = d.passes.filter((p) => inWins(p.day));
+    const windowTardies = d.tardies.filter((t) => inWins(t.day));
+    const outsideCount = windowPasses.filter((p) => p.period == null).length;
+
+    // Built-in Helvetica is WinAnsi-only — strip accents and replace any
+    // remaining non-encodable characters so an unusual name or room label
+    // can't break PDF generation.
+    const wa = (s: string) =>
+      s
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^\x20-\x7E\u00A0-\u00FF·—–]/g, "?");
+
+    const fmtWhen = (iso: string) =>
+      new Date(iso).toLocaleString("en-US", {
+        timeZone: tz,
+        month: "numeric",
+        day: "numeric",
+        year: "2-digit",
+        hour: "numeric",
+        minute: "2-digit",
+      });
+
+    const doc = new PDFDocument({
+      size: "LETTER",
+      margins: { top: 50, bottom: 50, left: 50, right: 50 },
+      info: {
+        Title: wa(
+          `Hall Pass Research — ${d.student.firstName} ${d.student.lastName}`,
+        ),
+        Author: "PulseEDU",
+      },
     });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="hall-pass-research-${(d.student.localSisId ?? "student").replace(/[^A-Za-z0-9_-]/g, "")}.pdf"`,
+    );
+    doc.pipe(res);
+
+    const heading = (txt: string) => {
+      doc
+        .moveDown(0.6)
+        .font("Helvetica-Bold")
+        .fontSize(11)
+        .fillColor("#3b3b3b")
+        .text(txt.toUpperCase(), { characterSpacing: 1 })
+        .moveTo(50, doc.y)
+        .lineTo(562, doc.y)
+        .strokeColor("#d4d4d4")
+        .stroke()
+        .moveDown(0.3)
+        .fillColor("black")
+        .font("Helvetica")
+        .fontSize(10);
+    };
+
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(18)
+      .text(
+        wa(`Hall Pass Research — ${d.student.firstName} ${d.student.lastName}`),
+      );
+    doc
+      .font("Helvetica")
+      .fontSize(10)
+      .fillColor("#666")
+      .text(
+        `Student ID ${d.student.localSisId ?? "—"}  ·  Grade ${d.student.grade ?? "—"}  ·  Window: ${windowLabel}  ·  Generated ${new Date().toLocaleString("en-US", { timeZone: tz })}`,
+      )
+      .fillColor("black");
+
+    heading("Totals in the selected window");
+    doc.text(
+      `Passes: ${windowPasses.length}  ·  Tardies: ${windowTardies.length}  ·  Lost instruction (school year): ${d.totals.lostMin.toLocaleString()} min` +
+        (d.totals.days != null && d.totals.periodLen != null
+          ? ` (about ${d.totals.days} class periods of ${d.totals.periodLen} min)`
+          : ""),
+    );
+    if (outsideCount > 0) {
+      doc
+        .fillColor("#666")
+        .text(
+          `${outsideCount} of the ${windowPasses.length} passes ${outsideCount === 1 ? "was" : "were"} taken outside scheduled class periods (before/after school or between classes), so ${outsideCount === 1 ? "it doesn't" : "they don't"} appear in a period row below.`,
+        )
+        .fillColor("black");
+    }
+
+    heading("By period");
+    if (d.periods.length === 0) {
+      doc
+        .fillColor("#666")
+        .text(
+          "No default bell schedule is configured, so passes can't be matched to periods.",
+        )
+        .fillColor("black");
+    } else {
+      // Simple table: fixed column x-positions on LETTER width.
+      const cols = d.coreTeam
+        ? [
+            { x: 50, w: 42, label: "Period" },
+            { x: 92, w: 218, label: "Class" },
+            { x: 310, w: 55, label: "Passes" },
+            { x: 365, w: 62, label: "Lost min" },
+            { x: 427, w: 55, label: "Tardies" },
+            { x: 482, w: 70, label: "Absences" },
+          ]
+        : [
+            { x: 50, w: 42, label: "Period" },
+            { x: 92, w: 218, label: "Class" },
+            { x: 310, w: 80, label: "Passes (yr)" },
+            { x: 390, w: 80, label: "My lost min" },
+            { x: 470, w: 82, label: "Tardies (yr)" },
+          ];
+      doc.font("Helvetica-Bold").fontSize(9);
+      const headerY = doc.y;
+      for (const c of cols)
+        doc.text(c.label, c.x, headerY, { width: c.w, lineBreak: false });
+      doc
+        .moveTo(50, headerY + 12)
+        .lineTo(562, headerY + 12)
+        .strokeColor("#d4d4d4")
+        .stroke();
+      doc.font("Helvetica").fontSize(9);
+      let y = headerY + 17;
+      for (const p of d.periods) {
+        if (y > 700) {
+          doc.addPage();
+          y = 50;
+        }
+        const sched = p.schedule;
+        const cls = wa(
+          sched
+            ? `${sched.courseName ?? "—"} · ${sched.teacherName}${sched.room ? ` · Rm ${sched.room}` : ""}`
+            : p.isMine
+              ? (p.courseName ?? "—")
+              : "—",
+        );
+        const cells = d.coreTeam
+          ? [
+              String(p.period),
+              cls,
+              String(p.windowPassCount ?? 0),
+              String(p.windowLostMin ?? 0),
+              String(p.windowTardyCount ?? 0),
+              String(p.absenceCount ?? 0),
+            ]
+          : [
+              String(p.period),
+              cls,
+              String(p.todayCount + p.historicCount),
+              p.myLostMin == null ? "—" : String(p.myLostMin),
+              String(p.tardyYearCount),
+            ];
+        cells.forEach((v, i) =>
+          doc.text(v, cols[i].x, y, {
+            width: cols[i].w,
+            // Clamp to ONE line — pdfkit still wraps width-constrained text
+            // even with lineBreak:false, which overlaps the next row.
+            height: 11,
+            ellipsis: true,
+          }),
+        );
+        y += 15;
+      }
+      doc.y = y + 4;
+      doc.x = 50;
+    }
+
+    heading("Pass history (selected window)");
+    if (windowPasses.length === 0) {
+      doc
+        .fillColor("#666")
+        .text("No passes in the selected window.")
+        .fillColor("black");
+    } else {
+      const cap = 60;
+      doc.fontSize(9);
+      for (const p of windowPasses.slice(0, cap)) {
+        if (doc.y > 720) doc.addPage();
+        const dur = p.lostMin == null ? "active" : `${p.lostMin} min`;
+        doc.text(
+          wa(
+            `${fmtWhen(p.createdAt)}  ·  ${p.originRoom ?? "—"} to ${p.destination ?? "—"}  ·  ${dur}  ·  ${p.period == null ? "outside class periods" : `Period ${p.period}`}${p.isTardyReturn ? "  ·  TARDY" : ""}`,
+          ),
+        );
+      }
+      if (windowPasses.length > cap) {
+        doc
+          .fillColor("#666")
+          .text(`… and ${windowPasses.length - cap} more.`)
+          .fillColor("black");
+      }
+    }
+
+    doc
+      .moveDown(1)
+      .fontSize(8)
+      .fillColor("#888")
+      .text("Confidential — for staff use only.", { align: "center" });
+    doc.end();
   },
 );
 
