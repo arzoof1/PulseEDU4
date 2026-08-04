@@ -962,6 +962,13 @@ export default function TeacherHallPassResearch({
             const tardyTotal = summary.tardies.filter((t) =>
               inWindows(t.day, summary.windows),
             ).length;
+            // Passes counted in the total but taken OUTSIDE any bell-schedule
+            // period (before/after school, lunch, etc.) — they can't appear
+            // in a period circle, so call them out or the numbers won't
+            // reconcile with the grid.
+            const outsideTotal = summary.passes.filter(
+              (p) => p.period == null && inWindows(p.day, summary.windows),
+            ).length;
             return (
               <div
                 style={{
@@ -979,6 +986,19 @@ export default function TeacherHallPassResearch({
                 <Dot color="#f59e0b" value={tardyTotal} title="" size={16} />{" "}
                 {tardyTotal === 1 ? "tardy" : "tardies"} in the selected
                 window ({quarterLabel})
+                {outsideTotal > 0 && (
+                  <div
+                    style={{
+                      fontWeight: 400,
+                      color: "#64748b",
+                      marginTop: 2,
+                    }}
+                  >
+                    {outsideTotal === passTotal
+                      ? `All ${outsideTotal === 1 ? "1 pass was" : `${outsideTotal} passes were`} taken outside scheduled class periods (before/after school or between classes), so no period circles light up.`
+                      : `${outsideTotal} of these ${passTotal} passes ${outsideTotal === 1 ? "was" : "were"} taken outside scheduled class periods (before/after school or between classes) and won't appear in a period circle.`}
+                  </div>
+                )}
               </div>
             );
           })()}
