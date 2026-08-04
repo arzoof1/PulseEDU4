@@ -202,6 +202,48 @@ function parseQuarters(v: unknown, legacy: unknown): QuarterKey[] {
   return qs.length === 0 || qs.length === 4 ? [] : qs;
 }
 
+// Optional explicit date range (?from=YYYY-MM-DD&to=YYYY-MM-DD) — used by
+// the client's Today / This week / This month quick-select. When both are
+// valid and ordered, it REPLACES the quarter window(s).
+function parseDateRange(
+  fromQ: unknown,
+  toQ: unknown,
+): { from: string; to: string } | null {
+  const from = typeof fromQ === "string" ? fromQ.trim() : "";
+  const to = typeof toQ === "string" ? toQ.trim() : "";
+  const ok = /^\d{4}-\d{2}-\d{2}$/;
+  if (!ok.test(from) || !ok.test(to) || from > to) return null;
+  return { from, to };
+}
+
+// Canonical quick-select windows (?preset=today|week|month), computed from
+// the SCHOOL-timezone "today" so a staff member in a different timezone
+// still gets the school's day/week/month boundaries. Week = Mon → Sun.
+function presetWindow(
+  todayKey: string,
+  presetQ: unknown,
+): { from: string; to: string } | null {
+  const preset = typeof presetQ === "string" ? presetQ.trim() : "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(todayKey);
+  if (!m || !["today", "week", "month"].includes(preset)) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const key = (dt: Date) => dt.toISOString().slice(0, 10);
+  if (preset === "today") return { from: todayKey, to: todayKey };
+  if (preset === "week") {
+    const base = new Date(Date.UTC(y, mo - 1, d));
+    const dow = (base.getUTCDay() + 6) % 7; // Mon=0 … Sun=6
+    const mon = new Date(base);
+    mon.setUTCDate(base.getUTCDate() - dow);
+    const sun = new Date(mon);
+    sun.setUTCDate(mon.getUTCDate() + 6);
+    return { from: key(mon), to: key(sun) };
+  }
+  return {
+    from: key(new Date(Date.UTC(y, mo - 1, 1))),
+    to: key(new Date(Date.UTC(y, mo, 0))),
+  };
+}
+
 // Bell-schedule period a pass started in, from its checkout instant.
 function periodForIso(
   windows: Map<number, PeriodWindow>,
@@ -504,8 +546,12 @@ router.get(
       .filter((d): d is string => d != null);
     const startYear = effectiveStartYear(passDays, today);
     const firstDay = await loadFirstDayOfSchool(schoolId);
-    const wins =
-      quarters.length === 0
+    const range =
+      presetWindow(today, req.query.preset) ??
+      parseDateRange(req.query.from, req.query.to);
+    const wins = range
+      ? [range]
+      : quarters.length === 0
         ? [quarterWindow(startYear, "all", firstDay)]
         : quarters.map((q) => quarterWindow(startYear, q, firstDay));
     const inSelected = (day: string) =>
@@ -730,8 +776,12 @@ router.get(
     const yearWin = quarterWindow(startYear, "all", firstDay);
     // Selected window(s): whole year when no quarters chosen, otherwise the
     // union of the chosen quarters (possibly disjoint, e.g. Q1+Q3).
-    const wins =
-      quarters.length === 0
+    const range =
+      presetWindow(today, req.query.preset) ??
+      parseDateRange(req.query.from, req.query.to);
+    const wins = range
+      ? [range]
+      : quarters.length === 0
         ? [yearWin]
         : quarters.map((q) => quarterWindow(startYear, q, firstDay));
     const inSelected = (day: string) =>

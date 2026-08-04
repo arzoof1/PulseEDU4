@@ -237,6 +237,11 @@ export default function TeacherHallPassResearch({
   // shortcuts that toggle Q1+Q2 / Q3+Q4; all four selected snaps back to
   // Year so the highlight always reads cleanly.
   const [quarters, setQuarters] = useState<QuarterKey[]>([]);
+  // Quick-select date presets. When set, they REPLACE the quarter windows
+  // (both server-side aggregates and labels) with an explicit date range.
+  const [preset, setPreset] = useState<"today" | "week" | "month" | null>(
+    null,
+  );
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -256,14 +261,29 @@ export default function TeacherHallPassResearch({
       .catch(() => setRosterTotal(null));
   }, []);
 
+  // Window portion of the query string, shared by both endpoints. Presets
+  // send `preset=` so the SERVER computes the day/week/month boundaries in
+  // the school's timezone (a staff member's browser may be elsewhere).
+  const windowQs = preset
+    ? `preset=${preset}`
+    : quarters.length
+      ? `quarters=${quarters.join(",")}`
+      : "";
+
+  const schoolReqIdRef = useRef(0);
   useEffect(() => {
     if (!coreTeam) return;
-    const qs = quarters.length ? `?quarters=${quarters.join(",")}` : "";
+    const myReq = ++schoolReqIdRef.current;
+    const qs = windowQs ? `?${windowQs}` : "";
     authFetch(`/api/hall-passes/research/school-summary${qs}`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => setSchoolSummary(d))
-      .catch(() => setSchoolSummary(null));
-  }, [coreTeam, quarters]);
+      .then((d) => {
+        if (myReq === schoolReqIdRef.current) setSchoolSummary(d);
+      })
+      .catch(() => {
+        if (myReq === schoolReqIdRef.current) setSchoolSummary(null);
+      });
+  }, [coreTeam, windowQs]);
 
   const clearSelection = () => {
     // Invalidate any in-flight summary fetch so a late response can't
@@ -282,9 +302,7 @@ export default function TeacherHallPassResearch({
     const myReq = ++reqIdRef.current;
     setLoading(true);
     setError("");
-    const qs = quarters.length
-      ? `&quarters=${quarters.join(",")}`
-      : "";
+    const qs = windowQs ? `&${windowQs}` : "";
     authFetch(
       `/api/hall-passes/research/summary?studentId=${encodeURIComponent(selectedId)}${qs}`,
     )
@@ -307,19 +325,22 @@ export default function TeacherHallPassResearch({
       .finally(() => {
         if (myReq === reqIdRef.current) setLoading(false);
       });
-  }, [selectedId, quarters]);
+  }, [selectedId, windowQs]);
 
   const normalizeQuarters = (next: QuarterKey[]): QuarterKey[] =>
     next.length === 4 ? [] : ALL_QUARTERS.filter((q) => next.includes(q));
 
-  const toggleQuarter = (q: QuarterKey) =>
+  const toggleQuarter = (q: QuarterKey) => {
+    setPreset(null);
     setQuarters((prev) =>
       normalizeQuarters(
         prev.includes(q) ? prev.filter((x) => x !== q) : [...prev, q],
       ),
     );
+  };
 
-  const toggleSem = (pair: QuarterKey[]) =>
+  const toggleSem = (pair: QuarterKey[]) => {
+    setPreset(null);
     setQuarters((prev) => {
       const has = pair.every((q) => prev.includes(q));
       const next = has
@@ -327,6 +348,7 @@ export default function TeacherHallPassResearch({
         : Array.from(new Set([...prev, ...pair]));
       return normalizeQuarters(next);
     });
+  };
 
   const historyPasses = useMemo(() => {
     if (!summary) return [];
@@ -334,10 +356,15 @@ export default function TeacherHallPassResearch({
       ? new Date(`${fromDate}T00:00:00`).getTime()
       : -Infinity;
     const toMs = toDate ? new Date(`${toDate}T23:59:59`).getTime() : Infinity;
-    return summary.passes.filter((p) => {
-      const t = new Date(p.createdAt).getTime();
-      return t >= fromMs && t <= toMs;
-    });
+    return summary.passes
+      .filter((p) => {
+        const t = new Date(p.createdAt).getTime();
+        return t >= fromMs && t <= toMs;
+      })
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
   }, [summary, fromDate, toDate]);
 
   const inWindows = (day: string | null, wins: { from: string; to: string }[]) =>
@@ -381,8 +408,13 @@ export default function TeacherHallPassResearch({
   const showSchool = coreTeam && tab === "school";
   const showStudent = !coreTeam || tab === "student";
 
-  const quarterLabel =
-    quarters.length === 0
+  const quarterLabel = preset
+    ? preset === "today"
+      ? "today"
+      : preset === "week"
+        ? "this week"
+        : "this month"
+    : quarters.length === 0
       ? "school year"
       : quarters.length === 2 && quarters[0] === "Q1" && quarters[1] === "Q2"
         ? "SEM 1"
@@ -553,9 +585,36 @@ export default function TeacherHallPassResearch({
             {(
               [
                 {
+                  label: "Today",
+                  active: preset === "today",
+                  onClick: () => {
+                    setQuarters([]);
+                    setPreset("today");
+                  },
+                },
+                {
+                  label: "This week",
+                  active: preset === "week",
+                  onClick: () => {
+                    setQuarters([]);
+                    setPreset("week");
+                  },
+                },
+                {
+                  label: "This month",
+                  active: preset === "month",
+                  onClick: () => {
+                    setQuarters([]);
+                    setPreset("month");
+                  },
+                },
+                {
                   label: "Year",
-                  active: quarters.length === 0,
-                  onClick: () => setQuarters([]),
+                  active: !preset && quarters.length === 0,
+                  onClick: () => {
+                    setPreset(null);
+                    setQuarters([]);
+                  },
                 },
                 ...ALL_QUARTERS.map((q) => ({
                   label: q,
@@ -919,7 +978,7 @@ export default function TeacherHallPassResearch({
                 {passTotal === 1 ? "pass" : "passes"} ·{" "}
                 <Dot color="#f59e0b" value={tardyTotal} title="" size={16} />{" "}
                 {tardyTotal === 1 ? "tardy" : "tardies"} in the selected
-                Year/Q/SEM window
+                window ({quarterLabel})
               </div>
             );
           })()}
@@ -928,7 +987,7 @@ export default function TeacherHallPassResearch({
           >
             Key: green = today, purple = passes, amber = tardies. Highlighted
             cells are periods where this student is in YOUR class (their
-            circles follow the Year/Q/SEM selection).
+            circles follow the selected window).
           </div>
           {summary.periods.length === 0 ? (
             <div style={{ color: "#64748b" }}>
@@ -1123,7 +1182,38 @@ export default function TeacherHallPassResearch({
                         >
                           {(
                             [
-                              { label: "Year", active: quarters.length === 0, onClick: () => setQuarters([]) },
+                              {
+                                label: "Today",
+                                active: preset === "today",
+                                onClick: () => {
+                                  setQuarters([]);
+                                  setPreset("today");
+                                },
+                              },
+                              {
+                                label: "Week",
+                                active: preset === "week",
+                                onClick: () => {
+                                  setQuarters([]);
+                                  setPreset("week");
+                                },
+                              },
+                              {
+                                label: "Month",
+                                active: preset === "month",
+                                onClick: () => {
+                                  setQuarters([]);
+                                  setPreset("month");
+                                },
+                              },
+                              {
+                                label: "Year",
+                                active: !preset && quarters.length === 0,
+                                onClick: () => {
+                                  setPreset(null);
+                                  setQuarters([]);
+                                },
+                              },
                               ...ALL_QUARTERS.map((q) => ({
                                 label: q,
                                 active: quarters.includes(q),

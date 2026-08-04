@@ -14870,6 +14870,54 @@ function App() {
                       style={{ padding: "0.35rem 0.5rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem" }}
                     />
                   </label>
+                  {(() => {
+                    const toKey = (d: Date) =>
+                      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+                    const now = new Date();
+                    const dow = (now.getDay() + 6) % 7; // Mon=0 … Sun=6
+                    const mon = new Date(now);
+                    mon.setDate(now.getDate() - dow);
+                    const sun = new Date(mon);
+                    sun.setDate(mon.getDate() + 6);
+                    const presets: {
+                      label: string;
+                      from: string;
+                      to: string;
+                    }[] = [
+                      { label: "Today", from: toKey(now), to: toKey(now) },
+                      { label: "This week", from: toKey(mon), to: toKey(sun) },
+                      {
+                        label: "This month",
+                        from: toKey(new Date(now.getFullYear(), now.getMonth(), 1)),
+                        to: toKey(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
+                      },
+                    ];
+                    return presets.map((p) => {
+                      const active = researchStart === p.from && researchEnd === p.to;
+                      return (
+                        <button
+                          key={p.label}
+                          type="button"
+                          onClick={() => {
+                            setResearchStart(p.from);
+                            setResearchEnd(p.to);
+                          }}
+                          style={{
+                            padding: "0.45rem 0.9rem",
+                            fontSize: "0.85rem",
+                            borderRadius: 6,
+                            border: active ? "1px solid #7c3aed" : "1px solid #cbd5e1",
+                            background: active ? "#7c3aed" : "white",
+                            color: active ? "white" : "#475569",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                          }}
+                        >
+                          {p.label}
+                        </button>
+                      );
+                    });
+                  })()}
                   <button
                     type="button"
                     onClick={() => {
