@@ -5555,6 +5555,12 @@ function App() {
     "overview",
   );
   const [hpReportSection, setHpReportSection] = useState<"hub" | "overview" | "byDay" | "ytd" | "research">("hub");
+  // Research page tabs: School-wide dashboard / Student lookup / raw Pass
+  // log. Which tabs a user actually gets is role-derived at render time
+  // (hpResearchTabs); this just remembers the last selection.
+  const [hpResearchTab, setHpResearchTab] = useState<
+    "school" | "student" | "log"
+  >("school");
   const [researchStart, setResearchStart] = useState<string>(() => {
     const d = new Date();
     return `${d.getFullYear()}-01-01`;
@@ -9818,6 +9824,21 @@ function App() {
     authUser?.isCounselor === true ||
     authUser?.isSocialWorker === true ||
     authUser?.isDean === true;
+  // Hall Pass Research tabs by role: Core Team-style users get the
+  // school-wide dashboard + whole-school student lookup; Admin/SuperUser/
+  // ESE also get the raw Pass log explorer. Teachers get no tabs — just
+  // their roster-scoped lookup.
+  const hpResearchTabs: ("school" | "student" | "log")[] = [
+    ...(canResearchSchoolwideClient
+      ? (["school", "student"] as const)
+      : (["student"] as const)),
+    ...(authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator
+      ? (["log"] as const)
+      : []),
+  ];
+  const hpResearchActiveTab = hpResearchTabs.includes(hpResearchTab)
+    ? hpResearchTab
+    : hpResearchTabs[0];
   // Pickup-tag management gate — mirrors canManagePickup() in
   // lib/coreTeam.ts. Admin / Core Team (BS, MTSS, school psych,
   // district admin, super) / counselor (school OR guidance) /
@@ -14675,7 +14696,72 @@ function App() {
         );
       })()}
 
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "research" && (() => {
+      {/* Research header: back button + role-derived tabs (School-wide /
+          Student lookup / Pass log). Teachers get just the back button. */}
+      {hpView === "reports" && authUser && hpReportSection === "research" && (
+        <>
+          <div
+            style={{
+              borderTopLeftRadius: "var(--radius-lg, 8px)",
+              borderTopRightRadius: "var(--radius-lg, 8px)",
+              overflow: "hidden",
+              marginBottom: "-1px",
+            }}
+          >
+            <div className="section-header-bar-teal" style={{ width: "100%", margin: 0 }} />
+            <div
+              className="section-header-band-hub"
+              style={{
+                width: "100%",
+                margin: 0,
+                display: "flex",
+                alignItems: "center",
+                gap: "0.75rem",
+                flexWrap: "wrap",
+              }}
+            >
+              <button
+                type="button"
+                className="back-button-purple"
+                style={{ marginBottom: 0 }}
+                onClick={() => setHpReportSection("hub")}
+              >
+                ← Back
+              </button>
+              {hpResearchTabs.length > 1 &&
+                hpResearchTabs.map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setHpResearchTab(t)}
+                    style={{
+                      padding: "0.4rem 1rem",
+                      fontSize: "0.9rem",
+                      fontWeight: 700,
+                      borderRadius: 8,
+                      cursor: "pointer",
+                      border:
+                        hpResearchActiveTab === t
+                          ? "1px solid #7c3aed"
+                          : "1px solid #cbd5e1",
+                      background:
+                        hpResearchActiveTab === t ? "#7c3aed" : "white",
+                      color: hpResearchActiveTab === t ? "white" : "#475569",
+                    }}
+                  >
+                    {t === "school"
+                      ? "School-wide"
+                      : t === "student"
+                        ? "Student lookup"
+                        : "Pass log"}
+                  </button>
+                ))}
+            </div>
+          </div>
+        </>
+      )}
+
+      {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "research" && hpResearchActiveTab === "log" && (() => {
         const studentInfo = new Map<
           string,
           { name: string; grade: number; localSisId: string | null }
@@ -14735,28 +14821,10 @@ function App() {
           return "#22c55e";
         };
 
+        // Header (back button + tabs) is rendered once for the whole
+        // Research page above; this tab starts straight at the filters.
         return (
           <>
-            <div
-              style={{
-                borderTopLeftRadius: "var(--radius-lg, 8px)",
-                borderTopRightRadius: "var(--radius-lg, 8px)",
-                overflow: "hidden",
-                marginBottom: "-1px",
-              }}
-            >
-              <div className="section-header-bar-teal" style={{ width: "100%", margin: 0 }} />
-              <div className="section-header-band-hub" style={{ width: "100%", margin: 0 }}>
-                <button
-                  type="button"
-                  className="back-button-purple"
-                  style={{ marginBottom: 0 }}
-                  onClick={() => setHpReportSection("hub")}
-                >
-                  ← Back
-                </button>
-              </div>
-            </div>
             <div className="card">
               <h2
                 style={{
@@ -14989,12 +15057,19 @@ function App() {
 
       {/* Research: roster-scoped for teachers; Core Team (+ guidance /
           social worker / dean) get the school-wide dashboard + whole-school
-          student search. Admin/SuperUser/ESE also keep the original raw
-          pass-list Research above. Served by dedicated endpoints (never the
-          whole-school pass list). */}
-      {hpView === "reports" && authUser && hpReportSection === "research" && (
-        <TeacherHallPassResearch coreTeam={canResearchSchoolwideClient} />
-      )}
+          student search, split across the School-wide / Student lookup
+          tabs. Served by dedicated endpoints (never the whole-school pass
+          list). Stays mounted across those two tabs so the selected
+          student and window survive tab switches. */}
+      {hpView === "reports" &&
+        authUser &&
+        hpReportSection === "research" &&
+        hpResearchActiveTab !== "log" && (
+          <TeacherHallPassResearch
+            coreTeam={canResearchSchoolwideClient}
+            tab={hpResearchActiveTab === "school" ? "school" : "student"}
+          />
+        )}
 
       {hpView === "reports" && authUser && hpReportSection === "byDay" && (<>
         <div

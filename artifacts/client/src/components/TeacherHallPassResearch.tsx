@@ -215,10 +215,14 @@ function Bar({
 
 export default function TeacherHallPassResearch({
   coreTeam = false,
+  tab = "student",
 }: {
   // Core Team (+ guidance / social worker / dean): unlocks the school-wide
-  // dashboard before a search and the full-schedule student view after.
+  // dashboard tab and the full-schedule student view.
   coreTeam?: boolean;
+  // Which Research tab is showing: "school" (dashboard) or "student"
+  // (lookup). Ignored for teachers — they only have the lookup.
+  tab?: "school" | "student";
 }) {
   const [roster, setRoster] = useState<RosterStudent[]>([]);
   const [rosterTotal, setRosterTotal] = useState<RosterTotal | null>(null);
@@ -353,18 +357,29 @@ export default function TeacherHallPassResearch({
     );
   }, [summary, expandedPeriod]);
 
-  const headerLostMin = summary
-    ? summary.totals.lostMin
+  // Header reflects the selected student only on the lookup tab; the
+  // school-wide tab always shows the whole-population totals.
+  const headerSummary = !coreTeam || tab === "student" ? summary : null;
+  const headerLostMin = headerSummary
+    ? headerSummary.totals.lostMin
     : (rosterTotal?.lostMin ?? null);
-  const headerDays = summary
-    ? summary.totals.days
+  const headerDays = headerSummary
+    ? headerSummary.totals.days
     : (rosterTotal?.days ?? null);
-  const headerLabel = summary
-    ? `${summary.student.firstName} ${summary.student.lastName} · this school year`
+  const headerLabel = headerSummary
+    ? `${headerSummary.student.firstName} ${headerSummary.student.lastName} · this school year`
     : rosterTotal
-      ? `your ${rosterTotal.studentCount.toLocaleString()} students with passes · this school year`
+      ? coreTeam
+        ? `${rosterTotal.studentCount.toLocaleString()} students with passes school-wide · this school year`
+        : `your ${rosterTotal.studentCount.toLocaleString()} students with passes · this school year`
       : "";
-  const periodLen = summary?.totals.periodLen ?? rosterTotal?.periodLen ?? null;
+  const periodLen =
+    headerSummary?.totals.periodLen ?? rosterTotal?.periodLen ?? null;
+
+  // Section visibility. The component stays mounted across the two tabs so
+  // the selected student + window survive switching back and forth.
+  const showSchool = coreTeam && tab === "school";
+  const showStudent = !coreTeam || tab === "student";
 
   const quarterLabel =
     quarters.length === 0
@@ -416,6 +431,7 @@ export default function TeacherHallPassResearch({
 
       {/* 2 — Filters */}
       <div className="card">
+        {showStudent && (
         <div
           style={{
             display: "flex",
@@ -432,7 +448,7 @@ export default function TeacherHallPassResearch({
               color: "#64748b",
             }}
           >
-            Student (your roster)
+            {coreTeam ? "Student (whole school)" : "Student (your roster)"}
             <StudentPicker
               mode="local"
               items={roster}
@@ -520,6 +536,7 @@ export default function TeacherHallPassResearch({
             </span>
           )}
         </div>
+        )}
         {coreTeam && (
           <div
             style={{
@@ -577,17 +594,23 @@ export default function TeacherHallPassResearch({
             ))}
           </div>
         )}
-        {!summary && !loading && !error && (
+        {showStudent && !summary && !loading && !error && (
           <div style={{ color: "#64748b", marginTop: "0.75rem" }}>
             {coreTeam
-              ? "The school-wide picture is below. Search any student to zoom in on their full schedule, passes, tardies, and absences."
+              ? "Search any student in the school to see their full schedule, passes, tardies, and absences."
               : "Search a student from your roster to see their pass history, a period-by-period breakdown, and how much of YOUR class they have missed on passes."}
           </div>
         )}
       </div>
 
-      {/* Core Team, before a search: school-wide per-period dashboard */}
-      {coreTeam && !summary && schoolSummary && (
+      {/* Core Team, School-wide tab: per-period dashboard */}
+      {showSchool && !schoolSummary && (
+        <div className="card" style={{ color: "#64748b" }}>
+          Loading the school-wide picture… if this doesn't fill in after a
+          few seconds, try refreshing the page.
+        </div>
+      )}
+      {showSchool && schoolSummary && (
         <div className="card">
           <h3 style={{ margin: "0 0 0.25rem", color: "#4c1d95" }}>
             School-wide by period · {quarterLabel}
@@ -862,7 +885,7 @@ export default function TeacherHallPassResearch({
       )}
 
       {/* 3 — Period dot graph */}
-      {summary && (
+      {showStudent && summary && (
         <div className="card">
           <h3 style={{ margin: "0 0 0.25rem", color: "#4c1d95" }}>
             Passes by period —{" "}
@@ -1352,7 +1375,7 @@ export default function TeacherHallPassResearch({
       )}
 
       {/* 4 — Pass history */}
-      {summary && (
+      {showStudent && summary && (
         <div className="card">
           <h3 style={{ margin: "0 0 0.5rem", color: "#4c1d95" }}>
             Pass history
