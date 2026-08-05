@@ -547,3 +547,17 @@ uri = "file://attached_assets/generated/ClassLink_RosterServer_Data_Request.docx
 type = "word_document"
 title = "ClassLink RosterServer Data Request"
 description = "Word document listing exactly what to request from the district via ClassLink RosterServer (OneRoster), plus the two supplemental items (bell schedule times, parent contact info if not in the share)."
+
+[[outputs]]
+id = "ydo-O8ZZcb_nfH2fFfQ3y"
+uri = "file://attached_assets/generated/PulseEDU_Onboarding_Playbook.docx"
+type = "word_document"
+title = "PulseEDU Onboarding Playbook"
+description = "Step-by-step new-school setup guide focused on Hall Pass and PBIS, in order, with a verification check after each step and a go-live checklist."
+
+[[outputs]]
+id = "LTrnwEmwLi29V-uZlzydr"
+uri = "file://attached_assets/generated/PulseEDU_School_Request_Checklist.docx"
+type = "word_document"
+title = "What to Request from the School"
+description = "Editable checklist of everything to collect from a school before onboarding — bell schedules, teacher/room lists, restroom map, PBIS decisions, and more."
