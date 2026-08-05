@@ -342,6 +342,45 @@ function isCreatedToday(createdAt: string): boolean {
   );
 }
 
+// ---- Tardy list date filtering -------------------------------------
+// Local-day comparisons (matches isCreatedToday semantics). Range inputs
+// are yyyy-mm-dd from <input type="date">, compared as local date keys.
+type TardyDateFilter = "all" | "today" | "week" | "month" | "range";
+
+function localDateKey(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function matchesTardyDateFilter(
+  createdAt: string,
+  filter: TardyDateFilter,
+  rangeStart: string,
+  rangeEnd: string,
+): boolean {
+  if (filter === "all") return true;
+  const d = new Date(createdAt);
+  if (Number.isNaN(d.getTime())) return false;
+  const key = localDateKey(d);
+  const now = new Date();
+  const todayKey = localDateKey(now);
+  if (filter === "today") return key === todayKey;
+  if (filter === "week") {
+    // Monday of the current week through today.
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    return key >= localDateKey(monday) && key <= todayKey;
+  }
+  if (filter === "month") {
+    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+    return key >= localDateKey(first) && key <= todayKey;
+  }
+  // range: blank ends are open-ended (inclusive on both bounds).
+  if (rangeStart && key < rangeStart) return false;
+  if (rangeEnd && key > rangeEnd) return false;
+  return true;
+}
+
 function getTimeStatusColor(pass: HallPass, now: number): string {
   if (pass.status !== "active") return "#e2e8f0";
   const totalMs = pass.maxDurationMinutes * 60 * 1000;
@@ -5525,6 +5564,13 @@ function App() {
   const [changePwError, setChangePwError] = useState("");
   const [changePwOk, setChangePwOk] = useState(false);
   const [dateFilter, setDateFilter] = useState<"today" | "all">("all");
+  // Tardy / Check-In History page owns its own richer date filter
+  // (All / Today / This week / This month / custom range) — independent
+  // of the global header "Show" control above.
+  const [tardyDateFilter, setTardyDateFilter] =
+    useState<TardyDateFilter>("all");
+  const [tardyRangeStart, setTardyRangeStart] = useState("");
+  const [tardyRangeEnd, setTardyRangeEnd] = useState("");
   const [staffFilter, setStaffFilter] = useState<"all" | "mine">("all");
   // "mine" is the combined "Mine & heading to me" view (passes I created OR
   // passes routed to me); "all" is every active pass school-wide.
@@ -12652,16 +12698,52 @@ function App() {
             }}
           >
             <h2 style={{ margin: 0 }}>Tardy / Check-In History</h2>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: "0.5rem",
+                flexWrap: "wrap",
+                alignItems: "center",
+              }}
+            >
               <select
-                value={dateFilter}
+                value={tardyDateFilter}
                 onChange={(e) =>
-                  setDateFilter(e.target.value as "today" | "all")
+                  setTardyDateFilter(e.target.value as TardyDateFilter)
                 }
               >
-                <option value="today">Today</option>
                 <option value="all">All dates</option>
+                <option value="today">Today</option>
+                <option value="week">This week</option>
+                <option value="month">This month</option>
+                <option value="range">Date range…</option>
               </select>
+              {tardyDateFilter === "range" && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "0.35rem",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  <input
+                    type="date"
+                    value={tardyRangeStart}
+                    max={tardyRangeEnd || undefined}
+                    onChange={(e) => setTardyRangeStart(e.target.value)}
+                    aria-label="Range start date"
+                  />
+                  <span style={{ color: "var(--text-subtle)" }}>to</span>
+                  <input
+                    type="date"
+                    value={tardyRangeEnd}
+                    min={tardyRangeStart || undefined}
+                    onChange={(e) => setTardyRangeEnd(e.target.value)}
+                    aria-label="Range end date"
+                  />
+                </span>
+              )}
               <select
                 value={staffFilter}
                 onChange={(e) =>
@@ -12758,12 +12840,24 @@ function App() {
             <tbody>
               {tardies
                 .filter((t) =>
-                  dateFilter === "today" ? isCreatedToday(t.createdAt) : true,
+                  matchesTardyDateFilter(
+                    t.createdAt,
+                    tardyDateFilter,
+                    tardyRangeStart,
+                    tardyRangeEnd,
+                  ),
                 )
                 .filter((t) =>
                   staffFilter === "mine"
                     ? t.teacherName === currentStaffUser
                     : true,
+                )
+                // Newest first. Sort here (not on the shared array) so other
+                // consumers of `tardies` keep the API's chronological order.
+                .slice()
+                .sort(
+                  (a, b) =>
+                    b.createdAt.localeCompare(a.createdAt) || b.id - a.id,
                 )
                 .map((t) => (
                   <tr key={t.id}>
