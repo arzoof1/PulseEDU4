@@ -113,6 +113,9 @@ interface SafetyPlanItem {
 
 interface SafetyPlanSummary {
   itemCount: number;
+  // Explicit "needs an escort" answer from the plan editor. Drives the
+  // amber E badge next to the SP pill + a bold line in the popover.
+  escortRequired?: boolean;
   items: SafetyPlanItem[];
   notes: string;
   updatedAt: string | null;
@@ -268,6 +271,26 @@ function SafetyPlanPill({
       >
         SP
       </Tag>
+      {plan.escortRequired && (
+        <span
+          title="Escort required — this student cannot create kiosk passes"
+          aria-label="Escort required"
+          style={{
+            display: "inline-block",
+            marginLeft: 2,
+            padding: "2px 6px",
+            borderRadius: 999,
+            background: "#f59e0b",
+            color: "#fff",
+            fontSize: 11,
+            fontWeight: 800,
+            letterSpacing: 0.4,
+            lineHeight: 1.4,
+          }}
+        >
+          E
+        </span>
+      )}
       {open && (
         <div
           role="tooltip"
@@ -301,6 +324,23 @@ function SafetyPlanPill({
           >
             Safety plan — {studentName}
           </div>
+          {plan.escortRequired && (
+            <div
+              style={{
+                fontSize: 12,
+                fontWeight: 800,
+                color: "#92400e",
+                background: "#fef3c7",
+                border: "1px solid #fcd34d",
+                borderRadius: 4,
+                padding: "3px 8px",
+                marginBottom: 6,
+              }}
+            >
+              ESCORT REQUIRED — no kiosk passes; acknowledge before issuing a
+              pass.
+            </div>
+          )}
           {plan.items.length === 0 ? (
             <div style={{ color: "#6b7280", fontSize: 12 }}>
               (No active items)

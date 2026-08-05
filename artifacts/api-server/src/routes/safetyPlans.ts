@@ -286,6 +286,7 @@ router.put(
       items?: unknown;
       notes?: unknown;
       status?: unknown;
+      escortRequired?: unknown;
       startDate?: unknown;
       endDate?: unknown;
     };
@@ -293,6 +294,10 @@ router.put(
     const notes = typeof body.notes === "string" ? body.notes : "";
     const status =
       body.status === "inactive" ? "inactive" : "active";
+    // Explicit counselor answer to "Does this student need an escort?".
+    // Drives the kiosk hard-block + teacher pass-creation flag while the
+    // plan is active and within its dates.
+    const escortRequired = body.escortRequired === true;
     const startDate =
       typeof body.startDate === "string" && body.startDate.trim()
         ? body.startDate.trim()
@@ -310,6 +315,7 @@ router.put(
         .update(safetyPlansTable)
         .set({
           status,
+          escortRequired,
           items,
           notes,
           startDate,
@@ -333,6 +339,7 @@ router.put(
           schoolId,
           studentId,
           status,
+          escortRequired,
           items,
           notes,
           startDate,
@@ -351,7 +358,7 @@ router.put(
       action,
       actorStaffId: staff.id,
       actorName: staff.displayName,
-      snapshot: { status, items, notes, startDate, endDate },
+      snapshot: { status, escortRequired, items, notes, startDate, endDate },
     });
     res.json(row);
   },

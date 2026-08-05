@@ -25,6 +25,7 @@ interface LibraryItem {
 interface PlanRow {
   id: number;
   status: string;
+  escortRequired?: boolean;
   items: SafetyPlanItem[];
   notes: string;
   startDate: string | null;
@@ -55,6 +56,9 @@ export default function SafetyPlanEditor({
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [status, setStatus] = useState<"active" | "inactive">("active");
+  // Explicit answer to "Does this student need an escort?". Drives the
+  // kiosk hard-block + teacher pass-creation flag server-side.
+  const [escortRequired, setEscortRequired] = useState(false);
   const [newItemLabel, setNewItemLabel] = useState("");
 
   useEffect(() => {
@@ -84,6 +88,7 @@ export default function SafetyPlanEditor({
           setStartDate(planJ.plan.startDate ?? "");
           setEndDate(planJ.plan.endDate ?? "");
           setStatus(planJ.plan.status === "inactive" ? "inactive" : "active");
+          setEscortRequired(planJ.plan.escortRequired === true);
         } else {
           // Pre-populate a brand new plan with the active library items
           // turned OFF so the editor starts clean.
@@ -116,6 +121,9 @@ export default function SafetyPlanEditor({
       setItems(items.filter((i) => i.label !== label));
     } else {
       setItems([...items, { label, active: true }]);
+      // Smart suggestion: turning on an escort-type item pre-checks the
+      // escort question. The counselor can still switch it back to No.
+      if (/escort/i.test(label)) setEscortRequired(true);
     }
   }
 
@@ -139,6 +147,7 @@ export default function SafetyPlanEditor({
       return;
     }
     setItems([...items, { label, active: true }]);
+    if (/escort/i.test(label)) setEscortRequired(true);
     setNewItemLabel("");
   }
 
@@ -156,6 +165,7 @@ export default function SafetyPlanEditor({
             items,
             notes,
             status,
+            escortRequired,
             startDate: startDate || null,
             endDate: endDate || null,
           }),
@@ -322,6 +332,62 @@ export default function SafetyPlanEditor({
                     disabled={!canEdit}
                   />
                 </label>
+              </div>
+
+              {/* Escort question — explicit counselor decision. When Yes,
+                  the server hard-blocks kiosk passes and flags teachers on
+                  pass creation while the plan is active + in its dates. */}
+              <div
+                style={{
+                  border: escortRequired ? "1px solid #fca5a5" : "1px solid #e5e7eb",
+                  background: escortRequired ? "#fef2f2" : "#f9fafb",
+                  borderRadius: 6,
+                  padding: "0.6rem 0.75rem",
+                  marginBottom: 12,
+                }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#111827", marginBottom: 6 }}>
+                  Does this student need an escort?
+                </div>
+                <div style={{ display: "flex", gap: 14 }}>
+                  <label style={{ fontSize: 13, color: "#374151", cursor: canEdit ? "pointer" : "default" }}>
+                    <input
+                      type="radio"
+                      name="sp-escort"
+                      checked={escortRequired}
+                      onChange={() => setEscortRequired(true)}
+                      disabled={!canEdit}
+                    />{" "}
+                    Yes — escort required
+                  </label>
+                  <label style={{ fontSize: 13, color: "#374151", cursor: canEdit ? "pointer" : "default" }}>
+                    <input
+                      type="radio"
+                      name="sp-escort"
+                      checked={!escortRequired}
+                      onChange={() => setEscortRequired(false)}
+                      disabled={!canEdit}
+                    />{" "}
+                    No
+                  </label>
+                </div>
+                {escortRequired && (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      fontSize: 12,
+                      color: "#7f1d1d",
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    While this plan is active, this student will be{" "}
+                    <strong>blocked from creating passes at kiosks</strong>{" "}
+                    (they'll see "please see your teacher" — no reason is
+                    shown), and teachers will see a{" "}
+                    <strong>safety flag they must acknowledge</strong> before
+                    creating a pass for them.
+                  </div>
+                )}
               </div>
 
               <h3 style={{ fontSize: 13, fontWeight: 700, margin: "12px 0 6px", color: "#111827" }}>

@@ -52,6 +52,7 @@ import {
   ensurePulseDnaVideosSchema,
   ensureStudentLocalSisIdBackfill,
   ensureStudentAccommodationsBackfill,
+  ensureSafetyPlanEscortSchema,
   ensureLocationAllowedDestinationsBackfill,
   backfillStaffRoomLocationsAtParrottOnce,
   ensureBenchmarkDeliveriesSchema,
@@ -391,6 +392,13 @@ async function runSeed(): Promise<void> {
     await ensureStudentAccommodationsBackfill();
   } catch (err) {
     logger.error({ err }, "[boot] student accommodations backfill failed");
+  }
+  // Additive column: safety_plans.escort_required (kiosk hard-block +
+  // teacher safety flag on pass creation). Idempotent.
+  try {
+    await ensureSafetyPlanEscortSchema();
+  } catch (err) {
+    logger.error({ err }, "[boot] safety plan escort schema ensure failed");
   }
   // Backfill location_allowed_destinations for schools that have locations
   // but zero origin×destination pairs — otherwise the kiosk destination

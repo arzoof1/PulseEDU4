@@ -24,6 +24,10 @@ import { autoEndStalePasses } from "../lib/hallPassLifecycle.js";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { findPolarityConflict } from "./polarityPairs";
+import {
+  findEscortHold,
+  ESCORT_KIOSK_MESSAGE,
+} from "../lib/safetyPlanEscort.js";
 import { findDailyLimitConflict } from "./studentHallPassLimits";
 import {
   loadRestroomDestinationNames,
@@ -403,6 +407,15 @@ router.post("/kiosk/queue/:token/add", async (req, res) => {
     return;
   }
   const trimmedId = student.studentId;
+
+  // Escort-required safety plan: hard block from the queue too (a queued
+  // student would eventually be issued a pass). Neutral message — this is
+  // a shared student-facing screen.
+  const escortHold = await findEscortHold(act.schoolId, trimmedId);
+  if (escortHold) {
+    res.status(409).json({ error: ESCORT_KIOSK_MESSAGE });
+    return;
+  }
 
   // Don't queue someone who's currently out on a pass from this room — they
   // already have one. Saves a footgun and a confusing queue display.

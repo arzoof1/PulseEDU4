@@ -5340,6 +5340,15 @@ function App() {
     onConfirm: () => void;
     onCancel: () => void;
   } | null>(null);
+  // Forced-acknowledgement modal for escort-required safety plans. The
+  // server returns 409 ESCORT_REQUIRED when the student's active safety
+  // plan has the escort flag; the teacher must confirm an escort is
+  // arranged before the pass is issued.
+  const [escortOverride, setEscortOverride] = useState<{
+    planItems: string[];
+    onConfirm: () => void;
+    onCancel: () => void;
+  } | null>(null);
   const [logTardyOpen, setLogTardyOpen] = useState(false);
   const [checkInOutOpen, setCheckInOutOpen] = useState(false);
   // Tier-aware Log Intervention launcher state. The launcher routes to
@@ -9537,6 +9546,7 @@ function App() {
     const post = async (
       overrideStudentActive: boolean,
       overridePolarityAck: boolean,
+      overrideEscortAck: boolean,
     ): Promise<void> => {
       const res = await authFetch("/api/hall-passes", {
         method: "POST",
@@ -9545,6 +9555,7 @@ function App() {
           ...payload,
           overrideStudentActive,
           overridePolarityAck,
+          overrideEscortAck,
         }),
       });
       if (res.ok) {
@@ -9569,6 +9580,7 @@ function App() {
                 lastName?: string | null;
                 destination?: string;
               };
+              planItems?: unknown[];
             },
         );
       if (res.status === 409 && body?.code === "STUDENT_HAS_ACTIVE_PASS") {
@@ -9581,7 +9593,7 @@ function App() {
           `${detail}\n\nEnd that pass and create the new one?`,
         );
         if (!ok) throw new Error("Cancelled.");
-        return post(true, overridePolarityAck);
+        return post(true, overridePolarityAck, overrideEscortAck);
       }
       if (res.status === 409 && body?.code === "KEEP_APART_CONFLICT") {
         const partner = body.partner;
@@ -9604,13 +9616,34 @@ function App() {
             },
           });
         });
-        return post(overrideStudentActive, true);
+        return post(overrideStudentActive, true, overrideEscortAck);
+      }
+      if (res.status === 409 && body?.code === "ESCORT_REQUIRED") {
+        const planItems = Array.isArray(body.planItems)
+          ? body.planItems.filter(
+              (s: unknown): s is string => typeof s === "string",
+            )
+          : [];
+        await new Promise<void>((resolve, reject) => {
+          setEscortOverride({
+            planItems,
+            onConfirm: () => {
+              setEscortOverride(null);
+              resolve();
+            },
+            onCancel: () => {
+              setEscortOverride(null);
+              reject(new Error("Cancelled."));
+            },
+          });
+        });
+        return post(overrideStudentActive, overridePolarityAck, true);
       }
       const text = body?.error ?? (await res.text());
       throw new Error(text || "Failed to create pass.");
     };
 
-    await post(false, false);
+    await post(false, false, false);
   };
 
   const handleEndPass = async (id: number) => {
@@ -12895,6 +12928,13 @@ function App() {
         }}
       />
 
+      {escortOverride && (
+        <EscortOverrideModal
+          planItems={escortOverride.planItems}
+          onCancel={escortOverride.onCancel}
+          onConfirm={escortOverride.onConfirm}
+        />
+      )}
       {keepApartOverride && (
         <KeepApartOverrideModal
           partnerName={keepApartOverride.partnerName}
@@ -26628,6 +26668,153 @@ function App() {
       <HelpAssistant />
     </div>
     </RoleProvider>
+  );
+}
+
+// Forced-acknowledgement modal for escort-required safety plans. Mirrors
+// the keep-apart override pattern: the teacher can proceed (they may be
+// the escort, or be arranging one) but only after an explicit checkbox.
+function EscortOverrideModal({
+  planItems,
+  onCancel,
+  onConfirm,
+}: {
+  planItems: string[];
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const [acked, setAcked] = useState(false);
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="escort-required-title"
+      onClick={onCancel}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.6)",
+        zIndex: 1100,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "1rem",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff",
+          borderRadius: 12,
+          width: "min(460px, 95vw)",
+          padding: "1.25rem 1.4rem",
+          display: "flex",
+          flexDirection: "column",
+          gap: "1rem",
+          borderTop: "6px solid #f59e0b",
+          boxShadow: "0 20px 50px rgba(0,0,0,0.25)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span aria-hidden style={{ fontSize: "1.4rem" }}>⚠️</span>
+          <h3
+            id="escort-required-title"
+            style={{ margin: 0, color: "#92400e", fontSize: "1.1rem" }}
+          >
+            Safety plan — escort required
+          </h3>
+        </div>
+
+        <div
+          style={{
+            background: "#fffbeb",
+            border: "1px solid #fcd34d",
+            borderRadius: 8,
+            padding: "0.7rem 0.85rem",
+            color: "#78350f",
+            fontSize: "0.9rem",
+            lineHeight: 1.45,
+          }}
+        >
+          This student's active safety plan requires a{" "}
+          <strong>staff escort</strong> when out of the classroom.
+          {planItems.length > 0 && (
+            <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+              {planItems.map((it, i) => (
+                <li key={`${it}-${i}`}>{it}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <label
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 10,
+            fontSize: "0.9rem",
+            cursor: "pointer",
+            padding: "0.5rem",
+            border: "1px solid #cbd5e1",
+            borderRadius: 6,
+            background: "#f8fafc",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={acked}
+            onChange={(e) => setAcked(e.target.checked)}
+            style={{ marginTop: 3, width: 18, height: 18, flexShrink: 0 }}
+            autoFocus
+          />
+          <span>
+            An escort is arranged for this student — I take responsibility
+            for issuing this pass.
+          </span>
+        </label>
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 8,
+            marginTop: 4,
+          }}
+        >
+          <button
+            type="button"
+            onClick={onCancel}
+            style={{
+              background: "#fff",
+              border: "1px solid #cbd5e1",
+              borderRadius: 6,
+              padding: "0.45rem 0.9rem",
+              fontSize: "0.9rem",
+              cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={!acked}
+            onClick={onConfirm}
+            style={{
+              background: acked ? "#d97706" : "#fcd34d",
+              color: "#fff",
+              border: "none",
+              borderRadius: 6,
+              padding: "0.45rem 1rem",
+              fontSize: "0.9rem",
+              fontWeight: 600,
+              cursor: acked ? "pointer" : "not-allowed",
+            }}
+          >
+            Escort arranged — create pass
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

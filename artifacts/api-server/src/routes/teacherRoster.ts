@@ -603,6 +603,7 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     db
       .select({
         studentId: safetyPlansTable.studentId,
+        escortRequired: safetyPlansTable.escortRequired,
         items: safetyPlansTable.items,
         notes: safetyPlansTable.notes,
         updatedAt: safetyPlansTable.updatedAt,
@@ -872,6 +873,7 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
         );
         return {
           itemCount: activeItems.length,
+          escortRequired: sp.escortRequired === true,
           items: activeItems,
           notes: sp.notes,
           updatedAt: sp.updatedAt,

@@ -21,6 +21,7 @@ import {
 } from "./studentHallPassLimits";
 import { resolveStudentIdInput } from "../lib/studentIdResolver.js";
 import { checkRestroomAccess } from "../lib/restroomAccess.js";
+import { findEscortHold } from "../lib/safetyPlanEscort.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 
 const router: IRouter = Router();
@@ -74,6 +75,7 @@ router.post("/hall-passes", async (req, res) => {
     isTardyReturn,
     overrideStudentActive,
     overridePolarityAck,
+    overrideEscortAck,
   } = req.body ?? {};
 
   if (
@@ -230,6 +232,30 @@ router.post("/hall-passes", async (req, res) => {
         schoolId,
       },
       "keep-apart override acknowledged by teacher",
+    );
+  }
+
+  // Escort-required safety plan flag. The teacher may proceed (they may BE
+  // the escort / be arranging one) but only after an explicit
+  // acknowledgement checkbox — same forced-ack pattern as keep-apart.
+  const escortHold = await findEscortHold(schoolId, resolvedStudentId);
+  if (escortHold) {
+    if (overrideEscortAck !== true) {
+      res.status(409).json({
+        code: "ESCORT_REQUIRED",
+        error:
+          "This student's safety plan requires a staff escort. Confirm an escort is arranged before issuing this pass.",
+        planItems: escortHold.activeItemLabels,
+      });
+      return;
+    }
+    req.log.warn(
+      {
+        studentId,
+        teacherName: effectiveTeacherName,
+        schoolId,
+      },
+      "escort-required safety plan acknowledged by teacher",
     );
   }
 

@@ -42,6 +42,10 @@ import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
 import { autoEndStalePasses } from "../lib/hallPassLifecycle.js";
+import {
+  findEscortHold,
+  ESCORT_KIOSK_MESSAGE,
+} from "../lib/safetyPlanEscort.js";
 import { loadSchoolWideDefaults } from "../lib/restroomAreas.js";
 import { getSchoolTimezone, startOfDayUtc } from "../lib/schoolYear.js";
 import { loadBrandingForSchool } from "./schoolBranding.js";
@@ -1272,6 +1276,16 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     res.status(409).json({
       error: `You already have an active pass to ${open.destination}. Tap "I'm back" to end it before starting another.`,
     });
+    return;
+  }
+
+  // Escort-required safety plan: HARD block at the kiosk — no queue, no
+  // override, and a deliberately neutral message (a shared student-facing
+  // screen must never mention "safety plan" or a reason). Applies to the
+  // "Go now" bypass too: an escort requirement wins over a summons.
+  const escortHold = await findEscortHold(act.schoolId, normalizedStudentId);
+  if (escortHold) {
+    res.status(409).json({ error: ESCORT_KIOSK_MESSAGE });
     return;
   }
 

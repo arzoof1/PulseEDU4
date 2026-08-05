@@ -2625,6 +2625,16 @@ export async function ensureAdminHubSchema() {
 // alert dismissals). All idempotent CREATE TABLE IF NOT EXISTS so a fresh
 // schema and an upgraded one both end up identical. Called from runSeed.
 // -----------------------------------------------------------------------------
+// Additive boot migration: safety_plans.escort_required. Set by the
+// counselor in the Safety Plan editor ("Does this student need an
+// escort?"). When TRUE on an active in-window plan, the kiosk hard-blocks
+// pass creation and teachers get an acknowledge-to-proceed safety flag.
+export async function ensureSafetyPlanEscortSchema() {
+  await db.execute(
+    sql`ALTER TABLE safety_plans ADD COLUMN IF NOT EXISTS escort_required BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+}
+
 export async function ensureWatchlistSchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS interactions (
