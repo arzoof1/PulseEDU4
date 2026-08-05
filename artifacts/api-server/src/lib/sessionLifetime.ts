@@ -60,6 +60,15 @@ export function capsFor(isPrivileged: boolean): SessionLifetimeCaps {
   return isPrivileged ? privilegedCaps() : regularCaps();
 }
 
+// Master activation flag. Default OFF so deploying the mechanism changes NOTHING
+// (sessions keep the existing rolling-cookie behavior). Set true once the
+// district's session durations are approved to begin enforcing idle/absolute
+// timeouts. Mirrors the inert-until-activated posture of the RLS work.
+export function isStaffSessionTimeoutEnabled(): boolean {
+  const raw = process.env.STAFF_SESSION_TIMEOUT_ENABLED?.trim().toLowerCase();
+  return raw === "true" || raw === "1" || raw === "yes" || raw === "on";
+}
+
 export interface SessionTimestamps {
   /** Epoch ms when the session was established (first authenticated request). */
   createdAt?: number;

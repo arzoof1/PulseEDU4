@@ -1,6 +1,9 @@
 import express, { type Express, type RequestHandler } from "express";
 import { applySecurityHeaders } from "./lib/securityHeaders.js";
-import { evaluateSession } from "./lib/sessionLifetime.js";
+import {
+  evaluateSession,
+  isStaffSessionTimeoutEnabled,
+} from "./lib/sessionLifetime.js";
 import pinoHttp from "pino-http";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
@@ -200,6 +203,12 @@ app.use(
 // identity middleware below sets isPrivileged once the staff row is loaded, so
 // the tight Admin/DA/SU caps take effect from the request after sign-in.
 app.use((req, res, next) => {
+  // Off by default — deploying this changes nothing until the district's
+  // session durations are approved and STAFF_SESSION_TIMEOUT_ENABLED=true.
+  if (!isStaffSessionTimeoutEnabled()) {
+    next();
+    return;
+  }
   const sid = req.session?.staffId;
   if (typeof sid !== "number") {
     next();
