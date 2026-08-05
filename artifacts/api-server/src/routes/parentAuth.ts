@@ -76,6 +76,10 @@ import {
   issueParentAuthToken,
   verifyParentAuthToken,
 } from "../lib/authToken.js";
+import {
+  bumpParentAuthTokenVersion,
+  parentAuthTokenVersion,
+} from "../lib/parentBearerAuth.js";
 import { loadBrandingForSchool } from "./schoolBranding.js";
 import { ensureCsrfToken } from "../lib/csrf.js";
 
@@ -112,7 +116,7 @@ router.use(async (req, _res, next) => {
   if (!pid) {
     const auth = req.headers.authorization;
     if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      pid = verifyParentAuthToken(auth.slice(7).trim());
+      pid = verifyParentAuthToken(auth.slice(7).trim())?.parentId ?? null;
     }
   }
   req.parentId = pid;
@@ -179,6 +183,9 @@ router.post("/parent-auth/login", async (req: Request, res) => {
       payload: { parentId: parent.id, email: normalizedEmail },
     });
 
+    // DV-10: stamp the bearer token with the parent's current token version so
+    // it is honored by requireActiveParent until the next revoke/reset.
+    const authTokenVersion = await parentAuthTokenVersion(parent.id);
     req.session.regenerate((err) => {
       if (err) {
         res.status(500).json({ error: "Could not start session" });
@@ -198,7 +205,7 @@ router.post("/parent-auth/login", async (req: Request, res) => {
         res.json({
           ...publicParent(parent),
           csrfToken,
-          authToken: issueParentAuthToken(parent.id),
+          authToken: issueParentAuthToken(parent.id, authTokenVersion),
         });
       });
     });
@@ -208,7 +215,11 @@ router.post("/parent-auth/login", async (req: Request, res) => {
   res.status(401).json({ error: GENERIC_LOGIN_ERROR });
 });
 
-router.post("/parent-auth/logout", (req, res) => {
+router.post("/parent-auth/logout", async (req, res) => {
+  // DV-10: bump the token version so any outstanding bearer token is revoked,
+  // not just the session cookie destroyed below.
+  const pid = req.session.parentId ?? null;
+  if (pid) await bumpParentAuthTokenVersion(pid);
   req.session.destroy((err) => {
     if (err) {
       res.status(500).json({ error: "Could not log out" });
@@ -251,10 +262,11 @@ router.get("/parent-auth/me", async (req, res) => {
     .innerJoin(studentsTable, eq(parentStudentsTable.studentId, studentsTable.id))
     .where(eq(parentStudentsTable.parentId, pid));
 
+  const authTokenVersion = await parentAuthTokenVersion(parent.id);
   res.json({
     ...publicParent(parent),
     csrfToken: ensureCsrfToken(req.session),
-    authToken: issueParentAuthToken(parent.id),
+    authToken: issueParentAuthToken(parent.id, authTokenVersion),
     students: links.map((s) => ({
       id: s.studentRowId,
       studentId: s.studentId,
@@ -501,6 +513,7 @@ router.post("/parent-auth/accept-invite", async (req, res) => {
     .select()
     .from(parentsTable)
     .where(eq(parentsTable.id, parentId));
+  const authTokenVersion = await parentAuthTokenVersion(parentId);
   req.session.regenerate((err) => {
     if (err) {
       res.status(500).json({ error: "Could not start session" });
@@ -518,7 +531,7 @@ router.post("/parent-auth/accept-invite", async (req, res) => {
       res.json({
         ...publicParent(parent!),
         csrfToken,
-        authToken: issueParentAuthToken(parentId),
+        authToken: issueParentAuthToken(parentId, authTokenVersion),
       });
     });
   });
@@ -878,6 +891,12 @@ router.post("/parent-auth/reset", async (req, res) => {
     payload: { parentId },
   });
 
+  // DV-10: a completed password reset must invalidate every previously-issued
+  // bearer token. Bump the version, then stamp the fresh token with the new
+  // value so this session's token is the only one that still works.
+  await bumpParentAuthTokenVersion(parentId);
+  const authTokenVersion = await parentAuthTokenVersion(parentId);
+
   // Auto-sign-in so the parent lands on their dashboard — same pattern
   // as accept-invite. Clear any pre-existing staff session bits.
   req.session.regenerate((err) => {
@@ -897,7 +916,7 @@ router.post("/parent-auth/reset", async (req, res) => {
       res.json({
         ...publicParent({ ...parent, passwordHash }),
         csrfToken,
-        authToken: issueParentAuthToken(parentId),
+        authToken: issueParentAuthToken(parentId, authTokenVersion),
       });
     });
   });

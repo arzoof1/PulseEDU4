@@ -725,6 +725,12 @@ export async function ensureHousesSchema() {
 // non-interactively. Safe to re-run on every boot.
 // -----------------------------------------------------------------------------
 export async function ensureParentMessagesSchema() {
+  // DV-10: parent bearer-token revocation version. Ensured here (a parent-domain
+  // ensure that runs early, incl. bootstrapCriticalColumns) so the column exists
+  // before any parent login path does a bare SELECT * on parents.
+  await db.execute(
+    sql`ALTER TABLE parents ADD COLUMN IF NOT EXISTS auth_token_version INTEGER NOT NULL DEFAULT 0`,
+  );
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS parent_messages (
       id SERIAL PRIMARY KEY,
