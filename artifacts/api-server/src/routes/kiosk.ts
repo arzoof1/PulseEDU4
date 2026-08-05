@@ -39,13 +39,13 @@ import {
 } from "../lib/objectStorage.js";
 import { and, eq, inArray, isNull, gt, gte, lt, desc, sql, ne, asc, like, or } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
-import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
 import { autoEndStalePasses } from "../lib/hallPassLifecycle.js";
 import {
   findEscortHold,
   ESCORT_KIOSK_MESSAGE,
 } from "../lib/safetyPlanEscort.js";
+import { kioskPassMinutesFor } from "../lib/kioskPassMinutes.js";
 import { loadSchoolWideDefaults } from "../lib/restroomAreas.js";
 import { getSchoolTimezone, startOfDayUtc } from "../lib/schoolYear.js";
 import { loadBrandingForSchool } from "./schoolBranding.js";
@@ -1419,7 +1419,7 @@ router.post("/kiosk/hall-passes", async (req, res) => {
       contactedAcknowledged: false,
       status: "active",
       createdAt: new Date().toISOString(),
-      maxDurationMinutes: config.defaultHallPassDurationMinutes,
+      maxDurationMinutes: await kioskPassMinutesFor(act.schoolId),
       endedAt: null,
       priorityBypass: bypassQueue,
     })

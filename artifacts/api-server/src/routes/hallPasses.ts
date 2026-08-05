@@ -9,7 +9,6 @@ import {
 import { autoEndStalePasses } from "../lib/hallPassLifecycle.js";
 import { eq, and, inArray } from "drizzle-orm";
 import { loadRestroomDestinationNames } from "../lib/oneWayPass.js";
-import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
 import {
   findPolarityConflict,
@@ -22,6 +21,7 @@ import {
 import { resolveStudentIdInput } from "../lib/studentIdResolver.js";
 import { checkRestroomAccess } from "../lib/restroomAccess.js";
 import { findEscortHold } from "../lib/safetyPlanEscort.js";
+import { kioskPassMinutesFor } from "../lib/kioskPassMinutes.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 
 const router: IRouter = Router();
@@ -284,7 +284,7 @@ router.post("/hall-passes", async (req, res) => {
         maxDurationMinutes > 0 &&
         maxDurationMinutes <= 240
           ? Math.round(maxDurationMinutes)
-          : config.defaultHallPassDurationMinutes,
+          : await kioskPassMinutesFor(schoolId),
       endedAt: null,
       isTardyReturn: isTardyReturn === true,
     })

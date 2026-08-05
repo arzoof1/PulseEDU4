@@ -2144,6 +2144,12 @@ export async function ensureSchoolSettingsFeatureFlagsSchema() {
       `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tier_preset_id INTEGER`,
     ),
   );
+  // Kiosk self-serve pass length (was hardcoded 4 min in config.ts).
+  await db.execute(
+    sql.raw(
+      `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS kiosk_pass_minutes INTEGER NOT NULL DEFAULT 4`,
+    ),
+  );
   // FAST Phase 2 — per-benchmark mastery threshold (percent, default 80).
   // Drives the Teacher Roster → Benchmarks heatmap color buckets and
   // the bottom-3 tile. Configurable per school.

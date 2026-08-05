@@ -120,6 +120,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     hallPassMaxMinutes,
     hallPassDefaultMinutes,
     hallPassAutoEndMinutes,
+    kioskPassMinutes,
     globalDailyHallPassLimit,
     pbisQuietTeacherDays,
     pbisInvisibleStudentDays,
@@ -208,6 +209,20 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.hallPassMaxMinutes = hallPassMaxMinutes;
+  }
+  if (kioskPassMinutes !== undefined) {
+    if (
+      typeof kioskPassMinutes !== "number" ||
+      !Number.isInteger(kioskPassMinutes) ||
+      kioskPassMinutes < 1 ||
+      kioskPassMinutes > 60
+    ) {
+      res.status(400).json({
+        error: "kioskPassMinutes must be an integer between 1 and 60",
+      });
+      return;
+    }
+    updates.kioskPassMinutes = kioskPassMinutes;
   }
   if (hallPassAutoEndMinutes !== undefined) {
     if (

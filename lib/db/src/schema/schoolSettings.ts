@@ -27,6 +27,10 @@ export const schoolSettingsTable = pgTable(
   hallPassAutoEndMinutes: integer("hall_pass_auto_end_minutes")
     .notNull()
     .default(20),
+  // Kiosk self-serve pass length (minutes). Drives the green→red flip and
+  // the countdown on kiosk-created passes; teacher-created passes use the
+  // duration the teacher picked. Historically hardcoded at 4.
+  kioskPassMinutes: integer("kiosk_pass_minutes").notNull().default(4),
   // Optional school-wide cap on the number of hall passes a student can take
   // in one school day. Null means no global cap.
   globalDailyHallPassLimit: integer("global_daily_hall_pass_limit"),

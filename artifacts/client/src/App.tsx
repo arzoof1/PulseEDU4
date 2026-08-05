@@ -5842,6 +5842,7 @@ function App() {
     hallPassMaxMinutes: number;
     hallPassDefaultMinutes: number;
     hallPassAutoEndMinutes: number;
+    kioskPassMinutes: number;
     globalDailyHallPassLimit: number | null;
     pbisQuietTeacherDays: number;
     pbisInvisibleStudentDays: number;
@@ -5935,6 +5936,7 @@ function App() {
     hallPassMaxMinutes: 30,
     hallPassDefaultMinutes: 5,
     hallPassAutoEndMinutes: 20,
+    kioskPassMinutes: 4,
     globalDailyHallPassLimit: null,
     pbisQuietTeacherDays: 5,
     pbisInvisibleStudentDays: 10,
@@ -7824,6 +7826,10 @@ function App() {
             typeof data.hallPassAutoEndMinutes === "number"
               ? data.hallPassAutoEndMinutes
               : 20,
+          kioskPassMinutes:
+            typeof data.kioskPassMinutes === "number"
+              ? data.kioskPassMinutes
+              : 4,
           globalDailyHallPassLimit:
             typeof data.globalDailyHallPassLimit === "number"
               ? data.globalDailyHallPassLimit
@@ -8039,6 +8045,10 @@ function App() {
           typeof data.hallPassAutoEndMinutes === "number"
             ? data.hallPassAutoEndMinutes
             : 20,
+        kioskPassMinutes:
+          typeof data.kioskPassMinutes === "number"
+            ? data.kioskPassMinutes
+            : 4,
         globalDailyHallPassLimit:
           typeof data.globalDailyHallPassLimit === "number"
             ? data.globalDailyHallPassLimit
@@ -23445,6 +23455,265 @@ function App() {
         <KioskWelcomePanel />
       )}
 
+      {activeSection === "settings" && canManageSettings && settingsTile === "pass-timers" && (
+        <div className="card" style={{ maxWidth: 720 }}>
+          <h2 style={{ marginTop: 0 }}>Pass Timers &amp; Kiosk</h2>
+          <p style={{ color: "var(--text-subtle, #64748b)", marginTop: "-0.25rem" }}>
+            School-wide timing rules for hall passes — teacher-created passes
+            and the self-serve kiosk timer. Changes apply to new passes only.
+          </p>
+          <div style={{ display: "grid", gap: "1.1rem" }}>
+            <div style={{ display: "grid", gap: "0.5rem" }}>
+              <span>
+                Hall Pass Time Limit
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontWeight: "normal",
+                    marginLeft: "0.5rem",
+                  }}
+                >
+                  (caps the slider in the Create Pass modal)
+                </span>
+              </span>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.75rem",
+                }}
+              >
+                <input
+                  type="range"
+                  min={1}
+                  max={240}
+                  step={1}
+                  value={schoolSettings.hallPassMaxMinutes}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    const next = Number.isFinite(n)
+                      ? Math.max(1, Math.min(240, Math.trunc(n)))
+                      : schoolSettings.hallPassMaxMinutes;
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      hallPassMaxMinutes: next,
+                      hallPassDefaultMinutes: Math.min(
+                        schoolSettings.hallPassDefaultMinutes,
+                        next,
+                      ),
+                    });
+                  }}
+                  style={{ flex: 1 }}
+                />
+                <input
+                  type="number"
+                  min={1}
+                  max={240}
+                  step={1}
+                  value={schoolSettings.hallPassMaxMinutes}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    const next = Number.isFinite(n)
+                      ? Math.max(1, Math.min(240, Math.trunc(n)))
+                      : schoolSettings.hallPassMaxMinutes;
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      hallPassMaxMinutes: next,
+                      hallPassDefaultMinutes: Math.min(
+                        schoolSettings.hallPassDefaultMinutes,
+                        next,
+                      ),
+                    });
+                  }}
+                  style={{ width: "5rem" }}
+                />
+                <span style={{ color: "var(--text-subtle, #64748b)" }}>
+                  min
+                </span>
+              </div>
+              <span style={{ fontSize: "0.85rem" }}>
+                Default starting value
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontWeight: "normal",
+                    marginLeft: "0.5rem",
+                  }}
+                >
+                  (where the slider opens — must be ≤ time limit)
+                </span>
+              </span>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.75rem",
+                }}
+              >
+                <input
+                  type="range"
+                  min={1}
+                  max={schoolSettings.hallPassMaxMinutes}
+                  step={1}
+                  value={schoolSettings.hallPassDefaultMinutes}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      hallPassDefaultMinutes: Number.isFinite(n)
+                        ? Math.max(
+                            1,
+                            Math.min(
+                              schoolSettings.hallPassMaxMinutes,
+                              Math.trunc(n),
+                            ),
+                          )
+                        : schoolSettings.hallPassDefaultMinutes,
+                    });
+                  }}
+                  style={{ flex: 1 }}
+                />
+                <input
+                  type="number"
+                  min={1}
+                  max={schoolSettings.hallPassMaxMinutes}
+                  step={1}
+                  value={schoolSettings.hallPassDefaultMinutes}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      hallPassDefaultMinutes: Number.isFinite(n)
+                        ? Math.max(
+                            1,
+                            Math.min(
+                              schoolSettings.hallPassMaxMinutes,
+                              Math.trunc(n),
+                            ),
+                          )
+                        : schoolSettings.hallPassDefaultMinutes,
+                    });
+                  }}
+                  style={{ width: "5rem" }}
+                />
+                <span style={{ color: "var(--text-subtle, #64748b)" }}>
+                  min
+                </span>
+              </div>
+            </div>
+            <div style={{ display: "grid", gap: "0.25rem" }}>
+              <span>
+                Auto-end forgotten passes after
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontWeight: "normal",
+                    marginLeft: "0.5rem",
+                  }}
+                >
+                  (a still-active pass this old is closed automatically, marked
+                  “Auto Ended,” with its end time capped here)
+                </span>
+              </span>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.75rem",
+                }}
+              >
+                <input
+                  type="number"
+                  min={1}
+                  max={240}
+                  step={1}
+                  value={schoolSettings.hallPassAutoEndMinutes}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      hallPassAutoEndMinutes: Number.isFinite(n)
+                        ? Math.max(1, Math.min(240, Math.trunc(n)))
+                        : schoolSettings.hallPassAutoEndMinutes,
+                    });
+                  }}
+                  style={{ width: "5rem" }}
+                />
+                <span style={{ color: "var(--text-subtle, #64748b)" }}>
+                  min
+                </span>
+              </div>
+            </div>
+            <div style={{ display: "grid", gap: "0.25rem" }}>
+              <span>
+                Kiosk pass length
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontWeight: "normal",
+                    marginLeft: "0.5rem",
+                  }}
+                >
+                  (every kiosk self-serve pass runs this long; the kiosk screen
+                  turns red when time is up)
+                </span>
+              </span>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.75rem",
+                }}
+              >
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  step={1}
+                  value={schoolSettings.kioskPassMinutes}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      kioskPassMinutes: Number.isFinite(n)
+                        ? Math.max(1, Math.min(60, Math.trunc(n)))
+                        : schoolSettings.kioskPassMinutes,
+                    });
+                  }}
+                  style={{ width: "5rem" }}
+                />
+                <span style={{ color: "var(--text-subtle, #64748b)" }}>
+                  min
+                </span>
+              </div>
+            </div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.75rem",
+              }}
+            >
+              <button
+                type="button"
+                onClick={saveSchoolSettings}
+                disabled={settingsStatus === "saving"}
+              >
+                {settingsStatus === "saving" ? "Saving…" : "Save Timers"}
+              </button>
+              {settingsStatus === "saved" && (
+                <span style={{ color: "var(--ok, #0a7a3b)" }}>Saved</span>
+              )}
+              {settingsStatus === "error" && (
+                <span style={{ color: "var(--danger, #b00020)" }}>
+                  {settingsError || "Save failed"}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {activeSection === "settings" && canManageSettings && settingsTile === "student-id-badges" && (
         <StudentBadgesPanel />
       )}
@@ -23514,6 +23783,14 @@ function App() {
                 badge: adminNotifications.length,
                 group: "admin-tenancy",
                 // ^ kept in admin-tenancy after the regroup.
+              },
+              {
+                id: "pass-timers",
+                icon: "⏱️",
+                title: "Pass Timers & Kiosk",
+                subtitle:
+                  "Time limit, default length, auto-end, and the kiosk pass timer.",
+                group: "hall-pass-locations",
               },
               {
                 id: "kiosk-setup",
@@ -26378,187 +26655,6 @@ function App() {
                 style={{ width: "6rem" }}
               />
             </label>
-            <div style={{ display: "grid", gap: "0.5rem" }}>
-              <span>
-                Hall Pass Time Limit
-                <span
-                  style={{
-                    color: "var(--text-subtle, #64748b)",
-                    fontWeight: "normal",
-                    marginLeft: "0.5rem",
-                  }}
-                >
-                  (caps the slider in the Create Pass modal)
-                </span>
-              </span>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.75rem",
-                }}
-              >
-                <input
-                  type="range"
-                  min={1}
-                  max={240}
-                  step={1}
-                  value={schoolSettings.hallPassMaxMinutes}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    const next = Number.isFinite(n)
-                      ? Math.max(1, Math.min(240, Math.trunc(n)))
-                      : schoolSettings.hallPassMaxMinutes;
-                    setSchoolSettings({
-                      ...schoolSettings,
-                      hallPassMaxMinutes: next,
-                      hallPassDefaultMinutes: Math.min(
-                        schoolSettings.hallPassDefaultMinutes,
-                        next,
-                      ),
-                    });
-                  }}
-                  style={{ flex: 1 }}
-                />
-                <input
-                  type="number"
-                  min={1}
-                  max={240}
-                  step={1}
-                  value={schoolSettings.hallPassMaxMinutes}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    const next = Number.isFinite(n)
-                      ? Math.max(1, Math.min(240, Math.trunc(n)))
-                      : schoolSettings.hallPassMaxMinutes;
-                    setSchoolSettings({
-                      ...schoolSettings,
-                      hallPassMaxMinutes: next,
-                      hallPassDefaultMinutes: Math.min(
-                        schoolSettings.hallPassDefaultMinutes,
-                        next,
-                      ),
-                    });
-                  }}
-                  style={{ width: "5rem" }}
-                />
-                <span style={{ color: "var(--text-subtle, #64748b)" }}>
-                  min
-                </span>
-              </div>
-              <span style={{ fontSize: "0.85rem" }}>
-                Default starting value
-                <span
-                  style={{
-                    color: "var(--text-subtle, #64748b)",
-                    fontWeight: "normal",
-                    marginLeft: "0.5rem",
-                  }}
-                >
-                  (where the slider opens — must be ≤ time limit)
-                </span>
-              </span>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.75rem",
-                }}
-              >
-                <input
-                  type="range"
-                  min={1}
-                  max={schoolSettings.hallPassMaxMinutes}
-                  step={1}
-                  value={schoolSettings.hallPassDefaultMinutes}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    setSchoolSettings({
-                      ...schoolSettings,
-                      hallPassDefaultMinutes: Number.isFinite(n)
-                        ? Math.max(
-                            1,
-                            Math.min(
-                              schoolSettings.hallPassMaxMinutes,
-                              Math.trunc(n),
-                            ),
-                          )
-                        : schoolSettings.hallPassDefaultMinutes,
-                    });
-                  }}
-                  style={{ flex: 1 }}
-                />
-                <input
-                  type="number"
-                  min={1}
-                  max={schoolSettings.hallPassMaxMinutes}
-                  step={1}
-                  value={schoolSettings.hallPassDefaultMinutes}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    setSchoolSettings({
-                      ...schoolSettings,
-                      hallPassDefaultMinutes: Number.isFinite(n)
-                        ? Math.max(
-                            1,
-                            Math.min(
-                              schoolSettings.hallPassMaxMinutes,
-                              Math.trunc(n),
-                            ),
-                          )
-                        : schoolSettings.hallPassDefaultMinutes,
-                    });
-                  }}
-                  style={{ width: "5rem" }}
-                />
-                <span style={{ color: "var(--text-subtle, #64748b)" }}>
-                  min
-                </span>
-              </div>
-            </div>
-            <div style={{ display: "grid", gap: "0.25rem" }}>
-              <span>
-                Auto-end forgotten passes after
-                <span
-                  style={{
-                    color: "var(--text-subtle, #64748b)",
-                    fontWeight: "normal",
-                    marginLeft: "0.5rem",
-                  }}
-                >
-                  (a still-active pass this old is closed automatically, marked
-                  “Auto Ended,” with its end time capped here)
-                </span>
-              </span>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.75rem",
-                }}
-              >
-                <input
-                  type="number"
-                  min={1}
-                  max={240}
-                  step={1}
-                  value={schoolSettings.hallPassAutoEndMinutes}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    setSchoolSettings({
-                      ...schoolSettings,
-                      hallPassAutoEndMinutes: Number.isFinite(n)
-                        ? Math.max(1, Math.min(240, Math.trunc(n)))
-                        : schoolSettings.hallPassAutoEndMinutes,
-                    });
-                  }}
-                  style={{ width: "5rem" }}
-                />
-                <span style={{ color: "var(--text-subtle, #64748b)" }}>
-                  min
-                </span>
-              </div>
-            </div>
             <label style={{ display: "grid", gap: "0.25rem" }}>
               <span>Email Signature</span>
               <textarea
