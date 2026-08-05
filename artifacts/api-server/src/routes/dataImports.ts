@@ -23,6 +23,7 @@ import {
 } from "express";
 import {
   db,
+  dataExportAuditLogTable,
   staffTable,
   schoolsTable,
   importJobsTable,
@@ -1638,6 +1639,36 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
       rows = rows.map((r) => keepIdx.map((i) => r[i] ?? ""));
     }
   }
+  // DV-11: roster/behavior/FAST/assessment exports are student PII leaving the
+  // app's access controls — audit BEFORE the bytes leave (blocking, like
+  // /exports/download) so an untracked export cannot occur. The detailed row
+  // lives in data_export_audit_log; writeAuthAudit mirrors it into the Security
+  // Events viewer (and never throws).
+  const exportSchoolId = req.schoolId ?? staff.schoolId ?? 0;
+  await db.insert(dataExportAuditLogTable).values({
+    schoolId: exportSchoolId,
+    datasetKey: `import:${kindRaw}`,
+    format: "csv",
+    columns: headers.map((h) => String(h)),
+    filters: { scope },
+    rowCount: rows.length,
+    actorStaffId: staff.id,
+    actorName: staff.displayName ?? staff.email ?? null,
+  });
+  await writeAuthAudit({
+    action: "data_export",
+    schoolId: exportSchoolId,
+    actorStaffId: staff.id,
+    actorName: staff.displayName ?? staff.email ?? null,
+    ip: req.ip ?? null,
+    payload: {
+      via: "data_imports",
+      kind: kindRaw,
+      scope,
+      format: "csv",
+      rowCount: rows.length,
+    },
+  });
   sendCsv(res, kindRaw, [headers, ...rows]);
 });
 

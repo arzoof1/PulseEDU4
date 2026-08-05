@@ -30,6 +30,7 @@ import {
   studentsTable,
   type SafetyPlanItem,
 } from "@workspace/db";
+import { writeAuthAudit } from "../lib/authAudit.js";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { canEditSafetyPlan } from "../lib/coreTeam.js";
@@ -251,6 +252,17 @@ router.get(
       return;
     }
     const plan = await loadPlan(schoolId, studentId);
+    // DV-11: log the VIEW of a highly sensitive Safety Plan into the audit
+    // trail. writeAuthAudit is internally fail-safe (never throws), so this
+    // never blocks access to safety information.
+    await writeAuthAudit({
+      action: "safety_plan_viewed",
+      schoolId,
+      actorStaffId: staff.id,
+      actorName: staff.displayName ?? staff.email ?? null,
+      ip: req.ip ?? null,
+      payload: { studentId },
+    });
     res.json({
       studentId,
       plan,
