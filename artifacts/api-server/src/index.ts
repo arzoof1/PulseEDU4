@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { s3BucketName, useS3ObjectStorage } from "./lib/storedObject.js";
 import { bootstrapCriticalColumns, runMigrations, runSeed } from "./seedRunner";
 import { recoverSuperUserPasswordOnce } from "./seed";
+import { checkMfaEncKeyAtBoot } from "./lib/mfaCrypto.js";
 import {
   scheduledJobsEnabled,
   startScheduledJobs,
@@ -59,6 +60,11 @@ const runScheduledJobs =
   scheduledJobsEnabled(!isProduction);
 
 function startListening(): void {
+  // DO-07: log the MFA_ENC_KEY configuration state at boot (evidence). Only
+  // hard-fails when MFA_ENC_KEY_REQUIRED=true is explicitly set, so this is
+  // safe to deploy to an instance that has not set the key yet.
+  checkMfaEncKeyAtBoot();
+
   if (useS3ObjectStorage()) {
     logger.info(
       {
