@@ -4110,20 +4110,79 @@ export async function ensureTicketingSchema(): Promise<void> {
 
 // Staff self-service password reset (mirrors parent_password_resets).
 // Additive CREATE TABLE IF NOT EXISTS per project convention.
+//
+// This ensure must match the current Drizzle schema (lib/db schema
+// staff_password_resets: token_hash + email + status + request_ip/used_ip ...).
+// An earlier version created a legacy shape (token NOT NULL, no email/status/
+// token_hash) that broke on a freshly-provisioned DB — the routes write
+// token_hash/email/status, so inserts failed and a unique index on the missing
+// `token` column errored (DV-06 / lab OPS-2). The statements below both create
+// the correct table on a fresh DB and self-heal a legacy table in place, so
+// re-running on any DB (fresh, legacy, or current prod) is a no-op-safe repair.
 export async function ensureStaffPasswordResetsSchema(): Promise<void> {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS staff_password_resets (
       id SERIAL PRIMARY KEY,
-      staff_id INTEGER NOT NULL,
-      token TEXT NOT NULL,
-      expires_at TIMESTAMPTZ NOT NULL,
+      staff_id INTEGER,
+      email TEXT,
+      token_hash TEXT,
+      status TEXT NOT NULL DEFAULT 'requested',
+      requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ,
       used_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      requested_ip TEXT
+      request_ip TEXT,
+      used_ip TEXT,
+      user_agent TEXT,
+      email_sent_at TIMESTAMPTZ,
+      email_error TEXT
     )
   `);
+  // Self-heal a table created by the legacy ensure: add the columns the app
+  // actually writes. Nullable at the physical level (the app always sets email/
+  // token_hash) so adding them to a table with existing rows never fails.
+  const columns: Array<[string, string]> = [
+    ["email", "TEXT"],
+    ["token_hash", "TEXT"],
+    ["status", "TEXT NOT NULL DEFAULT 'requested'"],
+    ["requested_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()"],
+    ["expires_at", "TIMESTAMPTZ"],
+    ["used_at", "TIMESTAMPTZ"],
+    ["request_ip", "TEXT"],
+    ["used_ip", "TEXT"],
+    ["user_agent", "TEXT"],
+    ["email_sent_at", "TIMESTAMPTZ"],
+    ["email_error", "TEXT"],
+  ];
+  for (const [name, type] of columns) {
+    await db.execute(
+      sql.raw(
+        `ALTER TABLE staff_password_resets ADD COLUMN IF NOT EXISTS ${name} ${type}`,
+      ),
+    );
+  }
+  // Relax legacy NOT NULLs that would block current inserts (the app leaves
+  // staff_id null for unknown-email requests and never sets the old `token`).
   await db.execute(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS staff_password_resets_token_unique ON staff_password_resets (token)`,
+    sql`ALTER TABLE staff_password_resets ALTER COLUMN staff_id DROP NOT NULL`,
+  );
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'staff_password_resets' AND column_name = 'token'
+      ) THEN
+        ALTER TABLE staff_password_resets ALTER COLUMN token DROP NOT NULL;
+      END IF;
+    END $$;
+  `);
+  // Drop the wrong legacy index (on the missing `token` column) and index the
+  // real one-time-use key (token_hash) plus the staff lookup.
+  await db.execute(
+    sql`DROP INDEX IF EXISTS staff_password_resets_token_unique`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS staff_password_resets_token_hash_unique ON staff_password_resets (token_hash)`,
   );
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS staff_password_resets_by_staff ON staff_password_resets (staff_id)`,

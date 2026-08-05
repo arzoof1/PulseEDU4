@@ -1,11 +1,11 @@
 import express, { type Express, type RequestHandler } from "express";
-import helmet from "helmet";
+import { applySecurityHeaders } from "./lib/securityHeaders.js";
+import { evaluateSession } from "./lib/sessionLifetime.js";
 import pinoHttp from "pino-http";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import router from "./routes";
 import { corsMiddleware } from "./lib/corsConfig.js";
-import { resolvePublicAppOrigin } from "./lib/publicAppUrl.js";
 import { csrfProtectionMiddleware } from "./lib/csrf.js";
 import { isStaffMfaEnabled } from "./lib/staffMfaSwitch.js";
 import { isMfaRequiredForStaffCached } from "./lib/mfaPolicyCache.js";
@@ -81,36 +81,18 @@ declare module "express-session" {
     // require this to be within PRIVILEGED_REAUTH_WINDOW_MS. Set by
     // POST /api/auth/reauth; checked via hasFreshPrivilegedReauth().
     privilegedReauthAt?: number;
+    // Session-lifetime bookkeeping (DV-07). createdAt anchors the absolute
+    // timeout; lastSeenAt anchors the idle timeout; isPrivileged selects the
+    // (much tighter) Admin/DA/SU caps. Stamped by sessionTimeoutMiddleware and
+    // the identity middleware below; evaluated via evaluateSession().
+    createdAt?: number;
+    lastSeenAt?: number;
+    isPrivileged?: boolean;
   }
 }
 
 const app: Express = express();
 const isProduction = process.env.NODE_ENV === "production";
-
-function csvEnv(name: string): string[] {
-  return (process.env[name] ?? "")
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-function frameAncestors(): string[] {
-  const configured = csvEnv("SECURITY_FRAME_ANCESTORS");
-  if (configured.length > 0) return configured;
-
-  const ancestors = ["'self'"];
-  ancestors.push(resolvePublicAppOrigin());
-
-  // Replit previews are iframe-based in development; keep that opt-in and
-  // production-configurable instead of using X-Frame-Options DENY/SAMEORIGIN.
-  if (!isProduction) {
-    ancestors.push("http://localhost:5173", "http://localhost:5174");
-    const replit = process.env.REPLIT_DEV_DOMAIN?.trim();
-    if (replit) ancestors.push(`https://${replit}`);
-  }
-
-  return ancestors;
-}
 
 // Required so express-session honors X-Forwarded-Proto from the Replit proxy
 // (TLS terminates upstream, so without this `secure: true` cookies are dropped).
@@ -127,40 +109,7 @@ if (!databaseUrl) {
 
 const PgSession = connectPgSimple(session);
 
-app.use(
-  helmet({
-    // Development Vite/React tooling can require eval/inline assets. Keep CSP
-    // strict in production and disabled locally to avoid breaking dev UX.
-    contentSecurityPolicy: isProduction
-      ? {
-        useDefaults: true,
-        directives: {
-          "default-src": ["'self'"],
-          "base-uri": ["'self'"],
-          "object-src": ["'none'"],
-          "frame-ancestors": frameAncestors(),
-          "form-action": ["'self'"],
-          "img-src": ["'self'", "data:", "blob:", "https:"],
-          "media-src": ["'self'", "data:", "blob:", "https:"],
-          "connect-src": ["'self'", ...csvEnv("CSP_CONNECT_SRC")],
-          "script-src": ["'self'"],
-          "style-src": ["'self'", "'unsafe-inline'"],
-        },
-      }
-      : false,
-    crossOriginEmbedderPolicy: false,
-    // frame-ancestors is more precise than X-Frame-Options for this app's
-    // preview/deployment needs; avoid emitting a conflicting legacy header.
-    frameguard: false,
-    hsts: isProduction
-      ? {
-        maxAge: 15552000,
-        includeSubDomains: true,
-      }
-      : false,
-    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
-  }),
-);
+applySecurityHeaders(app, isProduction);
 
 app.use(
   pinoHttp({
@@ -244,6 +193,43 @@ app.use(
   }),
 );
 
+// Server-side session timeout (DV-07). Enforces idle + absolute lifetime bounds
+// on top of the rolling cookie, with much tighter caps for privileged sessions.
+// Applies only to cookie-authenticated staff sessions — bearer tokens carry
+// their own versioned expiry. createdAt/lastSeenAt are stamped here; the
+// identity middleware below sets isPrivileged once the staff row is loaded, so
+// the tight Admin/DA/SU caps take effect from the request after sign-in.
+app.use((req, res, next) => {
+  const sid = req.session?.staffId;
+  if (typeof sid !== "number") {
+    next();
+    return;
+  }
+  const now = Date.now();
+  if (typeof req.session.createdAt !== "number") {
+    req.session.createdAt = now;
+  }
+  const verdict = evaluateSession(
+    {
+      createdAt: req.session.createdAt,
+      lastSeenAt: req.session.lastSeenAt,
+      isPrivileged: req.session.isPrivileged === true,
+    },
+    now,
+  );
+  if (verdict.expired) {
+    req.session.destroy((err) => {
+      if (err) logger.warn({ err }, "session destroy on timeout failed");
+      res
+        .status(401)
+        .json({ error: "Session expired", reason: `session_${verdict.reason}` });
+    });
+    return;
+  }
+  req.session.lastSeenAt = now;
+  next();
+});
+
 // Resolve staff identity from the HttpOnly session cookie. Bearer tokens are
 // optional (STAFF_BEARER_AUTH_ENABLED) for legacy iframe/dev only; they are
 // versioned and revoked on logout. Routes should read req.staffId.
@@ -278,6 +264,15 @@ app.use(async (req, _res, next) => {
         })
         .from(staffTable)
         .where(eq(staffTable.id, sid));
+      // Cache the session actor's privilege on the session so the (cookie-only)
+      // session-timeout middleware can pick the tight Admin/DA/SU caps without
+      // its own DB query. Only when sid came from the session cookie — bearer
+      // requests have no session.staffId and are not subject to this timeout.
+      if (orig && typeof req.session.staffId === "number") {
+        req.session.isPrivileged = !!(
+          orig.isAdmin || orig.isDistrictAdmin || orig.isSuperUser
+        );
+      }
       if (orig && orig.previewTargetStaffId) {
         const stillEligible =
           orig.active &&
