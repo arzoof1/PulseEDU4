@@ -388,6 +388,25 @@ export default function SafetyPlanEditor({
                     creating a pass for them.
                   </div>
                 )}
+                {escortRequired && status !== "active" && (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      fontSize: 12.5,
+                      fontWeight: 700,
+                      color: "#991b1b",
+                      background: "#fee2e2",
+                      border: "1px solid #fca5a5",
+                      borderRadius: 6,
+                      padding: "6px 10px",
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    ⚠️ This plan's Status is set to Inactive, so the escort
+                    protection is <u>NOT running</u> — the student can still
+                    create passes. Set Status to Active above.
+                  </div>
+                )}
               </div>
 
               <h3 style={{ fontSize: 13, fontWeight: 700, margin: "12px 0 6px", color: "#111827" }}>
