@@ -35,6 +35,11 @@ export const parentsTable = pgTable(
     // off the student row at invite time, parent can edit later.
     displayName: text("display_name").notNull(),
     active: boolean("active").notNull().default(true),
+    // Monotonic version for parent bearer tokens (DV-10). Bumped on logout,
+    // password reset, and admin revoke so any previously-issued bearer token is
+    // rejected immediately (mirrors staff.auth_token_version) — closes the gap
+    // where a revoked parent's token stayed valid until it naturally expired.
+    authTokenVersion: integer("auth_token_version").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

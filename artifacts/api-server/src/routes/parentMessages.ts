@@ -1208,7 +1208,7 @@ function resolveParentId(req: Request): number | null {
   if (!pid) {
     const auth = req.headers.authorization;
     if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      pid = verifyParentAuthToken(auth.slice(7).trim());
+      pid = verifyParentAuthToken(auth.slice(7).trim())?.parentId ?? null;
     }
   }
   return pid;

@@ -18,6 +18,7 @@ import type { Request, Response, NextFunction } from "express";
 import { db, parentsTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { verifyParentAuthToken } from "./authToken.js";
+import { parentAuthTokenVersion } from "./parentBearerAuth.js";
 
 // Resolve the parent id from the session cookie OR a Bearer parent token
 // (the preview iframe falls back to the token because the session cookie is
@@ -27,7 +28,7 @@ export function resolveParentId(req: Request): number | null {
   if (!pid) {
     const auth = req.headers.authorization;
     if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      pid = verifyParentAuthToken(auth.slice(7).trim());
+      pid = verifyParentAuthToken(auth.slice(7).trim())?.parentId ?? null;
     }
   }
   return pid;
@@ -70,6 +71,28 @@ export async function requireActiveParent(
       res.status(401).json({ error: "Sign-in required" });
     }
     return;
+  }
+  // DV-10: for BEARER-authenticated requests, enforce the token version so a
+  // revoked/reset parent's still-unexpired token stops working immediately.
+  // Session-cookie requests are skipped — a session is revoked directly (it is
+  // destroyed above the moment the account goes inactive). Kept in the bearer
+  // branch so the (rare) column read never touches the session hot path.
+  const fromSession = req.session?.parentId != null;
+  if (!fromSession) {
+    const auth = req.headers.authorization;
+    const token =
+      typeof auth === "string" && auth.startsWith("Bearer ")
+        ? auth.slice(7).trim()
+        : null;
+    const parsed = token ? verifyParentAuthToken(token) : null;
+    if (parsed) {
+      const currentVersion = await parentAuthTokenVersion(pid);
+      if (parsed.tokenVersion !== currentVersion) {
+        req.parentId = null;
+        res.status(401).json({ error: "Sign-in required" });
+        return;
+      }
+    }
   }
   req.parentId = parent.id;
   next();

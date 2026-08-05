@@ -90,10 +90,12 @@ export function verifyAuthToken(token: string): VerifiedStaffToken | null {
 // the same SESSION_SECRET.
 export function issueParentAuthToken(
   parentId: number,
+  tokenVersion = 0,
   ttlMs = PARENT_BEARER_TTL_MS,
 ): string {
   const payload = JSON.stringify({
     sid: parentId,
+    tv: tokenVersion,
     kind: "parent",
     exp: Date.now() + ttlMs,
   });
@@ -101,7 +103,14 @@ export function issueParentAuthToken(
   return `${body}.${sign(body)}`;
 }
 
-export function verifyParentAuthToken(token: string): number | null {
+export type VerifiedParentToken = {
+  parentId: number;
+  tokenVersion: number;
+};
+
+export function verifyParentAuthToken(
+  token: string,
+): VerifiedParentToken | null {
   if (typeof token !== "string" || !token.includes(".")) return null;
   const [body, sig] = token.split(".");
   if (!body || !sig) return null;
@@ -113,6 +122,7 @@ export function verifyParentAuthToken(token: string): number | null {
     const json = JSON.parse(fromB64url(body).toString("utf8")) as {
       sid?: unknown;
       exp?: unknown;
+      tv?: unknown;
       kind?: unknown;
     };
     if (
@@ -123,7 +133,11 @@ export function verifyParentAuthToken(token: string): number | null {
       return null;
     }
     if (json.exp < Date.now()) return null;
-    return json.sid;
+    // Legacy tokens issued before DV-10 carry no `tv` — treat as version 0,
+    // which matches a never-bumped parent (auth_token_version default 0).
+    const tokenVersion =
+      typeof json.tv === "number" && Number.isInteger(json.tv) ? json.tv : 0;
+    return { parentId: json.sid, tokenVersion };
   } catch {
     return null;
   }

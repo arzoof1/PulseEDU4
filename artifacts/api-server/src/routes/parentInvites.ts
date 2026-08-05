@@ -17,6 +17,7 @@ import {
 } from "../lib/parentInviteEmail.js";
 import { logger } from "../lib/logger.js";
 import { writeAuthAudit } from "../lib/authAudit.js";
+import { bumpParentAuthTokenVersion } from "../lib/parentBearerAuth.js";
 import {
   checkParentAccountQuota,
   enforceParentAccountQuota,
@@ -704,6 +705,10 @@ router.post("/admin/parents/:id/revoke", async (req, res) => {
     res.status(404).json({ error: "Parent not found in this school" });
     return;
   }
+
+  // DV-10: revoke any outstanding parent bearer token immediately (belt-and-
+  // suspenders alongside the active=false check + the session purge below).
+  await bumpParentAuthTokenVersion(parentId);
 
   // Kill any live sessions for this parent so a valid cookie stops working
   // immediately, not just on the next active=false re-check. connect-pg-simple
