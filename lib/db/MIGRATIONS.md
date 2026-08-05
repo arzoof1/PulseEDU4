@@ -72,6 +72,21 @@ the ORM the entire app runs on. That is deliberately NOT done here: it must be
 its own validated project (full app typecheck + test pass on orm v1, plus a
 push/generate smoke-test), not a side effect of setting up migrations.
 
+**Upgrade attempt — measured blast radius (2026-08-05).** Bumped the catalog to
+`drizzle-orm@1.0.0-rc.4` + `drizzle-kit@1.0.0-rc.4`, installed, and typechecked:
+
+```
+api-server tsc --noEmit under drizzle-orm v1:  13,639 errors
+  4,552 TS2345 (argument types)   4,284 TS2322 (assignment)   4,065 TS2339 (missing prop)
+```
+
+drizzle-orm v1 rewrote the table/column/query type system (PgColumn shape,
+`drizzle()` config, table brands), so essentially every schema file and query
+site fails to typecheck. This is a **multi-week migration on release-candidate
+software** — far outside "won't break prod." The bump was **reverted** (catalog
+back to `^0.45.1`, lockfile restored, typecheck green). Recommendation: schedule
+the drizzle v1 upgrade as its own post-launch project once v1 ships **stable**.
+
 **Interim (works today):** provision/refresh a database from the schema with the
 programmatic builder `scripts/src/testSchemaSync.mts` (drizzle `getTableConfig`
 → CREATE TABLE for all 198 tables; used to stand up the integration-test DB).
