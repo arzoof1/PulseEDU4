@@ -37,6 +37,7 @@ export type SettingsTileId =
   | "staff-directory"
   | "cameras"
   | "case-outcomes"
+  | "starter-lists"
   | "fast-coverage"
   | "kiosk-welcome"
   | "student-id-badges"

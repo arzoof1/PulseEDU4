@@ -31,6 +31,7 @@ import StaffTimeHub from "./components/StaffTimeHub";
 import TimeTrackingPanel from "./components/comp/TimeTrackingPanel";
 import WatchlistHub from "./components/WatchlistHub";
 import CaseOutcomesPage from "./components/CaseOutcomesPage";
+import StarterListsPanel from "./components/StarterListsPanel";
 import WatchlistNetwork from "./components/WatchlistNetwork";
 import WatchlistStudentGraph from "./components/WatchlistStudentGraph";
 import WatchlistCaseDetail from "./components/WatchlistCaseDetail";
@@ -24307,6 +24308,19 @@ function App() {
                 group: "people-access",
               });
             }
+            // One-click starter pack: loads the curated default entries
+            // into every configurable pick list, skipping duplicates.
+            // Intended for brand-new school onboarding / post-reset.
+            if (isAdmin || isDistrictAdmin || isSuperUser) {
+              tiles.push({
+                id: "starter-lists",
+                icon: "🧰",
+                title: "Starter Pick Lists",
+                subtitle:
+                  "One click loads default entries into every pick list (PBIS, interventions, outcomes, tags…). Skips anything you already have.",
+                group: "behavior-pbis",
+              });
+            }
             if (isAdmin || isDistrictAdmin || isSuperUser) {
               tiles.push({
                 id: "case-outcomes",
@@ -24458,6 +24472,10 @@ function App() {
 
       {activeSection === "settings" && canManageSettings && settingsTile === "case-outcomes" && (isAdmin || isDistrictAdmin || isSuperUser) && (
         <CaseOutcomesPage />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "starter-lists" && (isAdmin || isDistrictAdmin || isSuperUser) && (
+        <StarterListsPanel />
       )}
 
       {activeSection === "separationSuggestions" && (
