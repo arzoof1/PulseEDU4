@@ -5951,6 +5951,8 @@ function App() {
     pbisInvisibleDaysTier3: number;
     pbisReasonImbalancePct: number;
     pbisColdPeriodMultiple: number;
+    pbisAllowPointAdjust: boolean;
+    pbisMaxPointsPerAward: number;
     onTimeAttendanceEnabled: boolean;
     onTimeMaxPoints: number;
     onTimeLotteryEnabled: boolean;
@@ -6045,6 +6047,8 @@ function App() {
     pbisInvisibleDaysTier3: 3,
     pbisReasonImbalancePct: 60,
     pbisColdPeriodMultiple: 5,
+    pbisAllowPointAdjust: true,
+    pbisMaxPointsPerAward: 10,
     onTimeAttendanceEnabled: false,
     onTimeMaxPoints: 4,
     onTimeLotteryEnabled: false,
@@ -7962,6 +7966,14 @@ function App() {
             typeof data.pbisColdPeriodMultiple === "number"
               ? data.pbisColdPeriodMultiple
               : 5,
+          pbisAllowPointAdjust:
+            typeof data.pbisAllowPointAdjust === "boolean"
+              ? data.pbisAllowPointAdjust
+              : true,
+          pbisMaxPointsPerAward:
+            typeof data.pbisMaxPointsPerAward === "number"
+              ? data.pbisMaxPointsPerAward
+              : 10,
           onTimeAttendanceEnabled:
             typeof data.onTimeAttendanceEnabled === "boolean"
               ? data.onTimeAttendanceEnabled
@@ -8181,6 +8193,14 @@ function App() {
           typeof data.pbisColdPeriodMultiple === "number"
             ? data.pbisColdPeriodMultiple
             : 5,
+        pbisAllowPointAdjust:
+          typeof data.pbisAllowPointAdjust === "boolean"
+            ? data.pbisAllowPointAdjust
+            : true,
+        pbisMaxPointsPerAward:
+          typeof data.pbisMaxPointsPerAward === "number"
+            ? data.pbisMaxPointsPerAward
+            : 10,
         onTimeAttendanceEnabled:
           typeof data.onTimeAttendanceEnabled === "boolean"
             ? data.onTimeAttendanceEnabled
@@ -25491,6 +25511,91 @@ function App() {
             unit: "×",
           },
         ];
+        const pointControls = (
+          <>
+            {/* Award point controls — adjust toggle + per-award cap. */}
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "0.6rem",
+                paddingTop: "0.5rem",
+                borderTop: "1px solid var(--border, #e2e8f0)",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={schoolSettings.pbisAllowPointAdjust}
+                onChange={(e) =>
+                  setSchoolSettings({
+                    ...schoolSettings,
+                    pbisAllowPointAdjust: e.target.checked,
+                  })
+                }
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                <span style={{ fontWeight: 600 }}>
+                  Teachers can adjust points on an award
+                </span>
+                <br />
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontSize: "0.82rem",
+                  }}
+                >
+                  Off = every award uses the reason&apos;s default point
+                  value. Core Team members can always adjust.
+                </span>
+              </span>
+            </label>
+            {schoolSettings.pbisAllowPointAdjust && (
+              <label style={{ display: "grid", gap: "0.25rem" }}>
+                <span>
+                  Maximum points per award
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontWeight: "normal",
+                      marginLeft: "0.5rem",
+                      fontSize: "0.85rem",
+                    }}
+                  >
+                    (1–100)
+                  </span>
+                </span>
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontSize: "0.82rem",
+                  }}
+                >
+                  Hard ceiling for a single award when adjusting is allowed.
+                  Core Team members are exempt.
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  step={1}
+                  value={schoolSettings.pbisMaxPointsPerAward}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    const next = Number.isFinite(n)
+                      ? Math.max(1, Math.min(100, Math.trunc(n)))
+                      : schoolSettings.pbisMaxPointsPerAward;
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      pbisMaxPointsPerAward: next,
+                    });
+                  }}
+                  style={{ width: "6rem" }}
+                />
+              </label>
+            )}
+          </>
+        );
         return (
           <div className="card" style={{ marginTop: "1rem" }}>
             <h2>PBIS Thresholds</h2>
@@ -25556,6 +25661,7 @@ function App() {
                   </div>
                 </label>
               ))}
+              {pointControls}
               <div
                 style={{
                   display: "flex",

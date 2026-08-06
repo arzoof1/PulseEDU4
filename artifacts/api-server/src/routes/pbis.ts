@@ -18,6 +18,7 @@ import {
   processMilestonesForStudents,
 } from "../lib/pbisMilestones";
 import { requireSchool } from "../lib/scope.js";
+import { isCoreTeam } from "../lib/coreTeam";
 
 const router: IRouter = Router();
 
@@ -194,12 +195,14 @@ router.post("/pbis", async (req, res) => {
   let resolvedStaffId: number | null = null;
   let resolvedStaffName =
     typeof staffName === "string" ? staffName : "";
+  let sessionStaffRow: typeof staffTable.$inferSelect | undefined;
   if (sessionStaffId) {
     const [s] = await db
       .select()
       .from(staffTable)
       .where(eq(staffTable.id, sessionStaffId));
     if (s && s.active) {
+      sessionStaffRow = s;
       resolvedStaffId = s.id;
       resolvedStaffName = s.displayName;
     }
@@ -276,17 +279,35 @@ router.post("/pbis", async (req, res) => {
     polarity = "negative";
   }
 
-  let storedPoints = pts;
+  // School point-control policy (server-authoritative — the client hides or
+  // caps the stepper, but this is the real gate). Core Team is exempt.
+  const [settingsRow] = await db
+    .select()
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
+  let effPts = pts;
+  const exempt = sessionStaffRow ? isCoreTeam(sessionStaffRow) : false;
+  if (!exempt) {
+    const allowAdjust = settingsRow?.pbisAllowPointAdjust ?? true;
+    const maxPts = settingsRow?.pbisMaxPointsPerAward ?? 10;
+    if (!allowAdjust && matched) {
+      // Adjustment disabled: silently pin to the reason's configured value.
+      effPts = Math.abs(matched.defaultPoints);
+    } else if (Math.abs(pts) > maxPts) {
+      res.status(400).json({
+        error: `Point value exceeds this school's limit of ${maxPts} per award`,
+      });
+      return;
+    }
+  }
+
+  let storedPoints = effPts;
   if (polarity === "negative") {
-    const [settingsRow] = await db
-      .select()
-      .from(schoolSettingsTable)
-      .where(eq(schoolSettingsTable.schoolId, schoolId));
     const subtract = settingsRow?.pbisNegativeAffectsTotal ?? false;
-    const magnitude = Math.abs(pts);
+    const magnitude = Math.abs(effPts);
     storedPoints = subtract ? -magnitude : 0;
   } else {
-    storedPoints = Math.abs(pts);
+    storedPoints = Math.abs(effPts);
   }
 
   // Optional teacher note (trim, cap to 500 chars to keep rows reasonable).
@@ -424,17 +445,33 @@ router.post("/pbis/bulk", async (req: Request, res: Response) => {
   } else if (pts < 0) {
     polarity = "negative";
   }
-  let storedPoints = pts;
+  // School point-control policy — mirrors the single-award endpoint so a
+  // bulk award can't bypass the adjust lock / per-award cap. Core Team exempt.
+  const [settingsRow] = await db
+    .select()
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, req.schoolId!));
+  let effPts = pts;
+  if (!isCoreTeam(staff)) {
+    const allowAdjust = settingsRow?.pbisAllowPointAdjust ?? true;
+    const maxPts = settingsRow?.pbisMaxPointsPerAward ?? 10;
+    if (!allowAdjust && matched) {
+      effPts = Math.abs(matched.defaultPoints);
+    } else if (Math.abs(pts) > maxPts) {
+      res.status(400).json({
+        error: `Point value exceeds this school's limit of ${maxPts} per award`,
+      });
+      return;
+    }
+  }
+
+  let storedPoints = effPts;
   if (polarity === "negative") {
-    const [settingsRow] = await db
-      .select()
-      .from(schoolSettingsTable)
-      .where(eq(schoolSettingsTable.schoolId, req.schoolId!));
     const subtract = settingsRow?.pbisNegativeAffectsTotal ?? false;
-    const magnitude = Math.abs(pts);
+    const magnitude = Math.abs(effPts);
     storedPoints = subtract ? -magnitude : 0;
   } else {
-    storedPoints = Math.abs(pts);
+    storedPoints = Math.abs(effPts);
   }
 
   // Optional shared note attached to every entry in this bulk.
@@ -539,6 +576,23 @@ router.patch("/pbis/:id", async (req: Request, res: Response) => {
     if (!Number.isFinite(pts)) {
       res.status(400).json({ error: "points must be a number" });
       return;
+    }
+    // Same per-award cap as the award endpoints (Core Team exempt) so an
+    // edit can't smuggle in a value the award flow would reject. The
+    // adjust-off lock isn't re-applied here because an edit has no single
+    // authoritative reason row to pin to.
+    if (!isCoreTeam(staff)) {
+      const [settingsRow] = await db
+        .select()
+        .from(schoolSettingsTable)
+        .where(eq(schoolSettingsTable.schoolId, schoolId));
+      const maxPts = settingsRow?.pbisMaxPointsPerAward ?? 10;
+      if (Math.abs(pts) > maxPts) {
+        res.status(400).json({
+          error: `Point value exceeds this school's limit of ${maxPts} per award`,
+        });
+        return;
+      }
     }
     updates.points = pts;
   }

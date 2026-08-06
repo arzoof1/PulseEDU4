@@ -74,6 +74,16 @@ export const schoolSettingsTable = pgTable(
   pbisColdPeriodMultiple: integer("pbis_cold_period_multiple")
     .notNull()
     .default(5),
+  // Whether teachers may change the point value on an award (vs locked to
+  // the reason's default). Core Team is always exempt server-side.
+  pbisAllowPointAdjust: boolean("pbis_allow_point_adjust")
+    .notNull()
+    .default(true),
+  // Hard ceiling per single award when adjustment is allowed (Core Team
+  // exempt). Enforced server-side at the award endpoints.
+  pbisMaxPointsPerAward: integer("pbis_max_points_per_award")
+    .notNull()
+    .default(10),
   // -----------------------------------------------------------------
   // Watch List (Insights) "Needs Attention" thresholds.
   //

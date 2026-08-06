@@ -131,6 +131,8 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     pbisColdPeriodMultiple,
     interventionEffectivenessDays,
     pbisNegativeAffectsTotal,
+    pbisAllowPointAdjust,
+    pbisMaxPointsPerAward,
     schoolWideExpectationAcronym,
     schoolWideExpectationLetters,
     issDailyCapacity,
@@ -485,6 +487,64 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.pbisNegativeAffectsTotal = pbisNegativeAffectsTotal;
+  }
+
+  // Teacher point-adjustment toggle + per-award cap — same school-wide PBIS
+  // policy gate as pbisNegativeAffectsTotal (admin / PBIS coordinator /
+  // behavior specialist / SuperUser only). The cap is validated and written
+  // HERE (not via intRange) so it gets the same role gate as the toggle.
+  if (pbisAllowPointAdjust !== undefined || pbisMaxPointsPerAward !== undefined) {
+    if (
+      pbisAllowPointAdjust !== undefined &&
+      typeof pbisAllowPointAdjust !== "boolean"
+    ) {
+      res
+        .status(400)
+        .json({ error: "pbisAllowPointAdjust must be a boolean" });
+      return;
+    }
+    if (
+      pbisMaxPointsPerAward !== undefined &&
+      (typeof pbisMaxPointsPerAward !== "number" ||
+        !Number.isInteger(pbisMaxPointsPerAward) ||
+        pbisMaxPointsPerAward < 1 ||
+        pbisMaxPointsPerAward > 100)
+    ) {
+      res.status(400).json({
+        error: "pbisMaxPointsPerAward must be an integer between 1 and 100",
+      });
+      return;
+    }
+    const staffId = req.staffId;
+    let allowed = false;
+    if (staffId) {
+      const [s] = await db
+        .select()
+        .from(staffTable)
+        .where(eq(staffTable.id, staffId));
+      if (
+        s &&
+        s.active &&
+        (s.isSuperUser ||
+          s.isAdmin ||
+          s.isPbisCoordinator ||
+          s.isBehaviorSpecialist)
+      ) {
+        allowed = true;
+      }
+    }
+    if (!allowed) {
+      res
+        .status(403)
+        .json({ error: "Only admin, PBIS coordinator, or behavior specialist may change this" });
+      return;
+    }
+    if (pbisAllowPointAdjust !== undefined) {
+      updates.pbisAllowPointAdjust = pbisAllowPointAdjust;
+    }
+    if (pbisMaxPointsPerAward !== undefined) {
+      updates.pbisMaxPointsPerAward = pbisMaxPointsPerAward;
+    }
   }
 
   // School Store inventory mode — `simple` (in-stock boolean) vs `quantity`

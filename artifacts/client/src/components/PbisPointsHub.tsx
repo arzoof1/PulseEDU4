@@ -143,6 +143,12 @@ export default function PbisPointsHub({
   const [storeToggleErr, setStoreToggleErr] = useState<string | null>(null);
 
   const [me, setMe] = useState<Me | null>(null);
+  // School point-control policy for awards. Server-authoritative; this only
+  // shapes the UI (lock the points input / cap the stepper).
+  const [pointPolicy, setPointPolicy] = useState<{
+    allowAdjust: boolean;
+    maxPoints: number;
+  }>({ allowAdjust: true, maxPoints: 10 });
   const [sections, setSections] = useState<Section[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [reasons, setReasons] = useState<Reason[]>([]);
@@ -241,7 +247,7 @@ export default function PbisPointsHub({
           meJson.isEseCoordinator
         );
 
-        const [schedRes, studRes, reasonsRes, pbisRes, tplRes, ivRes] =
+        const [schedRes, studRes, reasonsRes, pbisRes, tplRes, ivRes, settingsRes] =
           await Promise.all([
             authFetch(adminScope ? "/api/schedule?all=1" : "/api/schedule"),
             authFetch("/api/students"),
@@ -249,6 +255,7 @@ export default function PbisPointsHub({
             authFetch("/api/pbis"),
             authFetch("/api/pbis-note-templates"),
             authFetch("/api/intervention-types"),
+            authFetch("/api/school-settings"),
           ]);
         if (!schedRes.ok) throw new Error("Failed to load class schedule");
         if (!studRes.ok) throw new Error("Failed to load students");
@@ -264,6 +271,27 @@ export default function PbisPointsHub({
           ? ((await tplRes.json()) as NoteTemplate[])
           : [];
         const ivJson = ivRes.ok ? ((await ivRes.json()) as IvType[]) : [];
+        // Point-control policy (adjust toggle + per-award cap). Non-critical
+        // fetch — fall back to the permissive defaults if it fails; the
+        // server enforces the real limits either way.
+        if (settingsRes.ok) {
+          const sJson = (await settingsRes.json()) as {
+            pbisAllowPointAdjust?: boolean;
+            pbisMaxPointsPerAward?: number;
+          };
+          if (!cancelled) {
+            setPointPolicy({
+              allowAdjust:
+                typeof sJson.pbisAllowPointAdjust === "boolean"
+                  ? sJson.pbisAllowPointAdjust
+                  : true,
+              maxPoints:
+                typeof sJson.pbisMaxPointsPerAward === "number"
+                  ? sJson.pbisMaxPointsPerAward
+                  : 10,
+            });
+          }
+        }
 
         if (cancelled) return;
 
@@ -336,6 +364,17 @@ export default function PbisPointsHub({
     () => reasons.filter((r) => r.polarity === "positive"),
     [reasons],
   );
+  // Client mirror of the server's Core Team exemption for point controls.
+  // The server is authoritative; this only decides what the UI shows.
+  const isCoreTeamViewer = !!(
+    me &&
+    (me.isSuperUser ||
+      me.isAdmin ||
+      me.isBehaviorSpecialist ||
+      me.isMtssCoordinator)
+  );
+  const canAdjustPoints = isCoreTeamViewer || pointPolicy.allowAdjust;
+  const maxPointsPerAward = isCoreTeamViewer ? null : pointPolicy.maxPoints;
   const negativeReasons = useMemo(
     () => reasons.filter((r) => r.polarity === "negative"),
     [reasons],
@@ -905,6 +944,8 @@ export default function PbisPointsHub({
           student={awardingFor}
           reasons={positiveReasons}
           templates={noteTemplates}
+          canAdjustPoints={canAdjustPoints}
+          maxPointsPerAward={maxPointsPerAward}
           onSaveTemplate={saveNoteTemplate}
           onClose={() => setAwardingFor(null)}
           onSubmit={async (picks, note) => {
@@ -925,6 +966,8 @@ export default function PbisPointsHub({
           students={students}
           reasons={positiveReasons}
           templates={noteTemplates}
+          canAdjustPoints={canAdjustPoints}
+          maxPointsPerAward={maxPointsPerAward}
           onSaveTemplate={saveNoteTemplate}
           onClose={() => setBulkOpen(false)}
           onSubmit={async (picks, note) => {
@@ -2772,6 +2815,8 @@ function AwardModal({
   onSaveTemplate,
   onClose,
   onSubmit,
+  canAdjustPoints,
+  maxPointsPerAward,
 }: {
   student: Student;
   reasons: Reason[];
@@ -2782,6 +2827,8 @@ function AwardModal({
     picks: { reason: Reason; points: number }[],
     note: string,
   ) => Promise<void>;
+  canAdjustPoints: boolean;
+  maxPointsPerAward: number | null;
 }) {
   // Multi-select: map of reasonId -> points (per-pick, editable). Tiles toggle
   // on/off; the strip below shows each pick with its own points input.
@@ -2797,11 +2844,16 @@ function AwardModal({
     points: pts,
     reason: reasons.find((r) => r.id === Number(id)) ?? null,
   }));
-  // All picks must have a positive whole-number points value.
+  // All picks must have a positive whole-number points value within the
+  // school's per-award cap (null = no cap for this user).
   const allValid =
     pickEntries.length > 0 &&
     pickEntries.every(
-      (p) => p.reason !== null && Number.isInteger(p.points) && p.points >= 1,
+      (p) =>
+        p.reason !== null &&
+        Number.isInteger(p.points) &&
+        p.points >= 1 &&
+        (maxPointsPerAward == null || p.points <= maxPointsPerAward),
     );
 
   function togglePick(r: Reason) {
@@ -2978,6 +3030,8 @@ function AwardModal({
               picks={pickEntries}
               onChangePoints={setPickPoints}
               onRemove={removePick}
+              canAdjust={canAdjustPoints}
+              maxPoints={maxPointsPerAward}
             />
 
             <NoteSection
@@ -3074,11 +3128,17 @@ function PicksEditor({
   onChangePoints,
   onRemove,
   perStudent,
+  canAdjust = true,
+  maxPoints = null,
 }: {
   picks: { id: number; points: number; reason: Reason | null }[];
   onChangePoints: (id: number, pts: number) => void;
   onRemove: (id: number) => void;
   perStudent?: boolean;
+  // School policy: false = points locked to the reason default (input
+  // replaced by a static value). maxPoints null = no per-award cap.
+  canAdjust?: boolean;
+  maxPoints?: number | null;
 }) {
   if (picks.length === 0) {
     return (
@@ -3157,21 +3217,47 @@ function PicksEditor({
               >
                 {isNeg ? "−" : "+"}
               </span>
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={p.points}
-                onChange={(e) => onChangePoints(p.id, Number(e.target.value))}
-                aria-label={`Points for ${p.reason.name}`}
-                style={{
-                  width: "4.5rem",
-                  padding: "0.25rem 0.4rem",
-                  border: valid ? "1px solid #cbd5e1" : "1px solid #dc2626",
-                  borderRadius: "0.3rem",
-                  fontSize: "0.88rem",
-                }}
-              />
+              {canAdjust ? (
+                <input
+                  type="number"
+                  min={1}
+                  max={maxPoints ?? undefined}
+                  step={1}
+                  value={p.points}
+                  onChange={(e) => onChangePoints(p.id, Number(e.target.value))}
+                  aria-label={`Points for ${p.reason.name}`}
+                  title={
+                    maxPoints != null
+                      ? `School limit: up to ${maxPoints} points per award`
+                      : undefined
+                  }
+                  style={{
+                    width: "4.5rem",
+                    padding: "0.25rem 0.4rem",
+                    border: valid ? "1px solid #cbd5e1" : "1px solid #dc2626",
+                    borderRadius: "0.3rem",
+                    fontSize: "0.88rem",
+                  }}
+                />
+              ) : (
+                <span
+                  aria-label={`Points for ${p.reason.name} (set by school)`}
+                  title="Point values are set by your school"
+                  style={{
+                    minWidth: "2.2rem",
+                    textAlign: "center",
+                    padding: "0.25rem 0.4rem",
+                    background: "#f1f5f9",
+                    border: "1px solid #e2e8f0",
+                    borderRadius: "0.3rem",
+                    fontSize: "0.88rem",
+                    fontWeight: 700,
+                    color: "#0f172a",
+                  }}
+                >
+                  {p.points}
+                </span>
+              )}
               <button
                 type="button"
                 onClick={() => onRemove(p.id)}
@@ -3457,6 +3543,8 @@ function BulkAwardModal({
   onSaveTemplate,
   onClose,
   onSubmit,
+  canAdjustPoints,
+  maxPointsPerAward,
 }: {
   studentIds: string[];
   students: Student[];
@@ -3468,6 +3556,8 @@ function BulkAwardModal({
     picks: { reason: Reason; points: number }[],
     note: string,
   ) => Promise<void>;
+  canAdjustPoints: boolean;
+  maxPointsPerAward: number | null;
 }) {
   // Multi-select picks: reasonId -> points each (per-student).
   const [picks, setPicks] = useState<Record<number, number>>({});
@@ -3483,7 +3573,11 @@ function BulkAwardModal({
   const allValid =
     pickEntries.length > 0 &&
     pickEntries.every(
-      (p) => p.reason !== null && Number.isInteger(p.points) && p.points >= 1,
+      (p) =>
+        p.reason !== null &&
+        Number.isInteger(p.points) &&
+        p.points >= 1 &&
+        (maxPointsPerAward == null || p.points <= maxPointsPerAward),
     );
   // Cap the note client-side at the same 500-char limit the server enforces.
   const noteOver = note.length > 500;
@@ -3723,6 +3817,8 @@ function BulkAwardModal({
               onChangePoints={setPickPoints}
               onRemove={removePick}
               perStudent
+              canAdjust={canAdjustPoints}
+              maxPoints={maxPointsPerAward}
             />
 
             <NoteSection

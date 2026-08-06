@@ -2150,6 +2150,17 @@ export async function ensureSchoolSettingsFeatureFlagsSchema() {
       `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS kiosk_pass_minutes INTEGER NOT NULL DEFAULT 4`,
     ),
   );
+  // PBIS award point controls (adjust toggle + per-award cap).
+  await db.execute(
+    sql.raw(
+      `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS pbis_allow_point_adjust BOOLEAN NOT NULL DEFAULT TRUE`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS pbis_max_points_per_award INTEGER NOT NULL DEFAULT 10`,
+    ),
+  );
   // FAST Phase 2 — per-benchmark mastery threshold (percent, default 80).
   // Drives the Teacher Roster → Benchmarks heatmap color buckets and
   // the bottom-3 tile. Configurable per school.
