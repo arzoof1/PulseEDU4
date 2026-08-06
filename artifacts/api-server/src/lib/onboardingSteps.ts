@@ -449,7 +449,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
               FROM student_fast_item_responses
              WHERE school_id = ${schoolId}
                AND school_year = ${sy}
-               AND window = 'pm3'
+               AND "window" = 'pm3'
                AND subject IN ('ela','math')
              GROUP BY subject`,
       );
