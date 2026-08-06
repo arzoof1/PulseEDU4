@@ -242,6 +242,10 @@ interface HallPass {
   arrivedAt?: string | null;
   endedBy?: string | null;
   isTardyReturn?: boolean;
+  /** JSON array string of refused wrong-kiosk check-in attempts: [{room, at}]. */
+  arrivalAttempts?: string | null;
+  /** True for restroom round-trips (which legitimately close without an arrival stamp). */
+  isRoundTrip?: boolean;
 }
 
 const teachers = ["Ms. Rivera", "Mr. Johnson", "Coach Lee"];
@@ -5506,6 +5510,10 @@ function App() {
     string[]
   >([]);
   const [editingPassId, setEditingPassId] = useState<number | null>(null);
+  // Server refusal from an End / Receive attempt (e.g. "Only staff at
+  // Guidance can end this pass") — shown inline; dialogs are blocked in the
+  // preview iframe and console.error is invisible to staff.
+  const [passActionError, setPassActionError] = useState<string | null>(null);
   const [editEndedAt, setEditEndedAt] = useState<string>("");
   const [editCreatedAt, setEditCreatedAt] = useState<string>("");
   const [tardies, setTardies] = useState<Tardy[]>([]);
@@ -5706,6 +5714,8 @@ function App() {
     maxDurationMinutes: number;
     createdAt: string;
     endedAt: string | null;
+    arrivedAt?: string | null;
+    isRoundTrip?: boolean;
     day: string;
   }
   interface HpFeed {
@@ -9778,16 +9788,25 @@ function App() {
 
   const handleEndPass = async (id: number) => {
     try {
+      setPassActionError(null);
       const res = await authFetch(`/api/hall-passes/${id}/end`, {
         method: "PATCH",
       });
       if (!res.ok) {
-        console.error("Failed to end hall pass:", await res.text());
+        let msg = "Could not end that pass.";
+        try {
+          const j = (await res.json()) as { error?: string };
+          if (j?.error) msg = j.error;
+        } catch {
+          /* non-JSON error body */
+        }
+        setPassActionError(msg);
         return;
       }
       loadHallPasses();
     } catch (err) {
       console.error("Failed to end hall pass:", err);
+      setPassActionError("Could not end that pass — please try again.");
     }
   };
 
@@ -9797,6 +9816,7 @@ function App() {
   // friendly no-op that still refreshes the list.
   const handleReceivePass = async (id: number) => {
     try {
+      setPassActionError(null);
       const res = await authFetch(`/api/hall-passes/${id}/end`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -9806,12 +9826,20 @@ function App() {
         }),
       });
       if (!res.ok) {
-        console.error("Failed to check in hall pass:", await res.text());
+        let msg = "Could not check in that pass.";
+        try {
+          const j = (await res.json()) as { error?: string };
+          if (j?.error) msg = j.error;
+        } catch {
+          /* non-JSON error body */
+        }
+        setPassActionError(msg);
         return;
       }
       loadHallPasses();
     } catch (err) {
       console.error("Failed to check in hall pass:", err);
+      setPassActionError("Could not check in that pass — please try again.");
     }
   };
 
@@ -13184,6 +13212,41 @@ function App() {
           </div>
         </div>
 
+        {passActionError && (
+          <div
+            role="alert"
+            style={{
+              margin: "0.5rem 0",
+              padding: "0.6rem 0.9rem",
+              background: "#fef2f2",
+              border: "1px solid #fecaca",
+              borderRadius: 8,
+              color: "#991b1b",
+              fontSize: "0.9rem",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: "0.75rem",
+            }}
+          >
+            <span>{passActionError}</span>
+            <button
+              type="button"
+              onClick={() => setPassActionError(null)}
+              style={{
+                background: "none",
+                border: "none",
+                color: "#991b1b",
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+              aria-label="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        )}
+
         {passListView === "active" ? (
           (() => {
             const visible = hallPasses
@@ -13378,6 +13441,17 @@ function App() {
                     authUser?.isAdmin === true ||
                     authUser?.isSuperUser === true;
                   const isEditing = editingPassId === p.id;
+                  // Three ways a pass closes, each with its own badge so
+                  // unverified closes can't hide: confirmed arrival (green
+                  // check), ended with NO check-in (amber — someone closed it
+                  // without the student being received at the destination),
+                  // and auto/system timeout (red). Restroom round-trips
+                  // legitimately close without an arrival stamp, so they
+                  // just show "Returned".
+                  const unconfirmedClose =
+                    p.status === "ended" &&
+                    !p.arrivedAt &&
+                    p.isRoundTrip !== true;
                   const statusClass =
                     p.status === "active"
                       ? "badge badge-active"
@@ -13389,7 +13463,33 @@ function App() {
                       ? "System Ended"
                       : p.status === "auto_ended"
                         ? "Auto Ended"
-                        : p.status;
+                        : p.status === "ended"
+                          ? p.isRoundTrip === true
+                            ? "Returned"
+                            : p.arrivedAt
+                              ? "Arrived ✓"
+                              : "No check-in"
+                          : p.status;
+                  // Refused wrong-kiosk check-ins recorded on the pass.
+                  let attemptRooms: string[] = [];
+                  if (p.arrivalAttempts) {
+                    try {
+                      const parsed = JSON.parse(p.arrivalAttempts) as {
+                        room?: string;
+                      }[];
+                      if (Array.isArray(parsed)) {
+                        attemptRooms = Array.from(
+                          new Set(
+                            parsed
+                              .map((a) => a?.room)
+                              .filter((r): r is string => !!r),
+                          ),
+                        );
+                      }
+                    } catch {
+                      /* malformed JSON — skip badge */
+                    }
+                  }
                   return (
                     <tr key={p.id}>
                       <td>
@@ -13418,7 +13518,62 @@ function App() {
                       </td>
                       <td>{p.originRoom}</td>
                       <td>
-                        <span className={statusClass}>{statusLabel}</span>
+                        <span
+                          className={statusClass}
+                          style={
+                            unconfirmedClose
+                              ? {
+                                  background: "#fef3c7",
+                                  color: "#92400e",
+                                  border: "1px solid #fcd34d",
+                                }
+                              : p.status === "ended" && p.arrivedAt
+                                ? {
+                                    background: "#dcfce7",
+                                    color: "#166534",
+                                    border: "1px solid #86efac",
+                                  }
+                                : undefined
+                          }
+                          title={
+                            unconfirmedClose
+                              ? `Closed${p.endedBy ? ` by ${p.endedBy}` : ""} without a destination check-in`
+                              : p.status === "ended" && p.arrivedAt
+                                ? `Received${p.endedBy ? ` by ${p.endedBy}` : ""}`
+                                : undefined
+                          }
+                        >
+                          {statusLabel}
+                        </span>
+                        {unconfirmedClose && p.endedBy && (
+                          <div
+                            style={{
+                              fontSize: 10,
+                              color: "#92400e",
+                              marginTop: 2,
+                            }}
+                          >
+                            by {p.endedBy}
+                          </div>
+                        )}
+                        {attemptRooms.length > 0 && (
+                          <div
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 700,
+                              color: "#92400e",
+                              background: "#fef3c7",
+                              border: "1px solid #fcd34d",
+                              borderRadius: 6,
+                              padding: "1px 5px",
+                              marginTop: 3,
+                              display: "inline-block",
+                            }}
+                            title="The student tried to check in at a kiosk that wasn't this pass's destination"
+                          >
+                            ⚠ tried {attemptRooms.join(", ")}
+                          </div>
+                        )}
                       </td>
                       <td>
                         {(() => {
@@ -13540,6 +13695,8 @@ function App() {
         let active = 0;
         let overdue = 0;
         let ended = 0;
+        let autoEnded = 0;
+        let unconfirmed = 0;
         const today = new Date();
         for (const p of hallPasses) {
           const created = new Date(p.createdAt);
@@ -13550,6 +13707,16 @@ function App() {
           if (!isToday) continue;
           if (p.status !== "active") {
             ended++;
+            if (p.status === "auto_ended" || p.status === "system_ended") {
+              autoEnded++;
+            } else if (
+              p.status === "ended" &&
+              !p.arrivedAt &&
+              p.isRoundTrip !== true
+            ) {
+              // One-way pass closed without any destination check-in.
+              unconfirmed++;
+            }
           } else if (p.status === "active") {
             const expiresAt =
               new Date(p.createdAt).getTime() +
@@ -13695,6 +13862,34 @@ function App() {
                   Ended Passes
                 </span>
                 <span className="stat-value">{ended}</span>
+                {(unconfirmed > 0 || autoEnded > 0) && (
+                  <span
+                    style={{
+                      display: "block",
+                      fontSize: "0.78rem",
+                      lineHeight: 1.5,
+                      marginTop: "0.35rem",
+                    }}
+                  >
+                    {unconfirmed > 0 && (
+                      <span
+                        style={{ color: "#92400e", fontWeight: 600 }}
+                        title="One-way passes closed without a destination check-in"
+                      >
+                        ⚠ {unconfirmed} without check-in
+                      </span>
+                    )}
+                    {unconfirmed > 0 && autoEnded > 0 && <br />}
+                    {autoEnded > 0 && (
+                      <span
+                        style={{ color: "#b91c1c", fontWeight: 600 }}
+                        title="Passes closed by the timer, not a person"
+                      >
+                        ⏱ {autoEnded} timed out
+                      </span>
+                    )}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -14244,6 +14439,21 @@ function App() {
           series[idx][`G${g}`] = (series[idx][`G${g}`] as number) + 1;
           totalYtd++;
         }
+        // How the year's closed one-way passes ended — confirmed arrival vs
+        // closed with no destination check-in vs timed out. Restroom
+        // round-trips are excluded (they never carry an arrival stamp).
+        let ytdOneWayClosed = 0;
+        let ytdUnconfirmed = 0;
+        let ytdAutoEnded = 0;
+        for (const p of feedPasses) {
+          if (p.isRoundTrip === true || p.status === "active") continue;
+          ytdOneWayClosed++;
+          if (p.status === "auto_ended" || p.status === "system_ended") {
+            ytdAutoEnded++;
+          } else if (!p.arrivedAt) {
+            ytdUnconfirmed++;
+          }
+        }
 
         return (
           <>
@@ -14296,8 +14506,25 @@ function App() {
                 }}
               >
                 <h3 style={{ margin: 0 }}>Daily Passes</h3>
-                <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
+                <div style={{ fontSize: "0.85rem", color: "#64748b", textAlign: "right" }}>
                   Total passes YTD: <strong>{totalYtd.toLocaleString()}</strong>
+                  {ytdOneWayClosed > 0 && (
+                    <div style={{ fontSize: "0.78rem", marginTop: 2 }}>
+                      <span
+                        style={{ color: "#92400e", fontWeight: 600 }}
+                        title="One-way passes closed without a destination check-in"
+                      >
+                        {Math.round((ytdUnconfirmed / ytdOneWayClosed) * 100)}% closed without check-in
+                      </span>
+                      {" · "}
+                      <span
+                        style={{ color: "#b91c1c", fontWeight: 600 }}
+                        title="Passes closed by the timer, not a person"
+                      >
+                        {Math.round((ytdAutoEnded / ytdOneWayClosed) * 100)}% timed out
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
               {totalYtd === 0 ? (

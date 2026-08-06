@@ -29,6 +29,7 @@ import {
 import PDFDocument from "pdfkit";
 import { getSchoolTimezone } from "../lib/schoolYear.js";
 import { canResearchSchoolwide } from "../lib/coreTeam.js";
+import { loadRestroomDestinationNames } from "../lib/oneWayPass.js";
 
 // Hall Pass Research — roster-scoped student pass research for teachers.
 //
@@ -434,6 +435,7 @@ router.get(
         maxDurationMinutes: hallPassesTable.maxDurationMinutes,
         createdAt: hallPassesTable.createdAt,
         endedAt: hallPassesTable.endedAt,
+        arrivedAt: hallPassesTable.arrivedAt,
       })
       .from(hallPassesTable)
       .where(
@@ -481,6 +483,10 @@ router.get(
       for (const s of feedStudents) gradeById.set(s.studentId, s.grade);
     }
 
+    // Round-trip (restroom) passes legitimately close without an arrival
+    // stamp — flag them so the client's "closed without check-in" share
+    // only counts one-way passes that were never received.
+    const restroomNames = await loadRestroomDestinationNames(schoolId);
     const out = [];
     for (const p of passes) {
       const day = tzDay(p.createdAt, tz);
@@ -495,6 +501,8 @@ router.get(
         maxDurationMinutes: p.maxDurationMinutes,
         createdAt: p.createdAt,
         endedAt: p.endedAt,
+        arrivedAt: p.arrivedAt,
+        isRoundTrip: restroomNames.has(p.destination),
         day,
       });
     }

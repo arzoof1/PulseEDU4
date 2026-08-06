@@ -1605,6 +1605,33 @@ router.post("/kiosk/hall-passes/arrive", async (req, res) => {
     act.staffId,
   );
   if (!passHeadsToKiosk(pass, act.room, kioskTeacher)) {
+    // Record the refused attempt on the pass — "headed to Clinic, tried to
+    // check in at Room 214" is exactly the discrepancy staff want to see.
+    // Best-effort (never blocks the refusal response), capped at 10, and
+    // only while the pass is still active.
+    if (pass.status === "active") {
+      try {
+        let attempts: { room: string; at: string }[] = [];
+        if (pass.arrivalAttempts) {
+          const parsed = JSON.parse(pass.arrivalAttempts) as unknown;
+          if (Array.isArray(parsed)) {
+            attempts = parsed.filter(
+              (a): a is { room: string; at: string } =>
+                !!a && typeof a === "object" && typeof (a as { room?: unknown }).room === "string",
+            );
+          }
+        }
+        if (attempts.length < 10) {
+          attempts.push({ room: act.room, at: new Date().toISOString() });
+          await db
+            .update(hallPassesTable)
+            .set({ arrivalAttempts: JSON.stringify(attempts) })
+            .where(eq(hallPassesTable.id, pass.id));
+        }
+      } catch (err) {
+        console.error("Failed to record wrong-kiosk attempt:", err);
+      }
+    }
     res.status(403).json({
       error: `That pass is headed to ${pass.destination}, not ${act.room}.`,
     });

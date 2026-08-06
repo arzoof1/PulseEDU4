@@ -8695,6 +8695,9 @@ export async function ensureOneWayPassSchema(): Promise<void> {
     sql`ALTER TABLE hall_passes ADD COLUMN IF NOT EXISTS overdue_alerted_at TEXT`,
   );
   await db.execute(
+    sql`ALTER TABLE hall_passes ADD COLUMN IF NOT EXISTS arrival_attempts TEXT`,
+  );
+  await db.execute(
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS in_route_overdue_minutes INTEGER NOT NULL DEFAULT 10`,
   );
   await db.execute(sql`

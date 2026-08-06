@@ -30,6 +30,12 @@ export const hallPassesTable = pgTable("hall_passes", {
   // Set once when the overdue-in-route alert has fired for this pass, so the
   // sweep notifies each stranded student exactly once. Null = not yet alerted.
   overdueAlertedAt: text("overdue_alerted_at"),
+  // JSON array (string) of refused kiosk check-in attempts:
+  // [{"room":"Room 214","at":"<iso>"}, ...]. Recorded when a student tries
+  // to close this pass at a kiosk that is NOT its destination — the refusal
+  // itself is the signal ("headed to Clinic, tried to check in at 214").
+  // Capped at 10 entries per pass. Null = no wrong-kiosk attempts.
+  arrivalAttempts: text("arrival_attempts"),
 });
 
 export type HallPassRow = typeof hallPassesTable.$inferSelect;

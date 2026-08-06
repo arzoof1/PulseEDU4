@@ -8,7 +8,10 @@ import {
 } from "@workspace/db";
 import { autoEndStalePasses } from "../lib/hallPassLifecycle.js";
 import { eq, and, inArray } from "drizzle-orm";
-import { loadRestroomDestinationNames } from "../lib/oneWayPass.js";
+import {
+  loadRestroomDestinationNames,
+  loadStaffCoverage,
+} from "../lib/oneWayPass.js";
 import { requireSchool } from "../lib/scope.js";
 import {
   findPolarityConflict,
@@ -53,8 +56,16 @@ router.get("/hall-passes", async (req, res) => {
       );
     for (const s of stu) localBySid.set(s.studentId, s.localSisId);
   }
+  // Round-trip flag so the client can tell "ended with no arrivedAt because
+  // it's a restroom round-trip (normal)" apart from "one-way pass closed
+  // without any destination check-in (worth surfacing)".
+  const restroomNames = await loadRestroomDestinationNames(schoolId);
   res.json(
-    rows.map((r) => ({ ...r, localSisId: localBySid.get(r.studentId) ?? null })),
+    rows.map((r) => ({
+      ...r,
+      localSisId: localBySid.get(r.studentId) ?? null,
+      isRoundTrip: restroomNames.has(r.destination),
+    })),
   );
 });
 
@@ -325,7 +336,7 @@ router.patch("/hall-passes/:id/end", async (req, res) => {
   // Enforce server-side so a spoofed client can't fabricate a restroom
   // "arrival". Non-restroom destinations honor the arrival.
   const restroomNames = await loadRestroomDestinationNames(schoolId);
-  const arrived = arrivedRequested && !restroomNames.has(existing.destination);
+  let arrived = arrivedRequested && !restroomNames.has(existing.destination);
 
   // WHO ended/received the pass is identity, not free text — derive it from
   // the authenticated staff so the client can't spoof `endedBy`. Only fall
@@ -333,10 +344,23 @@ router.patch("/hall-passes/:id/end", async (req, res) => {
   // or the unauthenticated origin "I'm back" flow).
   let endedBy: string | null;
   if (system) {
+    // `system: true` is the client timer-cleanup path and it bypasses the
+    // destination gate below — so verify the claim: a system end is only
+    // legitimate once the pass has actually outlived its max duration.
+    // Otherwise a crafted request could dodge the who-can-end rule.
+    const expiresAtMs =
+      new Date(existing.createdAt).getTime() +
+      existing.maxDurationMinutes * 60 * 1000;
+    if (Date.now() < expiresAtMs) {
+      res.status(403).json({
+        error: "This pass hasn't expired yet — it can't be system-ended.",
+      });
+      return;
+    }
     endedBy = "(system)";
   } else if (req.staffId) {
     const [actor] = await db
-      .select({ displayName: staffTable.displayName })
+      .select()
       .from(staffTable)
       .where(
         and(
@@ -344,6 +368,39 @@ router.patch("/hall-passes/:id/end", async (req, res) => {
           eq(staffTable.schoolId, schoolId),
         ),
       );
+    // WHO may end someone else's pass is destination-scoped, not open to
+    // every signed-in staff member. Allowed: staff whose coverage includes
+    // the pass's destination OR origin room (received-locations, default
+    // room), the staff member who created the pass, and Core Team. This
+    // closes the "student walks to a favorite teacher instead of the Clinic
+    // and they quietly close the pass" hole — the check is server-side
+    // because client list filtering is bypassable.
+    if (!actor) {
+      res.status(403).json({ error: "Staff record not found" });
+      return;
+    }
+    const core = isCoreTeam(actor);
+    const isCreator = actor.displayName === existing.teacherName;
+    let coversDestination = false;
+    let coversOrigin = false;
+    if (!core) {
+      const coverage = await loadStaffCoverage(schoolId, actor.id);
+      coversDestination = coverage.has(existing.destination);
+      coversOrigin = coverage.has(existing.originRoom);
+    }
+    if (!core && !isCreator && !coversDestination && !coversOrigin) {
+      res.status(403).json({
+        error: `Only staff at ${existing.destination} (or the pass creator) can end this pass.`,
+      });
+      return;
+    }
+    // An arrival stamp asserts "the student reached the destination and I
+    // received them" — so require the receiver to actually cover that
+    // destination (or be Core Team). Anyone else's end is recorded as a
+    // plain end WITHOUT arrival confirmation, which the pass log surfaces.
+    if (arrived && !core && !coversDestination) {
+      arrived = false;
+    }
     const endedByRaw = req.body?.endedBy;
     endedBy =
       actor?.displayName ??
