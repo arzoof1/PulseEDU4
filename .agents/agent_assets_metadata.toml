@@ -568,3 +568,10 @@ uri = "file://attached_assets/generated/PulseEDU_Teacher_Kiosk_Setup.docx"
 type = "word_document"
 title = "Teacher Kiosk Setup Guide (branded)"
 description = "PulseEDU-branded, teacher-facing step-by-step Word doc: generate a kiosk code, activate the classroom device (QR / 6-digit code / sign-in), test the flow, and a troubleshooting table."
+
+[[outputs]]
+id = "kKCXE0nHioD35iOZ31TFt"
+uri = "file://attached_assets/generated/PulseEDU_Pick_Lists_Reference.docx"
+type = "word_document"
+title = "PulseEDU Pick Lists Reference"
+description = "Every school-configurable pick list at D. S. Parrott Middle School — current entries plus where in the software to rebuild each list after the pre-launch data reset."
