@@ -144,7 +144,8 @@ interface RosterRow {
   isInvisible: boolean;
   mtssTier: number | null;
   // Whole-child program flags. Source of truth is the SIS / roster
-  // import; rendered as small chips in the Programs column.
+  // import; rendered as fixed-slot chips beside the status pills in the
+  // Student column (gated by the Programs visibility toggle).
   ese: boolean;
   is504: boolean;
   ell: boolean;
@@ -160,7 +161,7 @@ interface RosterRow {
   ossToday: boolean;
   issAcks: Array<{ period: number; method: string }>;
   // Grades the student was retained in (ascending). Empty when none.
-  // Drives the small black "R" pill rendered after the chain icon.
+  // Drives the small black "R" badge rendered beside the student name.
   retainedGrades: number[];
   // Additive read-only attendance (from the Eligibility Hub upload).
   // daysAbsent is the raw absence total; attendancePct is an ESTIMATE
@@ -928,6 +929,49 @@ const GROUP_DIVIDER: React.CSSProperties = {
   borderLeft: "1px solid #e5e7eb",
 };
 
+// Fixed-width slot in the status pill strip. Every pill TYPE has a
+// reserved position that is identical on every roster row (SP always
+// first, T3 second, Bx third, …) so the eye can scan straight down a
+// vertical line of, say, T3s. Empty slot = empty space, by design.
+function Slot({ w, children }: { w: number; children?: React.ReactNode }) {
+  return (
+    <span
+      style={{
+        width: w,
+        display: "inline-flex",
+        justifyContent: "center",
+        flexShrink: 0,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+// Shared style for the compact two-letter action buttons (Sp / Lg / Ch /
+// FA / PO / Sx). Icon-sized circles keep the actions toolbar at a fixed
+// narrow width; the full name lives in title/aria-label and the legend
+// strip under the table.
+function circleBtn(bg: string, border: string, fg: string): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 26,
+    height: 26,
+    borderRadius: "50%",
+    border: `1px solid ${border}`,
+    background: bg,
+    color: fg,
+    fontSize: 10,
+    fontWeight: 700,
+    lineHeight: 1,
+    cursor: "pointer",
+    flexShrink: 0,
+    padding: 0,
+  };
+}
+
 // PmDelta ("+12 from PM1") is single-sourced in FastScorePill.tsx and imported
 // above, so the Roster / Snapshot / band-drawer deltas can never diverge.
 
@@ -1424,7 +1468,7 @@ function ProgramPill({
 // sanitized at the source — it never contains confidential material —
 // and the 15-bullet entry cap keeps the card scannable. Mirrors the
 // ProgramPill fixed-position popover so it escapes table overflow.
-function BehaviorPill({ row }: { row: RosterRow }) {
+function BehaviorPill({ row, compact }: { row: RosterRow; compact?: boolean }) {
   const bs = row.behaviorSupport;
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<HTMLSpanElement | null>(null);
@@ -1489,7 +1533,7 @@ function BehaviorPill({ row }: { row: RosterRow }) {
           outline: "none",
         }}
       >
-        Behavior
+        {compact ? "Bx" : "Behavior"}
       </span>
       {open && coords && (
         <div
@@ -1637,9 +1681,10 @@ function PulloutButton({
         style={{
           display: "inline-flex",
           alignItems: "center",
-          gap: 4,
-          padding: "2px 8px",
-          borderRadius: 999,
+          justifyContent: "center",
+          width: 26,
+          height: 26,
+          borderRadius: "50%",
           border: hot
             ? "1px solid #fcd34d"
             : count > 0
@@ -1647,10 +1692,12 @@ function PulloutButton({
               : "1px solid #e2e8f0",
           background: hot ? "#fffbeb" : count > 0 ? "#f1f5f9" : "#f8fafc",
           color: hot ? "#92400e" : "#475569",
-          fontSize: 12,
-          fontWeight: 600,
-          lineHeight: 1.2,
+          fontSize: 10,
+          fontWeight: 700,
+          lineHeight: 1,
           cursor: "pointer",
+          flexShrink: 0,
+          padding: 0,
         }}
       >
         {/* Person-being-led-out icon (approved over the 📤 emoji, which
@@ -1678,8 +1725,29 @@ function PulloutButton({
             <path d="M78 30 l16 14 -16 14" />
           </g>
         </svg>
-        {count > 0 && <span>{count}</span>}
       </button>
+      {count > 0 && (
+        <span
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            top: -4,
+            right: -6,
+            minWidth: 14,
+            height: 14,
+            padding: "0 3px",
+            borderRadius: 999,
+            background: hot ? "#f59e0b" : "#64748b",
+            color: "white",
+            fontSize: 9,
+            fontWeight: 800,
+            lineHeight: "14px",
+            textAlign: "center",
+          }}
+        >
+          {count}
+        </span>
+      )}
       {open && coords && count > 0 && info && (
         <div
           role="tooltip"
@@ -1743,30 +1811,6 @@ function PulloutButton({
   );
 }
 
-function ProgramPills({ row }: { row: RosterRow }) {
-  const chips: Array<"ese" | "504" | "ell"> = [];
-  if (row.ese) chips.push("ese");
-  if (row.is504) chips.push("504");
-  if (row.ell) chips.push("ell");
-  // The school recognizes only ESE / 504 / ELL as trackable program
-  // identifiers. If a student has none of these flags we render a
-  // placeholder em-dash, regardless of whether they have
-  // accommodations on file. (Students with accommodations but no
-  // program flag indicate a SIS data-quality issue — the source
-  // system should be reflagged, not the UI.) Behavior Supports sits
-  // BESIDE these program flags (a student can have all four).
-  if (chips.length === 0 && !row.behaviorSupport) {
-    return <span style={{ color: "#9ca3af", fontSize: 12 }}>—</span>;
-  }
-  return (
-    <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-      {chips.map((c) => (
-        <ProgramPill key={c} kind={c} row={row} />
-      ))}
-      {row.behaviorSupport && <BehaviorPill row={row} />}
-    </div>
-  );
-}
 
 // Soft reminder banner shown beneath the student's name when they're on
 // admin-logged ISS today AND this teacher has not yet acknowledged the
@@ -3673,7 +3717,7 @@ export default function TeacherRosterPage({
         </label>
         <label
           style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
-          title="Show or hide the Programs column (ESE / 504 / ELL)"
+          title="Show or hide the ESE / 504 / ELL indicators beside each student's status pills"
         >
           <input
             type="checkbox"
@@ -3768,30 +3812,23 @@ export default function TeacherRosterPage({
                 <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
                   Student
                 </th>
-                {/* Dedicated Actions column (approved layout "B"): the
-                    click-me buttons live here in a fixed order on every
-                    row, so Spider is always under Spider and FAST under
-                    FAST. Status pills (SP / T3 / R / ISS / OSS) stay
-                    beside the name in the Student column. */}
+                {/* Dedicated actions column: compact two-letter buttons in
+                    a fixed order on every row (Sp/Lg/Ch/FA/PO/Sx). Header
+                    text intentionally dropped (per Chris) — the divider
+                    line marks where reading ends and clicking begins; the
+                    legend strip under the table names each button. */}
                 <th
                   rowSpan={2}
+                  aria-label="Per-student actions"
                   style={{
                     padding: "8px 10px",
                     verticalAlign: "bottom",
                     ...GROUP_DIVIDER,
                   }}
-                >
-                  Actions
-                </th>
-                {visibility.programs && (
-                  <th
-                    rowSpan={2}
-                    style={{ padding: "8px 10px", verticalAlign: "bottom" }}
-                    title="ESE / 504 / ELL designations from the SIS"
-                  >
-                    Programs
-                  </th>
-                )}
+                />
+                {/* Programs column removed — ESE / 504 / ELL now render as
+                    fixed slots beside the status pills in the Student
+                    column (still gated by the Programs visibility toggle). */}
                 <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
                   Grade
                 </th>
@@ -3920,113 +3957,173 @@ export default function TeacherRosterPage({
                       )}
                     </td>
                   )}
-                  <td style={{ padding: "6px 10px" }}>
+                  <td style={{ padding: "4px 8px" }}>
                     <span
                       style={{
-                        display: "inline-flex",
+                        display: "flex",
                         alignItems: "center",
-                        gap: 8,
+                        gap: 4,
                       }}
                     >
-                      <EnlargeableStudentPhoto
-                        firstName={row.firstName}
-                        lastName={row.lastName}
-                        grade={row.grade}
-                        photoObjectKey={row.photoObjectKey}
-                        photoConsent={row.photoConsent}
-                        size={28}
-                      />
-                      <span style={{ display: "inline-flex", flexDirection: "column", lineHeight: 1.15 }}>
-                        <span>{row.lastName}, {row.firstName}</span>
-                        {row.localSisId && (
-                          <span style={{ fontSize: 11, color: "#6b7280", fontFamily: "ui-monospace, monospace" }}>
-                            ID {row.localSisId}
+                      {/* Name cluster gets a FIXED width so the pill slots
+                          to its right start at the same x on every row. The
+                          retention "R" sits right beside the student's name
+                          (per Chris) rather than in the slot strip. */}
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 8,
+                          width: 210,
+                          flexShrink: 0,
+                          overflow: "hidden",
+                        }}
+                      >
+                        <EnlargeableStudentPhoto
+                          firstName={row.firstName}
+                          lastName={row.lastName}
+                          grade={row.grade}
+                          photoObjectKey={row.photoObjectKey}
+                          photoConsent={row.photoConsent}
+                          size={28}
+                        />
+                        <span style={{ display: "inline-flex", flexDirection: "column", lineHeight: 1.15, minWidth: 0 }}>
+                          <span
+                            style={{
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                            }}
+                          >
+                            {row.lastName}, {row.firstName}
+                          </span>
+                          {row.localSisId && (
+                            <span style={{ fontSize: 11, color: "#6b7280", fontFamily: "ui-monospace, monospace" }}>
+                              ID {row.localSisId}
+                            </span>
+                          )}
+                        </span>
+                        {row.retainedGrades && row.retainedGrades.length > 0 && (
+                          <span
+                            title={`Retained: ${row.retainedGrades
+                              .map((g) => `Grade ${g}`)
+                              .join(", ")}`}
+                            aria-label={`Retained at ${row.retainedGrades
+                              .map((g) => `Grade ${g}`)
+                              .join(", ")}`}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              width: 18,
+                              height: 18,
+                              borderRadius: "50%",
+                              background: "#0f172a",
+                              color: "white",
+                              fontSize: 11,
+                              fontWeight: 800,
+                              lineHeight: 1,
+                              cursor: "help",
+                              flexShrink: 0,
+                            }}
+                          >
+                            R
                           </span>
                         )}
                       </span>
-                      {row.safetyPlan && (
-                        <SafetyPlanPill
-                          plan={row.safetyPlan}
-                          studentName={`${row.firstName} ${row.lastName}`}
-                          onOpen={
-                            onOpenSafetyPlan
-                              ? () => onOpenSafetyPlan(row.studentId)
-                              : undefined
-                          }
-                        />
-                      )}
-                      {row.mtssTier != null && row.mtssTier >= 3 && (
-                        <Tier3Pill
-                          actionable={tier3Missing.has(row.studentId)}
-                          missingCount={tier3Missing.get(row.studentId) ?? 0}
-                          studentName={`${row.firstName} ${row.lastName}`}
-                          onOpen={() =>
-                            setTier3Modal({
-                              studentId: row.studentId,
-                              studentName: `${row.firstName} ${row.lastName}`,
-                            })
-                          }
-                        />
-                      )}
-                      {row.retainedGrades && row.retainedGrades.length > 0 && (
-                        <span
-                          title={`Retained: ${row.retainedGrades
-                            .map((g) => `Grade ${g}`)
-                            .join(", ")}`}
-                          aria-label={`Retained at ${row.retainedGrades
-                            .map((g) => `Grade ${g}`)
-                            .join(", ")}`}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            width: 18,
-                            height: 18,
-                            borderRadius: "50%",
-                            background: "#0f172a",
-                            color: "white",
-                            fontSize: 11,
-                            fontWeight: 800,
-                            lineHeight: 1,
-                            cursor: "help",
-                          }}
-                        >
-                          R
-                        </span>
-                      )}
-                      {row.issToday && (
-                        <span
-                          title="On In-School Suspension today"
-                          style={{
-                            padding: "2px 8px",
-                            borderRadius: 999,
-                            border: "1px solid #fdba74",
-                            background: "#fff7ed",
-                            color: "#9a3412",
-                            fontSize: 11,
-                            fontWeight: 700,
-                            lineHeight: 1.2,
-                          }}
-                        >
-                          ISS
-                        </span>
-                      )}
-                      {row.ossToday && (
-                        <span
-                          title="On Out-of-School Suspension today"
-                          style={{
-                            padding: "2px 8px",
-                            borderRadius: 999,
-                            border: "1px solid #fca5a5",
-                            background: "#fef2f2",
-                            color: "#991b1b",
-                            fontSize: 11,
-                            fontWeight: 700,
-                            lineHeight: 1.2,
-                          }}
-                        >
-                          OSS
-                        </span>
+                      {/* Fixed pill slots: SP · T3 · Bx · ISS/OSS · ESE ·
+                          504 · ELL. Same order, same position, every row.
+                          Programs (ESE/504/ELL) moved here from the old
+                          Programs column; the visibility toggle still
+                          controls whether those three slots render. */}
+                      {/* SP slot sized for its widest render (SP + escort
+                          "E" badge); T3 slot likewise fits the overdue
+                          count badge. */}
+                      <Slot w={54}>
+                        {row.safetyPlan && (
+                          <SafetyPlanPill
+                            plan={row.safetyPlan}
+                            studentName={`${row.firstName} ${row.lastName}`}
+                            onOpen={
+                              onOpenSafetyPlan
+                                ? () => onOpenSafetyPlan(row.studentId)
+                                : undefined
+                            }
+                          />
+                        )}
+                      </Slot>
+                      <Slot w={48}>
+                        {row.mtssTier != null && row.mtssTier >= 3 && (
+                          <Tier3Pill
+                            actionable={tier3Missing.has(row.studentId)}
+                            missingCount={tier3Missing.get(row.studentId) ?? 0}
+                            studentName={`${row.firstName} ${row.lastName}`}
+                            onOpen={() =>
+                              setTier3Modal({
+                                studentId: row.studentId,
+                                studentName: `${row.firstName} ${row.lastName}`,
+                              })
+                            }
+                          />
+                        )}
+                      </Slot>
+                      <Slot w={34}>
+                        {row.behaviorSupport && <BehaviorPill row={row} compact />}
+                      </Slot>
+                      <Slot w={42}>
+                        {row.issToday ? (
+                          <span
+                            title={
+                              row.ossToday
+                                ? "On In-School AND Out-of-School Suspension today (conflicting records — check the Admin Hub)"
+                                : "On In-School Suspension today"
+                            }
+                            style={{
+                              padding: "2px 8px",
+                              borderRadius: 999,
+                              border: row.ossToday
+                                ? "1px solid #fca5a5"
+                                : "1px solid #fdba74",
+                              background: "#fff7ed",
+                              color: "#9a3412",
+                              fontSize: 11,
+                              fontWeight: 700,
+                              lineHeight: 1.2,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {row.ossToday ? "ISS+O" : "ISS"}
+                          </span>
+                        ) : row.ossToday ? (
+                          <span
+                            title="On Out-of-School Suspension today"
+                            style={{
+                              padding: "2px 8px",
+                              borderRadius: 999,
+                              border: "1px solid #fca5a5",
+                              background: "#fef2f2",
+                              color: "#991b1b",
+                              fontSize: 11,
+                              fontWeight: 700,
+                              lineHeight: 1.2,
+                            }}
+                          >
+                            OSS
+                          </span>
+                        ) : null}
+                      </Slot>
+                      {visibility.programs && (
+                        <>
+                          <Slot w={38}>
+                            {row.ese && <ProgramPill kind="ese" row={row} />}
+                          </Slot>
+                          <Slot w={38}>
+                            {row.is504 && <ProgramPill kind="504" row={row} />}
+                          </Slot>
+                          <Slot w={38}>
+                            {row.ell && <ProgramPill kind="ell" row={row} />}
+                          </Slot>
+                        </>
                       )}
                     </span>
                     <IssReminder
@@ -4040,38 +4137,23 @@ export default function TeacherRosterPage({
                       so each button sits in the same spot down the whole
                       table. The left border extends the header divider so
                       the column boundary reads clearly on every row. */}
-                  <td style={{ padding: "6px 10px", ...GROUP_DIVIDER }}>
+                  <td style={{ padding: "4px 8px", ...GROUP_DIVIDER }}>
                     <span
                       style={{
                         display: "inline-flex",
                         alignItems: "center",
-                        flexWrap: "wrap",
-                        gap: 6,
+                        gap: 5,
                       }}
                     >
                       {onOpenSpider && (
                         <button
                           type="button"
                           onClick={() => onOpenSpider(row.studentId)}
-                          title={`Open whole-child radar for ${row.firstName} ${row.lastName}`}
+                          title={`Spider — open whole-child radar for ${row.firstName} ${row.lastName}`}
                           aria-label={`Open whole-child radar for ${row.firstName} ${row.lastName}`}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 4,
-                            padding: "2px 8px",
-                            borderRadius: 999,
-                            border: "1px solid #c7d2fe",
-                            background: "#eef2ff",
-                            color: "#3730a3",
-                            fontSize: 12,
-                            fontWeight: 600,
-                            lineHeight: 1.2,
-                            cursor: "pointer",
-                          }}
+                          style={circleBtn("#eef2ff", "#c7d2fe", "#3730a3")}
                         >
-                          <span aria-hidden="true">🕸️</span>
-                          <span>Spider</span>
+                          Sp
                         </button>
                       )}
                       <button
@@ -4083,60 +4165,28 @@ export default function TeacherRosterPage({
                             localSisId: row.localSisId,
                           })
                         }
-                        title={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
+                        title={`Log — log a behavior & intervention for ${row.firstName} ${row.lastName}`}
                         aria-label={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          border: "1px solid #fbcfe8",
-                          background: "#fdf2f8",
-                          color: "#9d174d",
-                          fontSize: 12,
-                          fontWeight: 600,
-                          lineHeight: 1.2,
-                          cursor: "pointer",
-                        }}
+                        style={circleBtn("#fdf2f8", "#fbcfe8", "#9d174d")}
                       >
-                        <span aria-hidden="true">📝</span>
-                        <span>Log</span>
+                        Lg
                       </button>
                       <button
                         type="button"
                         onClick={() => setChatModal(row.studentId)}
                         title={
                           pendingChatIds.has(row.studentId)
-                            ? `Data chat pending for ${row.firstName} ${row.lastName} — log it now`
-                            : `Log a data chat with ${row.firstName} ${row.lastName}`
+                            ? `Chat — data chat pending for ${row.firstName} ${row.lastName}, log it now`
+                            : `Chat — log a data chat with ${row.firstName} ${row.lastName}`
                         }
                         aria-label={`Log a data chat with ${row.firstName} ${row.lastName}`}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          border: pendingChatIds.has(row.studentId)
-                            ? "1px solid #c4b5fd"
-                            : "1px solid #e2e8f0",
-                          background: pendingChatIds.has(row.studentId)
-                            ? "#f5f3ff"
-                            : "#f8fafc",
-                          color: pendingChatIds.has(row.studentId)
-                            ? "#6d28d9"
-                            : "#475569",
-                          fontSize: 12,
-                          fontWeight: 600,
-                          lineHeight: 1.2,
-                          cursor: "pointer",
-                        }}
+                        style={circleBtn(
+                          pendingChatIds.has(row.studentId) ? "#f5f3ff" : "#f8fafc",
+                          pendingChatIds.has(row.studentId) ? "#c4b5fd" : "#e2e8f0",
+                          pendingChatIds.has(row.studentId) ? "#6d28d9" : "#475569",
+                        )}
                       >
-                        <span aria-hidden="true">💬</span>
-                        <span>
-                          {pendingChatIds.has(row.studentId) ? "Chat!" : "Chat"}
-                        </span>
+                        {pendingChatIds.has(row.studentId) ? "Ch!" : "Ch"}
                       </button>
                       <button
                         type="button"
@@ -4147,25 +4197,11 @@ export default function TeacherRosterPage({
                             localSisId: row.localSisId ?? null,
                           })
                         }
-                        title={`View FAST PM3 history for ${row.firstName} ${row.lastName}`}
+                        title={`FAST — view FAST PM3 history for ${row.firstName} ${row.lastName}`}
                         aria-label={`View FAST PM3 history for ${row.firstName} ${row.lastName}`}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          border: "1px solid #bfdbfe",
-                          background: "#eff6ff",
-                          color: "#1d4ed8",
-                          fontSize: 12,
-                          fontWeight: 600,
-                          lineHeight: 1.2,
-                          cursor: "pointer",
-                        }}
+                        style={circleBtn("#eff6ff", "#bfdbfe", "#1d4ed8")}
                       >
-                        <span aria-hidden="true">📖</span>
-                        <span>FAST</span>
+                        FA
                       </button>
                       {onRequestPullout && (
                         <PulloutButton
@@ -4202,34 +4238,42 @@ export default function TeacherRosterPage({
                                 : `Suggest separation for ${row.firstName} ${row.lastName}`
                             }
                             style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: 4,
-                              padding: "2px 8px",
-                              borderRadius: 999,
-                              border: flagged
-                                ? "1px solid #fca5a5"
-                                : "1px solid #cbd5e1",
-                              background: flagged ? "#fef2f2" : "white",
-                              color: flagged ? "#b91c1c" : "#475569",
-                              fontSize: 12,
-                              fontWeight: 600,
-                              lineHeight: 1.2,
-                              cursor: "pointer",
+                              ...circleBtn(
+                                flagged ? "#fef2f2" : "white",
+                                flagged ? "#fca5a5" : "#cbd5e1",
+                                flagged ? "#b91c1c" : "#475569",
+                              ),
+                              position: "relative",
                             }}
                           >
-                            <span aria-hidden="true">{flagged ? "🚫" : "🔗"}</span>
-                            {flagged && <span>{n}</span>}
+                            Sx
+                            {flagged && (
+                              <span
+                                aria-hidden="true"
+                                style={{
+                                  position: "absolute",
+                                  top: -4,
+                                  right: -6,
+                                  minWidth: 14,
+                                  height: 14,
+                                  padding: "0 3px",
+                                  borderRadius: 999,
+                                  background: "#dc2626",
+                                  color: "white",
+                                  fontSize: 9,
+                                  fontWeight: 800,
+                                  lineHeight: "14px",
+                                  textAlign: "center",
+                                }}
+                              >
+                                {n}
+                              </span>
+                            )}
                           </button>
                         );
                       })()}
                     </span>
                   </td>
-                  {visibility.programs && (
-                    <td style={{ padding: "6px 10px" }}>
-                      <ProgramPills row={row} />
-                    </td>
-                  )}
                   <td style={{ padding: "6px 10px" }}>{row.grade}</td>
                   {visibility.attendance && (
                     <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
@@ -4285,6 +4329,21 @@ export default function TeacherRosterPage({
               ))}
             </tbody>
           </table>
+          {/* Legend strip for the compact action buttons — covers the
+              short learning curve of the two-letter labels; hovering a
+              button also shows its full name. */}
+          <div
+            style={{
+              padding: "6px 10px",
+              fontSize: 11,
+              color: "#6b7280",
+              borderTop: "1px solid #e5e7eb",
+            }}
+          >
+            Hover any button for its full name: Sp = Spider · Lg = Log · Ch =
+            Chat · FA = FAST · person-arrow = Pull-out · Sx = Separation · Bx =
+            Behavior supports
+          </div>
         </div>
       )}
       </PillViewContext.Provider>
