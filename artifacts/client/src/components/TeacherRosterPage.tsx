@@ -1635,11 +1635,17 @@ function PulloutButton({
         }
         aria-label={`Request a pull-out for ${row.firstName} ${row.lastName}${count > 0 ? ` (${count} this year)` : ""}`}
         style={{
+          // Tall button: spans the full height of the two stacked
+          // button rows beside it (Spider/FAST and Log/Chat).
           display: "inline-flex",
+          flexDirection: "column",
           alignItems: "center",
-          gap: 4,
-          padding: "2px 8px",
-          borderRadius: 999,
+          justifyContent: "center",
+          gap: 2,
+          width: 38,
+          height: 56,
+          padding: 0,
+          borderRadius: 10,
           border: hot
             ? "1px solid #fcd34d"
             : count > 0
@@ -1651,6 +1657,7 @@ function PulloutButton({
           fontWeight: 600,
           lineHeight: 1.2,
           cursor: "pointer",
+          flexShrink: 0,
         }}
       >
         {/* Person-being-led-out icon (approved over the 📤 emoji, which
@@ -1658,8 +1665,8 @@ function PulloutButton({
             crisp and inherits the button's gray/amber via currentColor. */}
         <svg
           aria-hidden="true"
-          width="15"
-          height="13"
+          width="20"
+          height="18"
           viewBox="0 0 100 88"
           style={{ display: "block", flexShrink: 0 }}
         >
@@ -3929,16 +3936,57 @@ export default function TeacherRosterPage({
                           </span>
                         )}
                       </span>
-                      {row.safetyPlan && (
-                        <SafetyPlanPill
-                          plan={row.safetyPlan}
-                          studentName={`${row.firstName} ${row.lastName}`}
-                          onOpen={
-                            onOpenSafetyPlan
-                              ? () => onOpenSafetyPlan(row.studentId)
-                              : undefined
-                          }
-                        />
+                      {/* SP + Retention stacked pair — R sits directly
+                          under the SP pill (approved mockup). Either can
+                          appear alone. */}
+                      {(row.safetyPlan ||
+                        (row.retainedGrades && row.retainedGrades.length > 0)) && (
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            flexDirection: "column",
+                            alignItems: "center",
+                            gap: 3,
+                          }}
+                        >
+                          {row.safetyPlan && (
+                            <SafetyPlanPill
+                              plan={row.safetyPlan}
+                              studentName={`${row.firstName} ${row.lastName}`}
+                              onOpen={
+                                onOpenSafetyPlan
+                                  ? () => onOpenSafetyPlan(row.studentId)
+                                  : undefined
+                              }
+                            />
+                          )}
+                          {row.retainedGrades && row.retainedGrades.length > 0 && (
+                            <span
+                              title={`Retained: ${row.retainedGrades
+                                .map((g) => `Grade ${g}`)
+                                .join(", ")}`}
+                              aria-label={`Retained at ${row.retainedGrades
+                                .map((g) => `Grade ${g}`)
+                                .join(", ")}`}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                width: 18,
+                                height: 18,
+                                borderRadius: "50%",
+                                background: "#0f172a",
+                                color: "white",
+                                fontSize: 11,
+                                fontWeight: 800,
+                                lineHeight: 1,
+                                cursor: "help",
+                              }}
+                            >
+                              R
+                            </span>
+                          )}
+                        </span>
                       )}
                       {row.mtssTier != null && row.mtssTier >= 3 && (
                         <Tier3Pill
@@ -3953,124 +4001,148 @@ export default function TeacherRosterPage({
                           }
                         />
                       )}
-                      {onOpenSpider && (
+                      {/* Spider + FAST stacked pair (approved mockup). */}
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          flexDirection: "column",
+                          alignItems: "stretch",
+                          gap: 3,
+                        }}
+                      >
+                        {onOpenSpider && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenSpider(row.studentId)}
+                            title={`Open whole-child radar for ${row.firstName} ${row.lastName}`}
+                            aria-label={`Open whole-child radar for ${row.firstName} ${row.lastName}`}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              gap: 4,
+                              padding: "2px 8px",
+                              borderRadius: 999,
+                              border: "1px solid #c7d2fe",
+                              background: "#eef2ff",
+                              color: "#3730a3",
+                              fontSize: 11,
+                              fontWeight: 600,
+                              lineHeight: 1.2,
+                              cursor: "pointer",
+                            }}
+                          >
+                            <span aria-hidden="true">🕸️</span>
+                            <span>Spider</span>
+                          </button>
+                        )}
                         <button
                           type="button"
-                          onClick={() => onOpenSpider(row.studentId)}
-                          title={`Open whole-child radar for ${row.firstName} ${row.lastName}`}
-                          aria-label={`Open whole-child radar for ${row.firstName} ${row.lastName}`}
+                          onClick={() =>
+                            setFastHistModal({
+                              studentId: row.studentId,
+                              studentName: `${row.firstName} ${row.lastName}`,
+                              localSisId: row.localSisId ?? null,
+                            })
+                          }
+                          title={`View FAST PM3 history for ${row.firstName} ${row.lastName}`}
+                          aria-label={`View FAST PM3 history for ${row.firstName} ${row.lastName}`}
                           style={{
                             display: "inline-flex",
                             alignItems: "center",
+                            justifyContent: "center",
                             gap: 4,
                             padding: "2px 8px",
                             borderRadius: 999,
-                            border: "1px solid #c7d2fe",
-                            background: "#eef2ff",
-                            color: "#3730a3",
+                            border: "1px solid #bfdbfe",
+                            background: "#eff6ff",
+                            color: "#1d4ed8",
                             fontSize: 11,
                             fontWeight: 600,
                             lineHeight: 1.2,
                             cursor: "pointer",
                           }}
                         >
-                          <span aria-hidden="true">🕸️</span>
-                          <span>Spider</span>
+                          <span aria-hidden="true">📖</span>
+                          <span>FAST</span>
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setLogModal({
-                            studentId: row.studentId,
-                            studentName: `${row.firstName} ${row.lastName}`,
-                            localSisId: row.localSisId,
-                          })
-                        }
-                        title={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
-                        aria-label={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
+                      </span>
+                      {/* Log + Chat stacked pair (approved mockup). */}
+                      <span
                         style={{
                           display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          border: "1px solid #fbcfe8",
-                          background: "#fdf2f8",
-                          color: "#9d174d",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          lineHeight: 1.2,
-                          cursor: "pointer",
+                          flexDirection: "column",
+                          alignItems: "stretch",
+                          gap: 3,
                         }}
                       >
-                        <span aria-hidden="true">📝</span>
-                        <span>Log</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setChatModal(row.studentId)}
-                        title={
-                          pendingChatIds.has(row.studentId)
-                            ? `Data chat pending for ${row.firstName} ${row.lastName} — log it now`
-                            : `Log a data chat with ${row.firstName} ${row.lastName}`
-                        }
-                        aria-label={`Log a data chat with ${row.firstName} ${row.lastName}`}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          border: pendingChatIds.has(row.studentId)
-                            ? "1px solid #c4b5fd"
-                            : "1px solid #e2e8f0",
-                          background: pendingChatIds.has(row.studentId)
-                            ? "#f5f3ff"
-                            : "#f8fafc",
-                          color: pendingChatIds.has(row.studentId)
-                            ? "#6d28d9"
-                            : "#475569",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          lineHeight: 1.2,
-                          cursor: "pointer",
-                        }}
-                      >
-                        <span aria-hidden="true">💬</span>
-                        <span>
-                          {pendingChatIds.has(row.studentId) ? "Chat!" : "Chat"}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setFastHistModal({
-                            studentId: row.studentId,
-                            studentName: `${row.firstName} ${row.lastName}`,
-                            localSisId: row.localSisId ?? null,
-                          })
-                        }
-                        title={`View FAST PM3 history for ${row.firstName} ${row.lastName}`}
-                        aria-label={`View FAST PM3 history for ${row.firstName} ${row.lastName}`}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          border: "1px solid #bfdbfe",
-                          background: "#eff6ff",
-                          color: "#1d4ed8",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          lineHeight: 1.2,
-                          cursor: "pointer",
-                        }}
-                      >
-                        <span aria-hidden="true">📖</span>
-                        <span>FAST</span>
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setLogModal({
+                              studentId: row.studentId,
+                              studentName: `${row.firstName} ${row.lastName}`,
+                              localSisId: row.localSisId,
+                            })
+                          }
+                          title={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
+                          aria-label={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 4,
+                            padding: "2px 8px",
+                            borderRadius: 999,
+                            border: "1px solid #fbcfe8",
+                            background: "#fdf2f8",
+                            color: "#9d174d",
+                            fontSize: 11,
+                            fontWeight: 600,
+                            lineHeight: 1.2,
+                            cursor: "pointer",
+                          }}
+                        >
+                          <span aria-hidden="true">📝</span>
+                          <span>Log</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setChatModal(row.studentId)}
+                          title={
+                            pendingChatIds.has(row.studentId)
+                              ? `Data chat pending for ${row.firstName} ${row.lastName} — log it now`
+                              : `Log a data chat with ${row.firstName} ${row.lastName}`
+                          }
+                          aria-label={`Log a data chat with ${row.firstName} ${row.lastName}`}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 4,
+                            padding: "2px 8px",
+                            borderRadius: 999,
+                            border: pendingChatIds.has(row.studentId)
+                              ? "1px solid #c4b5fd"
+                              : "1px solid #e2e8f0",
+                            background: pendingChatIds.has(row.studentId)
+                              ? "#f5f3ff"
+                              : "#f8fafc",
+                            color: pendingChatIds.has(row.studentId)
+                              ? "#6d28d9"
+                              : "#475569",
+                            fontSize: 11,
+                            fontWeight: 600,
+                            lineHeight: 1.2,
+                            cursor: "pointer",
+                          }}
+                        >
+                          <span aria-hidden="true">💬</span>
+                          <span>
+                            {pendingChatIds.has(row.studentId) ? "Chat!" : "Chat"}
+                          </span>
+                        </button>
+                      </span>
                       {onRequestPullout && (
                         <PulloutButton
                           row={row}
@@ -4127,32 +4199,6 @@ export default function TeacherRosterPage({
                           </button>
                         );
                       })()}
-                      {row.retainedGrades && row.retainedGrades.length > 0 && (
-                        <span
-                          title={`Retained: ${row.retainedGrades
-                            .map((g) => `Grade ${g}`)
-                            .join(", ")}`}
-                          aria-label={`Retained at ${row.retainedGrades
-                            .map((g) => `Grade ${g}`)
-                            .join(", ")}`}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            width: 18,
-                            height: 18,
-                            borderRadius: "50%",
-                            background: "#0f172a",
-                            color: "white",
-                            fontSize: 11,
-                            fontWeight: 800,
-                            lineHeight: 1,
-                            cursor: "help",
-                          }}
-                        >
-                          R
-                        </span>
-                      )}
                       {row.issToday && (
                         <span
                           title="On In-School Suspension today"
