@@ -1,0 +1,239 @@
+# PulseEDU Feature Request: Behavior Supports Module (MTSS)
+
+## Objective
+
+Create a new **Behavior Supports** module within the **MTSS Coordinator** section of PulseEDU. This module is designed to provide teachers with concise, actionable classroom strategies for students who have active behavior supports, while protecting confidential student information.
+
+This module is **not** intended to replace a Behavior Intervention Plan (BIP), Functional Behavior Assessment (FBA), psychological report, or any confidential educational record. It is strictly a teacher-facing instructional support tool.
+
+---
+
+## Navigation
+
+Add a new item to the MTSS Coordinator sidebar:
+
+**Behavior Supports**
+
+Only users with MTSS Coordinator, School Psychologist, Assistant Principal, or Principal permissions should have edit access.
+
+Teachers should have read-only access through the Teacher Roster.
+
+---
+
+## Student Record Fields
+
+Create the following editable fields:
+
+### Status
+
+* Active Behavior Supports (Yes/No)
+* Effective Date
+* Review Date
+* Last Updated
+* Last Updated By
+
+---
+
+### Teacher Behavior Snapshot
+
+This information will be visible to teachers.
+
+#### Behaviors Teachers May Observe
+
+Allow multiple bullet points.
+
+Examples:
+
+* Refuses work when overwhelmed
+* Calls out during instruction
+* Leaves seat without permission
+* Escalates when corrected publicly
+* Becomes frustrated during transitions
+
+---
+
+#### Common Triggers
+
+Allow multiple bullet points.
+
+Examples:
+
+* Independent work
+* Unexpected schedule changes
+* Peer conflict
+* Loud environments
+* Extended wait time
+
+---
+
+#### Recommended Teacher Responses
+
+Allow multiple bullet points.
+
+Examples:
+
+* Provide choices whenever possible.
+* Give a two-minute transition warning.
+* Redirect privately.
+* Maintain a calm tone.
+* Keep directions brief.
+* Avoid power struggles.
+* Avoid arguing with the student.
+* Offer processing time before repeating directions.
+
+---
+
+#### Replacement Behaviors to Reinforce
+
+Allow multiple bullet points.
+
+Examples:
+
+* Ask for a break appropriately.
+* Request teacher assistance.
+* Raise hand before speaking.
+* Use a coping strategy.
+* Complete one task at a time.
+* Use positive peer interactions.
+
+---
+
+#### Positive Reinforcement
+
+Allow multiple bullet points.
+
+Examples:
+
+* Specific verbal praise
+* Positive phone call home
+* Behavior points
+* Preferred activity
+* Classroom incentives
+
+---
+
+## Confidential Information
+
+The following information must NEVER be displayed to teachers or included in hover cards:
+
+* Mental health diagnoses
+* Medical information
+* Functional Behavior Assessments (FBA)
+* Psychological evaluations
+* Counseling records
+* Confidential MTSS notes
+* Discipline investigations
+* Parent communications
+* Internal administrative notes
+
+If confidential documentation is needed later, it should exist in a completely separate administrator-only section.
+
+---
+
+## Teacher Roster Integration
+
+Add a new column labeled:
+
+**Behavior Supports**
+
+Display a purple pill labeled:
+
+**Behavior**
+
+Only display the pill if Active Behavior Supports = Yes.
+
+---
+
+## Hover Card
+
+When a teacher hovers over the Behavior pill, display a compact summary.
+
+Example layout:
+
+---
+
+Behavior Supports
+
+Behaviors You May Observe
+
+• Refuses work when overwhelmed
+• Calls out during instruction
+• Escalates when corrected publicly
+
+---
+
+Recommended Teacher Responses
+
+• Redirect privately.
+• Avoid arguing or power struggles.
+• Offer choices.
+• Use calm, brief directions.
+• Provide transition warnings.
+
+---
+
+Replacement Behaviors to Reinforce
+
+• Request a break appropriately.
+• Raise hand for assistance.
+• Ask for help before becoming frustrated.
+
+---
+
+The hover card should be clean, easy to read, and limited to approximately 10–15 bullet points total.
+
+---
+
+## Permissions
+
+MTSS Coordinator
+
+* Create
+* Edit
+* Archive
+
+School Psychologist
+
+* Create
+* Edit
+
+Assistant Principal
+
+* Full Access
+
+Principal
+
+* Full Access
+
+Teachers
+
+* Read-only hover card
+* No editing
+
+Guidance Counselors
+
+* View access only
+
+---
+
+## Design Requirements
+
+* Match the existing PulseEDU interface and styling.
+* Use the same card layouts, fonts, spacing, and color palette as the rest of the application.
+* Mobile responsive.
+* Fast-loading hover cards.
+* Store behavior supports separately from IEP, 504, and ELL records while allowing all indicators to appear together on the Teacher Roster.
+
+---
+
+## Future Expansion
+
+Design the module so it can later support:
+
+* Tier 2 behavior interventions
+* Tier 3 interventions
+* Formal Behavior Intervention Plans (BIPs)
+* Behavior progress monitoring
+* MTSS behavior review meetings
+
+without requiring database redesign.
