@@ -24,7 +24,7 @@ import {
 } from "react";
 import { authFetch } from "../lib/authToken";
 import SuggestSeparationModal from "./SuggestSeparationModal";
-import StudentPhoto from "./StudentPhoto";
+import EnlargeableStudentPhoto from "./EnlargeableStudentPhoto";
 import TeacherBenchmarksTab from "./TeacherBenchmarksTab";
 import GroupInsightsTab from "./GroupInsightsTab";
 import TeacherInstructionLogTab from "./TeacherInstructionLogTab";
@@ -3559,9 +3559,10 @@ export default function TeacherRosterPage({
                         gap: 8,
                       }}
                     >
-                      <StudentPhoto
+                      <EnlargeableStudentPhoto
                         firstName={row.firstName}
                         lastName={row.lastName}
+                        grade={row.grade}
                         photoObjectKey={row.photoObjectKey}
                         photoConsent={row.photoConsent}
                         size={28}

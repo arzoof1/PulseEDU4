@@ -79,6 +79,10 @@ router.get("/student-finder/search", async (req: Request, res: Response) => {
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
       grade: studentsTable.grade,
+      // Photo fields feed the tap-to-enlarge avatar on the finder rows.
+      // Same consent-gated photo the Teacher Roster shows — no new exposure.
+      photoObjectKey: studentsTable.photoObjectKey,
+      photoConsent: studentsTable.photoConsent,
     })
     .from(studentsTable)
     .where(
