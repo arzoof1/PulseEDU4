@@ -1002,6 +1002,9 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
       and(
         eq(pbisEntriesTable.schoolId, req.schoolId!),
         isNull(pbisEntriesTable.voidedAt),
+        // Only POSITIVE interactions clear invisibility (keep in sync with
+        // the Teacher Roster eyeball query in teacherRoster.ts).
+        eq(pbisEntriesTable.polarity, "positive"),
         gte(pbisEntriesTable.createdAt, widestInvisibleWindow.toISOString()),
       ),
     );

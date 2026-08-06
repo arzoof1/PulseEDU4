@@ -22,7 +22,7 @@
 - [Pickup release-undo idempotency](pickup-release-undo.md) — undo must be idempotent (double-tap/already-undone → ok); only terminal events block; never dump raw JSON errors.
 - [Pickup manual override](pickup-manual-override.md) — RosterOne-disagrees flag is `!sisMayHaveContact` (client badge must match server count); office rows (isSyncProtected) skip bulk-assign; mutation+audit in one tx.
 - [Kiosk room source & bulk import](kiosk-room-source.md) — kiosk room = teacher record (`staff_defaults`), NOT `class_sections`; bulk teacher match: email safe, display-name ambiguous=unmatched, strip CSV BOM.
-- [PBIS Invisible Student tier windows](pbis-invisible-tier-windows.md) — invisible window is per-MTSS-tier (8/5/3); /pbis/needs-attention + Teacher Roster must compute invisibility identically or they disagree.
+- [PBIS Invisible Student tier windows](pbis-invisible-tier-windows.md) — per-MTSS-tier windows (8/5/3); ONLY polarity='positive' entries clear it (negatives don't); needs-attention + Teacher Roster must stay identical.
 - [PBIS weekly window full 7 days](pbis-weekly-window-full-week.md) — "this week" stat buckets must be Mon→next-Mon (not Mon-Fri), or weekend-awarded points fall in a gap and vanish from every bucket; reserve school-day counting for staleness windows.
 - [Datalist picker matcher](datalist-picker-matcher.md) — input+datalist pickers: onChange matcher string MUST mirror the <option> value, else selection silently fails and id-gated submit buttons stay permanently disabled.
 - [Dual feature-gate systems](feature-gate-dual-systems.md) — client nav gates via /api/school-settings, page FeatureGate via /api/me/features; they can disagree → blank page under a visible nav item. Gate both on the same key.

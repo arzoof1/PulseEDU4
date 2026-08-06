@@ -553,6 +553,10 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
         and(
           eq(pbisEntriesTable.schoolId, schoolId),
           isNull(pbisEntriesTable.voidedAt),
+          // Invisibility = no POSITIVE staff interaction in the window.
+          // Negative quick-log behaviors also write pbis_entries and must
+          // NOT clear the eyeball (keep in sync with /pbis/needs-attention).
+          eq(pbisEntriesTable.polarity, "positive"),
           gte(pbisEntriesTable.createdAt, invisibleWindowIso),
           inArray(pbisEntriesTable.studentId, studentIds),
         ),
