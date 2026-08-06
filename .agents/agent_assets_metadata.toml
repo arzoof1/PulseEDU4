@@ -582,3 +582,10 @@ uri = "file://attached_assets/PulseEDU-Multiple-Pass-Receivers-Directions.docx"
 type = "word_document"
 title = "Multiple Pass Receivers — Directions"
 description = "Step-by-step Word doc for assigning multiple staff to receive hall passes at a location."
+
+[[outputs]]
+id = "AxPToJo8meL8kraT20sGm"
+uri = "file://attached_assets/PulseEDU-Behavior-Supports-Directions.docx"
+type = "word_document"
+title = "Behavior Supports — Directions"
+description = "Word document covering what the Behavior Supports module does, who can edit/view, and step-by-step setup for the MTSS team plus what teachers see."
