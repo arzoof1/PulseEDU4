@@ -37,7 +37,12 @@ import {
   issAttendanceDayTable,
   ossLogDaysTable,
   issAcknowledgementsTable,
+  pulloutsTable,
 } from "@workspace/db";
+import {
+  getSchoolTimezone,
+  schoolYearStartDate,
+} from "../lib/schoolYear.js";
 import { and, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import {
@@ -504,6 +509,14 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
   // (see the schoolYear filter on the FAST query below).
   const currentFastYear = await getActiveSchoolYear(schoolId);
 
+  // School-local July-1 boundary for the pull-out YTD badge. Resolved in
+  // the SCHOOL's timezone (not the default Eastern) so boundary-day
+  // requests bucket correctly for schools in other zones. Cached lookup.
+  const pulloutYearStartIso = schoolYearStartDate(
+    new Date(),
+    await getSchoolTimezone(schoolId),
+  ).toISOString();
+
   const [
     students,
     scores,
@@ -516,6 +529,7 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     ossToday,
     issAcksToday,
     retentions,
+    teacherPullouts,
   ] = await Promise.all([
     db
       .select()
@@ -707,6 +721,29 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
           inArray(studentRetentionsTable.studentId, studentIds),
         ),
       ),
+    // Pull-out requests this school year where the TARGET TEACHER is the
+    // referring teacher (includes requests an admin/Core Team member
+    // logged on the teacher's behalf — requested_by may differ). Drives
+    // the 📤 count badge + hover history on each roster row. requestedAt
+    // is a text ISO timestamp, so a lexicographic gte against the
+    // year-start ISO is correct.
+    db
+      .select({
+        studentId: pulloutsTable.studentId,
+        requestedAt: pulloutsTable.requestedAt,
+        reason: pulloutsTable.reason,
+        editedReason: pulloutsTable.editedReason,
+        status: pulloutsTable.status,
+      })
+      .from(pulloutsTable)
+      .where(
+        and(
+          eq(pulloutsTable.schoolId, schoolId),
+          eq(pulloutsTable.referringTeacherStaffId, targetTeacherId),
+          gte(pulloutsTable.requestedAt, pulloutYearStartIso),
+          inArray(pulloutsTable.studentId, studentIds),
+        ),
+      ),
   ]);
 
   // Multi-year FAST history (PM3-only, prior years within the school's
@@ -754,6 +791,33 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     (typeof behaviorSupports)[number]
   >();
   for (const b of behaviorSupports) behaviorSupportByStudent.set(b.studentId, b);
+
+  // Per-student pull-out rollup for the roster badge: YTD count + the 5
+  // most recent (date, reason, status). Rejected requests still count —
+  // the badge measures how often the teacher has CALLED for a pull-out;
+  // the hover card shows each request's status honestly.
+  const pulloutsByStudent = new Map<
+    string,
+    { count: number; recent: Array<{ date: string; reason: string; status: string }> }
+  >();
+  {
+    const sorted = [...teacherPullouts].sort((a, b) =>
+      b.requestedAt.localeCompare(a.requestedAt),
+    );
+    for (const p of sorted) {
+      const entry =
+        pulloutsByStudent.get(p.studentId) ?? { count: 0, recent: [] };
+      entry.count += 1;
+      if (entry.recent.length < 5) {
+        entry.recent.push({
+          date: p.requestedAt,
+          reason: p.editedReason ?? p.reason,
+          status: p.status,
+        });
+      }
+      pulloutsByStudent.set(p.studentId, entry);
+    }
+  }
 
   // Group accommodations by studentId so the row builder can attach
   // them in O(1).
@@ -892,6 +956,10 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
       // already filed today.
       issToday: issByStudent.get(stu.studentId) ?? null,
       ossToday: ossSet.has(stu.studentId),
+      // This teacher's YTD pull-out requests for the student (null when
+      // none). Referring-teacher attribution: admin-logged requests on
+      // the teacher's behalf count too.
+      pullouts: pulloutsByStudent.get(stu.studentId) ?? null,
       issAcks: ackByStudent.get(stu.studentId) ?? [],
       // Grades the student was retained in (ascending). Empty array
       // when the student has no retention rows. The roster renders an

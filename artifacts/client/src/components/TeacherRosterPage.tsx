@@ -182,6 +182,14 @@ interface RosterRow {
     reviewDate: string | null;
     updatedAt: string;
   } | null;
+  // This teacher's pull-out requests for the student this school year
+  // (referring-teacher attribution — includes requests an admin logged
+  // on the teacher's behalf). Null when none. Drives the count badge on
+  // the row's Pull-out button + the hover history card.
+  pullouts?: {
+    count: number;
+    recent: Array<{ date: string; reason: string; status: string }>;
+  } | null;
 }
 
 interface RosterResponse {
@@ -216,6 +224,11 @@ interface Props {
   // active safety plans) but is non-clickable — hover still shows the
   // contents popover.
   onOpenSafetyPlan?: (studentId: string) => void;
+  // When provided, each row shows a "Pull-out" button (with this
+  // teacher's YTD request count for that student). Clicking hands the
+  // studentId to the host, which opens the Request Pullout flow with
+  // the student prefilled. Hover shows the recent request history.
+  onRequestPullout?: (studentId: string) => void;
   // When provided, the Benchmarks tab's "Suggest small group" modal
   // shows a "Open in Class Composer" button that calls this. Gated by
   // the host (admin / Core Team only); regular teachers see the
@@ -1557,6 +1570,155 @@ function BehaviorPill({ row }: { row: RosterRow }) {
   );
 }
 
+// Row-level Pull-out button: the teacher's inline entry into the Request
+// Pullout flow (student prefilled) AND the at-a-glance YTD count of their
+// own requests for this student. Quiet by default — no number badge when
+// the count is 0, gray at 1–2, amber at 3+ ("this student is out of your
+// class a lot"). Hover shows the recent history; same fixed-position
+// popover pattern as BehaviorPill so it never clips inside the table.
+function PulloutButton({
+  row,
+  onOpen,
+}: {
+  row: RosterRow;
+  onOpen: () => void;
+}) {
+  const info = row.pullouts ?? null;
+  const count = info?.count ?? 0;
+  const hot = count >= 3;
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLSpanElement | null>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!open || !anchorRef.current) return;
+    const measure = () => {
+      const r = anchorRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const W = 300;
+      let left = r.left;
+      if (left + W > window.innerWidth - 8) left = window.innerWidth - W - 8;
+      if (left < 8) left = 8;
+      setCoords({ top: r.bottom + 6, left });
+    };
+    measure();
+    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("scroll", measure, true);
+      window.removeEventListener("resize", measure);
+    };
+  }, [open]);
+  const statusLabel = (s: string) =>
+    s === "pending"
+      ? "pending verification"
+      : s === "enroute"
+        ? "en route"
+        : s;
+  return (
+    <span
+      ref={anchorRef}
+      style={{ position: "relative", display: "inline-block" }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        onClick={onOpen}
+        title={
+          count > 0
+            ? `${count} pull-out request${count === 1 ? "" : "s"} for ${row.firstName} this year — click to request another`
+            : `Request a pull-out for ${row.firstName} ${row.lastName}`
+        }
+        aria-label={`Request a pull-out for ${row.firstName} ${row.lastName}${count > 0 ? ` (${count} this year)` : ""}`}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          padding: "2px 8px",
+          borderRadius: 999,
+          border: hot
+            ? "1px solid #fcd34d"
+            : count > 0
+              ? "1px solid #cbd5e1"
+              : "1px solid #e2e8f0",
+          background: hot ? "#fffbeb" : count > 0 ? "#f1f5f9" : "#f8fafc",
+          color: hot ? "#92400e" : "#475569",
+          fontSize: 11,
+          fontWeight: 600,
+          lineHeight: 1.2,
+          cursor: "pointer",
+        }}
+      >
+        <span aria-hidden="true">📤</span>
+        {count > 0 && <span>{count}</span>}
+      </button>
+      {open && coords && count > 0 && info && (
+        <div
+          role="tooltip"
+          style={{
+            position: "fixed",
+            top: coords.top,
+            left: coords.left,
+            zIndex: 10000,
+            background: "white",
+            border: "1px solid #e5e7eb",
+            borderTop: hot ? "3px solid #f59e0b" : "3px solid #64748b",
+            borderRadius: 6,
+            padding: "0.55rem 0.75rem",
+            boxShadow: "0 6px 18px rgba(0,0,0,0.14)",
+            minWidth: 260,
+            maxWidth: 380,
+            color: "#111827",
+            textAlign: "left",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: hot ? "#92400e" : "#475569",
+              textTransform: "uppercase",
+              letterSpacing: 0.4,
+              marginBottom: 6,
+            }}
+          >
+            Your pull-outs — {row.firstName} {row.lastName}
+          </div>
+          <div style={{ fontSize: 12, marginBottom: 6 }}>
+            {count} request{count === 1 ? "" : "s"} this school year
+            {hot ? " — this student is out of your class often." : "."}
+          </div>
+          <ul
+            style={{ margin: 0, paddingLeft: 16, fontSize: 12, lineHeight: 1.5 }}
+          >
+            {info.recent.map((p, i) => (
+              <li key={i}>
+                {new Date(p.date).toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                })}{" "}
+                — {p.reason}{" "}
+                <span style={{ color: "#6b7280" }}>
+                  ({statusLabel(p.status)})
+                </span>
+              </li>
+            ))}
+          </ul>
+          {count > info.recent.length && (
+            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>
+              …and {count - info.recent.length} earlier.
+            </div>
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
 function ProgramPills({ row }: { row: RosterRow }) {
   const chips: Array<"ese" | "504" | "ell"> = [];
   if (row.ese) chips.push("ese");
@@ -2494,6 +2656,7 @@ export default function TeacherRosterPage({
   onBack,
   onOpenSpider,
   onOpenSafetyPlan,
+  onRequestPullout,
   onOpenClassComposer,
   onTeacherChange,
 }: Props) {
@@ -3884,6 +4047,12 @@ export default function TeacherRosterPage({
                         <span aria-hidden="true">📖</span>
                         <span>FAST</span>
                       </button>
+                      {onRequestPullout && (
+                        <PulloutButton
+                          row={row}
+                          onOpen={() => onRequestPullout(row.studentId)}
+                        />
+                      )}
                       {sepSectionId != null && (() => {
                         const n = sepCountByStudent.get(row.studentId) ?? 0;
                         // Two-state icon per the product spec:

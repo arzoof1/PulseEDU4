@@ -434,13 +434,21 @@ function RequestPulloutSection({
   interventionTypes,
   reasonOptions,
   isAdmin,
+  initialStudentId,
 }: {
   students: Student[];
   interventionTypes: InterventionTypeLite[];
   reasonOptions: PulloutReasonLite[];
   isAdmin?: boolean;
+  // Prefill handed off from the Teacher Roster row's Pull-out button.
+  // The StudentPicker stays fully usable — the teacher can clear it and
+  // pick a different student (the off-roster escape hatch).
+  initialStudentId?: string | null;
 }) {
-  const [studentId, setStudentId] = useState<string>("");
+  const [studentId, setStudentId] = useState<string>(initialStudentId ?? "");
+  useEffect(() => {
+    if (initialStudentId) setStudentId(initialStudentId);
+  }, [initialStudentId]);
   const [reasonChoice, setReasonChoice] = useState<string>("");
   const [reasonOther, setReasonOther] = useState<string>("");
   const reason =
@@ -5929,6 +5937,21 @@ function App() {
   // own staff id. Only matters for core team / SuperUsers — a regular
   // teacher can only see themselves anyway. Null on first load (App
   // falls back to authUser.id).
+  // Student handed off from a Teacher Roster row's 📤 Pull-out button to
+  // the Request Pullout section (prefill). Cleared implicitly on next
+  // handoff; the picker inside the section remains fully editable.
+  const [pulloutPrefillStudentId, setPulloutPrefillStudentId] = useState<
+    string | null
+  >(null);
+  // The prefill is consumed by one visit to the Request Pullout section.
+  // Clear it whenever the user is anywhere else, so a later visit via
+  // the sidebar (support/admin roles) never preselects a stale student.
+  useEffect(() => {
+    if (activeSection !== "requestPullout" && pulloutPrefillStudentId) {
+      setPulloutPrefillStudentId(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection]);
   const [teacherRosterTeacherId, setTeacherRosterTeacherId] = useState<
     number | null
   >(null);
@@ -10803,6 +10826,24 @@ function App() {
     !authUser?.isSuperUser &&
     !authUser?.isDistrictAdmin;
   const isFrontOfficeOnly = Boolean(authUser?.isFrontOffice);
+  // Classroom teachers now request pull-outs from the 📤 button on their
+  // Teacher Roster rows (student prefilled), so the sidebar "Request
+  // Pullout" entry is hidden for them to reduce clutter. It stays for
+  // support/admin roles — they have no roster of their own and often
+  // request on a teacher's behalf. The requestPullout SECTION remains
+  // reachable by teachers (the roster button navigates there).
+  const hideRequestPulloutNav = !(
+    isAdminTier ||
+    isBehaviorSpec ||
+    isMtss ||
+    Boolean(authUser?.isEseCoordinator) ||
+    Boolean(authUser?.isDean) ||
+    Boolean(authUser?.isCounselor) ||
+    Boolean(authUser?.isGuidanceCounselor) ||
+    Boolean(authUser?.isSocialWorker) ||
+    Boolean(authUser?.isSchoolPsychologist) ||
+    isFrontOfficeOnly
+  );
   const NON_EXEMPT_ALLOWED_KEYS = new Set(["hallPasses", "comp"]);
   const baseNavSections: NavSection[] = allBaseNavSections.filter((s) => {
     if (isNonExemptOnly && !NON_EXEMPT_ALLOWED_KEYS.has(s.key)) return false;
@@ -11220,7 +11261,7 @@ function App() {
       emoji: "📋",
       group: "quick",
     });
-    add(effectiveFeatures.RequestPullout && !isFrontOfficeOnly && !isNonExemptOnly, {
+    add(effectiveFeatures.RequestPullout && !isFrontOfficeOnly && !isNonExemptOnly && !hideRequestPulloutNav, {
       key: "requestPullout",
       label: "Request Pullout",
       description: "Refer a student for behavior/intervention pullout.",
@@ -12054,7 +12095,7 @@ function App() {
             key: "requestPullout",
             label: "Request Pullout",
             icon: IconClipboard,
-            canShow: effectiveFeatures.RequestPullout,
+            canShow: effectiveFeatures.RequestPullout && !hideRequestPulloutNav,
           },
           { key: "pbis", label: "PBIS Points", icon: IconStar, canShow: effectiveFeatures.Pbis },
           {
@@ -12445,6 +12486,7 @@ function App() {
                     already owns the key. Also still appears in the static
                     Quick Access list until 4b (interim duplication). */}
                 {effectiveFeatures.RequestPullout &&
+                  !hideRequestPulloutNav &&
                   renderNavItem({
                     key: "requestPullout",
                     label: "Request Pullout",
@@ -19913,7 +19955,10 @@ function App() {
               Use this when you need a student picked up from your
               room — not for routine scheduled pullouts. Include the
               specific reason so the receiving staff knows whether
-              this is urgent.
+              this is urgent. Fastest path: the 📤 button on the
+              student's row on your Teacher Roster — it opens this
+              form with the student already filled in and shows how
+              many pull-outs you've called for them this year.
             </RoleSection>
           </HowToUseHelp>
           <RequestPulloutSection
@@ -19921,6 +19966,7 @@ function App() {
             isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
             interventionTypes={interventionList}
             reasonOptions={pulloutReasonList}
+            initialStudentId={pulloutPrefillStudentId}
           />
         </>
       )}
@@ -20947,6 +20993,14 @@ function App() {
             setStudentProfileReturnTo("teacherRoster");
             setActiveSection("studentProfile");
           }}
+          onRequestPullout={
+            effectiveFeatures.RequestPullout
+              ? (studentId) => {
+                  setPulloutPrefillStudentId(studentId);
+                  setActiveSection("requestPullout");
+                }
+              : undefined
+          }
           /* SP pill is intentionally read-only on the roster for every
              role. Counselors / Core Team manage plans from the dedicated
              Safety Plans page or from Student Profile. The hover popover

@@ -120,4 +120,5 @@
 - [Hall-pass research Core Team tier](hall-pass-research-coreteam.md) — canResearchSchoolwide (Core Team + counselors/dean) gates school-summary + full-schedule extras; teacher JSON shape must stay unchanged; student summary JSON+PDF share buildStudentSummary.
 - [Hall-pass report feed scoping](hall-pass-report-feed.md) — Overview/YTD must read the scoped report-feed (never global pass list); YTD windows open on admin-set first_day_of_school, fallback Aug 1.
 - [Behavior Supports module](behavior-supports-module.md) — teacher-translation layer: schema has NO confidential-capable fields; teachers read via roster snapshot only, never the module routes; entry-time caps are server 400s.
+- [Roster pull-out badge](roster-pullout-badge.md) — count keyed by referring_teacher (admin-on-behalf counts); schoolYearStartDate NEEDS the school-tz arg; hidden sidebar item stays reachable (no section guard).
 - [School-year flip](school-year-flip.md) — FAST/Insights reporting year is a school-controlled DATE (school-tz), not wall-clock; no flip → newest data year; reconcile only touches school_settings + is_historical, never SIS; strip admin-only field from non-admin PUT.
