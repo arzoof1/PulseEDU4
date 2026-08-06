@@ -290,6 +290,618 @@ function FeedbackForm({
 }
 
 // ---------------------------------------------------------------------------
+// Plan Updates (coordinator): log a plan change after a meeting, track which
+// teachers have re-read + acknowledged, and nudge the stragglers.
+// ---------------------------------------------------------------------------
+
+const PLAN_TYPE_OPTIONS: { key: string; label: string }[] = [
+  { key: "504", label: "504 Plan" },
+  { key: "ese", label: "ESE / IEP" },
+  { key: "ell", label: "ELL Plan" },
+  { key: "behavior", label: "Behavior Plan" },
+];
+
+interface PlanUpdateItem {
+  id: number;
+  planType: string;
+  planLabel: string;
+  studentName: string;
+  grade: number | null;
+  summary: string;
+  effectiveDate: string;
+  meetingId: number | null;
+  createdByName: string;
+  createdAt: string;
+  archived: boolean;
+  counts: { recipients: number; acknowledged: number };
+  recipients: {
+    staffId: number;
+    displayName: string;
+    acknowledgedAt: string | null;
+    remindedAt: string | null;
+  }[];
+}
+
+interface RecentMeeting {
+  id: number;
+  meetingType: string;
+  date: string;
+  status: string;
+}
+
+function PlanUpdateForm({
+  onDone,
+  onCancel,
+}: {
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const [student, setStudent] = useState<StudentHit | null>(null);
+  const [planType, setPlanType] = useState("");
+  const [summary, setSummary] = useState("");
+  const [effectiveDate, setEffectiveDate] = useState("");
+  const [meetingId, setMeetingId] = useState<number | "">("");
+  const [recentMeetings, setRecentMeetings] = useState<RecentMeeting[]>([]);
+  const [recipients, setRecipients] = useState<
+    { staffId: number; displayName: string; fromSchedule: boolean }[]
+  >([]);
+  const [staffOptions, setStaffOptions] = useState<TeacherOpt[]>([]);
+  const [addPick, setAddPick] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [loadingContext, setLoadingContext] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await authFetch("/api/support-meetings/staff-options");
+        if (!res.ok) return;
+        const body = (await res.json()) as {
+          staff: { id: number; displayName: string; department: string | null }[];
+        };
+        if (alive) setStaffOptions(body.staff);
+      } catch {
+        /* picker just stays empty */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const searchStudents = useCallback(async (q: string) => {
+    const res = await authFetch(
+      `/api/student-lookup/search?q=${encodeURIComponent(q)}`,
+    );
+    if (!res.ok) throw new Error("search failed");
+    const body = (await res.json()) as { students: StudentHit[] };
+    return body.students;
+  }, []);
+
+  // Selecting a student pulls schedule teachers (default recipients) and
+  // that student's recent meetings (for the effective-date prefill + link).
+  const pickStudent = async (s: StudentHit) => {
+    setStudent(s);
+    setLoadingContext(true);
+    setMeetingId("");
+    try {
+      const res = await authFetch(
+        `/api/plan-updates/student-context?studentId=${encodeURIComponent(s.studentId)}`,
+      );
+      if (res.ok) {
+        const body = (await res.json()) as {
+          scheduleTeachers: { staffId: number; displayName: string }[];
+          recentMeetings: RecentMeeting[];
+        };
+        setRecipients(
+          body.scheduleTeachers.map((t) => ({
+            staffId: t.staffId,
+            displayName: t.displayName,
+            fromSchedule: true,
+          })),
+        );
+        setRecentMeetings(body.recentMeetings);
+        // Default the effective date to the most recent meeting, per the
+        // "change effective on the date of the last meeting" rule.
+        const latest = body.recentMeetings[0];
+        if (latest) {
+          setEffectiveDate(latest.date);
+          setMeetingId(latest.id);
+        }
+      }
+    } finally {
+      setLoadingContext(false);
+    }
+  };
+
+  const addRecipient = (id: number | null) => {
+    setAddPick(null);
+    if (id == null) return;
+    if (recipients.some((r) => r.staffId === id)) return;
+    const opt = staffOptions.find((o) => o.id === id);
+    if (!opt) return;
+    setRecipients((prev) => [
+      ...prev,
+      { staffId: id, displayName: opt.displayName ?? "Staff", fromSchedule: false },
+    ]);
+  };
+
+  const submit = async () => {
+    setError("");
+    if (!student) return setError("Choose a student.");
+    if (!planType) return setError("Choose which plan changed.");
+    if (!summary.trim()) return setError("Describe what changed — this is what teachers read.");
+    if (!effectiveDate) return setError("Choose the effective date.");
+    if (recipients.length === 0)
+      return setError("Add at least one teacher to notify.");
+    setSaving(true);
+    try {
+      const res = await authFetch("/api/plan-updates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: student.studentId,
+          planType,
+          summary: summary.trim(),
+          effectiveDate,
+          meetingId: meetingId === "" ? null : meetingId,
+          recipientStaffIds: recipients.map((r) => r.staffId),
+        }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) {
+        setError(body.error || "Could not log the plan update.");
+        return;
+      }
+      onDone();
+    } catch {
+      setError("Could not log the plan update.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <div>
+        <label style={labelStyle}>Student</label>
+        {student ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontWeight: 600 }}>
+              {student.firstName} {student.lastName}
+              {student.grade != null ? ` · Gr ${student.grade}` : ""}
+            </span>
+            <button
+              type="button"
+              style={{ ...btn, padding: "2px 10px" }}
+              onClick={() => {
+                setStudent(null);
+                setRecipients([]);
+                setRecentMeetings([]);
+                setMeetingId("");
+              }}
+            >
+              Change
+            </button>
+          </div>
+        ) : (
+          <StudentPicker
+            mode="async"
+            fetcher={searchStudents}
+            getKey={(s: StudentHit) => s.studentId}
+            getPrimary={(s: StudentHit) => `${s.firstName} ${s.lastName}`}
+            renderMeta={(s: StudentHit) =>
+              ` · ${s.localSisId ?? "—"}${s.grade != null ? ` · Gr ${s.grade}` : ""}`
+            }
+            onSelect={pickStudent}
+            placeholder="Search student…"
+            ariaLabel="Search student"
+          />
+        )}
+        {loadingContext && (
+          <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: 4 }}>
+            Loading schedule teachers & recent meetings…
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr" }}>
+        <div>
+          <label style={labelStyle}>Which plan changed?</label>
+          <select
+            value={planType}
+            onChange={(e) => setPlanType(e.target.value)}
+            style={inputStyle}
+          >
+            <option value="">Choose…</option>
+            {PLAN_TYPE_OPTIONS.map((p) => (
+              <option key={p.key} value={p.key}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Effective date</label>
+          <input
+            type="date"
+            value={effectiveDate}
+            onChange={(e) => setEffectiveDate(e.target.value)}
+            style={inputStyle}
+          />
+        </div>
+      </div>
+
+      {recentMeetings.length > 0 && (
+        <div>
+          <label style={labelStyle}>From meeting (optional)</label>
+          <select
+            value={meetingId}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === "") {
+                setMeetingId("");
+                return;
+              }
+              const id = Number(v);
+              setMeetingId(id);
+              const m = recentMeetings.find((x) => x.id === id);
+              if (m) setEffectiveDate(m.date);
+            }}
+            style={inputStyle}
+          >
+            <option value="">Not linked to a meeting</option>
+            {recentMeetings.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.meetingType} — {fmtDate(m.date)}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      <div>
+        <label style={labelStyle}>What changed? (teachers read this)</label>
+        <textarea
+          value={summary}
+          onChange={(e) => setSummary(e.target.value)}
+          rows={3}
+          placeholder="e.g. Extended time now applies to all classroom assessments, not just state testing."
+          style={{ ...inputStyle, resize: "vertical" }}
+        />
+      </div>
+
+      <div>
+        <label style={labelStyle}>
+          Teachers to notify ({recipients.length})
+        </label>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+          {recipients.map((r) => (
+            <span
+              key={r.staffId}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                background: "#f1f5f9",
+                borderRadius: 999,
+                padding: "3px 10px",
+                fontSize: "0.8rem",
+              }}
+            >
+              {r.displayName}
+              {r.fromSchedule && (
+                <span style={{ color: "#64748b", fontSize: "0.7rem" }}>
+                  schedule
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() =>
+                  setRecipients((prev) =>
+                    prev.filter((x) => x.staffId !== r.staffId),
+                  )
+                }
+                style={{
+                  border: "none",
+                  background: "none",
+                  cursor: "pointer",
+                  fontWeight: 700,
+                  color: "#64748b",
+                  padding: 0,
+                }}
+                aria-label={`Remove ${r.displayName}`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+          {recipients.length === 0 && (
+            <span style={{ color: "#94a3b8", fontSize: "0.85rem" }}>
+              Pick a student to auto-add their schedule teachers.
+            </span>
+          )}
+        </div>
+        <TeacherPicker
+          teachers={staffOptions}
+          value={addPick}
+          onChange={addRecipient}
+          searchPlaceholder="Add another staff member…"
+        />
+      </div>
+
+      {error && (
+        <div style={{ color: "#b91c1c", fontSize: "0.85rem" }}>{error}</div>
+      )}
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button type="button" style={btn} onClick={onCancel} disabled={saving}>
+          Cancel
+        </button>
+        <button type="button" style={btnPrimary} onClick={submit} disabled={saving}>
+          {saving ? "Saving…" : "Log Plan Update & Notify"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PlanUpdatesPanel() {
+  const [updates, setUpdates] = useState<PlanUpdateItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [notice, setNotice] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+
+  const load = useCallback(async (includeArchived: boolean) => {
+    setLoading(true);
+    setLoadError("");
+    try {
+      const res = await authFetch(
+        `/api/plan-updates${includeArchived ? "?includeArchived=1" : ""}`,
+      );
+      if (!res.ok) throw new Error("load failed");
+      const body = (await res.json()) as { updates: PlanUpdateItem[] };
+      setUpdates(body.updates);
+    } catch {
+      setLoadError("Could not load plan updates. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load(showArchived);
+  }, [load, showArchived]);
+
+  const remind = async (id: number) => {
+    setBusyId(id);
+    try {
+      const res = await authFetch(`/api/plan-updates/${id}/remind`, {
+        method: "POST",
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        reminded?: number;
+        error?: string;
+      };
+      if (!res.ok) {
+        setNotice(body.error || "Could not send reminders.");
+        return;
+      }
+      setNotice(
+        body.reminded
+          ? `Reminder email sent to ${body.reminded} teacher(s).`
+          : "Everyone has already acknowledged.",
+      );
+      await load(showArchived);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const setArchived = async (id: number, archived: boolean) => {
+    setBusyId(id);
+    try {
+      const res = await authFetch(`/api/plan-updates/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archived }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setNotice(body.error || "Could not update.");
+        return;
+      }
+      await load(showArchived);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ color: "#64748b", fontSize: "0.9rem" }}>
+          Log a plan change after a meeting, and track which teachers have
+          re-read and acknowledged it.
+        </div>
+        <button type="button" style={btnPrimary} onClick={() => setShowForm(true)}>
+          + Log Plan Update
+        </button>
+      </div>
+
+      {notice && (
+        <div
+          style={{
+            ...cardStyle,
+            background: "#eff6ff",
+            borderColor: "#bfdbfe",
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 10,
+          }}
+        >
+          <span style={{ fontSize: "0.9rem" }}>{notice}</span>
+          <button
+            type="button"
+            style={{ ...btn, padding: "2px 10px" }}
+            onClick={() => setNotice("")}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {loading ? (
+        <div style={cardStyle}>Loading plan updates…</div>
+      ) : loadError ? (
+        <div style={{ ...cardStyle, color: "#b91c1c" }}>{loadError}</div>
+      ) : updates.length === 0 ? (
+        <div style={{ ...cardStyle, color: "#64748b" }}>
+          No plan updates logged yet. After a meeting changes a student's
+          plan, log it here so every teacher re-reads and acknowledges.
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 10 }}>
+          {updates.map((u) => {
+            const done = u.counts.acknowledged >= u.counts.recipients;
+            const pending = u.recipients.filter((r) => !r.acknowledgedAt);
+            return (
+              <div key={u.id} style={{ ...cardStyle, opacity: u.archived ? 0.6 : 1 }}>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
+                  <div style={{ flex: "1 1 260px", minWidth: 220 }}>
+                    <div style={{ fontWeight: 700 }}>
+                      {u.studentName}
+                      {u.grade != null && (
+                        <span style={{ color: "#64748b", fontWeight: 400 }}>
+                          {" "}
+                          · Gr {u.grade}
+                        </span>
+                      )}
+                      <span
+                        style={{
+                          marginLeft: 8,
+                          background: "#fef3c7",
+                          color: "#92400e",
+                          borderRadius: 999,
+                          padding: "2px 10px",
+                          fontSize: "0.72rem",
+                          fontWeight: 700,
+                        }}
+                      >
+                        {u.planLabel}
+                      </span>
+                      {u.archived && (
+                        <span style={{ marginLeft: 8, fontSize: "0.72rem", color: "#94a3b8" }}>
+                          Archived
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: "0.85rem", color: "#475569", margin: "3px 0" }}>
+                      {u.summary}
+                    </div>
+                    <div style={{ fontSize: "0.78rem", color: "#94a3b8" }}>
+                      Effective {fmtDate(u.effectiveDate)} · Logged by {u.createdByName}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start" }}>
+                    <Chip
+                      label={`${u.counts.acknowledged}/${u.counts.recipients} acknowledged`}
+                      bg={done ? "#dcfce7" : "#fef3c7"}
+                      fg={done ? "#15803d" : "#b45309"}
+                    />
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {!u.archived && !done && (
+                      <button
+                        type="button"
+                        style={btn}
+                        disabled={busyId === u.id}
+                        onClick={() => remind(u.id)}
+                      >
+                        Send Reminder
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      style={btn}
+                      onClick={() => setExpanded(expanded === u.id ? null : u.id)}
+                    >
+                      {expanded === u.id ? "Hide Teachers" : "Teachers"}
+                    </button>
+                    <button
+                      type="button"
+                      style={btn}
+                      disabled={busyId === u.id}
+                      onClick={() => setArchived(u.id, !u.archived)}
+                    >
+                      {u.archived ? "Unarchive" : "Archive"}
+                    </button>
+                  </div>
+                </div>
+                {expanded === u.id && (
+                  <div style={{ marginTop: 10, borderTop: "1px solid var(--border, #e2e8f0)", paddingTop: 10 }}>
+                    {pending.length > 0 && (
+                      <div style={{ fontSize: "0.8rem", color: "#b45309", marginBottom: 6 }}>
+                        Still needs to acknowledge: {pending.map((r) => r.displayName).join(", ")}
+                      </div>
+                    )}
+                    <div style={{ display: "grid", gap: 4 }}>
+                      {u.recipients.map((r) => (
+                        <div
+                          key={r.staffId}
+                          style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem" }}
+                        >
+                          <span>{r.displayName}</span>
+                          <span style={{ color: r.acknowledgedAt ? "#15803d" : "#b45309" }}>
+                            {r.acknowledgedAt
+                              ? `✓ Acknowledged ${new Date(r.acknowledgedAt).toLocaleDateString()}`
+                              : r.remindedAt
+                                ? `Reminded ${new Date(r.remindedAt).toLocaleDateString()}`
+                                : "Pending"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <label style={{ fontSize: "0.85rem", color: "#64748b", display: "flex", gap: 6 }}>
+        <input
+          type="checkbox"
+          checked={showArchived}
+          onChange={(e) => setShowArchived(e.target.checked)}
+        />
+        Show archived updates
+      </label>
+
+      {showForm && (
+        <Modal title="Log a Plan Update" onClose={() => setShowForm(false)} wide>
+          <PlanUpdateForm
+            onCancel={() => setShowForm(false)}
+            onDone={async () => {
+              setShowForm(false);
+              setNotice(
+                "Plan update logged — teachers were emailed and their roster pill now shows the update until they acknowledge.",
+              );
+              await load(showArchived);
+            }}
+          />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Create / edit meeting form (organizer)
 // ---------------------------------------------------------------------------
 
@@ -746,7 +1358,7 @@ export default function SupportMeetingsPage({
 }) {
   const [canOrganize, setCanOrganize] = useState(false);
   const [meetingTypes, setMeetingTypes] = useState<string[]>([]);
-  const [tab, setTab] = useState<"mine" | "manage">("mine");
+  const [tab, setTab] = useState<"mine" | "manage" | "planUpdates">("mine");
   const [meetings, setMeetings] = useState<MeetingListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -832,6 +1444,7 @@ export default function SupportMeetingsPage({
   }, []);
 
   useEffect(() => {
+    if (tab === "planUpdates") return; // panel loads its own data
     loadList(tab);
   }, [tab, loadList]);
 
@@ -849,7 +1462,7 @@ export default function SupportMeetingsPage({
   };
 
   const refreshAll = async () => {
-    await loadList(tab);
+    if (tab !== "planUpdates") await loadList(tab);
     onCountsChanged?.();
   };
 
@@ -1072,7 +1685,7 @@ export default function SupportMeetingsPage({
 
       {canOrganize && (
         <div style={{ display: "flex", gap: 8 }}>
-          {(["mine", "manage"] as const).map((t) => (
+          {(["mine", "manage", "planUpdates"] as const).map((t) => (
             <button
               key={t}
               type="button"
@@ -1084,7 +1697,11 @@ export default function SupportMeetingsPage({
                 borderColor: tab === t ? "#2563eb" : undefined,
               }}
             >
-              {t === "mine" ? "My Meetings" : "Manage"}
+              {t === "mine"
+                ? "My Meetings"
+                : t === "manage"
+                  ? "Manage"
+                  : "Plan Updates"}
             </button>
           ))}
         </div>
@@ -1127,7 +1744,9 @@ export default function SupportMeetingsPage({
         </div>
       )}
 
-      {loading ? (
+      {tab === "planUpdates" ? (
+        <PlanUpdatesPanel />
+      ) : loading ? (
         <div style={cardStyle}>Loading meetings…</div>
       ) : loadError ? (
         <div style={{ ...cardStyle, color: "#b91c1c" }}>{loadError}</div>
@@ -1141,14 +1760,16 @@ export default function SupportMeetingsPage({
         <div style={{ display: "grid", gap: 10 }}>{visible.map(renderRow)}</div>
       )}
 
-      <label style={{ fontSize: "0.85rem", color: "#64748b", display: "flex", gap: 6 }}>
-        <input
-          type="checkbox"
-          checked={showPast}
-          onChange={(e) => setShowPast(e.target.checked)}
-        />
-        Show past & canceled meetings
-      </label>
+      {tab !== "planUpdates" && (
+        <label style={{ fontSize: "0.85rem", color: "#64748b", display: "flex", gap: 6 }}>
+          <input
+            type="checkbox"
+            checked={showPast}
+            onChange={(e) => setShowPast(e.target.checked)}
+          />
+          Show past & canceled meetings
+        </label>
+      )}
 
       {showCreate && (
         <Modal title="Schedule a Support Meeting" onClose={() => setShowCreate(false)} wide>

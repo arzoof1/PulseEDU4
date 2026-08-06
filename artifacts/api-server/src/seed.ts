@@ -10804,3 +10804,45 @@ export async function ensureSupportMeetingsSchema(): Promise<void> {
     sql`CREATE INDEX IF NOT EXISTS support_meeting_events_meeting_idx ON support_meeting_events (meeting_id)`,
   );
 }
+
+// ---------------------------------------------------------------------------
+// Student Plan Updates (drizzle-kit push is broken in this repo — boot
+// ensure* helpers are the schema-change mechanism). Mirrors
+// lib/db/src/schema/planUpdates.ts.
+// ---------------------------------------------------------------------------
+export async function ensurePlanUpdatesSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS plan_updates (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      plan_type TEXT NOT NULL,
+      student_id TEXT NOT NULL,
+      student_name TEXT NOT NULL,
+      grade INTEGER,
+      summary TEXT NOT NULL,
+      effective_date TEXT NOT NULL,
+      meeting_id INTEGER,
+      created_by_staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      archived_at TIMESTAMPTZ
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS plan_updates_school_student_idx ON plan_updates (school_id, student_id)`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS plan_update_recipients (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      update_id INTEGER NOT NULL,
+      staff_id INTEGER NOT NULL,
+      acknowledged_at TIMESTAMPTZ,
+      reminded_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT plan_update_recipients_unique UNIQUE (update_id, staff_id)
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS plan_update_recipients_staff_idx ON plan_update_recipients (school_id, staff_id)`,
+  );
+}

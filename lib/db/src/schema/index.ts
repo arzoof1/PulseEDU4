@@ -2,6 +2,7 @@ export * from "./districts";
 export * from "./schools";
 export * from "./hallPasses";
 export * from "./supportMeetings";
+export * from "./planUpdates";
 export * from "./tardies";
 export * from "./pbisEntries";
 export * from "./pbisPointMigrations";

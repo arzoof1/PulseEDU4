@@ -49,6 +49,7 @@ import {
   ensureCommunicationSchema,
   ensureDataChatSchema,
   ensureSupportMeetingsSchema,
+  ensurePlanUpdatesSchema,
   ensureSectionSupportSchema,
   ensureDataExportSchema,
   ensurePulseDnaVideosSchema,
@@ -332,6 +333,7 @@ async function runSeed(): Promise<void> {
   // Student Support Meetings module (504/IEP/MTSS/parent-conference
   // scheduling + teacher confirmations + feedback). Idempotent.
   await ensureSupportMeetingsSchema();
+  await ensurePlanUpdatesSchema();
   // Section Support Access — support teachers (ESE / co-teachers) assigned to
   // another teacher's whole section by the ESE Coordinator. Idempotent.
   await ensureSectionSupportSchema();

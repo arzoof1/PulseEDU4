@@ -16,6 +16,7 @@
 import {
   createContext,
   Fragment,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -1247,6 +1248,116 @@ function SubjectCells({
 // the three chips are visually distinct from the BQ pill (dark brown)
 // and from each other while staying calm enough not to dominate the
 // row. Title text spells the abbreviation out for screen readers.
+// One outstanding "plan changed — re-read + acknowledge" notice for the
+// logged-in teacher, keyed by student + plan type. Drives the amber dot on
+// the matching roster pill and the acknowledge checkbox in its hover box.
+export type PlanUpdateNotice = {
+  id: number;
+  planType: string;
+  studentId: string;
+  summary: string;
+  effectiveDate: string;
+  createdByName: string;
+};
+
+function fmtPlanDate(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+// Amber notification dot pinned to the pill's top-right corner.
+function UpdateDot() {
+  return (
+    <span
+      aria-hidden
+      style={{
+        position: "absolute",
+        top: -3,
+        right: -3,
+        width: 9,
+        height: 9,
+        borderRadius: "50%",
+        background: "#f59e0b",
+        border: "1.5px solid #fff",
+        boxShadow: "0 0 0 1px rgba(245,158,11,0.35)",
+      }}
+    />
+  );
+}
+
+// Amber "plan updated" block rendered inside a pill's hover box, with the
+// change summary, effective date, and the acknowledge checkbox.
+function PlanUpdateSection({
+  update,
+  onAck,
+}: {
+  update: PlanUpdateNotice;
+  onAck: (id: number) => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <div
+      style={{
+        marginTop: 8,
+        padding: "8px 10px",
+        background: "#fffbeb",
+        border: "1px solid #fde68a",
+        borderRadius: 6,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          color: "#b45309",
+          textTransform: "uppercase",
+          letterSpacing: 0.4,
+          marginBottom: 4,
+        }}
+      >
+        Plan updated — effective {fmtPlanDate(update.effectiveDate)}
+      </div>
+      <div style={{ fontSize: 12, color: "#374151", lineHeight: 1.45, marginBottom: 4 }}>
+        {update.summary}
+      </div>
+      <div style={{ fontSize: 11, color: "#92400e", marginBottom: 6 }}>
+        Logged by {update.createdByName}
+      </div>
+      <label
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          fontSize: 12,
+          fontWeight: 600,
+          color: "#78350f",
+          cursor: busy ? "wait" : "pointer",
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={false}
+          disabled={busy}
+          onChange={async () => {
+            setBusy(true);
+            try {
+              await onAck(update.id);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+        I've re-read this plan
+      </label>
+    </div>
+  );
+}
+
 const PROGRAM_META: Record<
   "ese" | "504" | "ell",
   { label: string; bg: string; fg: string; title: string }
@@ -1278,9 +1389,13 @@ const PROGRAM_META: Record<
 function ProgramPill({
   kind,
   row,
+  update,
+  onAck,
 }: {
   kind: "ese" | "504" | "ell";
   row: RosterRow;
+  update?: PlanUpdateNotice;
+  onAck?: (id: number) => Promise<void>;
 }) {
   const meta = PROGRAM_META[kind];
   const [open, setOpen] = useState(false);
@@ -1336,9 +1451,12 @@ function ProgramPill({
           letterSpacing: 0.2,
           cursor: "default",
           outline: "none",
+          position: "relative",
+          boxShadow: update ? "0 0 0 1.5px #f59e0b" : undefined,
         }}
       >
         {meta.label}
+        {update && <UpdateDot />}
       </span>
       {open && coords && (
         <div
@@ -1411,6 +1529,9 @@ function ProgramPill({
               </ul>
             </>
           )}
+          {update && onAck && (
+            <PlanUpdateSection update={update} onAck={onAck} />
+          )}
         </div>
       )}
     </span>
@@ -1424,7 +1545,15 @@ function ProgramPill({
 // sanitized at the source — it never contains confidential material —
 // and the 15-bullet entry cap keeps the card scannable. Mirrors the
 // ProgramPill fixed-position popover so it escapes table overflow.
-function BehaviorPill({ row }: { row: RosterRow }) {
+function BehaviorPill({
+  row,
+  update,
+  onAck,
+}: {
+  row: RosterRow;
+  update?: PlanUpdateNotice;
+  onAck?: (id: number) => Promise<void>;
+}) {
   const bs = row.behaviorSupport;
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<HTMLSpanElement | null>(null);
@@ -1487,9 +1616,12 @@ function BehaviorPill({ row }: { row: RosterRow }) {
           letterSpacing: 0.2,
           cursor: "default",
           outline: "none",
+          position: "relative",
+          boxShadow: update ? "0 0 0 1.5px #f59e0b" : undefined,
         }}
       >
         Behavior
+        {update && <UpdateDot />}
       </span>
       {open && coords && (
         <div
@@ -1564,6 +1696,9 @@ function BehaviorPill({ row }: { row: RosterRow }) {
               </ul>
             </div>
           ))}
+          {update && onAck && (
+            <PlanUpdateSection update={update} onAck={onAck} />
+          )}
         </div>
       )}
     </span>
@@ -1750,7 +1885,15 @@ function PulloutButton({
   );
 }
 
-function ProgramPills({ row }: { row: RosterRow }) {
+function ProgramPills({
+  row,
+  planUpdates,
+  onAckPlanUpdate,
+}: {
+  row: RosterRow;
+  planUpdates?: Map<string, PlanUpdateNotice>;
+  onAckPlanUpdate?: (id: number) => Promise<void>;
+}) {
   const chips: Array<"ese" | "504" | "ell"> = [];
   if (row.ese) chips.push("ese");
   if (row.is504) chips.push("504");
@@ -1768,9 +1911,21 @@ function ProgramPills({ row }: { row: RosterRow }) {
   return (
     <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
       {chips.map((c) => (
-        <ProgramPill key={c} kind={c} row={row} />
+        <ProgramPill
+          key={c}
+          kind={c}
+          row={row}
+          update={planUpdates?.get(`${row.studentId}:${c}`)}
+          onAck={onAckPlanUpdate}
+        />
       ))}
-      {row.behaviorSupport && <BehaviorPill row={row} />}
+      {row.behaviorSupport && (
+        <BehaviorPill
+          row={row}
+          update={planUpdates?.get(`${row.studentId}:behavior`)}
+          onAck={onAckPlanUpdate}
+        />
+      )}
     </div>
   );
 }
@@ -2856,6 +3011,51 @@ export default function TeacherRosterPage({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ----- Plan-update notices (mine) -----
+  // Outstanding "plan changed — re-read + acknowledge" items for the
+  // logged-in teacher. Keyed studentId:planType so the matching program
+  // pill gets an amber dot + acknowledge checkbox in its hover box.
+  // Notices are per logged-in user (not the viewed teacher), so a Core
+  // Team member browsing another teacher's roster sees only their own.
+  const [planUpdateList, setPlanUpdateList] = useState<PlanUpdateNotice[]>([]);
+  const loadPlanUpdates = useCallback(async () => {
+    try {
+      const res = await authFetch("/api/plan-updates/mine");
+      if (!res.ok) return;
+      const body = (await res.json()) as { updates: PlanUpdateNotice[] };
+      setPlanUpdateList(body.updates);
+    } catch {
+      /* non-fatal — pills simply show no dot */
+    }
+  }, []);
+  useEffect(() => {
+    loadPlanUpdates();
+  }, [loadPlanUpdates, reloadTick]);
+  const planUpdateMap = useMemo(() => {
+    const m = new Map<string, PlanUpdateNotice>();
+    // Newest-first from the server; keep the newest per student+plan.
+    for (const u of planUpdateList) {
+      const key = `${u.studentId}:${u.planType}`;
+      if (!m.has(key)) m.set(key, u);
+    }
+    return m;
+  }, [planUpdateList]);
+  const ackPlanUpdate = useCallback(
+    async (id: number) => {
+      try {
+        const res = await authFetch(`/api/plan-updates/${id}/ack`, {
+          method: "POST",
+        });
+        if (res.ok) {
+          setPlanUpdateList((prev) => prev.filter((u) => u.id !== id));
+        }
+      } catch {
+        /* leave the dot lit; teacher can retry */
+      }
+    },
+    [],
+  );
 
   // Reload roster when teacher or period changes, or when refresh() is
   // called (reloadTick bumps).
@@ -4242,7 +4442,11 @@ export default function TeacherRosterPage({
                   </td>
                   {visibility.programs && (
                     <td style={{ padding: "6px 10px" }}>
-                      <ProgramPills row={row} />
+                      <ProgramPills
+                        row={row}
+                        planUpdates={planUpdateMap}
+                        onAckPlanUpdate={ackPlanUpdate}
+                      />
                     </td>
                   )}
                   <td style={{ padding: "6px 10px" }}>{row.grade}</td>
