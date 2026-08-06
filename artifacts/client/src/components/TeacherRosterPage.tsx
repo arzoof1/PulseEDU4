@@ -1647,7 +1647,7 @@ function PulloutButton({
               : "1px solid #e2e8f0",
           background: hot ? "#fffbeb" : count > 0 ? "#f1f5f9" : "#f8fafc",
           color: hot ? "#92400e" : "#475569",
-          fontSize: 12,
+          fontSize: 11,
           fontWeight: 600,
           lineHeight: 1.2,
           cursor: "pointer",
@@ -3906,17 +3906,10 @@ export default function TeacherRosterPage({
                     </td>
                   )}
                   <td style={{ padding: "6px 10px" }}>
-                    {/* Two-line layout (per product decision): line 1 =
-                        identity + STATUS pills you READ (SP, Tier 3, R,
-                        ISS/OSS), a hairline divider, then line 2 = the
-                        ACTION buttons you CLICK, always in the same
-                        order (Spider, Log, Chat, FAST, Pull-out,
-                        Separation). The split frees horizontal space so
-                        buttons use a 12px font instead of 11px. */}
-                    <div
+                    <span
                       style={{
-                        display: "flex",
-                        alignItems: "flex-start",
+                        display: "inline-flex",
+                        alignItems: "center",
                         gap: 8,
                       }}
                     >
@@ -3928,21 +3921,6 @@ export default function TeacherRosterPage({
                         photoConsent={row.photoConsent}
                         size={28}
                       />
-                      <div
-                        style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          minWidth: 0,
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            flexWrap: "wrap",
-                            gap: 6,
-                          }}
-                        >
                       <span style={{ display: "inline-flex", flexDirection: "column", lineHeight: 1.15 }}>
                         <span>{row.lastName}, {row.firstName}</span>
                         {row.localSisId && (
@@ -3975,78 +3953,6 @@ export default function TeacherRosterPage({
                           }
                         />
                       )}
-                      {row.retainedGrades && row.retainedGrades.length > 0 && (
-                        <span
-                          title={`Retained: ${row.retainedGrades
-                            .map((g) => `Grade ${g}`)
-                            .join(", ")}`}
-                          aria-label={`Retained at ${row.retainedGrades
-                            .map((g) => `Grade ${g}`)
-                            .join(", ")}`}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            width: 18,
-                            height: 18,
-                            borderRadius: "50%",
-                            background: "#0f172a",
-                            color: "white",
-                            fontSize: 11,
-                            fontWeight: 800,
-                            lineHeight: 1,
-                            cursor: "help",
-                          }}
-                        >
-                          R
-                        </span>
-                      )}
-                      {row.issToday && (
-                        <span
-                          title="On In-School Suspension today"
-                          style={{
-                            padding: "2px 8px",
-                            borderRadius: 999,
-                            border: "1px solid #fdba74",
-                            background: "#fff7ed",
-                            color: "#9a3412",
-                            fontSize: 11,
-                            fontWeight: 700,
-                            lineHeight: 1.2,
-                          }}
-                        >
-                          ISS
-                        </span>
-                      )}
-                      {row.ossToday && (
-                        <span
-                          title="On Out-of-School Suspension today"
-                          style={{
-                            padding: "2px 8px",
-                            borderRadius: 999,
-                            border: "1px solid #fca5a5",
-                            background: "#fef2f2",
-                            color: "#991b1b",
-                            fontSize: 11,
-                            fontWeight: 700,
-                            lineHeight: 1.2,
-                          }}
-                        >
-                          OSS
-                        </span>
-                      )}
-                        </div>
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            flexWrap: "wrap",
-                            gap: 6,
-                            borderTop: "1px solid #e5e7eb",
-                            marginTop: 5,
-                            paddingTop: 5,
-                          }}
-                        >
                       {onOpenSpider && (
                         <button
                           type="button"
@@ -4062,7 +3968,7 @@ export default function TeacherRosterPage({
                             border: "1px solid #c7d2fe",
                             background: "#eef2ff",
                             color: "#3730a3",
-                            fontSize: 12,
+                            fontSize: 11,
                             fontWeight: 600,
                             lineHeight: 1.2,
                             cursor: "pointer",
@@ -4092,7 +3998,7 @@ export default function TeacherRosterPage({
                           border: "1px solid #fbcfe8",
                           background: "#fdf2f8",
                           color: "#9d174d",
-                          fontSize: 12,
+                          fontSize: 11,
                           fontWeight: 600,
                           lineHeight: 1.2,
                           cursor: "pointer",
@@ -4125,7 +4031,7 @@ export default function TeacherRosterPage({
                           color: pendingChatIds.has(row.studentId)
                             ? "#6d28d9"
                             : "#475569",
-                          fontSize: 12,
+                          fontSize: 11,
                           fontWeight: 600,
                           lineHeight: 1.2,
                           cursor: "pointer",
@@ -4156,7 +4062,7 @@ export default function TeacherRosterPage({
                           border: "1px solid #bfdbfe",
                           background: "#eff6ff",
                           color: "#1d4ed8",
-                          fontSize: 12,
+                          fontSize: 11,
                           fontWeight: 600,
                           lineHeight: 1.2,
                           cursor: "pointer",
@@ -4221,9 +4127,67 @@ export default function TeacherRosterPage({
                           </button>
                         );
                       })()}
-                        </div>
-                      </div>
-                    </div>
+                      {row.retainedGrades && row.retainedGrades.length > 0 && (
+                        <span
+                          title={`Retained: ${row.retainedGrades
+                            .map((g) => `Grade ${g}`)
+                            .join(", ")}`}
+                          aria-label={`Retained at ${row.retainedGrades
+                            .map((g) => `Grade ${g}`)
+                            .join(", ")}`}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: 18,
+                            height: 18,
+                            borderRadius: "50%",
+                            background: "#0f172a",
+                            color: "white",
+                            fontSize: 11,
+                            fontWeight: 800,
+                            lineHeight: 1,
+                            cursor: "help",
+                          }}
+                        >
+                          R
+                        </span>
+                      )}
+                      {row.issToday && (
+                        <span
+                          title="On In-School Suspension today"
+                          style={{
+                            padding: "2px 8px",
+                            borderRadius: 999,
+                            border: "1px solid #fdba74",
+                            background: "#fff7ed",
+                            color: "#9a3412",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            lineHeight: 1.2,
+                          }}
+                        >
+                          ISS
+                        </span>
+                      )}
+                      {row.ossToday && (
+                        <span
+                          title="On Out-of-School Suspension today"
+                          style={{
+                            padding: "2px 8px",
+                            borderRadius: 999,
+                            border: "1px solid #fca5a5",
+                            background: "#fef2f2",
+                            color: "#991b1b",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            lineHeight: 1.2,
+                          }}
+                        >
+                          OSS
+                        </span>
+                      )}
+                    </span>
                     <IssReminder
                       row={row}
                       period={data.selectedPeriod}
