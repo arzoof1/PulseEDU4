@@ -596,3 +596,10 @@ uri = "file://attached_assets/PulseEDU-Student-Support-Meetings-Revised-Spec.doc
 type = "word_document"
 title = "Student Support Meetings — Revised Spec"
 description = "The approved spec with all confirmed decisions: universal input forms, private feedback, sensitive-type masking, participation percentages, 7/3/same-morning reminders, and a staff-only V1 release plan."
+
+[[outputs]]
+id = "B82vQhcwC1uhEv4Dll1n9"
+uri = "file://attached_assets/pullout-icon-preview.png"
+type = "image"
+title = "Pull-out icon preview"
+description = "Person + arrow icon at real button size, in all three states (none / gray / amber)."
