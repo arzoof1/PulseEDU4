@@ -610,3 +610,10 @@ uri = "file://attached_assets/roster-layout-options.png"
 type = "image"
 title = "Roster layout options"
 description = "Side-by-side comparison: current one-line layout, dedicated Actions column, and the stacked layout."
+
+[[outputs]]
+id = "Khz6fflSCv2RQK075XVdc"
+uri = "file://attached_assets/roster-compact-option.png"
+type = "image"
+title = "Option D — compact roster mockup"
+description = "Icon-only action buttons, Programs merged into fixed pill slots, no Actions header — tighter rows and columns."
