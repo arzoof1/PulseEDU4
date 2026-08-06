@@ -432,7 +432,13 @@ async function rebuildSchedules(
 
   const classExternalToSectionId = new Map<string, number>();
   const sectionInserts: Array<typeof classSectionsTable.$inferInsert> = [];
-  const sectionMeta: SisClassSection[] = [];
+  // De-dupe on the section's business identity (teacher, period, course). A
+  // teacher legitimately runs several distinct courses in one period (ESE /
+  // self-contained), which the unique index now allows; two roster rows with
+  // the SAME identity collapse into one section and pool their enrollments,
+  // so the batch can never trip class_sections_teacher_period_course_unique.
+  const keyToInsertIndex = new Map<string, number>();
+  const externalToKey = new Map<string, string>();
 
   for (const sec of sections) {
     const teacherStaffId = staffExternalToId.get(sec.teacherExternalId);
@@ -446,14 +452,18 @@ async function rebuildSchedules(
       errors.push(`Skipped class ${sec.externalId}: invalid period.`);
       continue;
     }
-    sectionInserts.push({
-      schoolId,
-      teacherStaffId,
-      period: sec.period,
-      courseName: sec.courseName,
-      isPlanning: sec.isPlanning ?? false,
-    });
-    sectionMeta.push(sec);
+    const key = `${teacherStaffId}|${sec.period}|${sec.courseName}`;
+    externalToKey.set(sec.externalId, key);
+    if (!keyToInsertIndex.has(key)) {
+      keyToInsertIndex.set(key, sectionInserts.length);
+      sectionInserts.push({
+        schoolId,
+        teacherStaffId,
+        period: sec.period,
+        courseName: sec.courseName,
+        isPlanning: sec.isPlanning ?? false,
+      });
+    }
   }
 
   if (sectionInserts.length === 0) {
@@ -465,10 +475,16 @@ async function rebuildSchedules(
     .values(sectionInserts)
     .returning({ id: classSectionsTable.id });
 
-  for (let i = 0; i < sectionMeta.length; i++) {
-    const meta = sectionMeta[i]!;
-    const row = insertedSections[i];
-    if (row) classExternalToSectionId.set(meta.externalId, row.id);
+  // insertedSections aligns positionally with sectionInserts → key → section id,
+  // then every external class id (including de-duped ones) maps to its section.
+  const keyToSectionId = new Map<string, number>();
+  for (const [key, idx] of keyToInsertIndex) {
+    const row = insertedSections[idx];
+    if (row) keyToSectionId.set(key, row.id);
+  }
+  for (const [externalId, key] of externalToKey) {
+    const sectionId = keyToSectionId.get(key);
+    if (sectionId != null) classExternalToSectionId.set(externalId, sectionId);
   }
 
   const rosterRows: Array<typeof sectionRosterTable.$inferInsert> = [];
