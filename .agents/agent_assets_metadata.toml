@@ -617,3 +617,10 @@ uri = "file://attached_assets/roster-compact-option.png"
 type = "image"
 title = "Option D — compact roster mockup"
 description = "Icon-only action buttons, Programs merged into fixed pill slots, no Actions header — tighter rows and columns."
+
+[[outputs]]
+id = "FW2kLtDWmvVHrWMp6Gn58"
+uri = "file://attached_assets/roster-stacked-pairs.png"
+type = "image"
+title = "Roster — stacked pairs mockup"
+description = "R under SP, FAST under Spider, Chat under Log, tall pull-out button spanning both rows. Full-word buttons kept."
