@@ -1647,7 +1647,7 @@ function PulloutButton({
               : "1px solid #e2e8f0",
           background: hot ? "#fffbeb" : count > 0 ? "#f1f5f9" : "#f8fafc",
           color: hot ? "#92400e" : "#475569",
-          fontSize: 11,
+          fontSize: 12,
           fontWeight: 600,
           lineHeight: 1.2,
           cursor: "pointer",
@@ -3768,6 +3768,14 @@ export default function TeacherRosterPage({
                 <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
                   Student
                 </th>
+                {/* Dedicated Actions column (approved layout "B"): the
+                    click-me buttons live here in a fixed order on every
+                    row, so Spider is always under Spider and FAST under
+                    FAST. Status pills (SP / T3 / R / ISS / OSS) stay
+                    beside the name in the Student column. */}
+                <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
+                  Actions
+                </th>
                 {visibility.programs && (
                   <th
                     rowSpan={2}
@@ -3953,180 +3961,6 @@ export default function TeacherRosterPage({
                           }
                         />
                       )}
-                      {onOpenSpider && (
-                        <button
-                          type="button"
-                          onClick={() => onOpenSpider(row.studentId)}
-                          title={`Open whole-child radar for ${row.firstName} ${row.lastName}`}
-                          aria-label={`Open whole-child radar for ${row.firstName} ${row.lastName}`}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 4,
-                            padding: "2px 8px",
-                            borderRadius: 999,
-                            border: "1px solid #c7d2fe",
-                            background: "#eef2ff",
-                            color: "#3730a3",
-                            fontSize: 11,
-                            fontWeight: 600,
-                            lineHeight: 1.2,
-                            cursor: "pointer",
-                          }}
-                        >
-                          <span aria-hidden="true">🕸️</span>
-                          <span>Spider</span>
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setLogModal({
-                            studentId: row.studentId,
-                            studentName: `${row.firstName} ${row.lastName}`,
-                            localSisId: row.localSisId,
-                          })
-                        }
-                        title={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
-                        aria-label={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          border: "1px solid #fbcfe8",
-                          background: "#fdf2f8",
-                          color: "#9d174d",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          lineHeight: 1.2,
-                          cursor: "pointer",
-                        }}
-                      >
-                        <span aria-hidden="true">📝</span>
-                        <span>Log</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setChatModal(row.studentId)}
-                        title={
-                          pendingChatIds.has(row.studentId)
-                            ? `Data chat pending for ${row.firstName} ${row.lastName} — log it now`
-                            : `Log a data chat with ${row.firstName} ${row.lastName}`
-                        }
-                        aria-label={`Log a data chat with ${row.firstName} ${row.lastName}`}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          border: pendingChatIds.has(row.studentId)
-                            ? "1px solid #c4b5fd"
-                            : "1px solid #e2e8f0",
-                          background: pendingChatIds.has(row.studentId)
-                            ? "#f5f3ff"
-                            : "#f8fafc",
-                          color: pendingChatIds.has(row.studentId)
-                            ? "#6d28d9"
-                            : "#475569",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          lineHeight: 1.2,
-                          cursor: "pointer",
-                        }}
-                      >
-                        <span aria-hidden="true">💬</span>
-                        <span>
-                          {pendingChatIds.has(row.studentId) ? "Chat!" : "Chat"}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setFastHistModal({
-                            studentId: row.studentId,
-                            studentName: `${row.firstName} ${row.lastName}`,
-                            localSisId: row.localSisId ?? null,
-                          })
-                        }
-                        title={`View FAST PM3 history for ${row.firstName} ${row.lastName}`}
-                        aria-label={`View FAST PM3 history for ${row.firstName} ${row.lastName}`}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          border: "1px solid #bfdbfe",
-                          background: "#eff6ff",
-                          color: "#1d4ed8",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          lineHeight: 1.2,
-                          cursor: "pointer",
-                        }}
-                      >
-                        <span aria-hidden="true">📖</span>
-                        <span>FAST</span>
-                      </button>
-                      {onRequestPullout && (
-                        <PulloutButton
-                          row={row}
-                          onOpen={() => onRequestPullout(row.studentId)}
-                        />
-                      )}
-                      {sepSectionId != null && (() => {
-                        const n = sepCountByStudent.get(row.studentId) ?? 0;
-                        // Two-state icon per the product spec:
-                        //  - Default (no flag yet): chain-link 🔗 — "could be
-                        //    paired with someone in this class".
-                        //  - After flagged: red prohibition 🚫 — easy at-a-
-                        //    glance recognition that this student already has
-                        //    one or more separation suggestions on file.
-                        const flagged = n > 0;
-                        return (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setSepTarget({
-                                studentId: row.studentId,
-                                studentName: `${row.firstName} ${row.lastName}`,
-                              })
-                            }
-                            title={
-                              flagged
-                                ? `${n} separation suggestion${n === 1 ? "" : "s"} for ${row.firstName} this period — click to edit`
-                                : `Suggest a separation pairing for ${row.firstName}`
-                            }
-                            aria-label={
-                              flagged
-                                ? `Edit ${n} separation suggestion${n === 1 ? "" : "s"} for ${row.firstName} ${row.lastName}`
-                                : `Suggest separation for ${row.firstName} ${row.lastName}`
-                            }
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: 4,
-                              padding: "2px 8px",
-                              borderRadius: 999,
-                              border: flagged
-                                ? "1px solid #fca5a5"
-                                : "1px solid #cbd5e1",
-                              background: flagged ? "#fef2f2" : "white",
-                              color: flagged ? "#b91c1c" : "#475569",
-                              fontSize: 12,
-                              fontWeight: 600,
-                              lineHeight: 1.2,
-                              cursor: "pointer",
-                            }}
-                          >
-                            <span aria-hidden="true">{flagged ? "🚫" : "🔗"}</span>
-                            {flagged && <span>{n}</span>}
-                          </button>
-                        );
-                      })()}
                       {row.retainedGrades && row.retainedGrades.length > 0 && (
                         <span
                           title={`Retained: ${row.retainedGrades
@@ -4193,6 +4027,195 @@ export default function TeacherRosterPage({
                       period={data.selectedPeriod}
                       onAcknowledged={refresh}
                     />
+                  </td>
+                  {/* Dedicated Actions cell: fixed button order on every
+                      row (Spider, Log, Chat, FAST, Pull-out, Separation)
+                      so each button sits in the same spot down the whole
+                      table. */}
+                  <td style={{ padding: "6px 10px" }}>
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        gap: 6,
+                      }}
+                    >
+                      {onOpenSpider && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenSpider(row.studentId)}
+                          title={`Open whole-child radar for ${row.firstName} ${row.lastName}`}
+                          aria-label={`Open whole-child radar for ${row.firstName} ${row.lastName}`}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4,
+                            padding: "2px 8px",
+                            borderRadius: 999,
+                            border: "1px solid #c7d2fe",
+                            background: "#eef2ff",
+                            color: "#3730a3",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            lineHeight: 1.2,
+                            cursor: "pointer",
+                          }}
+                        >
+                          <span aria-hidden="true">🕸️</span>
+                          <span>Spider</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setLogModal({
+                            studentId: row.studentId,
+                            studentName: `${row.firstName} ${row.lastName}`,
+                            localSisId: row.localSisId,
+                          })
+                        }
+                        title={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
+                        aria-label={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          border: "1px solid #fbcfe8",
+                          background: "#fdf2f8",
+                          color: "#9d174d",
+                          fontSize: 12,
+                          fontWeight: 600,
+                          lineHeight: 1.2,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span aria-hidden="true">📝</span>
+                        <span>Log</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setChatModal(row.studentId)}
+                        title={
+                          pendingChatIds.has(row.studentId)
+                            ? `Data chat pending for ${row.firstName} ${row.lastName} — log it now`
+                            : `Log a data chat with ${row.firstName} ${row.lastName}`
+                        }
+                        aria-label={`Log a data chat with ${row.firstName} ${row.lastName}`}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          border: pendingChatIds.has(row.studentId)
+                            ? "1px solid #c4b5fd"
+                            : "1px solid #e2e8f0",
+                          background: pendingChatIds.has(row.studentId)
+                            ? "#f5f3ff"
+                            : "#f8fafc",
+                          color: pendingChatIds.has(row.studentId)
+                            ? "#6d28d9"
+                            : "#475569",
+                          fontSize: 12,
+                          fontWeight: 600,
+                          lineHeight: 1.2,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span aria-hidden="true">💬</span>
+                        <span>
+                          {pendingChatIds.has(row.studentId) ? "Chat!" : "Chat"}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setFastHistModal({
+                            studentId: row.studentId,
+                            studentName: `${row.firstName} ${row.lastName}`,
+                            localSisId: row.localSisId ?? null,
+                          })
+                        }
+                        title={`View FAST PM3 history for ${row.firstName} ${row.lastName}`}
+                        aria-label={`View FAST PM3 history for ${row.firstName} ${row.lastName}`}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          border: "1px solid #bfdbfe",
+                          background: "#eff6ff",
+                          color: "#1d4ed8",
+                          fontSize: 12,
+                          fontWeight: 600,
+                          lineHeight: 1.2,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span aria-hidden="true">📖</span>
+                        <span>FAST</span>
+                      </button>
+                      {onRequestPullout && (
+                        <PulloutButton
+                          row={row}
+                          onOpen={() => onRequestPullout(row.studentId)}
+                        />
+                      )}
+                      {sepSectionId != null && (() => {
+                        const n = sepCountByStudent.get(row.studentId) ?? 0;
+                        // Two-state icon per the product spec:
+                        //  - Default (no flag yet): chain-link 🔗 — "could be
+                        //    paired with someone in this class".
+                        //  - After flagged: red prohibition 🚫 — easy at-a-
+                        //    glance recognition that this student already has
+                        //    one or more separation suggestions on file.
+                        const flagged = n > 0;
+                        return (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSepTarget({
+                                studentId: row.studentId,
+                                studentName: `${row.firstName} ${row.lastName}`,
+                              })
+                            }
+                            title={
+                              flagged
+                                ? `${n} separation suggestion${n === 1 ? "" : "s"} for ${row.firstName} this period — click to edit`
+                                : `Suggest a separation pairing for ${row.firstName}`
+                            }
+                            aria-label={
+                              flagged
+                                ? `Edit ${n} separation suggestion${n === 1 ? "" : "s"} for ${row.firstName} ${row.lastName}`
+                                : `Suggest separation for ${row.firstName} ${row.lastName}`
+                            }
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              padding: "2px 8px",
+                              borderRadius: 999,
+                              border: flagged
+                                ? "1px solid #fca5a5"
+                                : "1px solid #cbd5e1",
+                              background: flagged ? "#fef2f2" : "white",
+                              color: flagged ? "#b91c1c" : "#475569",
+                              fontSize: 12,
+                              fontWeight: 600,
+                              lineHeight: 1.2,
+                              cursor: "pointer",
+                            }}
+                          >
+                            <span aria-hidden="true">{flagged ? "🚫" : "🔗"}</span>
+                            {flagged && <span>{n}</span>}
+                          </button>
+                        );
+                      })()}
+                    </span>
                   </td>
                   {visibility.programs && (
                     <td style={{ padding: "6px 10px" }}>
