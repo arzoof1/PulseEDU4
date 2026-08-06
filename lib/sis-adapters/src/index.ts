@@ -17,6 +17,12 @@ export {
   oneRosterFixtureDir,
   ONEROSTER_FIXTURE_BASE_URL,
 } from "./oneroster/fixtures.js";
+export {
+  OneRosterLiveClient,
+  OneRosterApiError,
+  resolveOneRosterBaseUrl,
+} from "./oneroster/liveClient.js";
+export type { OneRosterLiveClientOptions } from "./oneroster/liveClient.js";
 export type * from "./oneroster/types.js";
 export {
   resolveSchoolOrg,
