@@ -631,3 +631,10 @@ uri = "file://attached_assets/generated/PulseEDU_Migration_Report_2026-08-06.doc
 type = "word_document"
 title = "PulseEDU Production Migration Report (7/30–8/6) — updated"
 description = "Now explicitly describes the Starter Lists one-time dropdown fill: an admin button that loads a curated default set into all pick lists (insert-only, safe to re-run, no schema changes)."
+
+[[outputs]]
+id = "iXdKxyZsjQYLVhGq5KWLn"
+uri = "file://attached_assets/generated/PulseEDU_v1_Final_Migration_Report.docx"
+type = "word_document"
+title = "PulseEDU — Final Migration Report (Version 1)"
+description = "One complete document: a simple 3-step migration path up front, then full detail — all new tables/columns, ready-to-run SQL, every feature shipped in Version 1 (photos, escort plans, Starter Lists, PBIS controls, and more), config, verification checklist, and rollback notes. Onboarding connection errors intentionally excluded."
