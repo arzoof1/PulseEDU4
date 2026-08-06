@@ -603,3 +603,10 @@ uri = "file://attached_assets/pullout-icon-preview.png"
 type = "image"
 title = "Pull-out icon preview"
 description = "Person + arrow icon at real button size, in all three states (none / gray / amber)."
+
+[[outputs]]
+id = "m0dSKW1WeSgXX21ntXlZW"
+uri = "file://attached_assets/roster-layout-options.png"
+type = "image"
+title = "Roster layout options"
+description = "Side-by-side comparison: current one-line layout, dedicated Actions column, and the stacked layout."
