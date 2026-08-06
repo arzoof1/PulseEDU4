@@ -589,3 +589,10 @@ uri = "file://attached_assets/PulseEDU-Behavior-Supports-Directions.docx"
 type = "word_document"
 title = "Behavior Supports — Directions"
 description = "Word document covering what the Behavior Supports module does, who can edit/view, and step-by-step setup for the MTSS team plus what teachers see."
+
+[[outputs]]
+id = "xZn1Aoi881IGcNxEC55sq"
+uri = "file://attached_assets/PulseEDU-Student-Support-Meetings-Revised-Spec.docx"
+type = "word_document"
+title = "Student Support Meetings — Revised Spec"
+description = "The approved spec with all confirmed decisions: universal input forms, private feedback, sensitive-type masking, participation percentages, 7/3/same-morning reminders, and a staff-only V1 release plan."
