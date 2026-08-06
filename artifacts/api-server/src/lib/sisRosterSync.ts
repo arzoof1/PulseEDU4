@@ -19,7 +19,7 @@ import {
 } from "@workspace/sis-adapters";
 import { resolveSisSchoolMapping } from "./sisSchoolMapping.js";
 import { randomUUID } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { bcryptHash } from "./bcrypt.js";
 import { logger } from "./logger.js";
 
@@ -277,7 +277,11 @@ async function upsertStaff(
   schoolId: number,
   staffRows: SisStaff[],
   errors: string[],
-): Promise<{ upserted: number; skipped: number }> {
+): Promise<{
+  upserted: number;
+  skipped: number;
+  staffExternalToId: Map<string, number>;
+}> {
   const existing = await ex
     .select({
       id: staffTable.id,
@@ -295,6 +299,35 @@ async function upsertStaff(
     byEmail.set(row.email.toLowerCase(), row);
   }
 
+  // staff.email is GLOBALLY unique. A district shares teachers across schools
+  // (itinerant / ESE / district staff), so many incoming rows already exist
+  // under a different school_id. Pre-load every existing row for the incoming
+  // emails ACROSS ALL SCHOOLS, so we reuse those accounts instead of issuing an
+  // insert that would hit the unique constraint and abort the whole school's
+  // transaction (Postgres poisons the txn on the first error — catching after
+  // the fact can't recover it).
+  const incomingEmails = Array.from(
+    new Set(
+      staffRows
+        .map((s) => s.email.trim().toLowerCase())
+        .filter((e) => e.length > 0),
+    ),
+  );
+  const globalByEmail = new Map<string, { id: number; email: string }>();
+  for (let i = 0; i < incomingEmails.length; i += 500) {
+    const chunk = incomingEmails.slice(i, i + 500);
+    const rows = await ex
+      .select({ id: staffTable.id, email: staffTable.email })
+      .from(staffTable)
+      .where(inArray(staffTable.email, chunk));
+    for (const r of rows) globalByEmail.set(r.email.toLowerCase(), r);
+  }
+
+  // External-id -> staff.id for EVERY staff row this feed touches (in-school
+  // matches, brand-new inserts, and reused cross-school accounts). Scheduling
+  // relies on this map, and shared teachers live under another school_id, so a
+  // school-scoped re-query would silently drop them.
+  const staffExternalToId = new Map<string, number>();
   let upserted = 0;
   let skipped = 0;
 
@@ -308,10 +341,9 @@ async function upsertStaff(
       continue;
     }
 
-    const match =
-      byExternal.get(s.externalId) ?? byEmail.get(email) ?? null;
-
-    if (match) {
+    // 1. Already a staff row for THIS school — update in place.
+    const localMatch = byExternal.get(s.externalId) ?? byEmail.get(email) ?? null;
+    if (localMatch) {
       await ex
         .update(staffTable)
         .set({
@@ -319,48 +351,71 @@ async function upsertStaff(
           displayName: s.displayName,
           // Never touch passwordHash on sync.
         })
-        .where(and(eq(staffTable.id, match.id), eq(staffTable.schoolId, schoolId)));
-      byExternal.set(s.externalId, { ...match, externalId: s.externalId });
-      byEmail.set(email, match);
+        .where(and(eq(staffTable.id, localMatch.id), eq(staffTable.schoolId, schoolId)));
+      byExternal.set(s.externalId, { ...localMatch, externalId: s.externalId });
+      byEmail.set(email, localMatch);
+      staffExternalToId.set(s.externalId, localMatch.id);
       upserted++;
       continue;
     }
 
+    // 2. Teacher already exists under ANOTHER school (shared / itinerant staff).
+    //    Reuse that account — link this school's class sections to it rather than
+    //    creating a duplicate (which the global email constraint forbids).
+    const globalMatch = globalByEmail.get(email);
+    if (globalMatch) {
+      staffExternalToId.set(s.externalId, globalMatch.id);
+      skipped++;
+      continue;
+    }
+
+    // 3. Brand-new staff for the district. onConflictDoNothing guarantees we
+    //    never raise (and never poison the txn) even under a race.
     const passwordHash = await bcryptHash(
       `sis-sync-no-login-${randomUUID()}`,
       10,
     );
-    try {
-      const [inserted] = await ex
-        .insert(staffTable)
-        .values({
-          schoolId,
-          email,
-          passwordHash,
-          displayName: s.displayName,
-          externalId: s.externalId,
-          active: true,
-        })
-        .returning({ id: staffTable.id, email: staffTable.email, externalId: staffTable.externalId, displayName: staffTable.displayName });
-      if (inserted) {
-        byExternal.set(s.externalId, inserted);
-        byEmail.set(email, inserted);
-        upserted++;
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.toLowerCase().includes("unique") || msg.includes("duplicate")) {
-        errors.push(
-          `Skipped new staff ${email}: email already used by another school account.`,
-        );
-        skipped++;
-      } else {
-        throw err;
-      }
+    const [inserted] = await ex
+      .insert(staffTable)
+      .values({
+        schoolId,
+        email,
+        passwordHash,
+        displayName: s.displayName,
+        externalId: s.externalId,
+        active: true,
+      })
+      .onConflictDoNothing({ target: staffTable.email })
+      .returning({
+        id: staffTable.id,
+        email: staffTable.email,
+        externalId: staffTable.externalId,
+        displayName: staffTable.displayName,
+      });
+    if (inserted) {
+      byExternal.set(s.externalId, inserted);
+      byEmail.set(email, inserted);
+      globalByEmail.set(email, inserted);
+      staffExternalToId.set(s.externalId, inserted.id);
+      upserted++;
+      continue;
     }
+
+    // Lost an insert race (row appeared between the pre-load and now). Resolve
+    // it so scheduling still maps, and never crash the run.
+    const [raced] = await ex
+      .select({ id: staffTable.id })
+      .from(staffTable)
+      .where(eq(staffTable.email, email))
+      .limit(1);
+    if (raced) {
+      globalByEmail.set(email, { id: raced.id, email });
+      staffExternalToId.set(s.externalId, raced.id);
+    }
+    skipped++;
   }
 
-  return { upserted, skipped };
+  return { upserted, skipped, staffExternalToId };
 }
 
 async function upsertStaffRooms(
@@ -515,26 +570,6 @@ async function rebuildSchedules(
     sections: insertedSections.length,
     enrollments: rosterRows.length,
   };
-}
-
-async function loadStaffExternalMap(
-  ex: DbExecutor,
-  schoolId: number,
-): Promise<Map<string, number>> {
-  const rows = await ex
-    .select({ id: staffTable.id, externalId: staffTable.externalId })
-    .from(staffTable)
-    .where(
-      and(
-        eq(staffTable.schoolId, schoolId),
-        sql`${staffTable.externalId} IS NOT NULL`,
-      ),
-    );
-  const map = new Map<string, number>();
-  for (const r of rows) {
-    if (r.externalId) map.set(r.externalId, r.id);
-  }
-  return map;
 }
 
 async function persistSyncStatus(
@@ -725,7 +760,7 @@ export async function runSisSync(
       counts.staffUpserted = staffResult.upserted;
       counts.staffSkipped = staffResult.skipped;
 
-      const staffExternalToId = await loadStaffExternalMap(tx, schoolId);
+      const staffExternalToId = staffResult.staffExternalToId;
       counts.roomsUpdated = await upsertStaffRooms(
         tx,
         schoolId,
