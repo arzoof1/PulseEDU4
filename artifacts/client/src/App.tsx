@@ -167,6 +167,7 @@ import EarlyWarningDashboard from "./components/EarlyWarningDashboard";
 import StudentProfile from "./components/StudentProfile";
 import StudentLookupPage from "./components/StudentLookupPage";
 import SafetyPlansAdminPage from "./components/SafetyPlansAdminPage";
+import BehaviorSupportsPage from "./components/BehaviorSupportsPage";
 import TrustedAdultsAdmin from "./components/TrustedAdultsAdmin";
 import SettingsHub, {
   SettingsBackBar,
@@ -4117,6 +4118,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     // group where the coordinator's sidebar row now lives.
     "mtssCoordinator",
     "mtssTemplates",
+    "behaviorSupports",
     "requestPullout",
     "behaviorSpecialist",
     "trustedAdultInterventions",
@@ -5791,6 +5793,7 @@ function App() {
     | "mtssTemplates"
     | "mtssPlans"
     | "safetyPlans"
+    | "behaviorSupports"
     | "teacherRoster"
     | "studentLookup"
     | "settings"
@@ -10250,6 +10253,25 @@ function App() {
     isBehaviorSpec ||
     isMtss ||
     Boolean(authUser?.isSchoolPsychologist);
+  // Behavior Supports (teacher-facing snapshots) — mirrors the server
+  // gates in routes/behaviorSupports.ts. Edit = Core Team-shaped set
+  // (Admin/AP/Principal, MTSS Coordinator, School Psychologist, Behavior
+  // Specialist, assignable Core Team, Confidential Secretary, SuperUser,
+  // District Admin). View adds Guidance Counselors (read-only). Teachers
+  // get neither — their read-only view is the roster hover card.
+  const canEditBehaviorSupportsClient =
+    Boolean(authUser?.isSuperUser) ||
+    Boolean(authUser?.isDistrictAdmin) ||
+    isAdmin ||
+    isBehaviorSpec ||
+    isMtss ||
+    Boolean(authUser?.isSchoolPsychologist) ||
+    Boolean(authUser?.isCoreTeam) ||
+    Boolean(authUser?.isConfidentialSecretary);
+  const canViewBehaviorSupportsClient =
+    canEditBehaviorSupportsClient ||
+    Boolean(authUser?.isGuidanceCounselor) ||
+    Boolean(authUser?.isCounselor);
   // Print Overall Report — mirrors the server gate `canPrintReport` in
   // routes/studentReportPdf.ts: SU / DistrictAdmin / Admin / BS / MTSS
   // / ESE Coord / School Psych / Guidance Counselor.
@@ -10591,6 +10613,9 @@ function App() {
     if (!canManageMtssPlans && activeSection === "mtssPlans") {
       setActiveSection("hallPasses");
     }
+    if (!canViewBehaviorSupportsClient && activeSection === "behaviorSupports") {
+      setActiveSection("hallPasses");
+    }
     if (!canManageEligibility && activeSection === "eligibility") {
       setActiveSection("hallPasses");
     }
@@ -10813,6 +10838,12 @@ function App() {
   ];
   const mtssCoordNavSections: NavSection[] = [
     { key: "mtssCoordinator", label: "MTSS Coordinator", icon: IconClipboard },
+  ];
+  // Behavior Supports — own sidebar row (not inside the MTSS hub gate)
+  // because School Psychologists and Guidance Counselors need it but
+  // don't all have canAccessMtssHub.
+  const behaviorSupportsNavSections: NavSection[] = [
+    { key: "behaviorSupports", label: "Behavior Supports", icon: IconClipboard },
   ];
   // canAccessMtssHub hoisted above the bounce-back useEffect — see note there.
   const pbisHubNavSections: NavSection[] = [
@@ -11945,6 +11976,7 @@ function App() {
           canReviewPullouts ||
           canManageMtssPlans ||
           canEditSafetyPlanClient ||
+          canViewBehaviorSupportsClient ||
           canAccessMtssHub ||
           isDistrictAdmin ||
           isDean ||
@@ -12400,6 +12432,11 @@ function App() {
                     force-expand ownership now lives on behaviorSupport. */}
                 {canAccessMtssHub &&
                   mtssCoordNavSections.map(renderNavItem)}
+                {/* Behavior Supports — teacher-translation snapshots.
+                    Editors + view-only counselors see the row; teachers
+                    never do (their read-only view is the roster pill). */}
+                {canViewBehaviorSupportsClient &&
+                  behaviorSupportsNavSections.map(renderNavItem)}
                 {/* Phase 4a: Request Pullout restored to its permanent
                     Student Support home so the grouped nav is the complete
                     map. Same gate as the Quick Access copy
@@ -20815,6 +20852,30 @@ function App() {
           />
         </>
         </FeatureGate>
+      )}
+
+      {activeSection === "behaviorSupports" && canViewBehaviorSupportsClient && (
+        <>
+          <HowToUseHelp title="How to use Behavior Supports">
+            <HowToSection title="What this page is">
+              Write the teacher-facing snapshot for students with active
+              behavior supports: behaviors teachers may observe, common
+              triggers, recommended responses, replacement behaviors, and
+              what reinforcement works. Teachers see it as a purple
+              Behavior pill on their roster — hover shows the card.
+            </HowToSection>
+            <HowToSection title="Keep it clean">
+              This is a translation layer, not a BIP or FBA. Never enter
+              diagnoses, evaluations, or counseling notes — everything on
+              this page is visible to classroom teachers. The 15-bullet
+              cap keeps the card readable mid-class.
+            </HowToSection>
+          </HowToUseHelp>
+          <BehaviorSupportsPage
+            canManage={canEditBehaviorSupportsClient}
+            onBack={() => setActiveSection("hallPasses")}
+          />
+        </>
       )}
 
       {activeSection === "safetyPlans" && canEditSafetyPlanClient && safetyPlansVis.visible && (

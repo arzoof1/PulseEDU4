@@ -8713,6 +8713,41 @@ export async function ensureOneWayPassSchema(): Promise<void> {
   );
 }
 
+// Behavior Supports — teacher-facing behavior snapshot records. Versioned
+// history: one current row per (school, student) via a partial unique
+// index; saves archive the prior row. Additive + idempotent.
+export async function ensureBehaviorSupportsSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS behavior_supports (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      effective_date TEXT,
+      review_date TEXT,
+      behaviors JSONB NOT NULL DEFAULT '[]'::jsonb,
+      triggers JSONB NOT NULL DEFAULT '[]'::jsonb,
+      responses JSONB NOT NULL DEFAULT '[]'::jsonb,
+      replacement_behaviors JSONB NOT NULL DEFAULT '[]'::jsonb,
+      reinforcement JSONB NOT NULL DEFAULT '[]'::jsonb,
+      updated_by_staff_id INTEGER,
+      updated_by_name TEXT,
+      archived_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS behavior_supports_school_idx ON behavior_supports (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS behavior_supports_school_student_idx ON behavior_supports (school_id, student_id)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS behavior_supports_current_idx ON behavior_supports (school_id, student_id) WHERE archived_at IS NULL`,
+  );
+}
+
 export async function ensureKioskCardsSchema(): Promise<void> {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS kiosk_enroll_tokens (

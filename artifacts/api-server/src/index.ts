@@ -37,6 +37,7 @@ import {
   ensureHallPassPriorityBypassColumn,
   ensureHallPassAllowlistSchema,
   ensureOneWayPassSchema,
+  ensureBehaviorSupportsSchema,
   ensureKioskWelcomeSchema,
   ensurePbisInvisibleTierColumns,
   ensureBadgePrintEventsSchema,
@@ -278,6 +279,8 @@ async function runSeed(): Promise<void> {
   // hall_passes, in_route_overdue_minutes on school_settings, and the
   // staff_received_locations coverage table. Additive + idempotent.
   await ensureOneWayPassSchema();
+  // Behavior Supports teacher-snapshot records (MTSS). Additive + idempotent.
+  await ensureBehaviorSupportsSchema();
   // Phase 3 — Kiosk "Sign in to class" welcome messages + class_signins
   // append-only ledger. Idempotent.
   await ensureKioskWelcomeSchema();

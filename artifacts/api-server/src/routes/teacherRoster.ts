@@ -32,6 +32,7 @@ import {
   studentAccommodationsTable,
   schoolAccommodationsTable,
   safetyPlansTable,
+  behaviorSupportsTable,
   studentRetentionsTable,
   issAttendanceDayTable,
   ossLogDaysTable,
@@ -510,6 +511,7 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     activeMtss,
     accommodations,
     safetyPlans,
+    behaviorSupports,
     issToday,
     ossToday,
     issAcksToday,
@@ -621,6 +623,29 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
           inArray(safetyPlansTable.studentId, studentIds),
         ),
       ),
+    // Current + active Behavior Supports snapshots — purple "Behavior"
+    // pill + hover card. Only the sanitized teacher snapshot fields are
+    // selected; the record has no confidential fields by design.
+    db
+      .select({
+        studentId: behaviorSupportsTable.studentId,
+        behaviors: behaviorSupportsTable.behaviors,
+        triggers: behaviorSupportsTable.triggers,
+        responses: behaviorSupportsTable.responses,
+        replacementBehaviors: behaviorSupportsTable.replacementBehaviors,
+        reinforcement: behaviorSupportsTable.reinforcement,
+        reviewDate: behaviorSupportsTable.reviewDate,
+        updatedAt: behaviorSupportsTable.updatedAt,
+      })
+      .from(behaviorSupportsTable)
+      .where(
+        and(
+          eq(behaviorSupportsTable.schoolId, schoolId),
+          eq(behaviorSupportsTable.isActive, true),
+          isNull(behaviorSupportsTable.archivedAt),
+          inArray(behaviorSupportsTable.studentId, studentIds),
+        ),
+      ),
     // ISS roster today — orange pill on the teacher roster row. Includes
     // any source (manual/pullout/admin) so the pill is honest about the
     // student being out of class.
@@ -724,6 +749,11 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
 
   const safetyPlanByStudent = new Map<string, (typeof safetyPlans)[number]>();
   for (const p of safetyPlans) safetyPlanByStudent.set(p.studentId, p);
+  const behaviorSupportByStudent = new Map<
+    string,
+    (typeof behaviorSupports)[number]
+  >();
+  for (const b of behaviorSupports) behaviorSupportByStudent.set(b.studentId, b);
 
   // Group accommodations by studentId so the row builder can attach
   // them in O(1).
@@ -882,6 +912,21 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
           notes: sp.notes,
           updatedAt: sp.updatedAt,
           updatedByName: sp.updatedByName,
+        };
+      })(),
+      // Active Behavior Supports snapshot (or null) — purple Behavior
+      // pill + hover card. Sanitized teacher-facing guidance only.
+      behaviorSupport: (() => {
+        const bs = behaviorSupportByStudent.get(stu.studentId);
+        if (!bs) return null;
+        return {
+          behaviors: bs.behaviors ?? [],
+          triggers: bs.triggers ?? [],
+          responses: bs.responses ?? [],
+          replacementBehaviors: bs.replacementBehaviors ?? [],
+          reinforcement: bs.reinforcement ?? [],
+          reviewDate: bs.reviewDate,
+          updatedAt: bs.updatedAt,
         };
       })(),
     };

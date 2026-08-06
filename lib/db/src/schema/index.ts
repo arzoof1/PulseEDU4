@@ -89,6 +89,7 @@ export * from "./tier3StrategyCategories";
 export * from "./tier3Strategies";
 export * from "./tier3StrategyUsage";
 export * from "./safetyPlans";
+export * from "./behaviorSupports";
 export * from "./issAdminLogs";
 export * from "./issAdminLogAudit";
 export * from "./ossLogs";

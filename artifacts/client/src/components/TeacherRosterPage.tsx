@@ -170,6 +170,18 @@ interface RosterRow {
     daysTardy: number | null;
     attendancePct: number | null;
   } | null;
+  // Active Behavior Supports snapshot (or null) — teacher-facing guidance
+  // written by the MTSS team. Drives the purple Behavior pill + hover
+  // card. Sits BESIDE ESE/504/ELL; never replaces them.
+  behaviorSupport?: {
+    behaviors: string[];
+    triggers: string[];
+    responses: string[];
+    replacementBehaviors: string[];
+    reinforcement: string[];
+    reviewDate: string | null;
+    updatedAt: string;
+  } | null;
 }
 
 interface RosterResponse {
@@ -1392,6 +1404,159 @@ function ProgramPill({
   );
 }
 
+// Purple "Behavior" pill — shown only when the student has an ACTIVE
+// Behavior Supports snapshot. Hover/focus opens a compact card with the
+// teacher-facing guidance (behaviors observed, responses, replacement
+// behaviors, plus triggers/reinforcement when present). The snapshot is
+// sanitized at the source — it never contains confidential material —
+// and the 15-bullet entry cap keeps the card scannable. Mirrors the
+// ProgramPill fixed-position popover so it escapes table overflow.
+function BehaviorPill({ row }: { row: RosterRow }) {
+  const bs = row.behaviorSupport;
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLSpanElement | null>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!open || !anchorRef.current) return;
+    const measure = () => {
+      const r = anchorRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const W = 300;
+      let left = r.left;
+      if (left + W > window.innerWidth - 8) left = window.innerWidth - W - 8;
+      if (left < 8) left = 8;
+      setCoords({ top: r.bottom + 6, left });
+    };
+    measure();
+    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("scroll", measure, true);
+      window.removeEventListener("resize", measure);
+    };
+  }, [open]);
+  if (!bs) return null;
+  const reviewOverdue =
+    !!bs.reviewDate && bs.reviewDate < new Date().toISOString().slice(0, 10);
+  const sections: Array<{ title: string; items: string[] }> = [
+    { title: "Behaviors You May Observe", items: bs.behaviors },
+    { title: "Common Triggers", items: bs.triggers },
+    { title: "Recommended Teacher Responses", items: bs.responses },
+    {
+      title: "Replacement Behaviors to Reinforce",
+      items: bs.replacementBehaviors,
+    },
+    { title: "Positive Reinforcement", items: bs.reinforcement },
+  ].filter((s) => s.items.length > 0);
+  return (
+    <span
+      style={{ position: "relative", display: "inline-block" }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+    >
+      <span
+        ref={anchorRef}
+        tabIndex={0}
+        aria-label="Behavior Supports — hover for classroom strategies"
+        style={{
+          display: "inline-block",
+          padding: "2px 8px",
+          borderRadius: 6,
+          background: "#f3e8ff",
+          color: "#6b21a8",
+          border: reviewOverdue ? "1px solid #f59e0b" : "1px solid transparent",
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: 0.2,
+          cursor: "default",
+          outline: "none",
+        }}
+      >
+        Behavior
+      </span>
+      {open && coords && (
+        <div
+          role="tooltip"
+          style={{
+            position: "fixed",
+            top: coords.top,
+            left: coords.left,
+            zIndex: 10000,
+            background: "white",
+            border: "1px solid #e5e7eb",
+            borderTop: "3px solid #6b21a8",
+            borderRadius: 6,
+            padding: "0.55rem 0.75rem",
+            boxShadow: "0 6px 18px rgba(0,0,0,0.14)",
+            minWidth: 260,
+            maxWidth: 380,
+            color: "#111827",
+            textAlign: "left",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: "#6b21a8",
+              textTransform: "uppercase",
+              letterSpacing: 0.4,
+              marginBottom: 6,
+            }}
+          >
+            Behavior Supports — {row.firstName} {row.lastName}
+          </div>
+          {reviewOverdue && (
+            <div
+              style={{
+                fontSize: 11,
+                color: "#92400e",
+                background: "#fef3c7",
+                border: "1px solid #fcd34d",
+                borderRadius: 4,
+                padding: "2px 6px",
+                marginBottom: 6,
+              }}
+            >
+              Review date passed ({bs.reviewDate}) — guidance may be stale.
+            </div>
+          )}
+          {sections.map((s) => (
+            <div key={s.title} style={{ marginBottom: 6 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: "#374151",
+                  marginBottom: 2,
+                }}
+              >
+                {s.title}
+              </div>
+              <ul
+                style={{
+                  margin: 0,
+                  paddingLeft: 16,
+                  fontSize: 12,
+                  lineHeight: 1.45,
+                }}
+              >
+                {s.items.map((it, i) => (
+                  <li key={i}>{it}</li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
 function ProgramPills({ row }: { row: RosterRow }) {
   const chips: Array<"ese" | "504" | "ell"> = [];
   if (row.ese) chips.push("ese");
@@ -1402,8 +1567,9 @@ function ProgramPills({ row }: { row: RosterRow }) {
   // placeholder em-dash, regardless of whether they have
   // accommodations on file. (Students with accommodations but no
   // program flag indicate a SIS data-quality issue — the source
-  // system should be reflagged, not the UI.)
-  if (chips.length === 0) {
+  // system should be reflagged, not the UI.) Behavior Supports sits
+  // BESIDE these program flags (a student can have all four).
+  if (chips.length === 0 && !row.behaviorSupport) {
     return <span style={{ color: "#9ca3af", fontSize: 12 }}>—</span>;
   }
   return (
@@ -1411,6 +1577,7 @@ function ProgramPills({ row }: { row: RosterRow }) {
       {chips.map((c) => (
         <ProgramPill key={c} kind={c} row={row} />
       ))}
+      {row.behaviorSupport && <BehaviorPill row={row} />}
     </div>
   );
 }
