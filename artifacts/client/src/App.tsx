@@ -31,6 +31,7 @@ import StaffTimeHub from "./components/StaffTimeHub";
 import TimeTrackingPanel from "./components/comp/TimeTrackingPanel";
 import WatchlistHub from "./components/WatchlistHub";
 import CaseOutcomesPage from "./components/CaseOutcomesPage";
+import StudentPhoto from "./components/StudentPhoto";
 import StarterListsPanel from "./components/StarterListsPanel";
 import WatchlistNetwork from "./components/WatchlistNetwork";
 import WatchlistStudentGraph from "./components/WatchlistStudentGraph";
@@ -219,6 +220,9 @@ interface Student {
   firstName: string;
   lastName: string;
   grade: number;
+  /** Object-storage key for the roster photo (server returns full row). */
+  photoObjectKey?: string | null;
+  photoConsent?: boolean | null;
 }
 
 interface HallPass {
@@ -1021,6 +1025,15 @@ function VerifyPulloutsSection({
     return s ? `${s.firstName} ${s.lastName}` : `Student ${id}`;
   };
 
+  // Tap-to-enlarge photo overlay: holds the student whose photo is
+  // currently shown near-full-screen (null = closed). Tapping anywhere
+  // on the overlay closes it.
+  const [photoOverlayStudent, setPhotoOverlayStudent] =
+    useState<Student | null>(null);
+
+  const studentFor = (id: string) =>
+    students.find((x) => x.studentId === id) ?? null;
+
   const studentParts = (id: string) => {
     const s = students.find((x) => x.studentId === id);
     return s
@@ -1553,11 +1566,39 @@ function VerifyPulloutsSection({
                     gap: 8,
                   }}
                 >
-                  <div>
-                    <strong>{studentName(p.studentId)}</strong>{" "}
-                    <span style={{ color: "#64748b" }}>
-                      (#{p.localSisId ?? "—"}) · pullout #{p.id}
-                    </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    {(() => {
+                      const stu = studentFor(p.studentId);
+                      if (!stu) return null;
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => setPhotoOverlayStudent(stu)}
+                          title="Tap to enlarge photo"
+                          style={{
+                            border: "none",
+                            background: "transparent",
+                            padding: 0,
+                            cursor: "pointer",
+                            lineHeight: 0,
+                          }}
+                        >
+                          <StudentPhoto
+                            firstName={stu.firstName}
+                            lastName={stu.lastName}
+                            photoObjectKey={stu.photoObjectKey}
+                            photoConsent={stu.photoConsent}
+                            size={96}
+                          />
+                        </button>
+                      );
+                    })()}
+                    <div>
+                      <strong>{studentName(p.studentId)}</strong>{" "}
+                      <span style={{ color: "#64748b" }}>
+                        (#{p.localSisId ?? "—"}) · pullout #{p.id}
+                      </span>
+                    </div>
                   </div>
                   <div style={{ color: "#64748b", fontSize: "0.85rem" }}>
                     Requested by {p.requestedByName} ·{" "}
@@ -1789,6 +1830,52 @@ function VerifyPulloutsSection({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {photoOverlayStudent && (
+        <div
+          onClick={() => setPhotoOverlayStudent(null)}
+          role="button"
+          aria-label="Close photo"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1300,
+            background: "rgba(0, 0, 0, 0.8)",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "1rem",
+            cursor: "pointer",
+            padding: "1rem",
+          }}
+        >
+          <StudentPhoto
+            firstName={photoOverlayStudent.firstName}
+            lastName={photoOverlayStudent.lastName}
+            photoObjectKey={photoOverlayStudent.photoObjectKey}
+            photoConsent={photoOverlayStudent.photoConsent}
+            size={360}
+            // CSS min() keeps the circle responsive if the phone rotates
+            // while the overlay is open (style overrides the numeric size).
+            style={{
+              width: "min(360px, 80vmin)",
+              height: "min(360px, 80vmin)",
+            }}
+          />
+          <div style={{ textAlign: "center", color: "white" }}>
+            <div style={{ fontSize: "1.4rem", fontWeight: 700 }}>
+              {photoOverlayStudent.firstName} {photoOverlayStudent.lastName}
+            </div>
+            <div style={{ fontSize: "1.05rem", color: "#cbd5e1" }}>
+              Grade {photoOverlayStudent.grade}
+            </div>
+            <div style={{ fontSize: "0.85rem", color: "#94a3b8", marginTop: 6 }}>
+              Tap anywhere to close
+            </div>
+          </div>
         </div>
       )}
 
