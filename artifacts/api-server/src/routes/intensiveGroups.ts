@@ -145,7 +145,7 @@ async function probePmReadiness(schoolId: number): Promise<{
       FROM student_fast_item_responses
      WHERE school_id = ${schoolId}
        AND school_year = ${schoolYear}
-       AND window = 'pm3'
+       AND "window" = 'pm3'
        AND subject IN ('ela','math')
      GROUP BY subject
   `);
@@ -394,13 +394,13 @@ router.get("/intensive-groups/skillcluster-banners", async (req, res) => {
   // (a) FAST PM-window data for those subjects.
   const subjectList = Array.from(subjectsWithSkillcluster);
   const r = await db.execute(sql`
-    SELECT subject, window, COUNT(*)::int AS c
+    SELECT subject, "window", COUNT(*)::int AS c
       FROM student_fast_item_responses
      WHERE school_id = ${schoolId}
        AND school_year = ${schoolYear}
-       AND window IN ('pm1','pm2','pm3')
+       AND "window" IN ('pm1','pm2','pm3')
        AND subject = ANY(${subjectList}::text[])
-     GROUP BY subject, window
+     GROUP BY subject, "window"
   `);
   const dataByWindow = new Map<string, Set<string>>();
   for (const row of r.rows as Array<{
