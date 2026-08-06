@@ -3773,7 +3773,14 @@ export default function TeacherRosterPage({
                     row, so Spider is always under Spider and FAST under
                     FAST. Status pills (SP / T3 / R / ISS / OSS) stay
                     beside the name in the Student column. */}
-                <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
+                <th
+                  rowSpan={2}
+                  style={{
+                    padding: "8px 10px",
+                    verticalAlign: "bottom",
+                    ...GROUP_DIVIDER,
+                  }}
+                >
                   Actions
                 </th>
                 {visibility.programs && (
@@ -4031,8 +4038,9 @@ export default function TeacherRosterPage({
                   {/* Dedicated Actions cell: fixed button order on every
                       row (Spider, Log, Chat, FAST, Pull-out, Separation)
                       so each button sits in the same spot down the whole
-                      table. */}
-                  <td style={{ padding: "6px 10px" }}>
+                      table. The left border extends the header divider so
+                      the column boundary reads clearly on every row. */}
+                  <td style={{ padding: "6px 10px", ...GROUP_DIVIDER }}>
                     <span
                       style={{
                         display: "inline-flex",
