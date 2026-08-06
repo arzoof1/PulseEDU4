@@ -575,3 +575,10 @@ uri = "file://attached_assets/generated/PulseEDU_Pick_Lists_Reference.docx"
 type = "word_document"
 title = "PulseEDU Pick Lists Reference"
 description = "Every school-configurable pick list at D. S. Parrott Middle School — current entries plus where in the software to rebuild each list after the pre-launch data reset."
+
+[[outputs]]
+id = "PbhjAshR_e3fhRP7JEXmW"
+uri = "file://attached_assets/PulseEDU-Multiple-Pass-Receivers-Directions.docx"
+type = "word_document"
+title = "Multiple Pass Receivers — Directions"
+description = "Step-by-step Word doc for assigning multiple staff to receive hall passes at a location."
