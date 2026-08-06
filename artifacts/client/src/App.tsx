@@ -10826,7 +10826,7 @@ function App() {
     !authUser?.isSuperUser &&
     !authUser?.isDistrictAdmin;
   const isFrontOfficeOnly = Boolean(authUser?.isFrontOffice);
-  // Classroom teachers now request pull-outs from the 📤 button on their
+  // Classroom teachers now request pull-outs from the person-with-arrow button on their
   // Teacher Roster rows (student prefilled), so the sidebar "Request
   // Pullout" entry is hidden for them to reduce clutter. It stays for
   // support/admin roles — they have no roster of their own and often
@@ -19955,7 +19955,8 @@ function App() {
               Use this when you need a student picked up from your
               room — not for routine scheduled pullouts. Include the
               specific reason so the receiving staff knows whether
-              this is urgent. Fastest path: the 📤 button on the
+              this is urgent. Fastest path: the person-with-arrow
+              button on the
               student's row on your Teacher Roster — it opens this
               form with the student already filled in and shows how
               many pull-outs you've called for them this year.

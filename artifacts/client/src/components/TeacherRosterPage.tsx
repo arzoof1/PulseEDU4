@@ -1653,7 +1653,31 @@ function PulloutButton({
           cursor: "pointer",
         }}
       >
-        <span aria-hidden="true">📤</span>
+        {/* Person-being-led-out icon (approved over the 📤 emoji, which
+            was hard to make out at this size). Drawn inline so it stays
+            crisp and inherits the button's gray/amber via currentColor. */}
+        <svg
+          aria-hidden="true"
+          width="15"
+          height="13"
+          viewBox="0 0 100 88"
+          style={{ display: "block", flexShrink: 0 }}
+        >
+          <g fill="currentColor">
+            <circle cx="26" cy="12" r="10" />
+            <path d="M26 24 c-8 0 -12 6 -12 14 v18 h6 l3 20 h6 l2 -16 2 16 h6 l3 -20 h6 v-18 c0 -8 -4 -14 -12 -14 z" />
+          </g>
+          <g
+            stroke="currentColor"
+            strokeWidth="9"
+            fill="none"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M58 44 h30" />
+            <path d="M78 30 l16 14 -16 14" />
+          </g>
+        </svg>
         {count > 0 && <span>{count}</span>}
       </button>
       {open && coords && count > 0 && info && (

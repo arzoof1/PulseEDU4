@@ -1,6 +1,6 @@
 ---
 name: Roster pull-out badge + inline request
-description: Teacher Roster 📤 button — YTD pull-out count keyed by referring teacher, prefilled request handoff, sidebar entry hidden for plain teachers.
+description: Teacher Roster person-with-arrow button — YTD pull-out count keyed by referring teacher, prefilled request handoff, sidebar entry hidden for plain teachers.
 ---
 - Count attribution is `referring_teacher_staff_id = target teacher` (NOT requested_by), so admin-on-behalf requests count toward the teacher. All statuses count (incl. rejected); the hover card shows per-request status.
 - YTD window = `schoolYearStartDate(new Date(), await getSchoolTimezone(schoolId))` — the tz arg is REQUIRED; the default is Eastern and mis-buckets July-1 boundary requests for other zones. pullouts.requestedAt is text ISO, lexicographic gte is fine.
