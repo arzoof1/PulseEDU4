@@ -328,6 +328,10 @@ router.get(
         firstName: studentsTable.firstName,
         lastName: studentsTable.lastName,
         grade: studentsTable.grade,
+        // Feed the tap-to-enlarge avatar in the finder detail header —
+        // same consent-gated photo as the roster.
+        photoObjectKey: studentsTable.photoObjectKey,
+        photoConsent: studentsTable.photoConsent,
       })
       .from(studentsTable)
       .where(

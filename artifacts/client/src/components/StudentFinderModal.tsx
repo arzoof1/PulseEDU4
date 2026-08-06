@@ -291,6 +291,16 @@ export function StudentFinderModal({
           }}
         >
           <span aria-hidden="true" style={{ fontSize: 20 }}>📍</span>
+          {selected && today ? (
+            <EnlargeableStudentPhoto
+              firstName={today.student.firstName}
+              lastName={today.student.lastName}
+              grade={today.student.grade}
+              photoObjectKey={today.student.photoObjectKey}
+              photoConsent={today.student.photoConsent}
+              size={44}
+            />
+          ) : null}
           <h2 style={{ margin: 0, fontSize: 18, flex: 1 }}>
             Student Finder
             {selected && today ? (

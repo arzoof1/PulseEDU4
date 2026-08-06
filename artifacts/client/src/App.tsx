@@ -1921,6 +1921,24 @@ function IssDashboardSection({ students }: { students: Student[] }) {
     return s ? `${s.firstName} ${s.lastName}` : `Student ${id}`;
   };
 
+  // Tap-to-enlarge avatar next to the name (same shared component as the
+  // pullout queue / finder / roster). Null when the roster prop hasn't
+  // resolved this student.
+  const studentPhotoFor = (id: string, size: number) => {
+    const s = students.find((x) => x.studentId === id);
+    if (!s) return null;
+    return (
+      <EnlargeableStudentPhoto
+        firstName={s.firstName}
+        lastName={s.lastName}
+        grade={s.grade}
+        photoObjectKey={s.photoObjectKey}
+        photoConsent={s.photoConsent}
+        size={size}
+      />
+    );
+  };
+
   const refresh = async () => {
     setLoading(true);
     setMsg(null);
@@ -2181,11 +2199,14 @@ function IssDashboardSection({ students }: { students: Student[] }) {
           gap: 8,
         }}
       >
-        <div>
-          <strong>{studentName(p.studentId)}</strong>{" "}
-          <span style={{ color: "#64748b" }}>
-            (#{p.localSisId ?? "—"}) · pullout #{p.id}
-          </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {studentPhotoFor(p.studentId, 56)}
+          <div>
+            <strong>{studentName(p.studentId)}</strong>{" "}
+            <span style={{ color: "#64748b" }}>
+              (#{p.localSisId ?? "—"}) · pullout #{p.id}
+            </span>
+          </div>
         </div>
         <div style={{ color: "#64748b", fontSize: "0.85rem" }}>
           {p.referringTeacherName}
@@ -2658,7 +2679,15 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                         alignItems: "center",
                       }}
                     >
-                      <div>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                        }}
+                      >
+                        {studentPhotoFor(entry.studentId, 44)}
+                        <div>
                         <strong>{studentName(entry.studentId)}</strong>{" "}
                         <span style={{ color: "#64748b" }}>
                           (#{entry.localSisId ?? "—"})
@@ -2687,6 +2716,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                         >
                           {rosterStyle.label}
                         </span>
+                        </div>
                       </div>
                       {!isEditing && !isConfirming && entry.kind !== "admin-day" && (
                         <div style={{ display: "flex", gap: 6 }}>

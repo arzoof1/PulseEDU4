@@ -20,6 +20,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import EnlargeableStudentPhoto from "./EnlargeableStudentPhoto";
 import {
   HowToUseHelp,
   HowToSection,
@@ -43,6 +44,8 @@ interface Row {
   lastName: string;
   grade: number;
   gender: string | null;
+  photoObjectKey?: string | null;
+  photoConsent?: boolean | null;
   flags: {
     ell: boolean;
     ese: boolean;
@@ -330,35 +333,6 @@ function pillarTone(status: PillarStatus): {
   }
 }
 
-// Initials for the avatar dot. First letter of first + last name; falls
-// back to "?" if both are empty.
-function initials(first: string, last: string): string {
-  const f = first?.trim()?.[0] ?? "";
-  const l = last?.trim()?.[0] ?? "";
-  const both = `${f}${l}`.toUpperCase();
-  return both || "?";
-}
-
-// Stable color tone for the avatar based on the studentId hash. Keeps
-// each kid's avatar visually consistent across renders without needing
-// a stored preference.
-function avatarTone(studentId: string): { bg: string; fg: string } {
-  const palette: Array<{ bg: string; fg: string }> = [
-    { bg: "#dbeafe", fg: "#1e40af" },
-    { bg: "#dcfce7", fg: "#166534" },
-    { bg: "#fef3c7", fg: "#92400e" },
-    { bg: "#fce7f3", fg: "#9d174d" },
-    { bg: "#ede9fe", fg: "#5b21b6" },
-    { bg: "#cffafe", fg: "#155e75" },
-    { bg: "#fee2e2", fg: "#991b1b" },
-    { bg: "#fef9c3", fg: "#854d0e" },
-  ];
-  let h = 0;
-  for (let i = 0; i < studentId.length; i++) {
-    h = (h * 31 + studentId.charCodeAt(i)) >>> 0;
-  }
-  return palette[h % palette.length];
-}
 
 // Sort options surfaced in the toolbar. Shorter than v1's per-column
 // header click since cards don't have headers — instead the user
@@ -1563,7 +1537,6 @@ function WatchCard({
   onSpider?: () => void;
 }) {
   const tone = SEVERITY_TONES[severity];
-  const av = avatarTone(row.studentId);
   const visibleSignals = signals.slice(0, 5);
   const overflow = signals.length - visibleSignals.length;
 
@@ -1614,25 +1587,18 @@ function WatchCard({
             minWidth: 0,
           }}
         >
-          <div
+          <EnlargeableStudentPhoto
+            firstName={row.firstName}
+            lastName={row.lastName}
+            grade={row.grade}
+            photoObjectKey={row.photoObjectKey}
+            photoConsent={row.photoConsent}
+            size={36}
             style={{
-              width: 36,
-              height: 36,
-              borderRadius: "50%",
-              background: av.bg,
-              color: av.fg,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontWeight: 700,
-              fontSize: "0.85rem",
               border: `2px solid ${tone.border}`,
-              flexShrink: 0,
+              borderRadius: "50%",
             }}
-            aria-hidden="true"
-          >
-            {initials(row.firstName, row.lastName)}
-          </div>
+          />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div
               style={{
