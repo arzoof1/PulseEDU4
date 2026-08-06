@@ -17,7 +17,9 @@
     "seed-mtss": "tsx ./src/seedMtssProgress.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "brochure-pdf": "tsx ./src/generateBrochurePdf.ts",
-    "migration-doc": "tsx ./src/generateMigrationDoc.ts"
+    "migration-doc": "tsx ./src/generateMigrationDoc.ts",
+    "classlink-setup": "tsx ./src/setupClasslinkDistrict.mts",
+    "classlink-wipe": "tsx ./src/wipeDummyRoster.mts"
   },
   "devDependencies": {
     "@types/node": "catalog:",
@@ -28,6 +30,7 @@
   "dependencies": {
     "@types/pdfkit": "^0.17.6",
     "@workspace/db": "workspace:*",
+    "@workspace/sis-adapters": "workspace:*",
     "drizzle-orm": "catalog:",
     "exceljs": "^4.4.0",
     "pdfkit": "^0.18.0"
