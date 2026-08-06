@@ -109,6 +109,7 @@ import Tier3StrategiesAdmin from "./components/Tier3StrategiesAdmin";
 import TrustedAdultInterventionsAdmin from "./components/TrustedAdultInterventionsAdmin";
 import MtssPlansAdmin from "./components/MtssPlansAdmin";
 import TeacherRosterPage from "./components/TeacherRosterPage";
+import SupportMeetingsPage from "./components/SupportMeetingsPage";
 import PrivacyGate from "./components/PrivacyGate";
 import SeparationSuggestionsPage from "./components/SeparationSuggestionsPage";
 import FastBenchmarksDashboard from "./components/FastBenchmarksDashboard";
@@ -4119,6 +4120,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
   behaviorSupport: [
     "logIntervention",
     "mtssPlans",
+    "supportMeetings",
     "interventionReports",
     // Phase 3 (heal MTSS split): the MTSS Coordinator hub + its Templates
     // sub-page moved here from the Insights group so the whole MTSS
@@ -5800,6 +5802,7 @@ function App() {
     | "mtssCoordinator"
     | "mtssTemplates"
     | "mtssPlans"
+    | "supportMeetings"
     | "safetyPlans"
     | "behaviorSupports"
     | "teacherRoster"
@@ -10928,6 +10931,24 @@ function App() {
   // Pending AST approvals count for the "AST Approvals" sidebar badge.
   // Polls so an approver notices new requests without opening the page.
   // The route returns { count } and { count: 0 } for non-approvers.
+  // Actionable Support Meetings count for the "Meetings" nav badge
+  // (my pending confirmations + declines still owing feedback). Polled so
+  // a meeting scheduled from another device shows up within 15s.
+  const [meetingsPendingCount, setMeetingsPendingCount] = useState<number>(0);
+  const refreshMeetingsPendingCount = useCallback(() => {
+    authFetch("/api/support-meetings/pending-count")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { count?: number } | null) => {
+        if (j) setMeetingsPendingCount(j.count ?? 0);
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    refreshMeetingsPendingCount();
+    const interval = setInterval(refreshMeetingsPendingCount, 15000);
+    return () => clearInterval(interval);
+  }, [refreshMeetingsPendingCount]);
+
   const [astPendingCount, setAstPendingCount] = useState<number>(0);
   useEffect(() => {
     if (!canApproveAst) {
@@ -11028,6 +11049,9 @@ function App() {
     }
     if (key === "contactFixes" && contactFixesCount > 0) {
       return <span style={badgeStyle}>{contactFixesCount}</span>;
+    }
+    if (key === "supportMeetings" && meetingsPendingCount > 0) {
+      return <span style={badgeStyle}>{meetingsPendingCount}</span>;
     }
     if (key === "staffTime" && astPendingCount + compPendingCount > 0) {
       return (
@@ -12026,7 +12050,12 @@ function App() {
           // an MTSS/behavior capability. Keep this a superset of the item
           // gates rendered inside.
           canManageSettings ||
-          (canManageBehaviorLists && !isBehaviorSpec);
+          (canManageBehaviorLists && !isBehaviorSpec) ||
+          // Support Meetings (504/IEP/MTSS scheduling + teacher responses)
+          // lives in this group and is visible to EVERY staff member —
+          // teachers must reach it to confirm/decline — so the group must
+          // always render (superset rule for NavGroup wrapper gates).
+          true;
         const showSpecialPrograms =
           effectiveFeatures.Accommodations || isEseCoord;
         // Phase 5 — role-aware nav: like showBehaviorSupport, this must be the
@@ -12423,6 +12452,14 @@ function App() {
                   activeSection,
                 )}
               >
+                {/* Support Meetings — visible to EVERY staff member:
+                    organizers schedule, teachers confirm/decline + leave
+                    feedback. The badge counts my actionable items. */}
+                {renderNavItem({
+                  key: "supportMeetings",
+                  label: "Meetings",
+                  icon: IconClipboard,
+                })}
                 {effectiveFeatures.LogIntervention &&
                   renderNavItem({
                     key: "logIntervention",
@@ -20867,6 +20904,10 @@ function App() {
           </>
         );
       })()}
+
+      {activeSection === "supportMeetings" && (
+        <SupportMeetingsPage onCountsChanged={refreshMeetingsPendingCount} />
+      )}
 
       {activeSection === "mtssPlans" && canManageMtssPlans && (
         <FeatureGate feature="mtssPlans" label="MTSS Plans">

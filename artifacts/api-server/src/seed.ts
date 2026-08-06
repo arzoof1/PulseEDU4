@@ -10725,3 +10725,82 @@ export async function seedEligibilityForSchool1(): Promise<void> {
     "[seed] eligibility demo seeded for school 1",
   );
 }
+
+// ---------------------------------------------------------------------------
+// Student Support Meetings module (v1) — meetings, attendees, teacher
+// feedback, and a lightweight event/audit trail. Additive + idempotent
+// (boot ensure* pattern; drizzle push is unreliable in this repo).
+// ---------------------------------------------------------------------------
+export async function ensureSupportMeetingsSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS support_meetings (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      meeting_type TEXT NOT NULL,
+      student_id TEXT NOT NULL,
+      student_name TEXT NOT NULL,
+      grade INTEGER,
+      date TEXT NOT NULL,
+      start_time TEXT NOT NULL,
+      end_time TEXT,
+      location TEXT NOT NULL DEFAULT '',
+      virtual_link TEXT NOT NULL DEFAULT '',
+      notes TEXT NOT NULL DEFAULT '',
+      organizer_staff_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'scheduled',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS support_meetings_school_date_idx ON support_meetings (school_id, date)`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS support_meeting_attendees (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      meeting_id INTEGER NOT NULL,
+      staff_id INTEGER NOT NULL,
+      from_schedule BOOLEAN NOT NULL DEFAULT FALSE,
+      response TEXT NOT NULL DEFAULT 'pending',
+      responded_at TIMESTAMPTZ,
+      reminded_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (meeting_id, staff_id)
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS support_meeting_attendees_staff_idx ON support_meeting_attendees (school_id, staff_id)`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS support_meeting_feedback (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      meeting_id INTEGER NOT NULL,
+      staff_id INTEGER NOT NULL,
+      academic_performance TEXT NOT NULL DEFAULT '',
+      strengths TEXT NOT NULL DEFAULT '',
+      concerns TEXT NOT NULL DEFAULT '',
+      accommodations TEXT NOT NULL DEFAULT '',
+      recommendations TEXT NOT NULL DEFAULT '',
+      additional TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (meeting_id, staff_id)
+    )
+  `);
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS support_meeting_events (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      meeting_id INTEGER NOT NULL,
+      staff_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS support_meeting_events_meeting_idx ON support_meeting_events (meeting_id)`,
+  );
+}

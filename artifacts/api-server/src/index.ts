@@ -48,6 +48,7 @@ import {
   ensureParentMessagesSchema,
   ensureCommunicationSchema,
   ensureDataChatSchema,
+  ensureSupportMeetingsSchema,
   ensureSectionSupportSchema,
   ensureDataExportSchema,
   ensurePulseDnaVideosSchema,
@@ -328,6 +329,9 @@ async function runSeed(): Promise<void> {
   // Data Chat / Check-In campaign engine (templates + campaigns + logs).
   // Idempotent.
   await ensureDataChatSchema();
+  // Student Support Meetings module (504/IEP/MTSS/parent-conference
+  // scheduling + teacher confirmations + feedback). Idempotent.
+  await ensureSupportMeetingsSchema();
   // Section Support Access — support teachers (ESE / co-teachers) assigned to
   // another teacher's whole section by the ESE Coordinator. Idempotent.
   await ensureSectionSupportSchema();
