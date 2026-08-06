@@ -624,3 +624,10 @@ uri = "file://attached_assets/roster-stacked-pairs.png"
 type = "image"
 title = "Roster — stacked pairs mockup"
 description = "R under SP, FAST under Spider, Chat under Log, tall pull-out button spanning both rows. Full-word buttons kept."
+
+[[outputs]]
+id = "GL0UOdes_JxfzdMPCOCZG"
+uri = "file://attached_assets/generated/PulseEDU_Migration_Report_2026-08-06.docx"
+type = "word_document"
+title = "PulseEDU Production Migration Report (7/30–8/6)"
+description = "All touched tables, full idempotent migration SQL, code surfaces, config requirements, verification checklist, and rollback notes for your developer."
