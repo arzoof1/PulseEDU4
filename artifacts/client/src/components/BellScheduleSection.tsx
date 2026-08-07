@@ -15,6 +15,26 @@ interface Period {
   includedInOnTimeStreak?: boolean;
 }
 
+type BlockType = "period" | "lunch" | "passing" | "advisory" | "homeroom" | "custom";
+
+interface VariantBlock {
+  id?: number;
+  blockType: BlockType;
+  periodNumber: number | null;
+  name: string;
+  startTime: string;
+  endTime: string;
+  includedInOnTimeStreak: boolean;
+}
+
+interface Variant {
+  id: number;
+  name: string;
+  isDefault: boolean;
+  blocks: VariantBlock[];
+  grades: string[];
+}
+
 interface Schedule {
   id: number;
   name: string;
@@ -24,7 +44,17 @@ interface Schedule {
   sortOrder: number;
   createdAt: string;
   periods: Period[];
+  variants?: Variant[];
 }
+
+const BLOCK_TYPE_LABEL: Record<BlockType, string> = {
+  period: "Class period",
+  lunch: "Lunch",
+  passing: "Passing",
+  advisory: "Advisory",
+  homeroom: "Homeroom",
+  custom: "Other",
+};
 
 const KIND_TILES: { kind: ScheduleKind; icon: string; title: string; subtitle: string }[] = [
   {
@@ -185,6 +215,9 @@ export default function BellScheduleSection() {
 
       {!loading && editingId !== null && (
         <ScheduleEditor
+          onRefresh={async (next) => {
+            setSchedules(next);
+          }}
           initial={
             editingSchedule ?? {
               id: 0,
@@ -493,11 +526,13 @@ function ScheduleEditor({
   isNew,
   onCancel,
   onSaved,
+  onRefresh,
 }: {
   initial: Schedule;
   isNew: boolean;
   onCancel: () => void;
   onSaved: () => void;
+  onRefresh: (schedules: Schedule[]) => void | Promise<void>;
 }) {
   const [name, setName] = useState(initial.name);
   const [kind, setKind] = useState<ScheduleKind>(initial.kind);
@@ -740,6 +775,14 @@ function ScheduleEditor({
         </tbody>
       </table>
 
+      {!isNew && (
+        <VariantsSection
+          scheduleId={initial.id}
+          variants={initial.variants ?? []}
+          onSchedules={onRefresh}
+        />
+      )}
+
       <div style={{ display: "flex", gap: 8, marginTop: "0.75rem" }}>
         <button
           type="button"
@@ -776,5 +819,536 @@ function ScheduleEditor({
         </button>
       </div>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Grade Variants — multiple simultaneous timing patterns under one Day Type
+// (e.g. Grade 6 / Grade 7 / Grade 8 with staggered lunches).
+// ---------------------------------------------------------------------------
+
+function blankBlock(): VariantBlock {
+  return {
+    blockType: "period",
+    periodNumber: 1,
+    name: "P1",
+    startTime: "08:00",
+    endTime: "08:50",
+    includedInOnTimeStreak: true,
+  };
+}
+
+function VariantsSection({
+  scheduleId,
+  variants,
+  onSchedules,
+}: {
+  scheduleId: number;
+  variants: Variant[];
+  onSchedules: (schedules: Schedule[]) => void | Promise<void>;
+}) {
+  const [editing, setEditing] = useState<Variant | "new" | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const call = async (url: string, method: string, body?: unknown) => {
+    setErr(null);
+    setBusy(true);
+    try {
+      const r = await authFetch(url, {
+        method,
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const text = await r.text();
+      if (!r.ok) {
+        try {
+          setErr((JSON.parse(text) as { error?: string }).error || text);
+        } catch {
+          setErr(text || `HTTP ${r.status}`);
+        }
+        return false;
+      }
+      const j = JSON.parse(text) as { schedules: Schedule[] };
+      await onSchedules(j.schedules);
+      return true;
+    } catch (e) {
+      setErr((e as Error).message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        marginTop: "1.25rem",
+        padding: "0.9rem 1rem",
+        border: "1px solid var(--border, #2a3447)",
+        borderRadius: 10,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <h4 style={{ margin: 0 }}>Grade schedules (variants)</h4>
+        <div style={{ flex: 1 }} />
+        {editing === null && (
+          <button
+            type="button"
+            onClick={() => setEditing("new")}
+            style={{
+              background: "#0d9488",
+              color: "white",
+              border: "none",
+              padding: "0.35rem 0.75rem",
+              borderRadius: 6,
+              cursor: "pointer",
+              font: "inherit",
+              fontWeight: 600,
+            }}
+          >
+            + Add grade schedule
+          </button>
+        )}
+      </div>
+      <p style={{ color: "var(--text-subtle)", fontSize: 13, margin: "0.4rem 0 0.75rem" }}>
+        Different grade levels can follow different timings on the same day —
+        for example staggered lunches for Grades 6, 7, and 8. Students in a
+        grade without its own schedule follow the default.
+      </p>
+
+      {err && (
+        <div
+          style={{
+            margin: "0.5rem 0",
+            padding: "0.5rem 0.75rem",
+            background: "#fef2f2",
+            border: "1px solid #fecaca",
+            color: "#b91c1c",
+            borderRadius: 6,
+          }}
+        >
+          {err}
+        </div>
+      )}
+
+      {editing === null ? (
+        variants.length === 0 ? (
+          <p style={{ color: "var(--text-subtle)" }}>
+            No variants yet — everyone follows the period list above.
+          </p>
+        ) : (
+          <table className="pulse-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ textAlign: "left", borderBottom: "1px solid var(--border, #2a3447)" }}>
+                <th style={{ padding: "0.5rem" }}>Name</th>
+                <th style={{ padding: "0.5rem" }}>Grades</th>
+                <th style={{ padding: "0.5rem" }}>Blocks</th>
+                <th style={{ padding: "0.5rem" }}>Default</th>
+                <th style={{ padding: "0.5rem", width: 1 }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {variants.map((v) => (
+                <tr key={v.id} style={{ borderBottom: "1px solid var(--border, #2a3447)" }}>
+                  <td style={{ padding: "0.5rem" }}>{v.name}</td>
+                  <td style={{ padding: "0.5rem" }}>
+                    {v.grades.length > 0 ? v.grades.join(", ") : "—"}
+                  </td>
+                  <td style={{ padding: "0.5rem" }}>
+                    {v.blocks.length}
+                    {v.blocks.some((b) => b.blockType === "lunch") ? " · incl. lunch" : ""}
+                  </td>
+                  <td style={{ padding: "0.5rem" }}>
+                    {v.isDefault ? (
+                      <span
+                        style={{
+                          background: "#0d9488",
+                          color: "white",
+                          borderRadius: 999,
+                          padding: "0.1rem 0.55rem",
+                          fontSize: "0.75rem",
+                          fontWeight: 700,
+                        }}
+                      >
+                        Default
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() =>
+                          call(
+                            `/api/bell-schedules/${scheduleId}/variants/${v.id}`,
+                            "PUT",
+                            { isDefault: true },
+                          )
+                        }
+                        style={{
+                          background: "transparent",
+                          border: "1px solid var(--border, #2a3447)",
+                          padding: "0.2rem 0.55rem",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          font: "inherit",
+                          fontSize: "0.85rem",
+                        }}
+                      >
+                        Set default
+                      </button>
+                    )}
+                  </td>
+                  <td style={{ padding: "0.5rem", whiteSpace: "nowrap" }}>
+                    <button
+                      type="button"
+                      onClick={() => setEditing(v)}
+                      style={{
+                        background: "#ede9fe",
+                        color: "#6d28d9",
+                        border: "1px solid #ddd6fe",
+                        padding: "0.3rem 0.65rem",
+                        borderRadius: 6,
+                        cursor: "pointer",
+                        font: "inherit",
+                        marginRight: 6,
+                      }}
+                    >
+                      Edit
+                    </button>
+                    {!v.isDefault && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() =>
+                          call(
+                            `/api/bell-schedules/${scheduleId}/variants/${v.id}`,
+                            "DELETE",
+                          )
+                        }
+                        style={{
+                          background: "#fee2e2",
+                          color: "#b91c1c",
+                          border: "1px solid #fecaca",
+                          padding: "0.3rem 0.65rem",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          font: "inherit",
+                        }}
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )
+      ) : (
+        <VariantEditor
+          initial={
+            editing === "new"
+              ? {
+                  id: 0,
+                  name: "",
+                  isDefault: false,
+                  blocks: [blankBlock()],
+                  grades: [],
+                }
+              : editing
+          }
+          isNew={editing === "new"}
+          busy={busy}
+          onCancel={() => setEditing(null)}
+          onSave={async (payload) => {
+            const ok = await call(
+              editing === "new"
+                ? `/api/bell-schedules/${scheduleId}/variants`
+                : `/api/bell-schedules/${scheduleId}/variants/${(editing as Variant).id}`,
+              editing === "new" ? "POST" : "PUT",
+              payload,
+            );
+            if (ok) setEditing(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function VariantEditor({
+  initial,
+  isNew,
+  busy,
+  onCancel,
+  onSave,
+}: {
+  initial: Variant;
+  isNew: boolean;
+  busy: boolean;
+  onCancel: () => void;
+  onSave: (payload: {
+    name: string;
+    blocks: VariantBlock[];
+    grades: string[];
+  }) => void | Promise<void>;
+}) {
+  const [name, setName] = useState(initial.name);
+  const [gradesText, setGradesText] = useState(initial.grades.join(", "));
+  const [blocks, setBlocks] = useState<VariantBlock[]>(
+    initial.blocks.map((b) => ({ ...b })),
+  );
+  const [localErr, setLocalErr] = useState<string | null>(null);
+
+  const update = (idx: number, patch: Partial<VariantBlock>) =>
+    setBlocks((arr) => arr.map((b, i) => (i === idx ? { ...b, ...patch } : b)));
+
+  return (
+    <div style={{ marginTop: "0.5rem" }}>
+      <h5 style={{ margin: "0 0 0.5rem" }}>
+        {isNew ? "New grade schedule" : `Edit: ${initial.name}`}
+      </h5>
+      {localErr && (
+        <div
+          style={{
+            margin: "0.5rem 0",
+            padding: "0.5rem 0.75rem",
+            background: "#fef2f2",
+            border: "1px solid #fecaca",
+            color: "#b91c1c",
+            borderRadius: 6,
+          }}
+        >
+          {localErr}
+        </div>
+      )}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+          gap: "0.75rem",
+          marginBottom: "0.75rem",
+        }}
+      >
+        <label style={{ display: "grid", gap: 4 }}>
+          <span>Variant name</span>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g., Grade 6 Schedule"
+          />
+        </label>
+        <label style={{ display: "grid", gap: 4 }}>
+          <span>Grades (comma-separated)</span>
+          <input
+            type="text"
+            value={gradesText}
+            onChange={(e) => setGradesText(e.target.value)}
+            placeholder="e.g., 6 or 6, 7"
+          />
+        </label>
+      </div>
+
+      <table className="pulse-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr style={{ textAlign: "left", borderBottom: "1px solid var(--border, #2a3447)" }}>
+            <th style={{ padding: "0.5rem", width: 140 }}>Type</th>
+            <th style={{ padding: "0.5rem", width: 70 }}>Period #</th>
+            <th style={{ padding: "0.5rem" }}>Name</th>
+            <th style={{ padding: "0.5rem", width: 130 }}>Start</th>
+            <th style={{ padding: "0.5rem", width: 130 }}>End</th>
+            <th style={{ padding: "0.5rem", width: 120 }} title="Counts toward the parent-portal on-time streak">
+              Streak
+            </th>
+            <th style={{ padding: "0.5rem", width: 1 }}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {blocks.map((b, idx) => (
+            <tr key={idx} style={{ borderBottom: "1px solid var(--border, #2a3447)" }}>
+              <td style={{ padding: "0.5rem" }}>
+                <select
+                  value={b.blockType}
+                  onChange={(e) => {
+                    const t = e.target.value as BlockType;
+                    update(idx, {
+                      blockType: t,
+                      periodNumber: t === "period" ? b.periodNumber ?? 1 : null,
+                      includedInOnTimeStreak: t === "period",
+                      name:
+                        b.name && b.name !== BLOCK_TYPE_LABEL[b.blockType]
+                          ? b.name
+                          : t === "period"
+                            ? b.name
+                            : BLOCK_TYPE_LABEL[t],
+                    });
+                  }}
+                >
+                  {(Object.keys(BLOCK_TYPE_LABEL) as BlockType[]).map((t) => (
+                    <option key={t} value={t}>
+                      {BLOCK_TYPE_LABEL[t]}
+                    </option>
+                  ))}
+                </select>
+              </td>
+              <td style={{ padding: "0.5rem" }}>
+                {b.blockType === "period" ? (
+                  <input
+                    type="number"
+                    min={1}
+                    value={b.periodNumber ?? 1}
+                    onChange={(e) =>
+                      update(idx, { periodNumber: Number(e.target.value) })
+                    }
+                    style={{ width: 60 }}
+                  />
+                ) : (
+                  <span style={{ color: "var(--text-subtle)" }}>—</span>
+                )}
+              </td>
+              <td style={{ padding: "0.5rem" }}>
+                <input
+                  type="text"
+                  value={b.name}
+                  onChange={(e) => update(idx, { name: e.target.value })}
+                  style={{ width: "100%" }}
+                />
+              </td>
+              <td style={{ padding: "0.5rem" }}>
+                <input
+                  type="time"
+                  value={b.startTime}
+                  onChange={(e) => update(idx, { startTime: e.target.value })}
+                />
+              </td>
+              <td style={{ padding: "0.5rem" }}>
+                <input
+                  type="time"
+                  value={b.endTime}
+                  onChange={(e) => update(idx, { endTime: e.target.value })}
+                />
+              </td>
+              <td style={{ padding: "0.5rem", textAlign: "center" }}>
+                {b.blockType === "period" ? (
+                  <input
+                    type="checkbox"
+                    checked={b.includedInOnTimeStreak}
+                    onChange={(e) =>
+                      update(idx, { includedInOnTimeStreak: e.target.checked })
+                    }
+                  />
+                ) : (
+                  <span style={{ color: "var(--text-subtle)" }}>—</span>
+                )}
+              </td>
+              <td style={{ padding: "0.5rem" }}>
+                <button
+                  type="button"
+                  onClick={() => setBlocks((arr) => arr.filter((_, i) => i !== idx))}
+                  style={{
+                    background: "#fee2e2",
+                    color: "#b91c1c",
+                    border: "1px solid #fecaca",
+                    padding: "0.25rem 0.55rem",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    font: "inherit",
+                  }}
+                >
+                  ✕
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <div style={{ display: "flex", gap: 8, marginTop: "0.75rem" }}>
+        <button
+          type="button"
+          onClick={() =>
+            setBlocks((arr) => {
+              const maxP = Math.max(
+                0,
+                ...arr
+                  .filter((b) => b.blockType === "period" && b.periodNumber != null)
+                  .map((b) => b.periodNumber as number),
+              );
+              const last = arr[arr.length - 1];
+              return [
+                ...arr,
+                {
+                  ...blankBlock(),
+                  periodNumber: maxP + 1,
+                  name: `P${maxP + 1}`,
+                  startTime: last ? last.endTime : "08:00",
+                  endTime: last ? last.endTime : "08:50",
+                },
+              ];
+            })
+          }
+          style={{
+            background: "transparent",
+            border: "1px solid var(--border, #2a3447)",
+            color: "inherit",
+            padding: "0.4rem 0.75rem",
+            borderRadius: 6,
+            cursor: "pointer",
+            font: "inherit",
+          }}
+        >
+          + Add block
+        </button>
+        <div style={{ flex: 1 }} />
+        <button
+          type="button"
+          onClick={onCancel}
+          style={{
+            background: "transparent",
+            border: "1px solid var(--border, #2a3447)",
+            color: "inherit",
+            padding: "0.4rem 0.75rem",
+            borderRadius: 6,
+            cursor: "pointer",
+            font: "inherit",
+          }}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setLocalErr(null);
+            if (!name.trim()) {
+              setLocalErr("Variant name is required");
+              return;
+            }
+            if (blocks.length === 0) {
+              setLocalErr("Add at least one block");
+              return;
+            }
+            const grades = gradesText
+              .split(",")
+              .map((g) => g.trim())
+              .filter(Boolean);
+            onSave({ name: name.trim(), blocks, grades });
+          }}
+          style={{
+            background: "#0d9488",
+            color: "white",
+            border: "none",
+            padding: "0.5rem 1rem",
+            borderRadius: 6,
+            cursor: busy ? "wait" : "pointer",
+            font: "inherit",
+            fontWeight: 600,
+          }}
+        >
+          {busy ? "Saving…" : isNew ? "Create variant" : "Save variant"}
+        </button>
+      </div>
+    </div>
   );
 }

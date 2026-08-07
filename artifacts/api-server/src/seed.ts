@@ -10846,3 +10846,100 @@ export async function ensurePlanUpdatesSchema(): Promise<void> {
     sql`CREATE INDEX IF NOT EXISTS plan_update_recipients_staff_idx ON plan_update_recipients (school_id, staff_id)`,
   );
 }
+
+// Multi-schedule bell architecture: Day Type (bell_schedules) → Schedule
+// Variants → typed Blocks, plus grade-level assignment rules. Also folds
+// every legacy schedule into a "Default Schedule" variant (blocks copied
+// from bell_schedule_periods, lunch/advisory detected by name) so existing
+// schools keep working with zero admin action. Idempotent: variants are
+// only created for schedules that have none.
+export async function ensureBellScheduleVariantsSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS bell_schedule_variants (
+      id SERIAL PRIMARY KEY,
+      schedule_id INTEGER NOT NULL REFERENCES bell_schedules(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      is_default BOOLEAN NOT NULL DEFAULT FALSE,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS bell_schedule_variants_default_idx ON bell_schedule_variants (schedule_id) WHERE is_default = true`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS bell_schedule_variants_schedule_idx ON bell_schedule_variants (schedule_id)`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS bell_variant_blocks (
+      id SERIAL PRIMARY KEY,
+      variant_id INTEGER NOT NULL REFERENCES bell_schedule_variants(id) ON DELETE CASCADE,
+      block_type TEXT NOT NULL DEFAULT 'period',
+      period_number INTEGER,
+      name TEXT NOT NULL,
+      start_time TEXT NOT NULL,
+      end_time TEXT NOT NULL,
+      included_in_on_time_streak BOOLEAN NOT NULL DEFAULT TRUE,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS bell_variant_blocks_variant_idx ON bell_variant_blocks (variant_id)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS bell_variant_blocks_variant_period_idx ON bell_variant_blocks (variant_id, period_number) WHERE period_number IS NOT NULL`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS bell_variant_assignments (
+      id SERIAL PRIMARY KEY,
+      schedule_id INTEGER NOT NULL REFERENCES bell_schedules(id) ON DELETE CASCADE,
+      variant_id INTEGER NOT NULL REFERENCES bell_schedule_variants(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL DEFAULT 'grade',
+      value TEXT NOT NULL
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS bell_variant_assignments_schedule_kind_value_idx ON bell_variant_assignments (schedule_id, kind, value)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS bell_variant_assignments_variant_idx ON bell_variant_assignments (variant_id)`,
+  );
+
+  // Backfill: every legacy schedule with no variants gets a default
+  // "Default Schedule" variant whose blocks mirror its periods. Lunch /
+  // advisory / homeroom periods are recognized by name so the resolver can
+  // treat them as non-instructional block types from day one.
+  await db.execute(sql`
+    INSERT INTO bell_schedule_variants (schedule_id, name, is_default, sort_order)
+    SELECT bs.id, 'Default Schedule', TRUE, 0
+    FROM bell_schedules bs
+    WHERE NOT EXISTS (
+      SELECT 1 FROM bell_schedule_variants v WHERE v.schedule_id = bs.id
+    )
+  `);
+  await db.execute(sql`
+    INSERT INTO bell_variant_blocks
+      (variant_id, block_type, period_number, name, start_time, end_time, included_in_on_time_streak, sort_order)
+    SELECT
+      v.id,
+      CASE
+        WHEN p.name ~* 'lunch' THEN 'lunch'
+        WHEN p.name ~* 'advisory' THEN 'advisory'
+        WHEN p.name ~* 'homeroom|home room' THEN 'homeroom'
+        WHEN p.name ~* 'passing' THEN 'passing'
+        ELSE 'period'
+      END,
+      CASE WHEN p.name ~* 'lunch|advisory|homeroom|home room|passing' THEN NULL ELSE p.period_number END,
+      p.name,
+      p.start_time,
+      p.end_time,
+      p.included_in_on_time_streak,
+      p.period_number
+    FROM bell_schedule_variants v
+    JOIN bell_schedule_periods p ON p.schedule_id = v.schedule_id
+    WHERE v.is_default = TRUE
+      AND NOT EXISTS (
+        SELECT 1 FROM bell_variant_blocks b WHERE b.variant_id = v.id
+      )
+  `);
+}

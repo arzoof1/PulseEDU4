@@ -8,8 +8,6 @@ import {
   classSectionsTable,
   recordEditsTable,
   schoolSettingsTable,
-  bellSchedulesTable,
-  bellSchedulePeriodsTable,
   studentMtssPlansTable,
 } from "@workspace/db";
 import { eq, and, isNull, gte, lt, inArray } from "drizzle-orm";
@@ -18,6 +16,10 @@ import {
   processMilestonesForStudents,
 } from "../lib/pbisMilestones";
 import { requireSchool } from "../lib/scope.js";
+import {
+  loadDayTypeContext,
+  minutesOfDayInTz,
+} from "../lib/scheduleResolver.js";
 import { isCoreTeam } from "../lib/coreTeam";
 
 const router: IRouter = Router();
@@ -1198,44 +1200,20 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     schoolAverage: number;
   }> = [];
   {
-    // D4: bell schedule is per-school. Cold-period analysis must use
-    // THIS school's default schedule, not whichever happens to be first.
-    const [defaultSched] = await db
-      .select({ id: bellSchedulesTable.id })
-      .from(bellSchedulesTable)
-      .where(
-        and(
-          eq(bellSchedulesTable.isDefault, true),
-          eq(bellSchedulesTable.active, true),
-          eq(bellSchedulesTable.schoolId, req.schoolId!),
-        ),
-      )
-      .limit(1);
-    if (defaultSched) {
-      const periods = await db
-        .select({
-          periodNumber: bellSchedulePeriodsTable.periodNumber,
-          name: bellSchedulePeriodsTable.name,
-          startTime: bellSchedulePeriodsTable.startTime,
-          endTime: bellSchedulePeriodsTable.endTime,
-        })
-        .from(bellSchedulePeriodsTable)
-        .where(eq(bellSchedulePeriodsTable.scheduleId, defaultSched.id));
-
-      // Parse "HH:MM" → minutes since midnight.
-      const toMin = (t: string): number => {
-        const [hh, mm] = t.split(":").map((x) => parseInt(x, 10));
-        if (!Number.isFinite(hh) || !Number.isFinite(mm)) return -1;
-        return hh * 60 + mm;
-      };
-      const periodWindows = periods
-        .map((p) => ({
-          number: p.periodNumber,
-          name: p.name,
-          start: toMin(p.startTime),
-          end: toMin(p.endTime),
-        }))
-        .filter((p) => p.start >= 0 && p.end >= 0);
+    // D4: bell schedule is per-school. Cold-period analysis is a
+    // school-level dashboard, so it buckets by the active Day Type's
+    // DEFAULT variant via the central schedule resolver (per-student
+    // variant precision isn't meaningful for an aggregate heat map).
+    const dayCtx = await loadDayTypeContext(req.schoolId!);
+    if (dayCtx.status === "ok" && dayCtx.defaultVariant) {
+      const periodWindows = dayCtx.defaultVariant.blocks
+        .filter((b) => b.blockType === "period" && b.periodNumber != null)
+        .map((b) => ({
+          number: b.periodNumber as number,
+          name: b.name,
+          start: b.startMin,
+          end: b.endMin,
+        }));
 
       const totals = new Map<number, number>();
       for (const p of periodWindows) totals.set(p.number, 0);
@@ -1244,7 +1222,9 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
         const d = new Date(e.createdAt);
         const dow = d.getDay();
         if (dow === 0 || dow === 6) continue;
-        const minutes = d.getHours() * 60 + d.getMinutes();
+        // Bucket in the SCHOOL's timezone (resolver carries it), not the
+        // server's local clock.
+        const minutes = minutesOfDayInTz(d, dayCtx.timezone);
         const match = periodWindows.find(
           (p) => minutes >= p.start && minutes < p.end,
         );

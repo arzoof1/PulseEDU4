@@ -28,6 +28,7 @@ import {
   issAttendanceDayTable,
   pulloutsTable,
   pbisEntriesTable,
+  studentsTable,
   studentMtssPlansTable,
   studentFastScoresTable,
   studentCourseGradesTable,
@@ -40,8 +41,9 @@ import {
   type AttendanceMetric,
 } from "./attendanceMetrics.js";
 import {
-  loadDefaultPeriodWindows,
+  loadGradePeriodWindows,
   tardyLostMinutes,
+  type GradePeriodWindows,
   hallPassLostMinutes,
   type PeriodWindow,
 } from "./lostInstruction.js";
@@ -186,12 +188,29 @@ export async function loadStudentMetrics(
   const loDay = range.from;
   const hiDay = range.to;
 
-  const [windows, tz, attendance, gpaEnabled] = await Promise.all([
-    loadDefaultPeriodWindows(schoolId),
-    getSchoolTimezone(schoolId),
-    loadAttendanceMetrics(schoolId, studentIds),
-    loadGpaEnabled(schoolId),
-  ]);
+  const [gradeWindows, tz, attendance, gpaEnabled, gradeRows] =
+    await Promise.all([
+      loadGradePeriodWindows(schoolId),
+      getSchoolTimezone(schoolId),
+      loadAttendanceMetrics(schoolId, studentIds),
+      loadGpaEnabled(schoolId),
+      db
+        .select({
+          studentId: studentsTable.studentId,
+          grade: studentsTable.grade,
+        })
+        .from(studentsTable)
+        .where(
+          and(
+            eq(studentsTable.schoolId, schoolId),
+            inArray(studentsTable.studentId, studentIds),
+          ),
+        ),
+    ]);
+  // MULTI-SCHEDULE: tardy lost-minutes use each student's own grade
+  // variant's period windows.
+  const gradeBySid = new Map<string, number | null>();
+  for (const g of gradeRows) gradeBySid.set(g.studentId, g.grade);
 
   // Seed every requested student so the map always has a complete row.
   for (const sid of studentIds) {
@@ -201,7 +220,7 @@ export async function loadStudentMetrics(
   }
 
   await Promise.all([
-    loadTardies(out, schoolId, studentIds, loIso, hiIso, windows, tz),
+    loadTardies(out, schoolId, studentIds, loIso, hiIso, gradeWindows, gradeBySid, tz),
     loadHallPasses(out, schoolId, studentIds, loIso, hiIso),
     loadOssDays(out, schoolId, studentIds, loDay, hiDay),
     loadIssDays(out, schoolId, studentIds, loDay, hiDay),
@@ -420,7 +439,8 @@ async function loadTardies(
   ids: string[],
   loIso: string | null,
   hiIso: string | null,
-  windows: Map<number, PeriodWindow>,
+  gradeWindows: GradePeriodWindows,
+  gradeBySid: Map<string, number | null>,
   tz: string,
 ) {
   const where = [
@@ -441,7 +461,12 @@ async function loadTardies(
     const m = out.get(r.studentId);
     if (!m) continue;
     m.tardies += 1;
-    const lost = tardyLostMinutes(windows, r.period, r.createdAt, tz);
+    const lost = tardyLostMinutes(
+      gradeWindows.windowsForGrade(gradeBySid.get(r.studentId)),
+      r.period,
+      r.createdAt,
+      tz,
+    );
     if (lost != null) m.lostInstructionMinutes += lost;
   }
 }

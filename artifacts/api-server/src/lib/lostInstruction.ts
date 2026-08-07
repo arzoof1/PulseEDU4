@@ -1,6 +1,10 @@
-import { db, bellSchedulesTable, bellSchedulePeriodsTable } from "@workspace/db";
-import { and, eq } from "drizzle-orm";
 import { DEFAULT_SCHOOL_TZ } from "./schoolYear.js";
+import {
+  loadDayTypeContext,
+  variantForGrade,
+  type DayTypeContext,
+  type ScheduleVariant,
+} from "./scheduleResolver.js";
 
 // Lost-instruction minutes from tardies.
 //
@@ -28,15 +32,6 @@ export interface PeriodWindow {
   lengthMin: number | null;
 }
 
-function hhmmToMinutes(s: string): number | null {
-  const m = s.match(/^(\d{1,2}):(\d{2})/);
-  if (!m) return null;
-  const h = Number(m[1]);
-  const mi = Number(m[2]);
-  if (!Number.isFinite(h) || !Number.isFinite(mi)) return null;
-  return h * 60 + mi;
-}
-
 // Period number from the SIS-varying period text ("3" / "03" / "P3" → 3).
 export function periodNumberFromText(period: string): number | null {
   const m = period.match(/\d+/);
@@ -45,41 +40,62 @@ export function periodNumberFromText(period: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-// Load the school's default active bell schedule as a period-number →
-// window map. Empty map when the school has no default schedule yet.
+function windowsFromVariant(
+  v: ScheduleVariant | null,
+): Map<number, PeriodWindow> {
+  const out = new Map<number, PeriodWindow>();
+  if (!v) return out;
+  for (const b of v.blocks) {
+    if (b.blockType !== "period" || b.periodNumber == null) continue;
+    out.set(b.periodNumber, {
+      startMin: b.startMin,
+      lengthMin: b.endMin > b.startMin ? b.endMin - b.startMin : null,
+    });
+  }
+  return out;
+}
+
+// Grade-aware period windows for the school's active Day Type.
+// MULTI-SCHEDULE: each grade may follow a different variant with different
+// period start times, so lost-minute math must use the STUDENT's own
+// windows. Load once per school, then call windowsForGrade per student —
+// results are memoized per variant.
+export interface GradePeriodWindows {
+  windowsForGrade(
+    grade: number | string | null | undefined,
+  ): Map<number, PeriodWindow>;
+}
+
+export function gradeWindowsFromContext(ctx: DayTypeContext): GradePeriodWindows {
+  const cache = new Map<number, Map<number, PeriodWindow>>();
+  return {
+    windowsForGrade(grade) {
+      const v = ctx.status === "ok" ? variantForGrade(ctx, grade) : null;
+      if (!v) return new Map();
+      const hit = cache.get(v.id);
+      if (hit) return hit;
+      const m = windowsFromVariant(v);
+      cache.set(v.id, m);
+      return m;
+    },
+  };
+}
+
+export async function loadGradePeriodWindows(
+  schoolId: number,
+): Promise<GradePeriodWindows> {
+  return gradeWindowsFromContext(await loadDayTypeContext(schoolId));
+}
+
+// Legacy shape: period windows of the DEFAULT variant. Kept for callers
+// with no per-student grade in scope; per-student math should prefer
+// loadGradePeriodWindows.
 export async function loadDefaultPeriodWindows(
   schoolId: number,
 ): Promise<Map<number, PeriodWindow>> {
-  const out = new Map<number, PeriodWindow>();
-  const [sched] = await db
-    .select({ id: bellSchedulesTable.id })
-    .from(bellSchedulesTable)
-    .where(
-      and(
-        eq(bellSchedulesTable.schoolId, schoolId),
-        eq(bellSchedulesTable.isDefault, true),
-        eq(bellSchedulesTable.active, true),
-      ),
-    )
-    .limit(1);
-  if (!sched) return out;
-  const periods = await db
-    .select({
-      periodNumber: bellSchedulePeriodsTable.periodNumber,
-      startTime: bellSchedulePeriodsTable.startTime,
-      endTime: bellSchedulePeriodsTable.endTime,
-    })
-    .from(bellSchedulePeriodsTable)
-    .where(eq(bellSchedulePeriodsTable.scheduleId, sched.id));
-  for (const p of periods) {
-    const startMin = hhmmToMinutes(p.startTime);
-    if (startMin == null) continue;
-    const endMin = hhmmToMinutes(p.endTime);
-    const lengthMin =
-      endMin != null && endMin > startMin ? endMin - startMin : null;
-    out.set(p.periodNumber, { startMin, lengthMin });
-  }
-  return out;
+  const ctx = await loadDayTypeContext(schoolId);
+  if (ctx.status !== "ok") return new Map();
+  return windowsFromVariant(ctx.defaultVariant);
 }
 
 // Instructional minutes attributable to a single period when a student

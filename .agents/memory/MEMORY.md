@@ -122,4 +122,5 @@
 - [Behavior Supports module](behavior-supports-module.md) — teacher-translation layer: schema has NO confidential-capable fields; teachers read via roster snapshot only, never the module routes; entry-time caps are server 400s.
 - [Roster layout preference](roster-layout-preference.md) — user rejected stacked rows, fixed pill slots, and cryptic two-letter buttons; keep the original single-line full-word roster layout.
 - [Roster pull-out badge](roster-pullout-badge.md) — count keyed by referring_teacher (admin-on-behalf counts); schoolYearStartDate NEEDS the school-tz arg; hidden sidebar item stays reachable (no section guard).
+- [Multi-grade bell schedules](multi-grade-bell-schedules.md) — Day Type → variants; ALL period lookups via scheduleResolver per student grade; passing blocks bridge windows, lunch closes them; legacy editor mirrors only while ≤1 variant.
 - [School-year flip](school-year-flip.md) — FAST/Insights reporting year is a school-controlled DATE (school-tz), not wall-clock; no flip → newest data year; reconcile only touches school_settings + is_historical, never SIS; strip admin-only field from non-admin PUT.

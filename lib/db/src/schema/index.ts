@@ -53,6 +53,7 @@ export * from "./studentHallPassLimits";
 export * from "./districtIntegrations";
 export * from "./customRoles";
 export * from "./bellSchedules";
+export * from "./bellScheduleVariants";
 export * from "./pickupAuthorizations";
 export * from "./pickupQueueEvents";
 export * from "./issRoster";

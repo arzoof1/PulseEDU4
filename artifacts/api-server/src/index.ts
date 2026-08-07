@@ -50,6 +50,7 @@ import {
   ensureDataChatSchema,
   ensureSupportMeetingsSchema,
   ensurePlanUpdatesSchema,
+  ensureBellScheduleVariantsSchema,
   ensureSectionSupportSchema,
   ensureDataExportSchema,
   ensurePulseDnaVideosSchema,
@@ -334,6 +335,7 @@ async function runSeed(): Promise<void> {
   // scheduling + teacher confirmations + feedback). Idempotent.
   await ensureSupportMeetingsSchema();
   await ensurePlanUpdatesSchema();
+  await ensureBellScheduleVariantsSchema();
   // Section Support Access — support teachers (ESE / co-teachers) assigned to
   // another teacher's whole section by the ESE Coordinator. Idempotent.
   await ensureSectionSupportSchema();

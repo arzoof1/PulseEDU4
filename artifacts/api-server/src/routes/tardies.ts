@@ -7,7 +7,7 @@ import { sendTardySmsStub } from "../lib/tardySms.js";
 import { isParentNotifyEnabled } from "../lib/parentNotify.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import {
-  loadDefaultPeriodWindows,
+  loadGradePeriodWindows,
   tardyLostMinutes,
 } from "../lib/lostInstruction.js";
 import { getSchoolTimezone } from "../lib/schoolYear.js";
@@ -26,11 +26,13 @@ router.get("/tardies", async (req, res) => {
   // studentId for internal joins.
   const sids = Array.from(new Set(rows.map((r) => r.studentId)));
   const localBySid = new Map<string, string | null>();
+  const gradeBySid = new Map<string, number | null>();
   if (sids.length > 0) {
     const stu = await db
       .select({
         studentId: studentsTable.studentId,
         localSisId: studentsTable.localSisId,
+        grade: studentsTable.grade,
       })
       .from(studentsTable)
       .where(
@@ -39,12 +41,15 @@ router.get("/tardies", async (req, res) => {
           inArray(studentsTable.studentId, sids),
         ),
       );
-    for (const s of stu) localBySid.set(s.studentId, s.localSisId);
+    for (const s of stu) {
+      localBySid.set(s.studentId, s.localSisId);
+      gradeBySid.set(s.studentId, s.grade);
+    }
   }
   // Lost-instruction minutes per tardy (check-in time − scheduled period
-  // start, from the default bell schedule). Only 'tardy' rows carry a
-  // value; other entry types and unmatched periods stay null.
-  const periodWindows = await loadDefaultPeriodWindows(schoolId);
+  // start, from the STUDENT's own grade schedule variant). Only 'tardy'
+  // rows carry a value; other entry types and unmatched periods stay null.
+  const gradeWindows = await loadGradePeriodWindows(schoolId);
   const tz = await getSchoolTimezone(schoolId);
   res.json(
     rows.map((r) => ({
@@ -52,7 +57,12 @@ router.get("/tardies", async (req, res) => {
       localSisId: localBySid.get(r.studentId) ?? null,
       lostMinutes:
         r.entryType === "tardy"
-          ? tardyLostMinutes(periodWindows, r.period, r.createdAt, tz)
+          ? tardyLostMinutes(
+              gradeWindows.windowsForGrade(gradeBySid.get(r.studentId)),
+              r.period,
+              r.createdAt,
+              tz,
+            )
           : null,
     })),
   );
