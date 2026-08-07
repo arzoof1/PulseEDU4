@@ -638,3 +638,10 @@ uri = "file://attached_assets/generated/PulseEDU_v1_Final_Migration_Report.docx"
 type = "word_document"
 title = "PulseEDU — Final Migration Report (Version 1)"
 description = "One complete document: a simple 3-step migration path up front, then full detail — all new tables/columns, ready-to-run SQL, every feature shipped in Version 1 (photos, escort plans, Starter Lists, PBIS controls, and more), config, verification checklist, and rollback notes. Onboarding connection errors intentionally excluded."
+
+[[outputs]]
+id = "T1k33L3QYO741RybeUp2f"
+uri = "file://docs/multi-grade-bell-schedule-migration.docx"
+type = "word_document"
+title = "Multi-Grade Bell Schedule — Developer Migration Report"
+description = "Word version of the single-source-of-truth migration report: new tables, schema details, resolver architecture, adjusted code paths, API changes, testing, and deployment notes."
