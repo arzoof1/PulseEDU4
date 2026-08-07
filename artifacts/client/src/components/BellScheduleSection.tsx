@@ -639,6 +639,41 @@ function ScheduleEditor({
         {isNew ? "New" : "Edit"} Bell Schedule
       </h3>
 
+      <div
+        style={{
+          margin: "0.5rem 0 0.75rem",
+          padding: "0.6rem 0.85rem",
+          background: "#eff6ff",
+          border: "1px solid #bfdbfe",
+          color: "#1e40af",
+          borderRadius: 6,
+          fontSize: "0.9rem",
+          lineHeight: 1.5,
+        }}
+      >
+        <strong>How this works:</strong>{" "}
+        {isNew ? (
+          <>
+            Step 1 — name this schedule and enter its periods below, then
+            save. Step 2 — if different grade levels follow different
+            timings (for example, staggered lunches for Grades 6, 7, and
+            8), reopen the saved schedule and add each grade&apos;s
+            timeline under <em>Grade schedules (variants)</em>, which
+            appears after saving.
+          </>
+        ) : (
+          <>
+            The period list below is the school-wide default timing. If
+            grade levels follow different timings (for example, staggered
+            lunches for Grades 6, 7, and 8), scroll down to{" "}
+            <em>Grade schedules (variants)</em> to add a timeline for each
+            grade and assign grades to it. Grades without their own
+            variant follow the default. Once grade variants exist, edit
+            timing there rather than in this period list.
+          </>
+        )}
+      </div>
+
       {err && (
         <div
           style={{
