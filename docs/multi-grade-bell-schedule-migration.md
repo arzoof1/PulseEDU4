@@ -138,6 +138,7 @@ Legacy schedule `POST`/`PUT` (flat period list) mirrors its periods into the def
 
 - New `VariantsSection` + `VariantEditor` inside the existing ScheduleEditor (shown for saved schedules): variant list with grade chips and default badge, typed block editor, comma-separated grade assignment input, wired to the new CRUD endpoints, list refresh from responses.
 - Admin path: **Settings → School Bell Schedule → edit a schedule → "Grade schedules (variants)"**.
+- In-editor guidance banner ("How this works") at the top of the schedule editor: on the New form it explains the two-step process (save default periods first, then reopen to add grade variants); on the Edit form it directs admins to the variants section and notes that once grade variants exist, timing edits belong there rather than in the legacy period list.
 
 ---
 

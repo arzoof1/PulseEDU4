@@ -643,5 +643,5 @@ description = "One complete document: a simple 3-step migration path up front, t
 id = "T1k33L3QYO741RybeUp2f"
 uri = "file://docs/multi-grade-bell-schedule-migration.docx"
 type = "word_document"
-title = "Multi-Grade Bell Schedule — Developer Migration Report"
-description = "Word version of the single-source-of-truth migration report: new tables, schema details, resolver architecture, adjusted code paths, API changes, testing, and deployment notes."
+title = "Multi-Grade Bell Schedule — Developer Migration Report (updated)"
+description = "Updated to include the new in-editor 'How this works' guidance banner in the Client Changes section."
