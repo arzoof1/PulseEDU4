@@ -1,0 +1,567 @@
+# PulseEDU Critical Fix #1: Support Multiple Grade-Level Bell Schedules Within the Same School Day
+
+We need to revise PulseEDU's bell schedule architecture.
+
+## Problem
+
+PulseEDU currently appears to assume that a school selects one bell schedule for a given school day, such as:
+
+* Regular Day
+* Early Release Day
+* Testing Day
+* Other alternate schedule
+
+Within that selected day type, the system currently assumes there is one universal sequence of period start and end times that applies to every student in the school.
+
+That assumption is incorrect for many middle and high schools.
+
+A school may be operating a **Regular Day** where the school begins and ends at the same time for everyone, but different grade levels or student groups have different period/lunch timing during that same day.
+
+### Example
+
+Assume grades 6, 7, and 8 are all attending a normal Regular Day.
+
+The school day starts and ends at the same time for all three grades.
+
+However, lunch causes their schedules to differ.
+
+**6th Grade**
+
+* Period 1
+* Period 2
+* Period 3
+* Lunch
+* Period 4
+* Period 5
+* Period 6
+* Period 7
+
+**7th Grade**
+
+* Period 1
+* Period 2
+* Period 3
+* Period 4
+* Lunch
+* Period 5
+* Period 6
+* Period 7
+
+**8th Grade**
+
+* Period 1
+* Period 2
+* Period 3
+* Period 4
+* Period 5
+* Lunch
+* Period 6
+* Period 7
+
+These schedules all occur simultaneously during the same Regular Day.
+
+Because of this, a physical school bell may ring while another grade is still in class. PulseEDU therefore cannot determine the current instructional period simply from the time of day or from one universal bell schedule.
+
+---
+
+# Required Architecture
+
+PulseEDU must support:
+
+**Day Type → Multiple Schedule Variants → Student/Group Assignment**
+
+For example:
+
+Regular Day
+
+* Regular Day – Grade 6
+* Regular Day – Grade 7
+* Regular Day – Grade 8
+
+Each schedule variant may have its own:
+
+* Period start time
+* Period end time
+* Passing period
+* Lunch period
+* Non-instructional blocks
+* Other schedule blocks if needed
+
+The administrator should still be able to identify the overall day as a **Regular Day**, but PulseEDU must then determine which Regular Day schedule applies to an individual student.
+
+Grade level should be supported immediately as the primary assignment method.
+
+However, please design the underlying architecture so that we are not permanently limited to grade level. In the future, we may need schedule variants assigned by another student attribute or cohort.
+
+Examples could eventually include:
+
+* Grade level
+* Academy
+* Program
+* Cohort
+* Individual schedule group
+
+Do not overbuild those additional assignment interfaces right now unless necessary, but avoid designing the database in a way that makes them impossible later.
+
+---
+
+# Important Distinction
+
+Do NOT interpret this request as simply adding multiple different school-day types.
+
+We already need concepts such as:
+
+* Regular Day
+* Early Release
+* Testing
+* Assembly
+* Modified Schedule
+
+The issue is that **one Day Type can contain multiple simultaneous schedule variants.**
+
+Example:
+
+Regular Day
+→ Grade 6 Regular Schedule
+→ Grade 7 Regular Schedule
+→ Grade 8 Regular Schedule
+
+Similarly, in the future we might have:
+
+Testing Day
+→ Grade 6 Testing Schedule
+→ Grade 7 Testing Schedule
+→ Grade 8 Testing Schedule
+
+The selected Day Type tells PulseEDU what kind of day the school is operating.
+
+The student's schedule assignment determines which timing rules apply to that particular student.
+
+---
+
+# Critical Rule
+
+Any PulseEDU feature that asks questions such as:
+
+* What period is it?
+* Is this currently a passing period?
+* Where should this student be?
+* Is this student late?
+* Is the student expected to be in class?
+* What class should this student currently be attending?
+* Should the kiosk currently accept an arrival?
+* What is the student's current location?
+
+must NOT use a universal school-wide current period.
+
+Instead, the system must resolve:
+
+1. Current school
+2. Current date
+3. Active Day Type
+4. Student identity, when the operation involves a student
+5. Student grade/schedule assignment
+6. Applicable schedule variant
+7. Current schedule block for that specific schedule
+8. Student's class/course/location associated with that block
+
+This should ideally be handled through one reusable scheduling service/function so different PulseEDU modules do not independently calculate bell schedules.
+
+---
+
+# Feature Impact Audit
+
+Before changing the code, inspect the entire PulseEDU application and identify every place where bell schedule, current period, passing period, tardiness, expected location, or time-based student status is calculated or referenced.
+
+Do not assume the following list is exhaustive.
+
+At minimum, inspect:
+
+* Hall Pass
+* Hall Pass kiosk
+* On-Time Arrival functionality
+* Student Finder
+* Student current-location calculations
+* Teacher/class roster logic
+* Attendance-related functionality
+* Tardy calculations
+* Student schedule display
+* Dashboards that show current classes or locations
+* Reports using period/time
+* Safety or accountability tools that depend on expected student location
+* Notifications triggered by class periods
+* Any background jobs or scheduled processes using bell times
+* Administrative displays showing the current period
+
+Create a concise summary of every impacted area before modifying it.
+
+---
+
+# Hall Pass Kiosk Requirement
+
+The Hall Pass kiosk currently changes behavior during passing periods so students can check in or be recognized as arriving on time.
+
+This can no longer rely on a universal passing period.
+
+Example:
+
+At 11:20 AM:
+
+* 6th grade might be transitioning from lunch to Period 4.
+* 7th grade might still be in Period 4.
+* 8th grade might still be in Period 5.
+
+Therefore, the kiosk must evaluate the **student who is scanning/checking in** and determine whether that individual student's assigned schedule currently places them:
+
+* In class
+* At lunch
+* In a passing period
+* At another valid schedule block
+
+The kiosk behavior should then use that student's schedule.
+
+A school-wide bell ringing must not automatically place every student into passing-period status.
+
+---
+
+# Student Finder Requirement
+
+The Finder must determine a student's expected current location using that student's schedule variant.
+
+The expected lookup should conceptually work like this:
+
+Student selected
+→ Identify school
+→ Identify grade/schedule group
+→ Determine today's Day Type
+→ Resolve applicable bell schedule variant
+→ Determine current schedule block
+→ Match that block to the student's enrolled course/period
+→ Return expected teacher/location/status
+
+For example, if an administrator searches for a 6th grader and an 8th grader at exactly the same clock time, PulseEDU may correctly return two different period numbers because the students are following different schedules.
+
+That is expected behavior.
+
+---
+
+# Lunch
+
+Lunch must be treated as an actual schedule block rather than merely a gap between periods.
+
+A schedule should support blocks such as:
+
+* Instructional Period
+* Lunch
+* Passing Period
+* Advisory
+* Homeroom
+* Assembly
+* Other/Custom
+
+At minimum, lunch must be explicitly identifiable so PulseEDU does not incorrectly report that a student should be in an academic class during lunch.
+
+If PulseEDU currently handles lunch differently, inspect the existing architecture and migrate carefully rather than duplicating conflicting concepts.
+
+---
+
+# Administrative Configuration
+
+Update the bell schedule configuration so an administrator can create multiple schedule variants under the same Day Type.
+
+Conceptual UI:
+
+**Regular Day**
+
+Schedule Variants:
+
+**Grade 6**
+
+* Period 1 — start/end
+* Period 2 — start/end
+* Period 3 — start/end
+* Lunch — start/end
+* Period 4 — start/end
+* Period 5 — start/end
+* Period 6 — start/end
+* Period 7 — start/end
+
+**Grade 7**
+
+* Period 1
+* Period 2
+* Period 3
+* Period 4
+* Lunch
+* Period 5
+* Period 6
+* Period 7
+
+**Grade 8**
+
+* Period 1
+* Period 2
+* Period 3
+* Period 4
+* Period 5
+* Lunch
+* Period 6
+* Period 7
+
+The interface does not have to match this exact visual design, but it must be intuitive for a school administrator.
+
+There should be a clear distinction between:
+
+**Day Type**
+and
+**Schedule Variant**
+
+---
+
+# Default / Backward Compatibility
+
+Do not break schools that use one universal bell schedule.
+
+Schools must still be able to configure:
+
+Regular Day
+→ Default Schedule
+
+and have that schedule apply to all students.
+
+Recommended resolution logic:
+
+1. Look for a schedule specifically assigned to the student's grade/group.
+2. If one exists, use it.
+3. Otherwise use the Day Type's default schedule.
+4. If neither exists, return a controlled configuration error rather than guessing.
+
+Existing schools with one bell schedule should be migrated or interpreted as having a **Default Schedule** so their current functionality continues working.
+
+---
+
+# Database / Data Model
+
+First inspect the existing schema before choosing exact table names or migrations.
+
+The final structure should conceptually support relationships similar to:
+
+School
+→ Day Type
+→ Schedule Variant
+→ Schedule Blocks
+
+and
+
+Schedule Variant
+→ Assignment Rule
+
+For initial implementation, assignment rules should support grade level.
+
+Do not simply add columns such as `grade6_start_time`, `grade7_start_time`, etc.
+
+This must be a relational/extensible design.
+
+Avoid hardcoding grades 6, 7, and 8 because PulseEDU may ultimately be used by elementary, middle, K-8, and high schools.
+
+---
+
+# Central Schedule Resolver
+
+Create or refactor toward a centralized schedule resolver.
+
+Conceptually, we should be able to make a call similar to:
+
+`getCurrentScheduleContext(studentId, dateTime)`
+
+and receive information such as:
+
+* schoolId
+* studentId
+* gradeLevel
+* dayType
+* scheduleVariant
+* currentBlock
+* blockType
+* periodNumber, if applicable
+* startTime
+* endTime
+* isPassingPeriod
+* isLunch
+* expectedCourse
+* expectedTeacher
+* expectedLocation
+
+The exact implementation and response model should follow the architecture of the existing application, but the principle is important:
+
+**There should be one authoritative method for determining a student's schedule context.**
+
+Features should consume that result rather than recreating schedule logic independently.
+
+For situations that do not involve a specific student, the system may return the overall Day Type and available schedule variants rather than pretending there is one universal current period.
+
+---
+
+# Date and Time Considerations
+
+Preserve or improve existing handling for:
+
+* School timezone
+* Weekdays
+* Holidays/non-school days
+* Alternate Day Types
+* Manually overridden schedules
+* Early release
+* Testing days
+* Special-event schedules
+
+Do not introduce UTC/local-time regressions.
+
+If there is already a school calendar or schedule override mechanism, integrate with it rather than creating a competing system.
+
+---
+
+# Testing Requirements
+
+Add automated tests covering at least the following scenario.
+
+Assume the same Regular Day contains three schedules:
+
+Grade 6:
+Periods 1–3 → Lunch → Periods 4–7
+
+Grade 7:
+Periods 1–4 → Lunch → Periods 5–7
+
+Grade 8:
+Periods 1–5 → Lunch → Periods 6–7
+
+Test multiple clock times where:
+
+1. All three grades are in the same numbered period.
+2. Grade 6 is at lunch while grades 7 and 8 are in class.
+3. Grade 6 is passing while grades 7 and 8 are still in class.
+4. Grade 7 is at lunch while grades 6 and 8 are in instructional periods.
+5. Grade 8 is at lunch while grades 6 and 7 are in instructional periods.
+6. Two students queried at the exact same time correctly resolve to different current periods.
+7. Finder returns the correct expected location for each student.
+8. Kiosk determines passing/on-time status using the individual student's schedule.
+9. A student without a grade-specific schedule falls back to the Default Schedule.
+10. An improperly configured school fails gracefully rather than assigning the wrong period.
+
+Also test schedule boundaries exactly at:
+
+* Period start time
+* Period end time
+* Passing-period start
+* Passing-period end
+* Lunch start
+* Lunch end
+
+There should be no ambiguous overlapping time intervals unless intentionally configured.
+
+---
+
+# Configuration Validation
+
+When administrators create schedules, validate against obvious configuration problems.
+
+Examples:
+
+* End time earlier than start time
+* Accidental overlapping blocks within the same schedule variant
+* Missing required schedule assignment
+* Duplicate grade-level assignments for the same Day Type
+* Schedule blocks outside the configured school day
+
+If overlapping blocks are intentionally supported for some future reason, they must have explicit precedence rules. Do not silently guess.
+
+---
+
+# Scope of This Revision
+
+This is not merely a UI change.
+
+The goal is to correct the underlying PulseEDU assumption that:
+
+**one school day = one bell schedule = one current period**
+
+The correct model is:
+
+**one school day = one Day Type**
+
+and that Day Type may contain:
+
+**multiple simultaneous schedule variants**
+
+The applicable schedule is resolved according to the student.
+
+---
+
+# Implementation Process
+
+Please complete this change in the following order.
+
+### Phase 1 — Inspect
+
+Before modifying code:
+
+1. Locate the current bell schedule data model.
+2. Locate the Day Type / Regular Day configuration.
+3. Locate all current-period calculations.
+4. Locate all passing-period calculations.
+5. Locate all bell schedule references throughout the application.
+6. Specifically inspect Finder and Hall Pass kiosk.
+7. Identify any duplicated schedule logic.
+
+Then provide a concise explanation of:
+
+* Current architecture
+* Why it fails for this scenario
+* Files/modules that must change
+* Proposed database changes
+* Proposed resolver/service architecture
+* Migration/backward-compatibility strategy
+
+### Phase 2 — Implement
+
+After understanding the current architecture:
+
+1. Update the data model.
+2. Add schedule variants.
+3. Add grade-level schedule assignment.
+4. Preserve/default existing school schedules.
+5. Build/refactor the centralized schedule resolver.
+6. Update administrative schedule configuration.
+7. Update Finder.
+8. Update Hall Pass kiosk.
+9. Update every other feature discovered during the audit that relies on bell schedule/current period.
+10. Add validation.
+
+### Phase 3 — Verify
+
+Run automated tests and specifically demonstrate that three students from three different grade levels can be queried at the same exact timestamp and PulseEDU correctly identifies each student's:
+
+* Schedule variant
+* Current block
+* Period/lunch/passing status
+* Expected location
+
+Also verify that an existing school using only one Regular Day schedule continues functioning without requiring the administrator to rebuild its schedule.
+
+---
+
+# Critical Guardrails
+
+* Do not hardcode this specifically for D.S. Parrott Middle School.
+* Do not hardcode grades 6, 7, and 8.
+* Do not solve this only inside Finder or Hall Pass.
+* Do not duplicate scheduling calculations in multiple modules.
+* Do not remove existing alternate-day functionality.
+* Do not break current school configurations.
+* Do not infer current period from a school-wide physical bell.
+* Do not treat lunch as though the student has no schedule.
+* Do not make unrelated cosmetic changes during this fix.
+* Do not make broad destructive database changes without preserving/migrating existing data.
+
+This is a core scheduling architecture correction and should become the authoritative scheduling logic used by the rest of PulseEDU.
