@@ -645,3 +645,10 @@ uri = "file://docs/multi-grade-bell-schedule-migration.docx"
 type = "word_document"
 title = "Multi-Grade Bell Schedule — Developer Migration Report (updated)"
 description = "Updated to include the new in-editor 'How this works' guidance banner in the Client Changes section."
+
+[[outputs]]
+id = "d6TNy1-cWiRBhNkv6Z6m4"
+uri = "file://docs/fast-xlsx-2026-format-migration.docx"
+type = "word_document"
+title = "CRITICAL — Florida FAST Excel Import Fix (Aug 2026 Format Change)"
+description = "Developer migration report: problem description, new fallback Excel reader, safety limits, parser changes, verification results, and deployment steps. No schema/dependency changes — publish to fix production uploads."
