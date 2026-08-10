@@ -11,15 +11,13 @@ export const classSectionsTable = pgTable(
     isPlanning: boolean("is_planning").notNull().default(false),
   },
   (t) => ({
-    // A teacher legitimately runs multiple sections in the same period — ESE
-    // / self-contained / co-taught rooms (e.g. Intensive Reading 1, 2 and 3
-    // all period 1). The old (teacher, period) unique key rejected real
-    // rosters, so course_name is part of the key. Distinct courses in one
-    // period coexist; only exact (teacher, period, course) duplicates collide
-    // (the roster sync also de-dupes on this key before insert).
+    // A teacher can teach the same course/period at MULTIPLE schools (shared /
+    // itinerant staff rows are district-global). The unique key must therefore
+    // include school_id — otherwise Sync All fails when two schools share a
+    // teacher+period+course (seen on Nature Coast after Parrott/Springstead).
     teacherPeriodCourseUnique: uniqueIndex(
-      "class_sections_teacher_period_course_unique",
-    ).on(t.teacherStaffId, t.period, t.courseName),
+      "class_sections_school_teacher_period_course_unique",
+    ).on(t.schoolId, t.teacherStaffId, t.period, t.courseName),
   }),
 );
 

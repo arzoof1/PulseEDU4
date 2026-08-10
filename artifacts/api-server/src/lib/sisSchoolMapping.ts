@@ -43,8 +43,8 @@ function parseMappingConfig(
 }
 
 /**
- * Cross-validate PulseEDU school + ClassLink org feed before roster writes.
- * Fails closed on any identifier / sourcedId mismatch.
+ * Resolve PulseEDU school + ClassLink org feed before roster writes.
+ * Prefers a resolved ClassLink org when Pulse state codes drift (warns).
  */
 export async function resolveSisSchoolMapping(
   row: DistrictIntegrationRow,
@@ -73,7 +73,6 @@ export async function resolveSisSchoolMapping(
     return { ok: false, errors: resolved.errors };
   }
 
-  const errors: string[] = [];
   const warnings = [...(resolved.warnings ?? [])];
 
   if (
@@ -81,8 +80,8 @@ export async function resolveSisSchoolMapping(
     resolved.org.identifier?.trim() &&
     !schoolCodesMatch(pulseSchool.stateSchoolCode, resolved.org.identifier)
   ) {
-    errors.push(
-      `PulseEDU school "${pulseSchool.name}" state code "${pulseSchool.stateSchoolCode}" does not match ClassLink org identifier "${resolved.org.identifier}".`,
+    warnings.push(
+      `PulseEDU school "${pulseSchool.name}" state code "${pulseSchool.stateSchoolCode}" does not match ClassLink org identifier "${resolved.org.identifier}". Syncing to this Pulse school using ClassLink org "${resolved.org.name}" (${resolved.org.sourcedId}).`,
     );
   }
 
@@ -91,13 +90,9 @@ export async function resolveSisSchoolMapping(
     resolved.org.identifier?.trim() &&
     !schoolCodesMatch(stateCode, resolved.org.identifier)
   ) {
-    errors.push(
-      `Configured state school code "${stateCode}" does not match ClassLink org identifier "${resolved.org.identifier}".`,
+    warnings.push(
+      `Configured state school code "${stateCode}" does not match ClassLink org identifier "${resolved.org.identifier}". Continuing with ClassLink org.`,
     );
-  }
-
-  if (errors.length > 0) {
-    return { ok: false, errors };
   }
 
   const adapterConfig: Record<string, unknown> = {

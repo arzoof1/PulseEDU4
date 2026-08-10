@@ -620,8 +620,10 @@ export async function ensureSectionSupportSchema() {
 // assumed one section per teacher per period. Real district rosters break this
 // (ESE / self-contained teachers run several courses in the same period), so
 // the sync failed with a duplicate-key violation on the first live import.
-// Self-heal to the (teacher_staff_id, period, course_name) key. Idempotent;
-// drizzle-kit push is unavailable here, so this boot ensure is how prod moves.
+// Self-heal to (school_id, teacher_staff_id, period, course_name) — school_id
+ // is required because shared/itinerant staff use one staff.id across schools.
+// Idempotent; drizzle-kit push is unavailable here, so this boot ensure is how
+// prod moves.
 export async function ensureClassSectionsSchema(): Promise<void> {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS class_sections (
@@ -633,12 +635,15 @@ export async function ensureClassSectionsSchema(): Promise<void> {
       is_planning BOOLEAN NOT NULL DEFAULT false
     )
   `);
-  // Drop the too-strict legacy key if present, add the course-aware one.
+  // Drop legacy keys if present, add the school-scoped course-aware one.
   await db.execute(
     sql`DROP INDEX IF EXISTS class_sections_teacher_period_unique`,
   );
   await db.execute(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS class_sections_teacher_period_course_unique ON class_sections (teacher_staff_id, period, course_name)`,
+    sql`DROP INDEX IF EXISTS class_sections_teacher_period_course_unique`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS class_sections_school_teacher_period_course_unique ON class_sections (school_id, teacher_staff_id, period, course_name)`,
   );
 }
 

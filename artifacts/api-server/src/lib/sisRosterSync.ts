@@ -553,11 +553,9 @@ async function rebuildSchedules(
 
   const classExternalToSectionId = new Map<string, number>();
   const sectionInserts: Array<typeof classSectionsTable.$inferInsert> = [];
-  // De-dupe on the section's business identity (teacher, period, course). A
-  // teacher legitimately runs several distinct courses in one period (ESE /
-  // self-contained), which the unique index now allows; two roster rows with
-  // the SAME identity collapse into one section and pool their enrollments,
-  // so the batch can never trip class_sections_teacher_period_course_unique.
+  // De-dupe on the section's business identity within this school
+  // (teacher, period, course). Shared staff may hold the same identity at
+  // another school — that is allowed by the school-scoped unique index.
   const keyToInsertIndex = new Map<string, number>();
   const externalToKey = new Map<string, string>();
 
@@ -573,7 +571,8 @@ async function rebuildSchedules(
       errors.push(`Skipped class ${sec.externalId}: invalid period.`);
       continue;
     }
-    const key = `${teacherStaffId}|${sec.period}|${sec.courseName}`;
+    const courseName = sec.courseName.trim() || "Class";
+    const key = `${teacherStaffId}|${sec.period}|${courseName}`;
     externalToKey.set(sec.externalId, key);
     if (!keyToInsertIndex.has(key)) {
       keyToInsertIndex.set(key, sectionInserts.length);
@@ -581,7 +580,7 @@ async function rebuildSchedules(
         schoolId,
         teacherStaffId,
         period: sec.period,
-        courseName: sec.courseName,
+        courseName,
         isPlanning: sec.isPlanning ?? false,
       });
     }

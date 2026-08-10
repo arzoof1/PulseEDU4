@@ -257,8 +257,10 @@ export function resolveSchoolOrg(
     candidate.identifier?.trim() &&
     !schoolCodesMatch(config.stateSchoolCode, candidate.identifier)
   ) {
-    errors.push(
-      `PulseEDU state school code "${config.stateSchoolCode}" does not match ClassLink org identifier "${candidate.identifier}" for org ${candidate.sourcedId}.`,
+    // Trust the resolved ClassLink org; Pulse/state codes can drift (e.g.
+    // Wilton Pulse 8351 vs ClassLink 8400). Warn, do not block the sync.
+    warnings.push(
+      `PulseEDU state school code "${config.stateSchoolCode}" does not match ClassLink org identifier "${candidate.identifier}" for org ${candidate.sourcedId} (${candidate.name}). Syncing against ClassLink org anyway — update schools.state_school_code when convenient.`,
     );
   }
 
@@ -267,8 +269,8 @@ export function resolveSchoolOrg(
     candidate.identifier?.trim() &&
     !schoolCodesMatch(config.schoolOrgIdentifier, candidate.identifier)
   ) {
-    errors.push(
-      `Configured schoolOrgIdentifier "${config.schoolOrgIdentifier}" does not match ClassLink org identifier "${candidate.identifier}".`,
+    warnings.push(
+      `Configured schoolOrgIdentifier "${config.schoolOrgIdentifier}" does not match ClassLink org identifier "${candidate.identifier}". Using ClassLink org "${candidate.name}".`,
     );
   }
 
