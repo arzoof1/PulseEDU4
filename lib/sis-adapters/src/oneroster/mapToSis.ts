@@ -48,6 +48,28 @@ function belongsToSchool(user: OneRosterUser, schoolOrgSourcedId: string): boole
   );
 }
 
+/** Users linked to a school via orgs OR via any enrollment/class at that school. */
+function userIdsForSchool(
+  bundle: OneRosterFixtureBundle,
+  schoolOrgSourcedId: string,
+): Set<string> | null {
+  if (!schoolOrgSourcedId) return null;
+  const ids = new Set<string>();
+  for (const u of bundle.users) {
+    if (belongsToSchool(u, schoolOrgSourcedId)) ids.add(u.sourcedId);
+  }
+  for (const e of bundle.enrollments) {
+    if (
+      isActive(e.status) &&
+      e.school?.sourcedId === schoolOrgSourcedId &&
+      e.user?.sourcedId
+    ) {
+      ids.add(e.user.sourcedId);
+    }
+  }
+  return ids;
+}
+
 function classById(
   classes: OneRosterClass[],
 ): Map<string, OneRosterClass> {
@@ -97,18 +119,21 @@ export function mapOneRosterStudents(
   schoolOrgSourcedId?: string,
 ): SisStudent[] {
   const demoMap = demographicsByUserId(bundle);
+  const schoolUserIds = schoolOrgSourcedId
+    ? userIdsForSchool(bundle, schoolOrgSourcedId)
+    : null;
   return bundle.users
     .filter(
       (u) =>
         u.role === "student" &&
         isActive(u.status) &&
-        (!schoolOrgSourcedId || belongsToSchool(u, schoolOrgSourcedId)),
+        (!schoolUserIds || schoolUserIds.has(u.sourcedId)),
     )
     .map((u) => ({
       externalId: u.sourcedId,
       studentId: districtStudentId(u),
-      firstName: u.givenName.trim(),
-      lastName: u.familyName.trim(),
+      firstName: u.givenName.trim() || "Student",
+      lastName: u.familyName.trim() || u.sourcedId,
       gradeLevel: gradeLevel(u),
       ...mapStudentDemographics(u, demoMap.get(u.sourcedId)),
     }));
@@ -118,17 +143,23 @@ export function mapOneRosterStaff(
   bundle: OneRosterFixtureBundle,
   schoolOrgSourcedId?: string,
 ): SisStaff[] {
+  const schoolUserIds = schoolOrgSourcedId
+    ? userIdsForSchool(bundle, schoolOrgSourcedId)
+    : null;
   return bundle.users
     .filter(
       (u) =>
         STAFF_ROLES.has(u.role) &&
         isActive(u.status) &&
-        (!schoolOrgSourcedId || belongsToSchool(u, schoolOrgSourcedId)),
+        (!schoolUserIds || schoolUserIds.has(u.sourcedId)),
     )
     .map((u) => ({
       externalId: u.sourcedId,
       email: (u.email ?? "").trim(),
-      displayName: `${u.givenName.trim()} ${u.familyName.trim()}`.trim(),
+      displayName:
+        `${u.givenName.trim()} ${u.familyName.trim()}`.trim() ||
+        (u.email ?? "").trim() ||
+        `Staff ${u.sourcedId}`,
       primaryRoom: null,
       role: typeof u.role === "string" ? u.role.trim().toLowerCase() : null,
     }));

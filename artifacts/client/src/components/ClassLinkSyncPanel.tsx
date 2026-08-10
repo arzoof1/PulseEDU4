@@ -30,6 +30,7 @@ type IntegrationRow = {
   sisLastSyncAt: string | null;
   sisLastSyncStatus: string | null;
   resolvedSchoolId: number | null;
+  resolvedSchoolName: string | null;
   resolvedStateSchoolCode: string | null;
   configuredSchoolOrgSourcedId: string | null;
   configuredStateSchoolCode: string | null;
@@ -163,9 +164,18 @@ export default function ClassLinkSyncPanel() {
       const counts = json.counts
         ? ` students ${json.counts.studentsUpserted ?? 0}, staff ${json.counts.staffUpserted ?? 0}, sections ${json.counts.sectionsWritten ?? 0}`
         : "";
+      const warnBits = (json.errors ?? []).slice(0, 2).join(" · ");
       setBanner({
-        tone: json.ok ? "ok" : json.status === "partial" ? "warn" : "err",
-        text: `${row.syncButtonLabel}: ${json.message || json.error || "Done."}${counts}`,
+        tone: json.ok
+          ? json.status === "partial"
+            ? "warn"
+            : "ok"
+          : json.status === "partial"
+            ? "warn"
+            : "err",
+        text: `${row.syncButtonLabel}: ${json.message || json.error || "Done."}${counts}${
+          warnBits && json.status === "partial" ? ` — ${warnBits}` : ""
+        }`,
       });
       await load();
     } catch (err) {
@@ -445,8 +455,15 @@ export default function ClassLinkSyncPanel() {
                     {row.resolvedSchoolId != null
                       ? ` · Pulse school #${row.resolvedSchoolId}`
                       : " · Not mapped"}
+                    {row.resolvedSchoolName &&
+                    row.resolvedSchoolName !== row.schoolName
+                      ? ` (${row.resolvedSchoolName})`
+                      : ""}
                     {row.resolvedStateSchoolCode
                       ? ` · code ${row.resolvedStateSchoolCode}`
+                      : ""}
+                    {row.configuredSchoolOrgSourcedId
+                      ? ` · orgId ${row.configuredSchoolOrgSourcedId}`
                       : ""}
                   </div>
                   <div style={{ fontSize: 13, marginTop: 4 }}>
@@ -459,16 +476,16 @@ export default function ClassLinkSyncPanel() {
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={busy || row.sisProvider === "none"}
                     onClick={() => void runOne(row)}
                     style={{
                       padding: "8px 12px",
                       borderRadius: 8,
                       border: "none",
-                      background: "#2563eb",
+                      background: row.sisProvider === "none" ? "#9ca3af" : "#2563eb",
                       color: "#fff",
                       fontWeight: 600,
-                      cursor: busy ? "wait" : "pointer",
+                      cursor: busy || row.sisProvider === "none" ? "not-allowed" : "pointer",
                     }}
                   >
                     {syncing ? "Syncing…" : row.syncButtonLabel}

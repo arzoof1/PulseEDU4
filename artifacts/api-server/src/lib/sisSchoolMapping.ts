@@ -23,7 +23,7 @@ export type ResolvedSisSchoolMapping = {
 };
 
 export type ResolveSisSchoolMappingResult =
-  | { ok: true; mapping: ResolvedSisSchoolMapping }
+  | { ok: true; mapping: ResolvedSisSchoolMapping; warnings: string[] }
   | { ok: false; errors: string[] };
 
 function parseMappingConfig(
@@ -74,6 +74,7 @@ export async function resolveSisSchoolMapping(
   }
 
   const errors: string[] = [];
+  const warnings = [...(resolved.warnings ?? [])];
 
   if (
     pulseSchool.stateSchoolCode?.trim() &&
@@ -115,5 +116,6 @@ export async function resolveSisSchoolMapping(
       classLinkOrg: resolved.org,
       adapterConfig,
     },
+    warnings,
   };
 }

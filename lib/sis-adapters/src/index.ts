@@ -27,6 +27,8 @@ export type * from "./oneroster/types.js";
 export {
   resolveSchoolOrg,
   schoolCodesMatch,
+  schoolCodeLookupKeys,
+  stripSchoolCodePrefix,
   buildSchoolOrgIndex,
 } from "./oneroster/schoolMapping.js";
 export type {

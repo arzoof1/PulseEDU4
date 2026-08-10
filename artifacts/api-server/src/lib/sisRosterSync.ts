@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { bcryptHash } from "./bcrypt.js";
 import { logger } from "./logger.js";
+import { schoolCodeLookupKeys } from "@workspace/sis-adapters";
 
 type DbExecutor = Pick<typeof db, "insert" | "update" | "delete" | "select">;
 
@@ -117,6 +118,7 @@ function summarizeStatus(errors: string[]): SisSyncStatus {
 
 function statusMessage(status: SisSyncStatus, errors: string[]): string {
   if (status === "success") return "Roster sync completed successfully.";
+  if (status === "partial" && errors.length === 1) return errors[0]!;
   if (errors.length === 1) return errors[0]!;
   return `Roster sync completed with ${errors.length} warnings.`;
 }
@@ -138,45 +140,90 @@ export async function resolveSchoolIdForIntegration(
     stateSchoolCode: schoolsTable.stateSchoolCode,
   };
 
+  const toResolved = (school: {
+    id: number;
+    name: string;
+    stateSchoolCode: string | null;
+  }): ResolvedPulseSchool => ({
+    schoolId: school.id,
+    schoolName: school.name,
+    stateSchoolCode: school.stateSchoolCode,
+  });
+
+  const [byIntegrationName] = row.schoolName?.trim()
+    ? await db
+        .select(schoolCols)
+        .from(schoolsTable)
+        .where(eq(schoolsTable.name, row.schoolName.trim()))
+    : [];
+
+  let byId: ResolvedPulseSchool | null = null;
   if (cfg.schoolId != null && cfg.schoolId > 0) {
     const [school] = await db
       .select(schoolCols)
       .from(schoolsTable)
       .where(eq(schoolsTable.id, cfg.schoolId));
-    if (school) {
-      return {
-        schoolId: school.id,
-        schoolName: school.name,
-        stateSchoolCode: school.stateSchoolCode,
-      };
-    }
+    if (school) byId = toResolved(school);
   }
 
-  if (cfg.stateSchoolCode?.trim()) {
-    const code = cfg.stateSchoolCode.trim();
-    const [school] = await db
+  // Prefer the integration's schoolName over a stale sis_config.schoolId when
+  // they disagree (root cause of "Pace" cards writing into Bayonet Point).
+  if (
+    byIntegrationName &&
+    byId &&
+    byIntegrationName.id !== byId.schoolId
+  ) {
+    logger.warn(
+      {
+        integrationId: row.id,
+        integrationSchoolName: row.schoolName,
+        configSchoolId: cfg.schoolId,
+        configSchoolName: byId.schoolName,
+        nameMatchedId: byIntegrationName.id,
+      },
+      "SIS sync: sis_config.schoolId disagrees with district_integrations.schoolName — using name match",
+    );
+    return toResolved(byIntegrationName);
+  }
+  if (byId) return byId;
+  if (byIntegrationName) return toResolved(byIntegrationName);
+
+  // Prefer explicit identifier, then state code — try every ENT/pad variant
+  // so ENT0342 finds a Pulse school stored as 0342 (and vice versa).
+  const codeHints = [
+    cfg.schoolOrgIdentifier,
+    cfg.stateSchoolCode,
+  ].filter((c): c is string => typeof c === "string" && c.trim().length > 0);
+
+  const codeKeys = Array.from(
+    new Set(codeHints.flatMap((c) => schoolCodeLookupKeys(c))),
+  );
+  if (codeKeys.length > 0) {
+    const matches = await db
       .select(schoolCols)
       .from(schoolsTable)
-      .where(eq(schoolsTable.stateSchoolCode, code));
-    if (school) {
-      return {
-        schoolId: school.id,
-        schoolName: school.name,
-        stateSchoolCode: school.stateSchoolCode,
-      };
+      .where(inArray(schoolsTable.stateSchoolCode, codeKeys));
+    if (matches.length === 1) {
+      return toResolved(matches[0]!);
     }
-  }
-
-  const [byName] = await db
-    .select(schoolCols)
-    .from(schoolsTable)
-    .where(eq(schoolsTable.name, row.schoolName));
-  if (byName) {
-    return {
-      schoolId: byName.id,
-      schoolName: byName.name,
-      stateSchoolCode: byName.stateSchoolCode,
-    };
+    if (matches.length > 1) {
+      const prefer = cfg.stateSchoolCode?.trim();
+      const exact = prefer
+        ? matches.find((m) => m.stateSchoolCode === prefer)
+        : undefined;
+      const school = exact ?? matches[0]!;
+      logger.warn(
+        {
+          integrationId: row.id,
+          schoolName: row.schoolName,
+          codeKeys,
+          matchedIds: matches.map((m) => m.id),
+          chosenId: school.id,
+        },
+        "SIS sync: multiple Pulse schools matched state code variants; using one",
+      );
+      return toResolved(school);
+    }
   }
 
   return null;
@@ -756,6 +803,9 @@ export async function runSisSync(
     }
 
     const { mapping } = mappingResult;
+    for (const w of mappingResult.warnings) {
+      errors.push(w);
+    }
     const adapter =
       buildAdapter(row, mapping.adapterConfig) ?? probeAdapter;
     const schoolMapping = toSyncSchoolMapping(resolved, mapping.classLinkOrg);
@@ -766,6 +816,44 @@ export async function runSisSync(
       adapter.listClassSections(),
       adapter.listEnrollments(),
     ]);
+
+    const feedEmpty =
+      students.length === 0 &&
+      staff.length === 0 &&
+      sections.length === 0;
+
+    if (feedEmpty) {
+      errors.push(
+        `ClassLink returned no students, staff, or classes for org "${mapping.classLinkOrg.name}" (${mapping.classLinkOrg.sourcedId}` +
+          (mapping.classLinkOrg.identifier
+            ? `, identifier ${mapping.classLinkOrg.identifier}`
+            : "") +
+          "). Existing PulseEDU roster was left unchanged.",
+      );
+      const status = summarizeStatus(errors);
+      const result: SisSyncResult = {
+        ok: true,
+        status,
+        integrationId: row.id,
+        schoolId,
+        schoolName,
+        schoolMapping,
+        counts,
+        errors,
+        message: statusMessage(status, errors),
+      };
+      await persistSyncStatus(row.id, status, errors);
+      logger.warn(
+        {
+          schoolId,
+          integrationId: row.id,
+          org: mapping.classLinkOrg,
+          warnings: mappingResult.warnings,
+        },
+        "SIS roster sync: empty ClassLink feed — skipped writes",
+      );
+      return result;
+    }
 
     await db.transaction(async (tx) => {
       counts.studentsUpserted = await upsertStudents(
@@ -842,6 +930,7 @@ export async function listSisSyncIntegrations(): Promise<
     sisLastSyncAt: Date | null;
     sisLastSyncStatus: string | null;
     resolvedSchoolId: number | null;
+    resolvedSchoolName: string | null;
     resolvedStateSchoolCode: string | null;
     configuredSchoolOrgSourcedId: string | null;
     configuredStateSchoolCode: string | null;
@@ -859,6 +948,7 @@ export async function listSisSyncIntegrations(): Promise<
       sisLastSyncAt: row.sisLastSyncAt,
       sisLastSyncStatus: row.sisLastSyncStatus,
       resolvedSchoolId: resolved?.schoolId ?? null,
+      resolvedSchoolName: resolved?.schoolName ?? null,
       resolvedStateSchoolCode: resolved?.stateSchoolCode ?? null,
       configuredSchoolOrgSourcedId: cfg.schoolOrgSourcedId ?? null,
       configuredStateSchoolCode: cfg.stateSchoolCode ?? null,
@@ -957,6 +1047,7 @@ export type SisDistrictDashboardRow = {
   sisLastSyncAt: Date | null;
   sisLastSyncStatus: string | null;
   resolvedSchoolId: number | null;
+  resolvedSchoolName: string | null;
   resolvedStateSchoolCode: string | null;
   configuredSchoolOrgSourcedId: string | null;
   configuredStateSchoolCode: string | null;
