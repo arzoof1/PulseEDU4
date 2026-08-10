@@ -16,7 +16,18 @@ import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import { is } from "drizzle-orm";
 import * as workspace from "@workspace/db";
 
-const { pool } = workspace as unknown as { pool: import("pg").Pool };
+// Minimal Pool shape for typecheck — runtime pool still comes from
+// @workspace/db (which depends on `pg`). Avoids requiring `pg` types to
+// resolve under @workspace/scripts alone.
+type QueryResult<T> = { rows: T[] };
+type PgPool = {
+  query(sql: string): Promise<QueryResult<Record<string, unknown>>>;
+  query<T extends Record<string, unknown>>(
+    sql: string,
+  ): Promise<QueryResult<T>>;
+  end(): Promise<void>;
+};
+const { pool } = workspace as unknown as { pool: PgPool };
 
 function quoteLiteral(v: string): string {
   return `'${v.replace(/'/g, "''")}'`;
