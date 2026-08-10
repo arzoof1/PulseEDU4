@@ -25,7 +25,7 @@
     "@types/node": "catalog:",
     "@types/pg": "^8.18.0",
     "docx": "^9.7.1",
-    "puppeteer": "^25.0.2",
+    "puppeteer": "^25.5.0",
     "tsx": "catalog:"
   },
   "dependencies": {
