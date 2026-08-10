@@ -13,6 +13,12 @@ export interface SisStaff {
   displayName: string;
   /** Primary classroom / homeroom, if the SIS exposes one. */
   primaryRoom: string | null;
+  /**
+   * OneRoster / SIS role string when the feed provides one
+   * (teacher | administrator | aide | proctor | …). Stored on
+   * `staff.sis_role` for sync dashboards and onboarding.
+   */
+  role?: string | null;
 }
 
 export interface SisStudent {

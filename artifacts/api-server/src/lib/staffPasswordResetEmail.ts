@@ -11,18 +11,30 @@ export async function sendStaffPasswordResetEmail(args: {
   displayName: string;
   resetUrl: string;
   expiresMinutes: number;
+  /** When true, use set-password invite copy instead of forgot-password. */
+  invite?: boolean;
 }): Promise<{ id: string }> {
   const { client, fromEmail } = await getUncachableResendClient();
-  const subject = "Reset your PulseEDU password";
+  const invite = args.invite === true;
+  const subject = invite
+    ? "Set your PulseEDU password"
+    : "Reset your PulseEDU password";
+  const intro = invite
+    ? `Your PulseEDU staff account is ready. Set a password to sign in.`
+    : `We received a request to reset your PulseEDU password.`;
+  const cta = invite ? "Set password" : "Reset password";
+  const heading = invite ? "Set your password" : "Reset your password";
   const text = [
     `Hello ${args.displayName},`,
     ``,
-    `We received a request to reset your PulseEDU password.`,
-    `Click the link below to choose a new password. This link expires in ${args.expiresMinutes} minutes and can only be used once.`,
+    intro,
+    `Click the link below to choose a password. This link expires in ${args.expiresMinutes} minutes and can only be used once.`,
     ``,
     args.resetUrl,
     ``,
-    `If you did not request this, you can ignore this email and your password will stay unchanged.`,
+    invite
+      ? `If you already set a password, you can ignore this email.`
+      : `If you did not request this, you can ignore this email and your password will stay unchanged.`,
     ``,
     `PulseEDU`,
   ].join("\n");
@@ -34,20 +46,20 @@ export async function sendStaffPasswordResetEmail(args: {
       <tr>
         <td style="background:linear-gradient(135deg,#0ea5a4 0%,#2563eb 100%);padding:24px 28px;">
           <div style="color:#ffffff;font-size:13px;letter-spacing:1.5px;text-transform:uppercase;opacity:0.85;">PulseEDU</div>
-          <div style="color:#ffffff;font-size:22px;font-weight:700;margin-top:6px;">Reset your password</div>
+          <div style="color:#ffffff;font-size:22px;font-weight:700;margin-top:6px;">${heading}</div>
         </td>
       </tr>
       <tr>
         <td style="padding:24px 28px;color:#1f2937;font-size:15px;line-height:1.55;">
           <p style="margin:0 0 14px 0;">Hello ${escapeHtml(args.displayName)},</p>
-          <p style="margin:0 0 14px 0;">We received a request to reset your PulseEDU password.</p>
-          <p style="margin:0 0 22px 0;">Click the button below to choose a new password. This link expires in ${args.expiresMinutes} minutes and can only be used once.</p>
+          <p style="margin:0 0 14px 0;">${escapeHtml(intro)}</p>
+          <p style="margin:0 0 22px 0;">Click the button below to choose a password. This link expires in ${args.expiresMinutes} minutes and can only be used once.</p>
           <p style="margin:0 0 22px 0;text-align:center;">
-            <a href="${args.resetUrl}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:10px;font-weight:600;font-size:15px;">Reset password</a>
+            <a href="${args.resetUrl}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:10px;font-weight:600;font-size:15px;">${cta}</a>
           </p>
           <p style="margin:0 0 6px 0;color:#6b7280;font-size:13px;">Or paste this link into your browser:</p>
           <p style="margin:0 0 22px 0;word-break:break-all;color:#2563eb;font-size:13px;">${args.resetUrl}</p>
-          <p style="margin:0;color:#6b7280;font-size:13px;">If you did not request this, you can ignore this email and your password will stay unchanged.</p>
+          <p style="margin:0;color:#6b7280;font-size:13px;">${invite ? "If you already set a password, you can ignore this email." : "If you did not request this, you can ignore this email and your password will stay unchanged."}</p>
         </td>
       </tr>
     </table>

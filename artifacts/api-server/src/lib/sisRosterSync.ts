@@ -104,6 +104,12 @@ function parseGrade(gradeLevel: string | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function normalizeSisRole(role: string | null | undefined): string | null {
+  if (role == null) return null;
+  const t = String(role).trim().toLowerCase();
+  return t.length > 0 ? t : null;
+}
+
 function summarizeStatus(errors: string[]): SisSyncStatus {
   if (errors.length === 0) return "success";
   return "partial";
@@ -341,6 +347,8 @@ async function upsertStaff(
       continue;
     }
 
+    const sisRole = normalizeSisRole(s.role);
+
     // 1. Already a staff row for THIS school — update in place.
     const localMatch = byExternal.get(s.externalId) ?? byEmail.get(email) ?? null;
     if (localMatch) {
@@ -349,6 +357,7 @@ async function upsertStaff(
         .set({
           externalId: s.externalId,
           displayName: s.displayName,
+          ...(sisRole ? { sisRole } : {}),
           // Never touch passwordHash on sync.
         })
         .where(and(eq(staffTable.id, localMatch.id), eq(staffTable.schoolId, schoolId)));
@@ -364,13 +373,20 @@ async function upsertStaff(
     //    creating a duplicate (which the global email constraint forbids).
     const globalMatch = globalByEmail.get(email);
     if (globalMatch) {
+      if (sisRole) {
+        await ex
+          .update(staffTable)
+          .set({ sisRole, externalId: s.externalId })
+          .where(eq(staffTable.id, globalMatch.id));
+      }
       staffExternalToId.set(s.externalId, globalMatch.id);
       skipped++;
       continue;
     }
 
-    // 3. Brand-new staff for the district. onConflictDoNothing guarantees we
-    //    never raise (and never poison the txn) even under a race.
+    // 3. Brand-new staff for the district. Placeholder password + must_set_password
+    //    until they complete invite / forgot-password. ClassLink administrator
+    //    → isAdmin on insert only (never downgrade on later syncs).
     const passwordHash = await bcryptHash(
       `sis-sync-no-login-${randomUUID()}`,
       10,
@@ -383,6 +399,9 @@ async function upsertStaff(
         passwordHash,
         displayName: s.displayName,
         externalId: s.externalId,
+        sisRole,
+        mustSetPassword: true,
+        isAdmin: sisRole === "administrator",
         active: true,
       })
       .onConflictDoNothing({ target: staffTable.email })
@@ -917,6 +936,108 @@ export async function runScheduledSisRosterSyncs(): Promise<
   }
 
   return results;
+}
+
+export type SisSchoolLiveCounts = {
+  students: number;
+  staffActive: number;
+  teachers: number;
+  admins: number;
+  otherStaff: number;
+  pulseAdmins: number;
+  needingPassword: number;
+  sections: number;
+  enrollments: number;
+};
+
+export type SisDistrictDashboardRow = {
+  id: number;
+  schoolName: string;
+  sisProvider: string;
+  sisLastSyncAt: Date | null;
+  sisLastSyncStatus: string | null;
+  resolvedSchoolId: number | null;
+  resolvedStateSchoolCode: string | null;
+  configuredSchoolOrgSourcedId: string | null;
+  configuredStateSchoolCode: string | null;
+  live: SisSchoolLiveCounts | null;
+};
+
+async function loadSchoolLiveCounts(
+  schoolId: number,
+): Promise<SisSchoolLiveCounts> {
+  const [studentRow] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(studentsTable)
+    .where(eq(studentsTable.schoolId, schoolId));
+
+  const staffRows = await db
+    .select({
+      sisRole: staffTable.sisRole,
+      isAdmin: staffTable.isAdmin,
+      mustSetPassword: staffTable.mustSetPassword,
+      active: staffTable.active,
+    })
+    .from(staffTable)
+    .where(eq(staffTable.schoolId, schoolId));
+
+  let staffActive = 0;
+  let teachers = 0;
+  let admins = 0;
+  let otherStaff = 0;
+  let pulseAdmins = 0;
+  let needingPassword = 0;
+  for (const row of staffRows) {
+    if (!row.active) continue;
+    staffActive++;
+    const role = (row.sisRole ?? "").trim().toLowerCase();
+    if (role === "teacher") teachers++;
+    else if (role === "administrator") admins++;
+    else otherStaff++;
+    if (row.isAdmin) pulseAdmins++;
+    if (row.mustSetPassword) needingPassword++;
+  }
+
+  const [sectionRow] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(classSectionsTable)
+    .where(eq(classSectionsTable.schoolId, schoolId));
+
+  const [enrollmentRow] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(sectionRosterTable)
+    .where(eq(sectionRosterTable.schoolId, schoolId));
+
+  return {
+    students: Number(studentRow?.n ?? 0),
+    staffActive,
+    teachers,
+    admins,
+    otherStaff,
+    pulseAdmins,
+    needingPassword,
+    sections: Number(sectionRow?.n ?? 0),
+    enrollments: Number(enrollmentRow?.n ?? 0),
+  };
+}
+
+/**
+ * District ClassLink control-panel payload: integrations + live PulseEDU counts.
+ */
+export async function getSisDistrictDashboard(): Promise<SisDistrictDashboardRow[]> {
+  const integrations = await listSisSyncIntegrations();
+  const out: SisDistrictDashboardRow[] = [];
+  for (const row of integrations) {
+    if (row.sisProvider !== "classlink" && row.sisProvider !== "mock") {
+      // Still include non-classlink if configured for SIS so ops can see them.
+    }
+    const live =
+      row.resolvedSchoolId != null
+        ? await loadSchoolLiveCounts(row.resolvedSchoolId)
+        : null;
+    out.push({ ...row, live });
+  }
+  return out;
 }
 
 export async function ensureParrottClasslinkIntegration(): Promise<number> {

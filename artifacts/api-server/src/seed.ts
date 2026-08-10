@@ -4253,6 +4253,19 @@ export async function ensureStaffPasswordResetsSchema(): Promise<void> {
   );
 }
 
+/** ClassLink / OneRoster invite onboarding columns on staff. */
+export async function ensureStaffSisInviteColumns(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS sis_role TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS must_set_password BOOLEAN NOT NULL DEFAULT false`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS staff_must_set_password_idx ON staff (school_id, must_set_password) WHERE must_set_password = true`,
+  );
+}
+
 // PBIS point-balance migration ledger + the import_job_id stamp on
 // pbis_entries (used by the "count as earned" migration path so its rows can
 // be rolled back by job). Additive + idempotent — direct SQL (drizzle-kit

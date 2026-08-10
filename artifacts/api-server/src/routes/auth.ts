@@ -316,7 +316,7 @@ router.post("/auth/reset-password", async (req: Request, res) => {
   const passwordHash = await bcryptHash(newPassword, 10);
   await db
     .update(staffTable)
-    .set({ passwordHash })
+    .set({ passwordHash, mustSetPassword: false })
     .where(eq(staffTable.id, staff.id));
 
   await bumpStaffAuthTokenVersion(staff.id);
@@ -664,7 +664,7 @@ router.post("/auth/change-password", async (req: Request, res) => {
   const passwordHash = await bcryptHash(newPassword, 10);
   await db
     .update(staffTable)
-    .set({ passwordHash })
+    .set({ passwordHash, mustSetPassword: false })
     .where(eq(staffTable.id, staffId));
 
   await bumpStaffAuthTokenVersion(staffId);
@@ -859,7 +859,7 @@ router.post("/auth/reset", async (req: Request, res) => {
   const passwordHash = await bcryptHash(newPassword, 10);
   await db
     .update(staffTable)
-    .set({ passwordHash })
+    .set({ passwordHash, mustSetPassword: false })
     .where(eq(staffTable.id, staff.id));
 
   await bumpStaffAuthTokenVersion(staff.id);

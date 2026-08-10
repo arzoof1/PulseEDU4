@@ -339,6 +339,12 @@ export const staffTable = pgTable("staff", {
 
   externalId: text("external_id"),
   ssoProvider: text("sso_provider"),
+  // Last role string from the SIS/OneRoster feed (teacher / administrator /
+  // aide / proctor). Used by the ClassLink Sync dashboard; not an ACL grant.
+  sisRole: text("sis_role"),
+  // True for accounts created by roster sync with a placeholder password
+  // until the staff member completes set-password / forgot-password.
+  mustSetPassword: boolean("must_set_password").notNull().default(false),
   active: boolean("active").notNull().default(true),
   // Per-user UI preferences (jsonb). Free-form key/value bag for
   // individual UI customizations that should sync across devices —

@@ -48,6 +48,7 @@ import {
   ensureSchoolsTimezoneColumn,
   ensureSpotlightPbisReason,
   ensureStaffPasswordResetsSchema,
+  ensureStaffSisInviteColumns,
   ensureStudentAccommodationsBackfill,
   ensureStudentLocalSisIdBackfill,
   ensureStudentPhotoColumns,
@@ -179,6 +180,7 @@ export async function runSeed(): Promise<void> {
   await ensureSchoolGradeSchema();
   await ensureEligibilitySchema();
   await ensureStaffPasswordResetsSchema();
+  await ensureStaffSisInviteColumns();
   await ensureMfaSchema();
   await ensureSchoolsTimezoneColumn();
   await ensureStudentPhotoColumns();
@@ -326,6 +328,7 @@ export async function runMigrations(): Promise<void> {
     ["ensureSchoolGradeSchema", ensureSchoolGradeSchema],
     ["ensureEligibilitySchema", ensureEligibilitySchema],
     ["ensureStaffPasswordResetsSchema", ensureStaffPasswordResetsSchema],
+    ["ensureStaffSisInviteColumns", ensureStaffSisInviteColumns],
     ["ensureMfaSchema", ensureMfaSchema],
     ["ensureParentMessagesSchema", ensureParentMessagesSchema],
     ["ensureCommunicationSchema", ensureCommunicationSchema],

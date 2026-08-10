@@ -130,6 +130,7 @@ export function mapOneRosterStaff(
       email: (u.email ?? "").trim(),
       displayName: `${u.givenName.trim()} ${u.familyName.trim()}`.trim(),
       primaryRoom: null,
+      role: typeof u.role === "string" ? u.role.trim().toLowerCase() : null,
     }));
 }
 

@@ -85,6 +85,7 @@ import DataChatsAdminPage, {
   DataChatQueueModal,
 } from "./components/DataChats";
 import FeatureLicensingAdminPage from "./components/featureLicensing/FeatureLicensingAdminPage";
+import ClassLinkSyncPanel from "./components/ClassLinkSyncPanel";
 import SecurityEvents from "./components/SecurityEvents";
 import SuperUserHomeRollups from "./components/districtOverview/SuperUserHomeRollups";
 import DistrictOverviewRollups from "./components/districtOverview/DistrictOverviewRollups";
@@ -4103,7 +4104,7 @@ const INSIGHTS_TILES: InsightsTile[] = [
 // pbisReports etc. all live under Recognition because that's where their
 // nav items render. Keep this in sync with the sidebar JSX below.
 const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
-  administration: ["superUserHome", "featureLicensing", "districtAdmin", "securityEvents"],
+  administration: ["superUserHome", "featureLicensing", "classLinkSync", "districtAdmin", "securityEvents"],
   insights: ["insights", "insightsWatchlist", "myWatchList", "studentProfile", "classComposer", "contactRate"],
   recognition: [
     "pbis",
@@ -5960,6 +5961,7 @@ function App() {
     | "parentAccess"
     | "superUserHome"
     | "featureLicensing"
+    | "classLinkSync"
     | "districtAdmin"
     | "securityEvents"
     | "insights"
@@ -10824,6 +10826,9 @@ function App() {
     if (!canActAsDistrict && activeSection === "districtAdmin") {
       setActiveSection("hallPasses");
     }
+    if (!canActAsDistrict && activeSection === "classLinkSync") {
+      setActiveSection("hallPasses");
+    }
     // Phase 2: Insights gated on the same canAccessMtssHub predicate that
     // already governs the legacy MTSS pages. Once district CSV imports
     // ship in Phase 3 we'll broaden this to anyone who should see the
@@ -12583,6 +12588,12 @@ function App() {
                   renderNavItem({
                     key: "featureLicensing",
                     label: "Feature Licensing",
+                    icon: IconClipboard,
+                  })}
+                {canActAsDistrict &&
+                  renderNavItem({
+                    key: "classLinkSync",
+                    label: "ClassLink Sync",
                     icon: IconClipboard,
                   })}
                 {renderNavItem({
@@ -20202,6 +20213,10 @@ function App() {
 
       {activeSection === "featureLicensing" && isSuperUser && (
         <FeatureLicensingAdminPage />
+      )}
+
+      {activeSection === "classLinkSync" && canActAsDistrict && (
+        <ClassLinkSyncPanel />
       )}
 
       {activeSection === "verifyPullouts" && canVerifyPullouts && (
