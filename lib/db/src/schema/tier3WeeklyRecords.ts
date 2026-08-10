@@ -8,6 +8,7 @@ import {
   index,
   boolean,
 } from "drizzle-orm/pg-core";
+import { encryptedText } from "./_encrypted";
 
 // Tier 3 weekly tracking record. ONE row per (student, teacher, week).
 // Every teacher on a Tier 3 student's schedule must complete their own
@@ -45,13 +46,13 @@ export const tier3WeeklyRecordsTable = pgTable(
     thuScore: integer("thu_score"),
     friScore: integer("fri_score"),
 
-    monComment: text("mon_comment"),
-    tueComment: text("tue_comment"),
-    wedComment: text("wed_comment"),
-    thuComment: text("thu_comment"),
-    friComment: text("fri_comment"),
+    monComment: encryptedText("mon_comment"),
+    tueComment: encryptedText("tue_comment"),
+    wedComment: encryptedText("wed_comment"),
+    thuComment: encryptedText("thu_comment"),
+    friComment: encryptedText("fri_comment"),
 
-    weeklyComment: text("weekly_comment").notNull().default(""),
+    weeklyComment: encryptedText("weekly_comment").notNull().default(""),
 
     prideMon: integer("pride_mon"),
     prideTue: integer("pride_tue"),
@@ -107,7 +108,7 @@ export const tier3WeeklyRecordsTable = pgTable(
     releasedNoIntervention: boolean("released_no_intervention")
       .notNull()
       .default(false),
-    releaseReason: text("release_reason"),
+    releaseReason: encryptedText("release_reason"),
     releasedByStaffId: integer("released_by_staff_id"),
     releasedAt: timestamp("released_at", { withTimezone: true }),
 

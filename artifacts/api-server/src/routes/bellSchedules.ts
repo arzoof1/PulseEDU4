@@ -16,7 +16,7 @@ import {
   BELL_BLOCK_TYPES,
 } from "@workspace/db";
 import { and, asc, eq, inArray, ne } from "drizzle-orm";
-import { verifyAuthToken } from "../lib/authToken.js";
+import { staffIdFromBearerToken } from "../lib/staffBearerAuth.js";
 import { requireSchool } from "../lib/scope.js";
 import {
   loadDayTypeContext,
@@ -32,7 +32,7 @@ async function loadStaff(req: Request): Promise<StaffRow | null> {
   if (!id) {
     const auth = req.headers.authorization;
     if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      id = verifyAuthToken(auth.slice(7).trim());
+      id = await staffIdFromBearerToken(auth.slice(7).trim());
     }
   }
   if (!id) return null;

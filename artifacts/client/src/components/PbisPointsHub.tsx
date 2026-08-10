@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { fetchAllStudents } from "../lib/students";
 import StudentPhoto from "./StudentPhoto";
 import { TeacherPicker } from "./TeacherPicker";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
@@ -247,10 +248,10 @@ export default function PbisPointsHub({
           meJson.isEseCoordinator
         );
 
-        const [schedRes, studRes, reasonsRes, pbisRes, tplRes, ivRes, settingsRes] =
+        const [schedRes, studJson, reasonsRes, pbisRes, tplRes, ivRes, settingsRes] =
           await Promise.all([
             authFetch(adminScope ? "/api/schedule?all=1" : "/api/schedule"),
-            authFetch("/api/students"),
+            fetchAllStudents<Student>(),
             authFetch("/api/pbis-reasons"),
             authFetch("/api/pbis"),
             authFetch("/api/pbis-note-templates"),
@@ -258,13 +259,11 @@ export default function PbisPointsHub({
             authFetch("/api/school-settings"),
           ]);
         if (!schedRes.ok) throw new Error("Failed to load class schedule");
-        if (!studRes.ok) throw new Error("Failed to load students");
         if (!reasonsRes.ok) throw new Error("Failed to load PBIS reasons");
         if (!pbisRes.ok) throw new Error("Failed to load PBIS entries");
         // Note templates are non-critical — if they fail, fall back to empty.
 
         const schedJson = (await schedRes.json()) as { sections: Section[] };
-        const studJson = (await studRes.json()) as Student[];
         const reasonsJson = (await reasonsRes.json()) as Reason[];
         const pbisJson = (await pbisRes.json()) as PbisEntry[];
         const tplJson = tplRes.ok

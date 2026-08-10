@@ -6,6 +6,7 @@ import {
   timestamp,
   index,
 } from "drizzle-orm/pg-core";
+import { encryptedText } from "./_encrypted";
 
 // A single logged family communication (a call/email/message about a student).
 // School-scoped + FLEID-safe (student_id is the FK; surfaces render localSisId).
@@ -31,7 +32,7 @@ export const communicationLogsTable = pgTable(
     outcome: text("outcome").notNull(),
     // positive | neutral | concern
     tone: text("tone").notNull().default("neutral"),
-    note: text("note"),
+    note: encryptedText("note"),
     staffId: integer("staff_id").notNull(),
     staffName: text("staff_name").notNull(),
     contactedAt: timestamp("contacted_at", { withTimezone: true }).notNull(),

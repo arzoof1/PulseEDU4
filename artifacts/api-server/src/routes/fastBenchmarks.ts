@@ -69,6 +69,38 @@ type StaffRow = typeof staffTable.$inferSelect;
 const VALID_SUBJECTS = new Set(["ela", "math", "algebra1", "geometry"]);
 const VALID_WINDOWS = new Set(["pm1", "pm2", "pm3"]);
 
+const PDF_HEADER_SIN45 = Math.SQRT1_2;
+const PDF_HEADER_COS45 = Math.SQRT1_2;
+
+// Short column label for the printable heatmap — mirrors the on-screen
+// heatmap (last two dotted segments for ELA; benchmark portion after
+// "|" for Math composites).
+function pdfBenchmarkShortLabel(code: string): string {
+  if (code.includes("|")) {
+    const pieces = code.split(/\s+and\s+/i).map((part) => {
+      const seg = part.trim();
+      const pipe = seg.lastIndexOf("|");
+      return pipe >= 0 ? seg.slice(pipe + 1) : seg;
+    });
+    return [...new Set(pieces)].join(" / ");
+  }
+  const segs = code.split(".");
+  return segs.length >= 2 ? segs.slice(-2).join(".") : code;
+}
+
+function computePdfHeaderHeight(
+  doc: InstanceType<typeof PDFDocument>,
+  labels: string[],
+  fontSize: number,
+): number {
+  doc.font("Helvetica").fontSize(fontSize);
+  let maxReach = 0;
+  for (const label of labels) {
+    maxReach = Math.max(maxReach, doc.widthOfString(label) * PDF_HEADER_SIN45);
+  }
+  return Math.min(130, Math.max(46, Math.ceil(maxReach) + 14));
+}
+
 async function resolveStaff(req: Request): Promise<StaffRow | null> {
   const id = req.staffId;
   if (!id) return null;
@@ -1464,76 +1496,50 @@ router.get(
         });
       }
 
-      // Column headers — rotate -45° so codes sit over narrow columns.
-      // Math benchmark codes are long "STRAND|BENCHMARK" composites (e.g.
-      // "MA.7.NSO.1|MA.7.NSO.1.1", up to 49 chars for multi-standard items
-      // like "MA.8.DP.2|MA.8.DP.2.3 and MA.8.DP.2.2|MA.8.DP.2.3"). Printing
-      // the raw code overflowed upward into the Bottom-3 tile and clipped the
-      // right margin. We display the BENCHMARK portion only (the part after
-      // "|"), deduped across " and " composites — this keeps the full
-      // standard identity (e.g. "MA.7.NSO.1.1") at ELA-like length. ELA codes
-      // have no "|" and pass through unchanged.
-      const shortCode = (code: string): string => {
-        const benches = code.split(/\s+and\s+/).map((p) => {
-          const i = p.lastIndexOf("|");
-          return (i >= 0 ? p.slice(i + 1) : p).trim();
-        });
-        const uniq = Array.from(new Set(benches.filter(Boolean)));
-        return uniq.join(" / ") || code;
-      };
-
-      // Size the header band to the tallest rotated label so nothing bleeds
-      // into the tile above. At -45° the vertical extent ≈ textWidth * sin45.
-      // Clamp to [46, 130]: 46 keeps ELA-length codes tight; 130 caps the
-      // band for the longest math composites.
-      doc.font("Helvetica").fontSize(7);
-      let maxLabelW = 0;
-      for (const b of chunk) {
-        const w = doc.widthOfString(shortCode(b.code));
-        if (w > maxLabelW) maxLabelW = w;
+      // Column header row — anchor each short label at its column's
+      // LEFT edge on the grid rule, rotate -45°, draw left-aligned so
+      // text rises up-and-to-the-right (see .agents/memory/fast-benchmarks-
+      // pdf-headers.md). Dynamic headerHeight keeps labels above the rule.
+      const shortLabels = chunk.map((b) => pdfBenchmarkShortLabel(b.code));
+      let fontSize = 7;
+      const pageRight = doc.page.width - doc.page.margins.right;
+      doc.font("Helvetica").fontSize(fontSize);
+      while (fontSize > 5) {
+        let fits = true;
+        for (let i = 0; i < chunk.length; i++) {
+          const colLeft = doc.page.margins.left + nameColW + i * cellW;
+          const w = doc.widthOfString(shortLabels[i]);
+          if (colLeft + w * PDF_HEADER_COS45 > pageRight - 4) {
+            fits = false;
+            break;
+          }
+        }
+        if (fits) break;
+        fontSize -= 0.5;
+        doc.fontSize(fontSize);
       }
-      const headerHeight = Math.min(
-        130,
-        Math.max(46, Math.ceil(maxLabelW * 0.7071) + 10),
-      );
-      // Small buffer above the band so the rotated text never bleeds
-      // into the bottom-3 tile above on chunk 0, or into the previous
-      // row of cells on subsequent chunks.
-      doc.y = doc.y + 4;
+      const headerHeight = computePdfHeaderHeight(doc, shortLabels, fontSize);
+      doc.y = doc.y + 6;
       const headerY = doc.y;
       doc
         .font("Helvetica-Bold")
         .fontSize(9)
+        .fillColor("#111")
         .text("Student", doc.page.margins.left, headerY + headerHeight - 14, {
           width: nameColW,
         });
 
-      const rightLimit = doc.page.width - doc.page.margins.right;
-      chunk.forEach((b, i) => {
-        // Anchor each rotated code at the LEFT edge of its own column, sitting
-        // on the grid rule, then let it rise up-and-to-the-right at 45°. With
-        // translate()+rotate() the diagonal body sits over its own column and
-        // the bottom tip points at the column. The previous approach anchored
-        // the text's right edge at the column CENTER and let it sag up-LEFT,
-        // which pushed the first column's label back over the "Student" name
-        // column and left every code visually offset from its cells. Long
-        // composites can still reach past the right margin, so shrink the font
-        // (down to 5pt) just for labels whose diagonal reach would cross it.
+      chunk.forEach((_b, i) => {
         const colLeft = doc.page.margins.left + nameColW + i * cellW;
-        const label = shortCode(b.code);
-        let fs = 7;
-        doc.font("Helvetica").fontSize(fs);
-        while (
-          fs > 5 &&
-          colLeft + 2 + doc.widthOfString(label) * 0.7071 > rightLimit
-        ) {
-          fs -= 0.5;
-          doc.fontSize(fs);
-        }
+        const anchorY = headerY + headerHeight;
         doc.save();
-        doc.translate(colLeft + 2, headerY + headerHeight - 2);
+        doc.translate(colLeft, anchorY);
         doc.rotate(-45);
-        doc.fillColor("#111").text(label, 0, -3, { lineBreak: false });
+        doc
+          .font("Helvetica")
+          .fontSize(fontSize)
+          .fillColor("#111")
+          .text(shortLabels[i], 2, -fontSize - 1, { lineBreak: false });
         doc.restore();
       });
 

@@ -9,7 +9,7 @@ import {
   ticketsTable,
 } from "@workspace/db";
 import { and, eq, inArray } from "drizzle-orm";
-import { verifyParentAuthToken } from "../lib/authToken.js";
+import { requireActiveParent } from "../lib/parentAuthMiddleware.js";
 import { renderTicketsPdf } from "../lib/ticketPdf.js";
 import {
   TICKET_RESPONSIBILITY_HEADLINE,
@@ -24,17 +24,8 @@ import {
 // route so a parent can never read another family's tickets.
 const router: IRouter = Router();
 
-router.use(async (req, _res, next) => {
-  let pid: number | null = req.session.parentId ?? null;
-  if (!pid) {
-    const auth = req.headers.authorization;
-    if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      pid = verifyParentAuthToken(auth.slice(7).trim());
-    }
-  }
-  req.parentId = pid;
-  next();
-});
+// Resolve req.parentId AND enforce parents.active=true on every request (F02).
+router.use(requireActiveParent);
 
 // Returns the set of student table-ids this parent is linked to. Empty set if
 // none (caller should 403/empty).

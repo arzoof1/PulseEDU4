@@ -34,6 +34,7 @@ import {
   type ConsistencyBundle,
   type ConsistencySourceRef,
 } from "./caseConsistencyBundle";
+import { isAiAssistEnabledForSchool } from "./aiFeatures.js";
 
 // ---------- Anthropic client (lazy, env-validated) -------------------
 
@@ -243,6 +244,13 @@ export async function runConsistencyCheck(opts: {
   actorName: string | null;
 }): Promise<ConsistencyRunResult> {
   const { schoolId, caseId, triggerReason, actorStaffId, actorName } = opts;
+
+  if (!(await isAiAssistEnabledForSchool(schoolId))) {
+    return {
+      kind: "error",
+      message: "AI features are disabled for this school.",
+    };
+  }
 
   // 1. Coarse debounce on lastAttemptAt — skip if attempted in the last
   //    DEBOUNCE_MS. Manual runs ignore the debounce so an admin can
@@ -475,6 +483,23 @@ export async function runConsistencyCheck(opts: {
 // belt-and-suspenders DB-level debounce in case the process restarted.
 const _scheduled = new Map<string, NodeJS.Timeout>();
 export function scheduleConsistencyRun(opts: {
+  schoolId: number;
+  caseId: number;
+  triggerReason:
+    | "new_statement"
+    | "new_interaction"
+    | "new_video"
+    | "initial";
+  actorStaffId: number | null;
+  actorName: string | null;
+}): void {
+  void isAiAssistEnabledForSchool(opts.schoolId).then((ok) => {
+    if (!ok) return;
+    scheduleConsistencyRunInner(opts);
+  });
+}
+
+function scheduleConsistencyRunInner(opts: {
   schoolId: number;
   caseId: number;
   triggerReason:

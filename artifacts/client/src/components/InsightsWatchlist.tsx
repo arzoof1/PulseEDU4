@@ -21,6 +21,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import EnlargeableStudentPhoto from "./EnlargeableStudentPhoto";
+import { fetchAllStudents } from "../lib/students";
 import {
   HowToUseHelp,
   HowToSection,
@@ -381,11 +382,10 @@ export default function InsightsWatchlist({
 
   useEffect(() => {
     let cancelled = false;
-    authFetch("/api/students")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((rowsResp: StudentLookup[]) => {
+    fetchAllStudents<StudentLookup>()
+      .then((rowsResp) => {
         if (cancelled) return;
-        setStudentDirectory(Array.isArray(rowsResp) ? rowsResp : []);
+        setStudentDirectory(rowsResp);
       })
       .catch(() => {});
     return () => {

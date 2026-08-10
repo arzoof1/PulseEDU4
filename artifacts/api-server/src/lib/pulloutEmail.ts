@@ -7,6 +7,7 @@ import {
 } from "@workspace/db";
 import { and, eq, or, inArray } from "drizzle-orm";
 import { getUncachableResendClient } from "./resendClient";
+import { formatFromHeader } from "./emailFrom";
 import { sendSmsBatch } from "./sms";
 
 // Tiny HTML escaper used when interpolating staff-supplied free text
@@ -144,7 +145,7 @@ export async function sendPulloutArrivalEmail(
 
   try {
     const { client, fromEmail } = await getUncachableResendClient();
-    const fromHeader = `${fromName} <${fromEmail}>`;
+    const fromHeader = formatFromHeader(fromName, fromEmail);
     const sendRes = await client.emails.send({
       from: fromHeader,
       to: parentEmail,
@@ -288,7 +289,7 @@ export async function sendPulloutSendToIssEmail(
 
   try {
     const { client, fromEmail } = await getUncachableResendClient();
-    const fromHeader = `${fromName} <${fromEmail}>`;
+    const fromHeader = formatFromHeader(fromName, fromEmail);
     const sendRes = await client.emails.send({
       from: fromHeader,
       to: parentEmail,
@@ -390,7 +391,7 @@ export async function sendPulloutReturnEmail(
     `<p>${signature.replace(/\n/g, "<br>")}</p>`;
   try {
     const { client, fromEmail } = await getUncachableResendClient();
-    const fromHeader = `${fromName} <${fromEmail}>`;
+    const fromHeader = formatFromHeader(fromName, fromEmail);
     const sendRes = await client.emails.send({
       from: fromHeader,
       to: parentEmail,
@@ -508,15 +509,12 @@ export async function sendPulloutDispatchEmail(
   const schoolName = settings?.schoolName ?? "PulseED";
   const fromName = settings?.fromName ?? schoolName;
 
-  // NEVER surface the canonical FLEID (`p.studentId`) in forward-facing
-  // dispatch comms — only the local SIS id is displayable. Extra recipients
-  // broaden who sees this, so the label must stay FLEID-free.
-  const studentSisLabel = student?.localSisId ?? null;
+  // FLEID-safe: render the local SIS id, never the canonical student_id.
   const studentLabel = student
     ? `${student.firstName} ${student.lastName}${
-        studentSisLabel ? ` (${studentSisLabel})` : ""
+        student.localSisId ? ` (ID ${student.localSisId})` : ""
       }`
-    : (studentSisLabel ?? "Student");
+    : "a student";
   const reasonText = (p.editedReason ?? p.reason).trim();
   const periodText = p.period ? `Period ${p.period}` : "Period n/a";
   const teacherText = p.referringTeacherName || "(unspecified)";
@@ -544,7 +542,7 @@ export async function sendPulloutDispatchEmail(
   const recipientStr = recipients.join(", ");
   try {
     const { client, fromEmail } = await getUncachableResendClient();
-    const fromHeader = `${fromName} <${fromEmail}>`;
+    const fromHeader = formatFromHeader(fromName, fromEmail);
     const sendRes = await client.emails.send({
       from: fromHeader,
       to: recipients,

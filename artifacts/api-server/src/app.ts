@@ -1,11 +1,25 @@
-import express, { type Express } from "express";
-import cors from "cors";
+import express, { type Express, type RequestHandler } from "express";
+import { applySecurityHeaders } from "./lib/securityHeaders.js";
+import {
+  evaluateSession,
+  isStaffSessionTimeoutEnabled,
+} from "./lib/sessionLifetime.js";
 import pinoHttp from "pino-http";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import router from "./routes";
+import { corsMiddleware } from "./lib/corsConfig.js";
+import { csrfProtectionMiddleware } from "./lib/csrf.js";
+import { isStaffMfaEnabled } from "./lib/staffMfaSwitch.js";
+import { isMfaRequiredForStaffCached } from "./lib/mfaPolicyCache.js";
+import { mfaEnrollmentGate } from "./lib/mfaEnrollmentGate.js";
+import { apiUsageAlertMiddleware } from "./lib/apiUsageMonitor.js";
+import { resolveActiveSchoolId } from "./lib/tenantScope.js";
 import { logger } from "./lib/logger";
-import { verifyAuthToken } from "./lib/authToken";
+import {
+  isStaffBearerAuthEnabled,
+  staffIdFromBearerToken,
+} from "./lib/staffBearerAuth";
 import { db, staffTable, schoolsTable, districtsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
@@ -13,6 +27,11 @@ declare global {
   namespace Express {
     interface Request {
       staffId?: number | null;
+      // Set by the global auth middleware when this staff's role is required
+      // by MFA policy but they have not enrolled. The mfaEnrollmentGate reads
+      // it to block all non-enrollment routes. Fail-open: any resolution error
+      // leaves it false (a transient DB blip must not wall the whole app).
+      mfaEnrollmentRequired?: boolean;
       // Parent identity for HeartBEAT parent-portal routes. Resolved by a
       // router-level middleware inside parentAuth.ts (NOT by the global
       // staff middleware below) so the two identity systems stay isolated.
@@ -41,11 +60,14 @@ declare global {
       impersonatorDisplayName?: string | null;
     }
   }
+
+
 }
 
 declare module "express-session" {
   interface SessionData {
     activeSchoolId?: number;
+    csrfToken?: string;
     // Set when a student signs into their personal HeartBEAT portal via
     // ClassLink SSO (or the guarded demo login). NUMERIC students.id.
     studentId?: number;
@@ -57,10 +79,23 @@ declare module "express-session" {
     // authorize→callback round-trip so the callback can scope the roster
     // lookup to a SINGLE tenant (identifiers are not globally unique).
     studentSsoSchoolId?: number;
+    // Epoch-ms of the staff's last successful privileged step-up reauth
+    // (Section 1.15). Sensitive actions (bulk export, Safety Plan viewing)
+    // require this to be within PRIVILEGED_REAUTH_WINDOW_MS. Set by
+    // POST /api/auth/reauth; checked via hasFreshPrivilegedReauth().
+    privilegedReauthAt?: number;
+    // Session-lifetime bookkeeping (DV-07). createdAt anchors the absolute
+    // timeout; lastSeenAt anchors the idle timeout; isPrivileged selects the
+    // (much tighter) Admin/DA/SU caps. Stamped by sessionTimeoutMiddleware and
+    // the identity middleware below; evaluated via evaluateSession().
+    createdAt?: number;
+    lastSeenAt?: number;
+    isPrivileged?: boolean;
   }
 }
 
 const app: Express = express();
+const isProduction = process.env.NODE_ENV === "production";
 
 // Required so express-session honors X-Forwarded-Proto from the Replit proxy
 // (TLS terminates upstream, so without this `secure: true` cookies are dropped).
@@ -76,6 +111,8 @@ if (!databaseUrl) {
 }
 
 const PgSession = connectPgSimple(session);
+
+applySecurityHeaders(app, isProduction);
 
 app.use(
   pinoHttp({
@@ -96,18 +133,49 @@ app.use(
     },
   }),
 );
-app.use(cors());
-// JSON body limit: bumped from the 100KB default so the Data Imports
-// route can accept CSV text in the request body. The frontend caps file
-// uploads at 10MB; 15MB gives headroom for JSON-quoting overhead.
-app.use(express.json({ limit: "15mb" }));
-app.use(express.urlencoded({ extended: true, limit: "15mb" }));
+app.use(corsMiddleware);
+
+const defaultJsonParser = express.json({ limit: "256kb" });
+const defaultUrlencodedParser = express.urlencoded({
+  extended: true,
+  limit: "64kb",
+});
+const importJsonParser = express.json({ limit: "15mb" });
+const importUrlencodedParser = express.urlencoded({
+  extended: true,
+  limit: "15mb",
+});
+
+function skipDataImportRequests(parser: RequestHandler): RequestHandler {
+  return (req, res, next) => {
+    const path = req.originalUrl.split("?")[0] ?? "";
+    if (path.startsWith("/api/data-imports")) {
+      next();
+      return;
+    }
+    parser(req, res, next);
+  };
+}
+
+// Data import endpoints accept CSV text in JSON bodies. Keep the larger limit
+// scoped to those routes; normal APIs use tighter defaults to reduce abuse.
+app.use("/api/data-imports", importJsonParser, importUrlencodedParser);
+app.use(skipDataImportRequests(defaultJsonParser));
+app.use(skipDataImportRequests(defaultUrlencodedParser));
 
 app.use(
   session({
     store: new PgSession({
       conObject: { connectionString: databaseUrl },
       tableName: "user_sessions",
+      // Not in Drizzle schema (connect-pg-simple owns this table). Create on first use
+      // so local / fresh DBs work without a separate migration step.
+      createTableIfMissing: true,
+      // Make the default cleanup behavior explicit: prune expired sessions
+      // every 15 minutes so user_sessions does not grow without bound.
+      pruneSessionInterval: 15 * 60,
+      errorLog: (err: unknown) =>
+        logger.warn({ err }, "session store background error"),
     }),
     secret: sessionSecret,
     resave: false,
@@ -120,27 +188,66 @@ app.use(
       // to allow third-party cookies, which is increasingly blocked by
       // default and was breaking the session inside the Replit preview iframe.
       sameSite: "lax",
-      secure: true,
+      // HttpOnly cookies work on http://localhost in dev; Secure only over HTTPS.
+      secure: process.env.NODE_ENV === "production",
       maxAge: 1000 * 60 * 60 * 24 * 14,
     },
     name: "pulseed.sid",
   }),
 );
 
-// Resolve the authenticated staff id per request from EITHER the session
-// cookie OR a server-issued Bearer token (HMAC-signed with SESSION_SECRET).
-// The bearer fallback is needed inside the Replit preview iframe where the
-// session cookie is often blocked. We DO NOT write to req.session here, so:
-//   - logout (which destroys the session) stays authoritative for cookie auth
-//   - the session store sees no extra writes/churn
-//   - bearer-derived identity never gets persisted with a different sid
-// Routes should read req.staffId instead of req.session.staffId.
+// Server-side session timeout (DV-07). Enforces idle + absolute lifetime bounds
+// on top of the rolling cookie, with much tighter caps for privileged sessions.
+// Applies only to cookie-authenticated staff sessions — bearer tokens carry
+// their own versioned expiry. createdAt/lastSeenAt are stamped here; the
+// identity middleware below sets isPrivileged once the staff row is loaded, so
+// the tight Admin/DA/SU caps take effect from the request after sign-in.
+app.use((req, res, next) => {
+  // Off by default — deploying this changes nothing until the district's
+  // session durations are approved and STAFF_SESSION_TIMEOUT_ENABLED=true.
+  if (!isStaffSessionTimeoutEnabled()) {
+    next();
+    return;
+  }
+  const sid = req.session?.staffId;
+  if (typeof sid !== "number") {
+    next();
+    return;
+  }
+  const now = Date.now();
+  if (typeof req.session.createdAt !== "number") {
+    req.session.createdAt = now;
+  }
+  const verdict = evaluateSession(
+    {
+      createdAt: req.session.createdAt,
+      lastSeenAt: req.session.lastSeenAt,
+      isPrivileged: req.session.isPrivileged === true,
+    },
+    now,
+  );
+  if (verdict.expired) {
+    req.session.destroy((err) => {
+      if (err) logger.warn({ err }, "session destroy on timeout failed");
+      res
+        .status(401)
+        .json({ error: "Session expired", reason: `session_${verdict.reason}` });
+    });
+    return;
+  }
+  req.session.lastSeenAt = now;
+  next();
+});
+
+// Resolve staff identity from the HttpOnly session cookie. Bearer tokens are
+// optional (STAFF_BEARER_AUTH_ENABLED) for legacy iframe/dev only; they are
+// versioned and revoked on logout. Routes should read req.staffId.
 app.use(async (req, _res, next) => {
   let sid: number | null = req.session.staffId ?? null;
-  if (!sid) {
+  if (!sid && isStaffBearerAuthEnabled()) {
     const auth = req.headers.authorization;
     if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      sid = verifyAuthToken(auth.slice(7).trim());
+      sid = await staffIdFromBearerToken(auth.slice(7).trim());
     }
   }
   // "Preview as another staff" swap. Backed by staff.preview_target_staff_id
@@ -166,6 +273,15 @@ app.use(async (req, _res, next) => {
         })
         .from(staffTable)
         .where(eq(staffTable.id, sid));
+      // Cache the session actor's privilege on the session so the (cookie-only)
+      // session-timeout middleware can pick the tight Admin/DA/SU caps without
+      // its own DB query. Only when sid came from the session cookie — bearer
+      // requests have no session.staffId and are not subject to this timeout.
+      if (orig && typeof req.session.staffId === "number") {
+        req.session.isPrivileged = !!(
+          orig.isAdmin || orig.isDistrictAdmin || orig.isSuperUser
+        );
+      }
       if (orig && orig.previewTargetStaffId) {
         const stillEligible =
           orig.active &&
@@ -213,6 +329,7 @@ app.use(async (req, _res, next) => {
     }
   }
   req.staffId = sid;
+  req.mfaEnrollmentRequired = false;
 
   // Resolve the active school for this request. For non-SuperUsers it is
   // strictly the staff's home school (session override is ignored). For
@@ -229,12 +346,32 @@ app.use(async (req, _res, next) => {
           schoolId: staffTable.schoolId,
           activeSchoolOverride: staffTable.activeSchoolOverride,
           isSuperUser: staffTable.isSuperUser,
+          isDistrictAdmin: staffTable.isDistrictAdmin,
+          isAdmin: staffTable.isAdmin,
+          mfaEnrolledAt: staffTable.mfaEnrolledAt,
           active: staffTable.active,
         })
         .from(staffTable)
         .where(eq(staffTable.id, sid));
       if (staff && staff.active) {
         req.homeSchoolId = staff.schoolId;
+
+        // MFA enrollment gate (Gate A / Section 1). Flag the request when this
+        // staff's role is required by policy but they have not enrolled, so
+        // mfaEnrollmentGate can block everything except the enrollment/sign-out
+        // routes. Computed here (before the school-active early-returns below)
+        // so it is set on every code path. Cheap short-circuits keep this off
+        // the hot path for the common cases: the master switch being off or an
+        // already-enrolled account both skip the policy lookup entirely; only
+        // un-enrolled users pay it, and the result is cached per school+tier.
+        if (isStaffMfaEnabled() && !staff.mfaEnrolledAt) {
+          req.mfaEnrollmentRequired = await isMfaRequiredForStaffCached({
+            isSuperUser: staff.isSuperUser,
+            isDistrictAdmin: staff.isDistrictAdmin,
+            isAdmin: staff.isAdmin,
+            schoolId: staff.schoolId,
+          });
+        }
         // Persisted on the staff row (not the session) so bearer-token
         // requests inside the Replit preview iframe — where session cookies
         // are blocked — keep the SuperUser's switch active across reloads.
@@ -243,8 +380,8 @@ app.use(async (req, _res, next) => {
         // active before honoring any school context. Soft-deactivated
         // (active=false) schools or districts must not be able to act
         // as the request's tenant; otherwise existing sessions keep
-        // reading/writing under a "retired" tenant. We let the request
-        // through with req.schoolId=null; downstream route guards
+        // reading/writing under a "retired" tenant. When inactive we let the
+        // request through with req.schoolId=null; downstream route guards
         // already 4xx on missing school.
         const [homeSchoolActive] = await db
           .select({
@@ -257,29 +394,31 @@ app.use(async (req, _res, next) => {
             eq(districtsTable.id, schoolsTable.districtId),
           )
           .where(eq(schoolsTable.id, staff.schoolId));
+        const homeSchoolActiveOk = Boolean(
+          homeSchoolActive && homeSchoolActive.schoolActive,
+        );
+        const homeDistrictActiveOk = Boolean(
+          homeSchoolActive && homeSchoolActive.districtActive,
+        );
+
+        // Only look up the override target when a SuperUser actually holds a
+        // differing, persisted override and the home school is active — this
+        // preserves the previous "no extra DB work in the common case" pattern.
+        // D6 defense-in-depth / Phase 5 District Switcher: a cross-district
+        // override is honored only when ALLOW_CROSS_DISTRICT_SUPERUSER=1; a
+        // stale row must never silently leak another tenant's data. Both the
+        // override school AND its district must be active.
+        let overrideExists = false;
+        let overrideSchoolActive = false;
+        let overrideDistrictActive = false;
+        let overrideSameDistrict = false;
         if (
-          !homeSchoolActive ||
-          !homeSchoolActive.schoolActive ||
-          !homeSchoolActive.districtActive
+          homeSchoolActiveOk &&
+          homeDistrictActiveOk &&
+          staff.isSuperUser &&
+          override &&
+          override !== staff.schoolId
         ) {
-          req.schoolId = null;
-          next();
-          return;
-        }
-        if (staff.isSuperUser && override && override !== staff.schoolId) {
-          // D6 defense-in-depth: validate the override still points at an
-          // active school. Phase 5 District Switcher: when
-          // ALLOW_CROSS_DISTRICT_SUPERUSER=1 a cross-district override is
-          // permitted (the operator has opted into the cross-district
-          // control tier). Without the flag we still hard-refuse cross-
-          // district overrides — even a stale row in activeSchoolOverride
-          // from before the gate landed must not silently leak data.
-          const crossDistrict =
-            process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
-          // Architect-flagged (Phase 5): previously this only validated
-          // the override school was active, not its district. Mirror the
-          // home-school check above and require districts.active=true on
-          // the override target before honoring it.
           const [overrideSchool] = await db
             .select({
               districtId: schoolsTable.districtId,
@@ -296,27 +435,38 @@ app.use(async (req, _res, next) => {
             .select({ districtId: schoolsTable.districtId })
             .from(schoolsTable)
             .where(eq(schoolsTable.id, staff.schoolId));
-          const sameDistrict =
+          overrideExists = Boolean(overrideSchool);
+          overrideSchoolActive = Boolean(
+            overrideSchool && overrideSchool.schoolActive,
+          );
+          overrideDistrictActive = Boolean(
+            overrideSchool && overrideSchool.districtActive,
+          );
+          overrideSameDistrict = Boolean(
             overrideSchool &&
             homeSchool &&
-            overrideSchool.districtId === homeSchool.districtId;
-          if (
-            overrideSchool &&
-            overrideSchool.schoolActive &&
-            overrideSchool.districtActive &&
-            (sameDistrict || crossDistrict)
-          ) {
-            req.schoolId = override;
-            req.isSchoolSwitched = true;
-          } else {
-            // Stale, cross-district (when gate off), or inactive override
-            // — fall back to home school. (Home school is already known
-            // active here.)
-            req.schoolId = staff.schoolId;
-          }
-        } else {
-          req.schoolId = staff.schoolId;
+            overrideSchool.districtId === homeSchool.districtId,
+          );
         }
+
+        // Pure, unit-tested tenant decision (Section 5.2, tenantScope.ts). Keeps
+        // the single most security-critical branch — which tenant a request acts
+        // under — in one testable place.
+        const resolution = resolveActiveSchoolId({
+          isSuperUser: Boolean(staff.isSuperUser),
+          homeSchoolId: staff.schoolId,
+          homeSchoolActive: homeSchoolActiveOk,
+          homeDistrictActive: homeDistrictActiveOk,
+          override,
+          overrideExists,
+          overrideSchoolActive,
+          overrideDistrictActive,
+          overrideSameDistrict,
+          allowCrossDistrict:
+            process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1",
+        });
+        req.schoolId = resolution.schoolId;
+        req.isSchoolSwitched = resolution.isSchoolSwitched;
       }
     } catch (err) {
       logger.warn({ err }, "schoolId middleware lookup failed");
@@ -325,6 +475,15 @@ app.use(async (req, _res, next) => {
   next();
 });
 
+app.use("/api", csrfProtectionMiddleware);
+// Excessive-API-usage monitor (3.3): counts requests per account/IP and alerts
+// on abnormal volume. Placed before the enrollment gate so even a flood of
+// gate-blocked requests still counts toward the volume threshold.
+app.use("/api", apiUsageAlertMiddleware);
+// Runs after CSRF (so enrollment POSTs still validate a token) and before the
+// route table: a not-yet-enrolled required user is 403'd on everything except
+// the enrollment + sign-out routes.
+app.use("/api", mfaEnrollmentGate);
 app.use("/api", router);
 
 // -----------------------------------------------------------------------------

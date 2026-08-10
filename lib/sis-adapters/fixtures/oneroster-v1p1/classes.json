@@ -1,0 +1,124 @@
+{
+  "classes": [
+    {
+      "sourcedId": "class-ela-p1",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:00:00.000Z",
+      "title": "ELA 6 - Period 1",
+      "classCode": "ELA6-01",
+      "classType": "scheduled",
+      "location": "Building A - Room 204",
+      "grades": ["06"],
+      "subjects": ["English"],
+      "subjectCodes": ["010"],
+      "periods": ["1"],
+      "course": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/courses/course-ela-06",
+        "sourcedId": "course-ela-06",
+        "type": "course"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "terms": [
+        {
+          "href": "https://demo.classlink.com/oneroster/v1p1/academicSessions/term-2025-2026",
+          "sourcedId": "term-2025-2026",
+          "type": "academicSession"
+        }
+      ]
+    },
+    {
+      "sourcedId": "class-math-p2",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:00:00.000Z",
+      "title": "Math 6 - Period 2",
+      "classCode": "MATH6-02",
+      "classType": "scheduled",
+      "location": "Building B - Room 118",
+      "grades": ["06"],
+      "subjects": ["Mathematics"],
+      "subjectCodes": ["020"],
+      "periods": ["2"],
+      "course": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/courses/course-math-06",
+        "sourcedId": "course-math-06",
+        "type": "course"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "terms": [
+        {
+          "href": "https://demo.classlink.com/oneroster/v1p1/academicSessions/term-2025-2026",
+          "sourcedId": "term-2025-2026",
+          "type": "academicSession"
+        }
+      ]
+    },
+    {
+      "sourcedId": "class-sci-p3",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:00:00.000Z",
+      "title": "Science 6 - Period 3",
+      "classCode": "SCI6-03",
+      "classType": "scheduled",
+      "location": "Building C - Room 305",
+      "grades": ["06"],
+      "subjects": ["Science"],
+      "subjectCodes": ["040"],
+      "periods": ["3"],
+      "course": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/courses/course-sci-06",
+        "sourcedId": "course-sci-06",
+        "type": "course"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "terms": [
+        {
+          "href": "https://demo.classlink.com/oneroster/v1p1/academicSessions/term-2025-2026",
+          "sourcedId": "term-2025-2026",
+          "type": "academicSession"
+        }
+      ]
+    },
+    {
+      "sourcedId": "class-ss-p4",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:00:00.000Z",
+      "title": "Social Studies 6 - Period 4",
+      "classCode": "SS6-04",
+      "classType": "scheduled",
+      "location": "Building A - Room 210",
+      "grades": ["06"],
+      "subjects": ["Social Studies"],
+      "subjectCodes": ["030"],
+      "periods": ["4"],
+      "course": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/courses/course-ss-06",
+        "sourcedId": "course-ss-06",
+        "type": "course"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "terms": [
+        {
+          "href": "https://demo.classlink.com/oneroster/v1p1/academicSessions/term-2025-2026",
+          "sourcedId": "term-2025-2026",
+          "type": "academicSession"
+        }
+      ]
+    }
+  ]
+}

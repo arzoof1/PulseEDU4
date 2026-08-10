@@ -23,6 +23,7 @@ import {
 } from "express";
 import {
   db,
+  dataExportAuditLogTable,
   staffTable,
   schoolsTable,
   importJobsTable,
@@ -63,6 +64,9 @@ import {
   schoolYearLabelFor,
 } from "../lib/schoolYear.js";
 import { getActiveSchoolYear } from "../lib/fastHistory.js";
+import { hasFreshPrivilegedReauth } from "../lib/privilegedReauth.js";
+import { writeAuthAudit } from "../lib/authAudit.js";
+import { evaluateImportApproval } from "../lib/importApproval.js";
 import Papa from "papaparse";
 import ExcelJS from "exceljs";
 import { xlsxToGrid } from "../lib/xlsxGrid";
@@ -190,10 +194,12 @@ const REQUIRED_FIELDS_DISTRICT: AssessmentField[] = [
   "school_code",
 ];
 
-// Hard cap on rows per import. Anything bigger should be split into
-// smaller files — keeps a runaway upload from filling assessments and
-// the error_log jsonb. Adjustable later if real district feeds need it.
-const MAX_ROWS_PER_IMPORT = 50000;
+// Hard caps for synchronous import requests. Larger district feeds should move
+// to the future streaming/background-worker path instead of tying up the API
+// process in one request.
+const MAX_ROWS_PER_IMPORT = 15000;
+const MAX_CSV_BYTES = 10 * 1024 * 1024;
+const IMPORT_LOOP_YIELD_EVERY_ROWS = 1000;
 
 const VALID_TARGETS = new Set<string>([
   "student_id",
@@ -204,6 +210,34 @@ const VALID_TARGETS = new Set<string>([
   "source",
   "school_code",
 ]);
+
+function validateCsvPayload(csv: string, res: Response): boolean {
+  if (!csv.trim()) {
+    res.status(400).json({ error: "CSV body is required" });
+    return false;
+  }
+  if (Buffer.byteLength(csv, "utf8") > MAX_CSV_BYTES) {
+    res.status(413).json({
+      error: `CSV exceeds the ${MAX_CSV_BYTES / 1024 / 1024}MB size limit. Split the file and try again.`,
+    });
+    return false;
+  }
+  return true;
+}
+
+function rejectTooManyRows(rowCount: number, res: Response): boolean {
+  if (rowCount <= MAX_ROWS_PER_IMPORT) return false;
+  res.status(400).json({
+    error: `CSV exceeds the ${MAX_ROWS_PER_IMPORT}-row limit (got ${rowCount}). Split the file and try again.`,
+  });
+  return true;
+}
+
+async function yieldImportProcessing(index: number): Promise<void> {
+  if (index > 0 && index % IMPORT_LOOP_YIELD_EVERY_ROWS === 0) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
 
 // Server-side mapping validator. Catches malformed mappings that bypass
 // the frontend's uniqueness check or reference columns / targets that
@@ -557,21 +591,13 @@ router.post(
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
     const csv = typeof req.body?.csv === "string" ? req.body.csv : "";
-    if (!csv.trim()) {
-      res.status(400).json({ error: "CSV body is required" });
-      return;
-    }
+    if (!validateCsvPayload(csv, res)) return;
     const { headers, rows, parseError } = parseCsv(csv);
     if (parseError) {
       res.status(400).json({ error: parseError, headers });
       return;
     }
-    if (rows.length > MAX_ROWS_PER_IMPORT) {
-      res.status(400).json({
-        error: `CSV exceeds the ${MAX_ROWS_PER_IMPORT}-row limit (got ${rows.length}). Split the file and try again.`,
-      });
-      return;
-    }
+    if (rejectTooManyRows(rows.length, res)) return;
     const auto = autoMapHeaders(headers);
     // Caller can override any column. We trust the override but only for
     // headers that actually exist AND for known target fields. Duplicate
@@ -597,6 +623,7 @@ router.post(
     let valid = 0;
     const sample: ParsedAssessment[] = [];
     for (let i = 0; i < rows.length; i++) {
+      await yieldImportProcessing(i);
       const parsed = parseRow(rows[i], mapping);
       if (parsed.ok) {
         valid++;
@@ -650,21 +677,13 @@ router.post(
       req.body?.mapping && typeof req.body.mapping === "object"
         ? (req.body.mapping as Record<string, string>)
         : {};
-    if (!csv.trim()) {
-      res.status(400).json({ error: "CSV body is required" });
-      return;
-    }
+    if (!validateCsvPayload(csv, res)) return;
     const { headers, rows, parseError } = parseCsv(csv);
     if (parseError) {
       res.status(400).json({ error: parseError });
       return;
     }
-    if (rows.length > MAX_ROWS_PER_IMPORT) {
-      res.status(400).json({
-        error: `CSV exceeds the ${MAX_ROWS_PER_IMPORT}-row limit (got ${rows.length}). Split the file and try again.`,
-      });
-      return;
-    }
+    if (rejectTooManyRows(rows.length, res)) return;
     const mappingError = validateMapping(mapping, headers);
     if (mappingError) {
       res.status(400).json({ error: mappingError });
@@ -677,6 +696,7 @@ router.post(
       raw?: Record<string, string>;
     }> = [];
     for (let i = 0; i < rows.length; i++) {
+      await yieldImportProcessing(i);
       const parsed = parseRow(rows[i], mapping);
       if (parsed.ok) {
         valid.push(parsed.value);
@@ -773,21 +793,13 @@ router.post(
     const districtId = await requireActorDistrict(staff, res);
     if (districtId == null) return;
     const csv = typeof req.body?.csv === "string" ? req.body.csv : "";
-    if (!csv.trim()) {
-      res.status(400).json({ error: "CSV body is required" });
-      return;
-    }
+    if (!validateCsvPayload(csv, res)) return;
     const { headers, rows, parseError } = parseCsv(csv);
     if (parseError) {
       res.status(400).json({ error: parseError, headers });
       return;
     }
-    if (rows.length > MAX_ROWS_PER_IMPORT) {
-      res.status(400).json({
-        error: `CSV exceeds the ${MAX_ROWS_PER_IMPORT}-row limit (got ${rows.length}). Split the file and try again.`,
-      });
-      return;
-    }
+    if (rejectTooManyRows(rows.length, res)) return;
     const auto = autoMapHeaders(headers);
     const supplied =
       req.body?.mapping && typeof req.body.mapping === "object"
@@ -817,6 +829,7 @@ router.post(
       validateMapping(mapping, headers, REQUIRED_FIELDS_DISTRICT) === null;
     if (mappingOk) {
       for (let i = 0; i < rows.length; i++) {
+        await yieldImportProcessing(i);
         const parsed = parseRowDistrict(rows[i], mapping, codeToId);
         if (parsed.ok) {
           valid++;
@@ -883,21 +896,13 @@ router.post(
       req.body?.mapping && typeof req.body.mapping === "object"
         ? (req.body.mapping as Record<string, string>)
         : {};
-    if (!csv.trim()) {
-      res.status(400).json({ error: "CSV body is required" });
-      return;
-    }
+    if (!validateCsvPayload(csv, res)) return;
     const { headers, rows, parseError } = parseCsv(csv);
     if (parseError) {
       res.status(400).json({ error: parseError });
       return;
     }
-    if (rows.length > MAX_ROWS_PER_IMPORT) {
-      res.status(400).json({
-        error: `CSV exceeds the ${MAX_ROWS_PER_IMPORT}-row limit (got ${rows.length}). Split the file and try again.`,
-      });
-      return;
-    }
+    if (rejectTooManyRows(rows.length, res)) return;
     const mappingError = validateMapping(
       mapping,
       headers,
@@ -915,6 +920,7 @@ router.post(
       raw?: Record<string, string>;
     }> = [];
     for (let i = 0; i < rows.length; i++) {
+      await yieldImportProcessing(i);
       const parsed = parseRowDistrict(rows[i], mapping, codeToId);
       if (parsed.ok) {
         valid.push(parsed.value);
@@ -1108,6 +1114,11 @@ router.get("/data-imports/jobs", requireImporter(), async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get("/data-imports/export", requireImporter(), async (req, res) => {
   const staff = (req as Request & { staff: StaffRow }).staff;
+  // Step-up reauth (Section 1.15): roster/behavior/FAST exports are student PII.
+  if (!hasFreshPrivilegedReauth(req.session)) {
+    res.status(403).json({ error: "reauth_required" });
+    return;
+  }
   const kindRaw = typeof req.query.kind === "string" ? req.query.kind : "";
   const SUPPORTED = new Set([
     "rosters",
@@ -1629,6 +1640,36 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
       rows = rows.map((r) => keepIdx.map((i) => r[i] ?? ""));
     }
   }
+  // DV-11: roster/behavior/FAST/assessment exports are student PII leaving the
+  // app's access controls — audit BEFORE the bytes leave (blocking, like
+  // /exports/download) so an untracked export cannot occur. The detailed row
+  // lives in data_export_audit_log; writeAuthAudit mirrors it into the Security
+  // Events viewer (and never throws).
+  const exportSchoolId = req.schoolId ?? staff.schoolId ?? 0;
+  await db.insert(dataExportAuditLogTable).values({
+    schoolId: exportSchoolId,
+    datasetKey: `import:${kindRaw}`,
+    format: "csv",
+    columns: headers.map((h) => String(h)),
+    filters: { scope },
+    rowCount: rows.length,
+    actorStaffId: staff.id,
+    actorName: staff.displayName ?? staff.email ?? null,
+  });
+  await writeAuthAudit({
+    action: "data_export",
+    schoolId: exportSchoolId,
+    actorStaffId: staff.id,
+    actorName: staff.displayName ?? staff.email ?? null,
+    ip: req.ip ?? null,
+    payload: {
+      via: "data_imports",
+      kind: kindRaw,
+      scope,
+      format: "csv",
+      rowCount: rows.length,
+    },
+  });
   sendCsv(res, kindRaw, [headers, ...rows]);
 });
 
@@ -5036,21 +5077,13 @@ function makePreviewHandler(kind: string, config: KindConfig) {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
     const csv = typeof req.body?.csv === "string" ? req.body.csv : "";
-    if (!csv.trim()) {
-      res.status(400).json({ error: "CSV body is required" });
-      return;
-    }
+    if (!validateCsvPayload(csv, res)) return;
     const { headers, rows, parseError } = parseCsv(csv);
     if (parseError) {
       res.status(400).json({ error: parseError, headers });
       return;
     }
-    if (rows.length > MAX_ROWS_PER_IMPORT) {
-      res.status(400).json({
-        error: `CSV exceeds the ${MAX_ROWS_PER_IMPORT}-row limit (got ${rows.length}). Split the file and try again.`,
-      });
-      return;
-    }
+    if (rejectTooManyRows(rows.length, res)) return;
     const auto = autoMapHeadersForConfig(headers, config);
     const supplied =
       req.body?.mapping && typeof req.body.mapping === "object"
@@ -5074,6 +5107,7 @@ function makePreviewHandler(kind: string, config: KindConfig) {
     const allValid: unknown[] = [];
     if (mappingOk) {
       for (let i = 0; i < rows.length; i++) {
+        await yieldImportProcessing(i);
         const parsed = config.parseRow(rows[i], mapping);
         if (parsed.ok) {
           valid++;
@@ -5134,21 +5168,13 @@ function makeCommitHandler<T>(kind: string, config: KindConfig<T>) {
                 : undefined,
           }
         : {};
-    if (!csv.trim()) {
-      res.status(400).json({ error: "CSV body is required" });
-      return;
-    }
+    if (!validateCsvPayload(csv, res)) return;
     const { headers, rows, parseError } = parseCsv(csv);
     if (parseError) {
       res.status(400).json({ error: parseError });
       return;
     }
-    if (rows.length > MAX_ROWS_PER_IMPORT) {
-      res.status(400).json({
-        error: `CSV exceeds the ${MAX_ROWS_PER_IMPORT}-row limit (got ${rows.length}). Split the file and try again.`,
-      });
-      return;
-    }
+    if (rejectTooManyRows(rows.length, res)) return;
     const mappingError = validateMappingForConfig(mapping, headers, config);
     if (mappingError) {
       res.status(400).json({ error: mappingError });
@@ -5167,6 +5193,7 @@ function makeCommitHandler<T>(kind: string, config: KindConfig<T>) {
       bucket?: string;
     }> = [];
     for (let i = 0; i < rows.length; i++) {
+      await yieldImportProcessing(i);
       const parsed = config.parseRow(rows[i], mapping);
       if (parsed.ok) {
         validIndexed.push({ rowIndex: i + 2, value: parsed.value, raw: rows[i] });
@@ -5275,6 +5302,98 @@ function requireManualRosterUploadEnabled() {
   };
 }
 
+// Roster-import approval / segregation of duties (Section 15.5). Production
+// does not auto-run migrations, so self-heal the setting column on first use.
+let importApprovalColumnEnsured = false;
+async function ensureImportApprovalColumn(): Promise<void> {
+  if (importApprovalColumnEnsured) return;
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS import_requires_approval BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  importApprovalColumnEnsured = true;
+}
+
+// Gate the roster COMMIT: when a school requires approval, the request must name
+// a different administrator as approver, validated server-side. Runs before the
+// commit handler, so an unapproved import is rejected before any data is written.
+function requireImportApproval() {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    await ensureImportApprovalColumn();
+    // Read the flag via raw SQL: the column is intentionally NOT in the Drizzle
+    // schema (broad .select() reads of school_settings would otherwise reference
+    // a column that prod hasn't migrated yet). COALESCE guards a fresh DB.
+    const settingRows = (
+      await db.execute(
+        sql`SELECT COALESCE(import_requires_approval, FALSE) AS requires_approval FROM school_settings WHERE school_id = ${schoolId}`,
+      )
+    ).rows as { requires_approval: boolean }[];
+    const requiresApproval = Boolean(settingRows[0]?.requires_approval);
+
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const uploaderStaffId = staff.id;
+
+    const rawApprover = (req.body as { approval?: { approvedByStaffId?: unknown } })
+      ?.approval?.approvedByStaffId;
+    const approverStaffId =
+      typeof rawApprover === "number" && Number.isInteger(rawApprover)
+        ? rawApprover
+        : null;
+
+    // Only resolve the approver from the DB when it could matter.
+    let approverIsAdmin = false;
+    if (requiresApproval && approverStaffId != null) {
+      const [approver] = await db
+        .select({
+          isAdmin: staffTable.isAdmin,
+          isSuperUser: staffTable.isSuperUser,
+          active: staffTable.active,
+        })
+        .from(staffTable)
+        .where(
+          and(
+            eq(staffTable.id, approverStaffId),
+            eq(staffTable.schoolId, schoolId),
+          ),
+        );
+      approverIsAdmin = Boolean(
+        approver &&
+          approver.active &&
+          (approver.isAdmin || approver.isSuperUser),
+      );
+    }
+
+    const decision = evaluateImportApproval({
+      requiresApproval,
+      approverStaffId,
+      approverIsAdmin,
+      uploaderStaffId,
+    });
+    if (!decision.allowed) {
+      res.status(403).json({
+        error: decision.reason,
+        detail:
+          "This school requires a second administrator to approve roster imports. Provide approval.approvedByStaffId naming a different admin.",
+      });
+      return;
+    }
+
+    // Record the dual-control approval in the tamper-evident audit trail.
+    if (requiresApproval && approverStaffId != null) {
+      void writeAuthAudit({
+        action: "roster_import_approved",
+        schoolId,
+        actorStaffId: uploaderStaffId,
+        actorName: staff.displayName,
+        ip: req.ip ?? null,
+        payload: { approverStaffId },
+      });
+    }
+    next();
+  };
+}
+
 router.post(
   "/data-imports/rosters/preview",
   requireImporter(),
@@ -5282,11 +5401,64 @@ router.post(
   requireManualRosterUploadEnabled(),
   makePreviewHandler("rosters", ROSTERS_CONFIG),
 );
+// Read/toggle the roster-import approval requirement for the active school
+// (Section 15.5). Raw SQL for the same reason as the middleware above.
+router.get(
+  "/data-imports/approval-policy",
+  requireImporter(),
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    await ensureImportApprovalColumn();
+    const rows = (
+      await db.execute(
+        sql`SELECT COALESCE(import_requires_approval, FALSE) AS requires_approval FROM school_settings WHERE school_id = ${schoolId}`,
+      )
+    ).rows as { requires_approval: boolean }[];
+    res.json({ importRequiresApproval: Boolean(rows[0]?.requires_approval) });
+  },
+);
+router.put(
+  "/data-imports/approval-policy",
+  requireImporter(),
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    if (!staff.isAdmin && !staff.isSuperUser) {
+      res.status(403).json({ error: "Admin access required" });
+      return;
+    }
+    const val = (req.body as { importRequiresApproval?: unknown })
+      ?.importRequiresApproval;
+    if (typeof val !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "importRequiresApproval must be a boolean" });
+      return;
+    }
+    await ensureImportApprovalColumn();
+    await db.execute(
+      sql`UPDATE school_settings SET import_requires_approval = ${val} WHERE school_id = ${schoolId}`,
+    );
+    void writeAuthAudit({
+      action: "import_approval_policy_changed",
+      schoolId,
+      actorStaffId: staff.id,
+      actorName: staff.displayName,
+      ip: req.ip ?? null,
+      payload: { importRequiresApproval: val },
+    });
+    res.json({ importRequiresApproval: val });
+  },
+);
+
 router.post(
   "/data-imports/rosters/commit",
   requireImporter(),
   requireImportKind("rosters"),
   requireManualRosterUploadEnabled(),
+  requireImportApproval(),
   makeCommitHandler("rosters", ROSTERS_CONFIG),
 );
 router.post(

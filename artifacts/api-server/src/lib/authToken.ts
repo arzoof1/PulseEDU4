@@ -1,16 +1,29 @@
 import crypto from "node:crypto";
 
-// Short-lived HMAC-signed bearer token used as a fallback for privileged
-// endpoints when the browser blocks the session cookie (e.g. inside the
-// Replit preview iframe). The token is signed with SESSION_SECRET so the
-// client cannot forge or modify it.
+// Optional HMAC bearer used only when STAFF_BEARER_AUTH_ENABLED=true (legacy
+// Replit preview iframe). Production staff auth is HttpOnly session cookies.
 
-const SECRET =
-  process.env.SESSION_SECRET ||
-  process.env.AUTH_TOKEN_SECRET ||
-  "dev-only-insecure-secret-change-me";
+function requireTokenSecret(): string {
+  const secret = process.env.AUTH_TOKEN_SECRET || process.env.SESSION_SECRET;
+  if (!secret) {
+    throw new Error(
+      "AUTH_TOKEN_SECRET or SESSION_SECRET is required for token signing",
+    );
+  }
+  return secret;
+}
 
-const DEFAULT_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours
+const SECRET = requireTokenSecret();
+
+/** Short TTL when bearer is enabled — limits XSS / post-logout exposure. */
+const STAFF_BEARER_TTL_MS = 1000 * 60 * 30; // 30 minutes
+const PARENT_BEARER_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours (parent portal unchanged here)
+const STUDENT_BEARER_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours
+
+export type VerifiedStaffToken = {
+  staffId: number;
+  tokenVersion: number;
+};
 
 function b64url(buf: Buffer | string): string {
   return Buffer.from(buf)
@@ -29,18 +42,26 @@ function sign(payload: string): string {
   return b64url(crypto.createHmac("sha256", SECRET).update(payload).digest());
 }
 
-export function issueAuthToken(staffId: number, ttlMs = DEFAULT_TTL_MS): string {
-  const payload = JSON.stringify({ sid: staffId, exp: Date.now() + ttlMs });
+export function issueAuthToken(
+  staffId: number,
+  tokenVersion = 0,
+  ttlMs = STAFF_BEARER_TTL_MS,
+): string {
+  const payload = JSON.stringify({
+    sid: staffId,
+    tv: tokenVersion,
+    kind: "staff",
+    exp: Date.now() + ttlMs,
+  });
   const body = b64url(payload);
   return `${body}.${sign(body)}`;
 }
 
-export function verifyAuthToken(token: string): number | null {
+export function verifyAuthToken(token: string): VerifiedStaffToken | null {
   if (typeof token !== "string" || !token.includes(".")) return null;
   const [body, sig] = token.split(".");
   if (!body || !sig) return null;
   const expected = sign(body);
-  // Constant-time compare
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
@@ -48,18 +69,17 @@ export function verifyAuthToken(token: string): number | null {
     const json = JSON.parse(fromB64url(body).toString("utf8")) as {
       sid?: unknown;
       exp?: unknown;
-      // `kind` is set on parent tokens so a parent bearer cannot be
-      // mistaken for a staff bearer (and vice versa). Older staff tokens
-      // do not carry a `kind` and must be treated as staff.
+      tv?: unknown;
       kind?: unknown;
     };
     if (typeof json.sid !== "number" || typeof json.exp !== "number") {
       return null;
     }
     if (json.exp < Date.now()) return null;
-    // Reject parent-kind tokens here; verifyParentAuthToken handles those.
     if (json.kind && json.kind !== "staff") return null;
-    return json.sid;
+    const tokenVersion =
+      typeof json.tv === "number" && Number.isInteger(json.tv) ? json.tv : 0;
+    return { staffId: json.sid, tokenVersion };
   } catch {
     return null;
   }
@@ -70,10 +90,12 @@ export function verifyAuthToken(token: string): number | null {
 // the same SESSION_SECRET.
 export function issueParentAuthToken(
   parentId: number,
-  ttlMs = DEFAULT_TTL_MS,
+  tokenVersion = 0,
+  ttlMs = PARENT_BEARER_TTL_MS,
 ): string {
   const payload = JSON.stringify({
     sid: parentId,
+    tv: tokenVersion,
     kind: "parent",
     exp: Date.now() + ttlMs,
   });
@@ -81,7 +103,14 @@ export function issueParentAuthToken(
   return `${body}.${sign(body)}`;
 }
 
-export function verifyParentAuthToken(token: string): number | null {
+export type VerifiedParentToken = {
+  parentId: number;
+  tokenVersion: number;
+};
+
+export function verifyParentAuthToken(
+  token: string,
+): VerifiedParentToken | null {
   if (typeof token !== "string" || !token.includes(".")) return null;
   const [body, sig] = token.split(".");
   if (!body || !sig) return null;
@@ -93,6 +122,7 @@ export function verifyParentAuthToken(token: string): number | null {
     const json = JSON.parse(fromB64url(body).toString("utf8")) as {
       sid?: unknown;
       exp?: unknown;
+      tv?: unknown;
       kind?: unknown;
     };
     if (
@@ -103,7 +133,11 @@ export function verifyParentAuthToken(token: string): number | null {
       return null;
     }
     if (json.exp < Date.now()) return null;
-    return json.sid;
+    // Legacy tokens issued before DV-10 carry no `tv` — treat as version 0,
+    // which matches a never-bumped parent (auth_token_version default 0).
+    const tokenVersion =
+      typeof json.tv === "number" && Number.isInteger(json.tv) ? json.tv : 0;
+    return { parentId: json.sid, tokenVersion };
   } catch {
     return null;
   }
@@ -116,7 +150,7 @@ export function verifyParentAuthToken(token: string): number | null {
 // in a client-held token).
 export function issueStudentAuthToken(
   studentRowId: number,
-  ttlMs = DEFAULT_TTL_MS,
+  ttlMs = STUDENT_BEARER_TTL_MS,
 ): string {
   const payload = JSON.stringify({
     sid: studentRowId,

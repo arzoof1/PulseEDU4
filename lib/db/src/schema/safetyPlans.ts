@@ -5,10 +5,10 @@ import {
   integer,
   timestamp,
   boolean,
-  jsonb,
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { encryptedJsonb, encryptedText } from "./_encrypted";
 
 // Safety Plans — per-student behavioral / physical safety checklist owned
 // by the school's Guidance Counselor and Core Team.
@@ -78,8 +78,10 @@ export const safetyPlansTable = pgTable(
     // passes at kiosks and teachers see an acknowledge-to-proceed safety
     // flag when creating a pass. Other safety plans never affect passes.
     escortRequired: boolean("escort_required").notNull().default(false),
-    items: jsonb("items").$type<SafetyPlanItem[]>().notNull().default([]),
-    notes: text("notes").notNull().default(""),
+    // Encrypted at rest (DV sensitive free-text) — keep both escort flag
+    // and production encryption helpers.
+    items: encryptedJsonb("items").$type<SafetyPlanItem[]>().notNull().default([]),
+    notes: encryptedText("notes").notNull().default(""),
     startDate: text("start_date"),
     endDate: text("end_date"),
     createdByStaffId: integer("created_by_staff_id"),
@@ -115,7 +117,7 @@ export const safetyPlanAuditTable = pgTable(
     action: text("action").notNull(), // created | updated | activated | deactivated
     actorStaffId: integer("actor_staff_id"),
     actorName: text("actor_name"),
-    snapshot: jsonb("snapshot").$type<Record<string, unknown>>(),
+    snapshot: encryptedJsonb("snapshot").$type<Record<string, unknown>>(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

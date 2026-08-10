@@ -4,7 +4,7 @@
 // last 7d, hall passes last 7d, ISS days last 7d) with a "Switch to
 // this school" button on each row that reuses /api/tenancy/switch-school.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { authFetch } from "../../lib/authToken";
 import EditSchoolModal from "./EditSchoolModal";
 import ChangePlanModal from "./ChangePlanModal";
@@ -71,6 +71,171 @@ function StatPill({ label, value }: { label: string; value: number }) {
       <div style={{ fontSize: "1.5rem", fontWeight: 700, marginTop: 2 }}>
         {value.toLocaleString()}
       </div>
+    </div>
+  );
+}
+
+// District-wide two-factor (MFA) policy card (Section 1.8). Lets a District
+// Admin require MFA across every school in their district. Reads/writes
+// /api/district-admin/mfa-policy (scoped server-side to the caller's own
+// district). The GET is District-Admin-gated, so this card silently hides
+// itself (returns null) for anyone without district authority.
+type DistrictMfaPolicy = {
+  name: string;
+  mfaRequiredPrivileged: boolean;
+  mfaRequiredStaff: boolean;
+};
+
+function DistrictMfaPolicyCard() {
+  const [policy, setPolicy] = useState<DistrictMfaPolicy | null>(null);
+  const [blocked, setBlocked] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authFetch("/api/district-admin/mfa-policy");
+        if (!res.ok) {
+          if (!cancelled) setBlocked(true); // 403/409 → not a district admin
+          return;
+        }
+        const j = (await res.json()) as DistrictMfaPolicy;
+        if (!cancelled) setPolicy(j);
+      } catch {
+        if (!cancelled) setBlocked(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function update(
+    field: "mfaRequiredPrivileged" | "mfaRequiredStaff",
+    value: boolean,
+  ) {
+    if (!policy) return;
+    if (
+      value &&
+      !window.confirm(
+        `Require two-factor across all of ${policy.name}?\n\n` +
+          "Every affected user in the district — including you — will be forced " +
+          "to set up an authenticator app at their next request. Continue?",
+      )
+    )
+      return;
+    const prev = policy;
+    setPolicy({ ...policy, [field]: value }); // optimistic
+    setSaving(true);
+    setSaved(false);
+    setErr(null);
+    try {
+      const res = await authFetch("/api/district-admin/mfa-policy", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [field]: value }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `Save failed (${res.status})`);
+      }
+      const j = (await res.json()) as DistrictMfaPolicy;
+      setPolicy(j);
+      setSaved(true);
+    } catch (e) {
+      setPolicy(prev); // revert on failure
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (blocked || !policy) return null;
+
+  const rowStyle: CSSProperties = {
+    display: "flex",
+    gap: "0.5rem",
+    alignItems: "flex-start",
+    marginTop: "0.6rem",
+  };
+  const subStyle: CSSProperties = {
+    color: "var(--text-subtle, #64748b)",
+    fontSize: "0.85rem",
+    fontWeight: "normal",
+  };
+
+  return (
+    <div
+      className="card"
+      style={{
+        marginTop: "0.75rem",
+        border: "1px solid var(--border, #e2e8f0)",
+        borderRadius: "var(--radius-sm, 8px)",
+        padding: "1rem",
+      }}
+    >
+      <div style={{ fontWeight: 700 }}>
+        District-wide two-factor (MFA) policy
+      </div>
+      <div style={{ ...subStyle, marginTop: "0.15rem" }}>
+        Applies to every school in {policy.name}. Combined (ORed) with each
+        school's own two-factor setting — turning it on here enforces MFA
+        district-wide even for schools that haven't enabled it.
+      </div>
+
+      <label style={rowStyle}>
+        <input
+          type="checkbox"
+          checked={policy.mfaRequiredPrivileged}
+          disabled={saving}
+          onChange={(e) =>
+            void update("mfaRequiredPrivileged", e.target.checked)
+          }
+          style={{ marginTop: "0.2rem" }}
+        />
+        <span style={{ display: "grid", gap: "0.15rem" }}>
+          <span style={{ fontWeight: 600 }}>
+            Require two-factor for all admins (district-wide)
+          </span>
+          <span style={subStyle}>
+            SuperUsers, District Admins, and School Admins across the district
+            must enter an authenticator code at sign-in.
+          </span>
+        </span>
+      </label>
+
+      <label style={rowStyle}>
+        <input
+          type="checkbox"
+          checked={policy.mfaRequiredStaff}
+          disabled={saving}
+          onChange={(e) => void update("mfaRequiredStaff", e.target.checked)}
+          style={{ marginTop: "0.2rem" }}
+        />
+        <span style={{ display: "grid", gap: "0.15rem" }}>
+          <span style={{ fontWeight: 600 }}>
+            Require two-factor for all staff (district-wide)
+          </span>
+          <span style={subStyle}>
+            Extends the requirement to every staff member with a login across
+            the district (teachers, support staff, and specialist roles).
+          </span>
+        </span>
+      </label>
+
+      {err && (
+        <div style={{ color: "#b91c1c", fontSize: 12, marginTop: "0.5rem" }}>
+          {err}
+        </div>
+      )}
+      {saved && !err && (
+        <div style={{ color: "#166534", fontSize: 12, marginTop: "0.5rem" }}>
+          Saved.
+        </div>
+      )}
     </div>
   );
 }
@@ -179,6 +344,9 @@ export default function DistrictOverviewRollups() {
         <StatPill label="Students" value={data.totals.students} />
         <StatPill label="Active Staff" value={data.totals.staff} />
       </div>
+
+      {/* District-wide MFA policy (Section 1.8) */}
+      <DistrictMfaPolicyCard />
 
       <div
         style={{ marginTop: "0.75rem", display: "flex", gap: "0.5rem" }}

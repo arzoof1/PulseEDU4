@@ -39,7 +39,7 @@ import {
   ObjectStorageService,
   ObjectNotFoundError,
 } from "../lib/objectStorage.js";
-import { bindObjectToSchool } from "./storage.js";
+import { claimTourBragObjectPaths } from "./storage.js";
 import {
   sendNewLeadNotifyEmail,
   sendFamilyAckEmail,
@@ -64,6 +64,7 @@ import { mergePdfs } from "../lib/mergePdfs.js";
 import { genUrlSafeToken } from "../lib/urlSafeToken.js";
 import QRCode from "qrcode";
 import { logger } from "../lib/logger.js";
+import { isAiAssistEnabledForSchool } from "../lib/aiFeatures.js";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
@@ -567,9 +568,7 @@ async function loadDistrictDocumentBranding(
   const key = branding.logoObjectKey;
   if (key && key.startsWith("/objects/")) {
     try {
-      const file = await objectStorageService.getObjectEntityFile(key);
-      const [buf] = await file.download();
-      logo = buf;
+      logo = await objectStorageService.readObjectAsBuffer(key);
     } catch {
       logo = null;
     }
@@ -709,6 +708,7 @@ async function generateAndCacheTranslation(
   const existing = inflightTranslations.get(key);
   if (existing) return existing;
   const work = (async () => {
+    if (!(await isAiAssistEnabledForSchool(schoolId))) return null;
     const translated = await translateTourContent(source, lang);
     if (!translated) return null;
     try {
@@ -1191,24 +1191,28 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) => 
     updatedAt: new Date(),
   };
 
-  // Claim ownership of every freshly-uploaded object (photos + flyers) for
-  // this school before persisting. `bindObjectToSchool` is idempotent for
-  // objects already owned by the same school, so re-saving an unchanged page
-  // is a no-op. External http(s) photo URLs are skipped (not object paths).
-  const objectKeys = [
-    ...values.photos.filter((p) => p.startsWith("/objects/")),
-    ...values.flyers.map((f) => f.key),
-  ];
-  for (const key of objectKeys) {
-    const bound = await bindObjectToSchool(key, schoolId);
-    if (!bound) {
-      res.status(400).json({
-        error:
-          "An uploaded file could not be verified. Please re-upload it and try again.",
-      });
-      return;
-    }
+  // Claim ownership of object-storage photos/flyers. Legacy paths missing
+  // from S3 (e.g. after a Replit → AWS migration) are dropped with a warning
+  // instead of failing the entire save.
+  const claimed = await claimTourBragObjectPaths(
+    schoolId,
+    values.photos,
+    values.flyers,
+  );
+  if (!claimed.ok) {
+    const msg =
+      claimed.reason === "wrong_school"
+        ? "An uploaded file belongs to another school."
+        : "An uploaded file could not be verified. Please re-upload it and try again.";
+    res.status(400).json({
+      error: msg,
+      failedPath: claimed.failedPath,
+      reason: claimed.reason,
+    });
+    return;
   }
+  values.photos = claimed.photos;
+  values.flyers = claimed.flyers;
 
   await db
     .insert(tourPagesTable)
@@ -1290,7 +1294,20 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) => 
       });
   }
 
-  res.json({ ok: true, publicUrl: `${publicAppOrigin(req)}/tour/${schoolId}` });
+  res.json({
+    ok: true,
+    publicUrl: `${publicAppOrigin(req)}/tour/${schoolId}`,
+    photos: values.photos,
+    flyers: values.flyers,
+    ...(claimed.droppedPaths.length > 0
+      ? {
+          warnings: [
+            `${claimed.droppedPaths.length} file(s) were removed because they are no longer in storage. Re-upload those images if needed.`,
+          ],
+          droppedPaths: claimed.droppedPaths,
+        }
+      : {}),
+  });
 });
 
 // ---- lead pipeline ---------------------------------------------------------

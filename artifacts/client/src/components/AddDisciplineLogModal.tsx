@@ -5,6 +5,7 @@ import {
   type CSSProperties,
 } from "react";
 import { authFetch } from "../lib/authToken";
+import { searchStudents as searchStudentsApi } from "../lib/students";
 import StudentPicker from "./StudentPicker";
 
 interface Props {
@@ -144,12 +145,13 @@ export default function AddDisciplineLogModal({
     })();
   }, [month]);
 
-  // Student typeahead — same endpoint, minChars, and 8-result cap as before.
   const searchStudents = async (q: string): Promise<StudentRow[]> => {
-    const r = await authFetch(`/api/students?q=${encodeURIComponent(q)}`);
-    if (!r.ok) throw new Error("Search failed");
-    const d = (await r.json()) as StudentRow[];
-    return d.slice(0, 8);
+    if (!q || q.length < 2) return [];
+    try {
+      return await searchStudentsApi<StudentRow>(q, 8);
+    } catch {
+      return [];
+    }
   };
 
   const toggleDate = (d: string) => {

@@ -1,0 +1,36 @@
+# Dynamic Application Security Testing (Section 16.4). Runs an OWASP ZAP
+# *baseline* scan against a running instance. Baseline mode is passive — it
+# spiders the target and runs passive checks only (no attack payloads), so it is
+# safe to point at production. Scheduled weekly and on-demand (not on every push,
+# to avoid crawling the live site on each commit). Results are uploaded as a
+# report artifact for review each release cycle.
+name: DAST (OWASP ZAP Baseline)
+
+on:
+  schedule:
+    - cron: "0 7 * * 1" # Mondays 07:00 UTC
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "URL to scan"
+        required: false
+        default: "https://pulseedu.pulsekinetics.us"
+
+jobs:
+  zap-baseline:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: ${{ github.event.inputs.target || 'https://pulseedu.pulsekinetics.us' }}
+          # Passive scan only; do not fail the job or open GitHub issues — the
+          # report artifact is the reviewable deliverable.
+          fail_action: false
+          allow_issue_writing: false
+          cmd_options: "-a"

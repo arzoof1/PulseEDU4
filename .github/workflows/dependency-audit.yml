@@ -1,0 +1,46 @@
+# Software Composition Analysis (Section 16.2). Scans the dependency tree for
+# known-vulnerable packages on every PR, weekly, and on demand.
+#
+# Posture: the build FAILS on any *critical* advisory in production (runtime)
+# dependencies — the highest-severity, must-not-ship class. High/moderate/low
+# findings across the full tree (including dev/build tooling) are reported as a
+# non-blocking summary so they are visible and tracked without blocking every
+# unrelated change. Tighten the fail threshold over time as findings are burned
+# down (see the Patch Management Policy for the remediation SLAs).
+name: Dependency Audit (SCA)
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+  schedule:
+    # Mondays 06:00 UTC — catches newly-disclosed advisories against pinned deps.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.22.0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit production dependencies (fail on critical)
+        run: pnpm audit --prod --audit-level critical
+
+      - name: Full advisory report (non-blocking)
+        if: always()
+        run: pnpm audit || true

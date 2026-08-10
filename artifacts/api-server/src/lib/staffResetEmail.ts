@@ -1,5 +1,6 @@
 import type { Request } from "express";
 import { getUncachableResendClient } from "./resendClient.js";
+import { formatFromHeader } from "./emailFrom.js";
 import { logger } from "./logger.js";
 
 // Resolve the absolute origin for links staff click OUTSIDE the workspace.
@@ -105,7 +106,7 @@ export async function sendStaffPasswordResetEmail(
 </html>`;
 
   const result = await client.emails.send({
-    from: fromName ? `${fromName} <${fromEmail}>` : fromEmail,
+    from: formatFromHeader(fromName, fromEmail),
     to,
     subject,
     text,

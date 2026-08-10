@@ -85,7 +85,8 @@ import {
 // MULTI-SCHOOL SEED
 // =============================================================================
 // This produces the realistic 7-school dataset (Hernando County 6 schools +
-// Pasco County 1 school) used by the live demo. It runs at boot:
+// Pasco County 1 school) used by the live demo. Boot-time execution is gated
+// in index.ts so production does not mutate demo data unless explicitly opted in:
 //   - seedTenancy() always runs and is idempotent. It guarantees the two
 //     districts and seven schools exist.
 //   - seedIfEmpty() runs only when school_accommodations is empty. It
@@ -615,6 +616,32 @@ export async function ensureSectionSupportSchema() {
   );
 }
 
+// class_sections carried a unique index on (teacher_staff_id, period) that
+// assumed one section per teacher per period. Real district rosters break this
+// (ESE / self-contained teachers run several courses in the same period), so
+// the sync failed with a duplicate-key violation on the first live import.
+// Self-heal to the (teacher_staff_id, period, course_name) key. Idempotent;
+// drizzle-kit push is unavailable here, so this boot ensure is how prod moves.
+export async function ensureClassSectionsSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS class_sections (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      teacher_staff_id INTEGER NOT NULL,
+      period INTEGER NOT NULL,
+      course_name TEXT NOT NULL,
+      is_planning BOOLEAN NOT NULL DEFAULT false
+    )
+  `);
+  // Drop the too-strict legacy key if present, add the course-aware one.
+  await db.execute(
+    sql`DROP INDEX IF EXISTS class_sections_teacher_period_unique`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS class_sections_teacher_period_course_unique ON class_sections (teacher_staff_id, period, course_name)`,
+  );
+}
+
 export async function ensureHousesSchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS houses (
@@ -724,6 +751,12 @@ export async function ensureHousesSchema() {
 // non-interactively. Safe to re-run on every boot.
 // -----------------------------------------------------------------------------
 export async function ensureParentMessagesSchema() {
+  // DV-10: parent bearer-token revocation version. Ensured here (a parent-domain
+  // ensure that runs early, incl. bootstrapCriticalColumns) so the column exists
+  // before any parent login path does a bare SELECT * on parents.
+  await db.execute(
+    sql`ALTER TABLE parents ADD COLUMN IF NOT EXISTS auth_token_version INTEGER NOT NULL DEFAULT 0`,
+  );
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS parent_messages (
       id SERIAL PRIMARY KEY,
@@ -1350,6 +1383,67 @@ export async function ensureDataExportSchema() {
   `);
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS data_export_audit_school_idx ON data_export_audit_log (school_id, created_at)`,
+  );
+}
+
+// Staff MFA (Gate A / Section 1) — additive + dormant. Creates the nullable
+// staff MFA columns, the two-tier enforcement flags on school_settings +
+// districts (all default FALSE, so nothing is enforced until deliberately
+// turned on), and the recovery-code + auth-audit tables. Every statement is
+// idempotent (ADD COLUMN / CREATE TABLE / CREATE INDEX IF NOT EXISTS), so it
+// is safe to run on every boot. Wired into BOTH bootstrapCriticalColumns()
+// (runs pre-listen, so the login path never sees a missing column) and
+// runSeed() (dev path).
+export async function ensureMfaSchema(): Promise<void> {
+  for (const stmt of [
+    `ALTER TABLE staff ADD COLUMN IF NOT EXISTS mfa_secret_enc TEXT`,
+    `ALTER TABLE staff ADD COLUMN IF NOT EXISTS mfa_enrolled_at TIMESTAMPTZ`,
+    `ALTER TABLE staff ADD COLUMN IF NOT EXISTS mfa_last_used_at TIMESTAMPTZ`,
+    `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS mfa_required_privileged BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS mfa_required_staff BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE districts ADD COLUMN IF NOT EXISTS mfa_required_privileged BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE districts ADD COLUMN IF NOT EXISTS mfa_required_staff BOOLEAN NOT NULL DEFAULT FALSE`,
+  ]) {
+    await db.execute(sql.raw(stmt));
+  }
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS staff_mfa_recovery_codes (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL,
+      code_hash TEXT NOT NULL,
+      used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS staff_mfa_recovery_codes_staff_idx ON staff_mfa_recovery_codes (staff_id)`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS auth_audit_log (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER,
+      action TEXT NOT NULL,
+      actor_staff_id INTEGER,
+      actor_name TEXT,
+      target_staff_id INTEGER,
+      ip TEXT,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS auth_audit_log_created_idx ON auth_audit_log (created_at)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS auth_audit_log_actor_idx ON auth_audit_log (actor_staff_id)`,
+  );
+  // Tamper-evidence hash chain (Section 3.8). Idempotent top-up so existing
+  // deployments gain the columns; legacy rows keep NULL hashes and remain valid.
+  await db.execute(
+    sql`ALTER TABLE auth_audit_log ADD COLUMN IF NOT EXISTS prev_hash TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE auth_audit_log ADD COLUMN IF NOT EXISTS entry_hash TEXT`,
   );
 }
 
@@ -4080,20 +4174,79 @@ export async function ensureTicketingSchema(): Promise<void> {
 
 // Staff self-service password reset (mirrors parent_password_resets).
 // Additive CREATE TABLE IF NOT EXISTS per project convention.
+//
+// This ensure must match the current Drizzle schema (lib/db schema
+// staff_password_resets: token_hash + email + status + request_ip/used_ip ...).
+// An earlier version created a legacy shape (token NOT NULL, no email/status/
+// token_hash) that broke on a freshly-provisioned DB — the routes write
+// token_hash/email/status, so inserts failed and a unique index on the missing
+// `token` column errored (DV-06 / lab OPS-2). The statements below both create
+// the correct table on a fresh DB and self-heal a legacy table in place, so
+// re-running on any DB (fresh, legacy, or current prod) is a no-op-safe repair.
 export async function ensureStaffPasswordResetsSchema(): Promise<void> {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS staff_password_resets (
       id SERIAL PRIMARY KEY,
-      staff_id INTEGER NOT NULL,
-      token TEXT NOT NULL,
-      expires_at TIMESTAMPTZ NOT NULL,
+      staff_id INTEGER,
+      email TEXT,
+      token_hash TEXT,
+      status TEXT NOT NULL DEFAULT 'requested',
+      requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ,
       used_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      requested_ip TEXT
+      request_ip TEXT,
+      used_ip TEXT,
+      user_agent TEXT,
+      email_sent_at TIMESTAMPTZ,
+      email_error TEXT
     )
   `);
+  // Self-heal a table created by the legacy ensure: add the columns the app
+  // actually writes. Nullable at the physical level (the app always sets email/
+  // token_hash) so adding them to a table with existing rows never fails.
+  const columns: Array<[string, string]> = [
+    ["email", "TEXT"],
+    ["token_hash", "TEXT"],
+    ["status", "TEXT NOT NULL DEFAULT 'requested'"],
+    ["requested_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()"],
+    ["expires_at", "TIMESTAMPTZ"],
+    ["used_at", "TIMESTAMPTZ"],
+    ["request_ip", "TEXT"],
+    ["used_ip", "TEXT"],
+    ["user_agent", "TEXT"],
+    ["email_sent_at", "TIMESTAMPTZ"],
+    ["email_error", "TEXT"],
+  ];
+  for (const [name, type] of columns) {
+    await db.execute(
+      sql.raw(
+        `ALTER TABLE staff_password_resets ADD COLUMN IF NOT EXISTS ${name} ${type}`,
+      ),
+    );
+  }
+  // Relax legacy NOT NULLs that would block current inserts (the app leaves
+  // staff_id null for unknown-email requests and never sets the old `token`).
   await db.execute(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS staff_password_resets_token_unique ON staff_password_resets (token)`,
+    sql`ALTER TABLE staff_password_resets ALTER COLUMN staff_id DROP NOT NULL`,
+  );
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'staff_password_resets' AND column_name = 'token'
+      ) THEN
+        ALTER TABLE staff_password_resets ALTER COLUMN token DROP NOT NULL;
+      END IF;
+    END $$;
+  `);
+  // Drop the wrong legacy index (on the missing `token` column) and index the
+  // real one-time-use key (token_hash) plus the staff lookup.
+  await db.execute(
+    sql`DROP INDEX IF EXISTS staff_password_resets_token_unique`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS staff_password_resets_token_hash_unique ON staff_password_resets (token_hash)`,
   );
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS staff_password_resets_by_staff ON staff_password_resets (staff_id)`,
@@ -6059,6 +6212,19 @@ export async function seedIfEmpty() {
   )).rows as { n: number }[];
   if (n >= SCHOOL_SPECS.length) return; // Already fully seeded.
 
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.ALLOW_DESTRUCTIVE_DEMO_RESEED !== "true"
+  ) {
+    logger.error(
+      { distinctSchoolsWithAccs: n, expected: SCHOOL_SPECS.length },
+      "[seed] refusing destructive demo reseed in production",
+    );
+    throw new Error(
+      "Refusing destructive demo reseed in production. Set ALLOW_DESTRUCTIVE_DEMO_RESEED=true only for an intentional demo database rebuild.",
+    );
+  }
+
   logger.info(
     { distinctSchoolsWithAccs: n, expected: SCHOOL_SPECS.length },
     "[seed] Multi-school seed starting (this takes ~30s)...",
@@ -7220,6 +7386,27 @@ export async function ensureDataImporterRollbackSchema(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS class_composer_banner_dismissed_sy TEXT`,
   );
+}
+
+// -----------------------------------------------------------------------------
+// ensureDistrictIntegrationsSchema — per-school SIS/SSO provider config +
+// roster sync metadata (ClassLink / OneRoster).
+// -----------------------------------------------------------------------------
+export async function ensureDistrictIntegrationsSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS district_integrations (
+      id SERIAL PRIMARY KEY,
+      school_name TEXT NOT NULL DEFAULT 'default',
+      sis_provider TEXT NOT NULL DEFAULT 'none',
+      sis_config JSONB,
+      sis_last_sync_at TIMESTAMPTZ,
+      sis_last_sync_status TEXT,
+      sso_provider TEXT NOT NULL DEFAULT 'none',
+      sso_config JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
 }
 
 // -----------------------------------------------------------------------------
@@ -10437,6 +10624,7 @@ export async function ensureEligibilitySchema(): Promise<void> {
     "gradebook",
     "school_grade",
     "safety_plans",
+    "ai_assist",
   ]) {
     await db.execute(
       sql.raw(
@@ -10484,7 +10672,8 @@ export async function ensureEligibilitySchema(): Promise<void> {
       'brainLab',    COALESCE(features->'brainLab',    'true'::jsonb),
       'gradebook',   COALESCE(features->'gradebook',   'true'::jsonb),
       'schoolGrade', COALESCE(features->'schoolGrade', 'true'::jsonb),
-      'safetyPlans', COALESCE(features->'safetyPlans', 'true'::jsonb)
+      'safetyPlans', COALESCE(features->'safetyPlans', 'true'::jsonb),
+      'aiAssist',    COALESCE(features->'aiAssist',    'true'::jsonb)
     )
   `);
 }

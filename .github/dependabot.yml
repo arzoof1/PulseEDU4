@@ -1,0 +1,29 @@
+# Automated dependency updates and security-advisory PRs (Section 16.2, SCA).
+# Dependabot detects pnpm-lock.yaml under the "npm" ecosystem and opens grouped
+# update PRs plus immediate PRs for any package with a security advisory.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    # Keep routine version bumps low-noise by grouping; security advisories are
+    # always raised individually and promptly regardless of these groups.
+    groups:
+      production-dependencies:
+        dependency-type: "production"
+      development-dependencies:
+        dependency-type: "development"
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "github-actions"

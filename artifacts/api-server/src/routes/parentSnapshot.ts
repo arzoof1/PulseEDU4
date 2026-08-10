@@ -1,20 +1,11 @@
 import { Router, type IRouter } from "express";
-import { verifyParentAuthToken } from "../lib/authToken.js";
 import { buildParentSnapshot } from "../lib/parentSnapshot.js";
+import { requireActiveParent } from "../lib/parentAuthMiddleware.js";
 
 const router: IRouter = Router();
 
-router.use(async (req, _res, next) => {
-  let pid: number | null = req.session.parentId ?? null;
-  if (!pid) {
-    const auth = req.headers.authorization;
-    if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      pid = verifyParentAuthToken(auth.slice(7).trim());
-    }
-  }
-  req.parentId = pid;
-  next();
-});
+// Resolve req.parentId AND enforce parents.active=true on every request (F02).
+router.use(requireActiveParent);
 
 router.get("/parent/snapshot", async (req, res) => {
   const pid = req.parentId;

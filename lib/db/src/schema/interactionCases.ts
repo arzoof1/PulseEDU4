@@ -7,6 +7,7 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { encryptedText } from "./_encrypted";
 
 // Cases — a named bundle of related interactions ("8th hallway arc",
 // "Bus 14", etc). Cases give the Core Team a place to track the social
@@ -27,12 +28,12 @@ export const interactionCasesTable = pgTable(
     caseNumber: integer("case_number").notNull(),
     // "26-27", "27-28", … — derived from openedAt at create time.
     schoolYearLabel: text("school_year_label").notNull(),
-    title: text("title").notNull(),
+    title: encryptedText("title").notNull(),
     // 'open' | 'monitoring' | 'escalated' | 'closed'
     status: text("status").notNull().default("open"),
     leadStaffId: integer("lead_staff_id"),
     leadStaffName: text("lead_staff_name").notNull().default(""),
-    summary: text("summary").notNull().default(""),
+    summary: encryptedText("summary").notNull().default(""),
     // The originating witness statement (interactions row) that triggered
     // this case. NULL is allowed because some cases are opened proactively
     // ("admin reported", "outside report") with no seeding statement.
@@ -49,7 +50,7 @@ export const interactionCasesTable = pgTable(
     // does NOT clear these — they are preserved as the historical record
     // of the previous closure cycle.
     outcomeCode: text("outcome_code"),
-    outcomeNote: text("outcome_note").notNull().default(""),
+    outcomeNote: encryptedText("outcome_note").notNull().default(""),
     closedByStaffId: integer("closed_by_staff_id"),
     closedByName: text("closed_by_name").notNull().default(""),
     createdByStaffId: integer("created_by_staff_id"),
@@ -82,7 +83,7 @@ export const interactionCaseNotesTable = pgTable(
     id: serial("id").primaryKey(),
     schoolId: integer("school_id").notNull(),
     caseId: integer("case_id").notNull(),
-    body: text("body").notNull(),
+    body: encryptedText("body").notNull(),
     authorStaffId: integer("author_staff_id"),
     authorName: text("author_name").notNull().default(""),
     createdAt: timestamp("created_at", { withTimezone: true })

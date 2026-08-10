@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import {
+  usePrivilegedReauth,
+  fetchWithReauth,
+} from "../lib/usePrivilegedReauth";
 
 // =============================================================================
 // Data Export (registry-backed) — admin panel
@@ -70,6 +74,7 @@ export function DataExportRegistryPanel() {
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"" | "preview" | "csv" | "xlsx">("");
+  const { ensureReauth, reauthModal } = usePrivilegedReauth();
 
   const dataset = useMemo(
     () => datasets?.find((d) => d.key === selectedKey) ?? null,
@@ -177,11 +182,14 @@ export function DataExportRegistryPanel() {
     setBusy(format);
     setLoadError(null);
     try {
-      const res = await authFetch("/api/exports/download", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const res = await fetchWithReauth(ensureReauth, () =>
+        authFetch("/api/exports/download", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+      if (!res) return; // step-up cancelled
       if (!res.ok) throw new Error("Download failed");
       const blob = await res.blob();
       const fallback = `${dataset.key}.${format}`;
@@ -205,6 +213,7 @@ export function DataExportRegistryPanel() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+      {reauthModal}
       <div className="card">
         <h2>Data Export</h2>
         <p style={{ marginTop: 0, color: "var(--text-subtle, #666)" }}>

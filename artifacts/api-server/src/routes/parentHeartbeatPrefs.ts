@@ -7,22 +7,12 @@ import {
   parentHeartbeatPrefsTable,
 } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
-import { verifyParentAuthToken } from "../lib/authToken.js";
+import { requireActiveParent } from "../lib/parentAuthMiddleware.js";
 
 const router: IRouter = Router();
 
-// Resolve parent identity (mirror of parentSnapshot.ts middleware).
-router.use(async (req, _res, next) => {
-  let pid: number | null = req.session.parentId ?? null;
-  if (!pid) {
-    const auth = req.headers.authorization;
-    if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      pid = verifyParentAuthToken(auth.slice(7).trim());
-    }
-  }
-  req.parentId = pid;
-  next();
-});
+// Resolve req.parentId AND enforce parents.active=true on every request (F02).
+router.use(requireActiveParent);
 
 const SECTION_KEYS = [
   "showRecognition",

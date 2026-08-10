@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { setAuthToken } from "./lib/authToken";
+import { setCsrfToken } from "./lib/csrf";
 
 export interface AuthUser {
   id: number;
@@ -16,10 +17,32 @@ export default function Login({
 }: {
   onLogin: (user: AuthUser) => void;
 }) {
+  const initialResetToken = (() => {
+    const marker = "/reset-password/";
+    const path = window.location.pathname;
+    const idx = path.indexOf(marker);
+    if (idx < 0) return "";
+    return decodeURIComponent(path.slice(idx + marker.length));
+  })();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetConfirm, setResetConfirm] = useState("");
+  const [mode, setMode] = useState<"login" | "forgot" | "reset" | "mfa">(
+    initialResetToken ? "reset" : "login",
+  );
+  const [mfaCode, setMfaCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  const passwordPolicyOk = (value: string) =>
+    value.length >= 8 &&
+    /[A-Z]/.test(value) &&
+    /[a-z]/.test(value) &&
+    /\d/.test(value) &&
+    /[^A-Za-z0-9]/.test(value);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -37,8 +60,19 @@ export default function Login({
         setError(body.error ?? `Sign-in failed (${res.status})`);
         return;
       }
-      const user: AuthUser & { authToken?: string } = await res.json();
+      const user: AuthUser & {
+        authToken?: string;
+        csrfToken?: string;
+        requiresMfa?: boolean;
+      } = await res.json();
+      if (user.requiresMfa) {
+        // Password was correct but the account has MFA — collect the code.
+        setMfaCode("");
+        setMode("mfa");
+        return;
+      }
       if (user.authToken) setAuthToken(user.authToken);
+      if (user.csrfToken) setCsrfToken(user.csrfToken);
       onLogin(user);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Network error");
@@ -46,6 +80,113 @@ export default function Login({
       setBusy(false);
     }
   }
+
+  async function handleMfaVerify(e: React.FormEvent) {
+    e.preventDefault();
+    if (mfaCode.trim().length < 6) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch("/api/auth/mfa/login-verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: mfaCode.trim() }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(
+          body.error === "invalid_code"
+            ? "That code didn't match. Try again."
+            : (body.error ?? `Verification failed (${res.status})`),
+        );
+        return;
+      }
+      const user = body as AuthUser & {
+        authToken?: string;
+        csrfToken?: string;
+      };
+      if (user.authToken) setAuthToken(user.authToken);
+      if (user.csrfToken) setCsrfToken(user.csrfToken);
+      onLogin(user);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleForgotPassword(e: React.FormEvent) {
+    e.preventDefault();
+    if (!forgotEmail.trim()) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const res = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: forgotEmail.trim() }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(body.error ?? `Request failed (${res.status})`);
+        return;
+      }
+      setMessage(
+        body.message ??
+          "If an active staff account exists for that email, a password reset link has been sent.",
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleResetPassword(e: React.FormEvent) {
+    e.preventDefault();
+    if (!initialResetToken || !passwordPolicyOk(resetPassword)) return;
+    if (resetPassword !== resetConfirm) {
+      setError("Passwords do not match.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const res = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token: initialResetToken,
+          newPassword: resetPassword,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(body.error ?? `Reset failed (${res.status})`);
+        return;
+      }
+      setMessage("Password updated. You can now sign in.");
+      setResetPassword("");
+      setResetConfirm("");
+      window.history.replaceState({}, "", "/");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const submitDisabled =
+    busy ||
+    (mode === "login" && (!email.trim() || !password)) ||
+    (mode === "forgot" && !forgotEmail.trim()) ||
+    (mode === "mfa" && mfaCode.trim().length < 6) ||
+    (mode === "reset" &&
+      (!passwordPolicyOk(resetPassword) ||
+        resetPassword !== resetConfirm ||
+        !!message));
 
   return (
     <div
@@ -61,7 +202,15 @@ export default function Login({
       }}
     >
       <form
-        onSubmit={handleSubmit}
+        onSubmit={
+          mode === "forgot"
+            ? handleForgotPassword
+            : mode === "reset"
+              ? handleResetPassword
+              : mode === "mfa"
+                ? handleMfaVerify
+                : handleSubmit
+        }
         style={{
           background: "rgba(255,255,255,0.06)",
           border: "1px solid rgba(255,255,255,0.12)",
@@ -78,34 +227,116 @@ export default function Login({
             Pulse<span style={{ color: "#3b82f6" }}>EDU</span>
           </div>
           <div style={{ fontSize: "0.9rem", opacity: 0.7, marginTop: 4 }}>
-            Sign in to continue
+            {mode === "forgot"
+              ? "Reset your staff password"
+              : mode === "reset"
+                ? "Choose a new staff password"
+                : mode === "mfa"
+                  ? "Enter your authentication code"
+                  : "Sign in to continue"}
           </div>
         </div>
 
-        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <span style={{ fontSize: "0.85rem", opacity: 0.85 }}>Email</span>
-          <input
-            type="email"
-            autoComplete="username"
-            autoFocus
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            disabled={busy}
-            style={inputStyle}
-          />
-        </label>
+        {mode === "forgot" ? (
+          <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <span style={{ fontSize: "0.85rem", opacity: 0.85 }}>
+              Staff email
+            </span>
+            <input
+              type="email"
+              autoComplete="username"
+              autoFocus
+              value={forgotEmail}
+              onChange={(e) => setForgotEmail(e.target.value)}
+              disabled={busy}
+              style={inputStyle}
+            />
+          </label>
+        ) : mode === "reset" ? (
+          <>
+            <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <span style={{ fontSize: "0.85rem", opacity: 0.85 }}>
+                New password
+              </span>
+              <input
+                type="password"
+                autoComplete="new-password"
+                autoFocus
+                value={resetPassword}
+                onChange={(e) => setResetPassword(e.target.value)}
+                disabled={busy || !!message}
+                style={inputStyle}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <span style={{ fontSize: "0.85rem", opacity: 0.85 }}>
+                Confirm new password
+              </span>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={resetConfirm}
+                onChange={(e) => setResetConfirm(e.target.value)}
+                disabled={busy || !!message}
+                style={inputStyle}
+              />
+            </label>
+            <div style={{ fontSize: "0.8rem", opacity: 0.75 }}>
+              Use at least 8 characters with uppercase, lowercase, number, and
+              special character.
+            </div>
+          </>
+        ) : mode === "mfa" ? (
+          <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <span style={{ fontSize: "0.85rem", opacity: 0.85 }}>
+              6-digit code or recovery code
+            </span>
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              autoFocus
+              value={mfaCode}
+              onChange={(e) => setMfaCode(e.target.value)}
+              disabled={busy}
+              placeholder="123456"
+              style={inputStyle}
+            />
+            <div style={{ fontSize: "0.8rem", opacity: 0.75 }}>
+              Open your authenticator app and enter the current code, or use a
+              recovery code.
+            </div>
+          </label>
+        ) : (
+          <>
+            <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <span style={{ fontSize: "0.85rem", opacity: 0.85 }}>Email</span>
+              <input
+                type="email"
+                autoComplete="username"
+                autoFocus
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={busy}
+                style={inputStyle}
+              />
+            </label>
 
-        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <span style={{ fontSize: "0.85rem", opacity: 0.85 }}>Password</span>
-          <input
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            disabled={busy}
-            style={inputStyle}
-          />
-        </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <span style={{ fontSize: "0.85rem", opacity: 0.85 }}>
+                Password
+              </span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                disabled={busy}
+                style={inputStyle}
+              />
+            </label>
+          </>
+        )}
 
         {error && (
           <div
@@ -121,47 +352,79 @@ export default function Login({
             {error}
           </div>
         )}
+        {message && (
+          <div
+            style={{
+              background: "rgba(34,197,94,0.15)",
+              border: "1px solid rgba(34,197,94,0.4)",
+              color: "#bbf7d0",
+              padding: "0.6rem 0.9rem",
+              borderRadius: 8,
+              fontSize: "0.9rem",
+            }}
+          >
+            {message}
+          </div>
+        )}
 
         <button
           type="submit"
-          disabled={busy || !email.trim() || !password}
+          disabled={submitDisabled}
           style={{
-            background:
-              busy || !email.trim() || !password
-                ? "rgba(59,130,246,0.4)"
-                : "#3b82f6",
+            background: submitDisabled ? "rgba(59,130,246,0.4)" : "#3b82f6",
             color: "#fff",
             border: "none",
             borderRadius: 8,
             padding: "0.75rem 1rem",
             fontSize: "1rem",
             fontWeight: 600,
-            cursor:
-              busy || !email.trim() || !password ? "not-allowed" : "pointer",
+            cursor: submitDisabled ? "not-allowed" : "pointer",
           }}
         >
-          {busy ? "Signing in…" : "Sign in"}
+          {busy
+            ? mode === "login"
+              ? "Signing in…"
+              : mode === "mfa"
+                ? "Verifying…"
+                : "Saving…"
+            : mode === "forgot"
+              ? "Send reset link"
+              : mode === "reset"
+                ? "Update password"
+                : mode === "mfa"
+                  ? "Verify"
+                  : "Sign in"}
         </button>
-
-        <div style={{ textAlign: "center", marginTop: "-0.25rem" }}>
-          <a
-            href={`${import.meta.env.BASE_URL || "/"}forgot-password`}
-            style={{
-              color: "rgba(255,255,255,0.6)",
-              fontSize: "0.85rem",
-              textDecoration: "underline",
-              textUnderlineOffset: 2,
+        {mode === "login" ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setMode("forgot");
+              setError("");
+              setMessage("");
+              setForgotEmail(email);
             }}
+            style={linkButtonStyle}
           >
             Forgot password?
-          </a>
-        </div>
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setMode("login");
+              setError("");
+              setMessage("");
+              window.history.replaceState({}, "", "/");
+            }}
+            style={linkButtonStyle}
+          >
+            Back to sign in
+          </button>
+        )}
 
-        {/* Parent-brand footer. PulseEDU is one of several school /
-            organization apps offered under Pulse Kinetics; the link
-            takes prospective customers (and anyone curious about the
-            company) back to the marketing site. Kept compact + low
-            contrast so it doesn't compete with the sign-in form. */}
         <div
           style={{
             textAlign: "center",
@@ -180,6 +443,13 @@ export default function Login({
           >
             pulsekinetics.us
           </a>
+          {" · "}
+          <a
+            href="/sms-policy"
+            style={{ color: "#93c5fd", textDecoration: "none" }}
+          >
+            SMS policy
+          </a>
         </div>
       </form>
     </div>
@@ -196,4 +466,14 @@ const inputStyle: React.CSSProperties = {
   outline: "none",
   width: "100%",
   boxSizing: "border-box",
+};
+
+const linkButtonStyle: React.CSSProperties = {
+  background: "transparent",
+  border: "none",
+  color: "#bfdbfe",
+  cursor: "pointer",
+  fontSize: "0.9rem",
+  padding: 0,
+  textDecoration: "underline",
 };

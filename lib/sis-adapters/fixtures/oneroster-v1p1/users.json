@@ -1,0 +1,328 @@
+{
+  "users": [
+    {
+      "sourcedId": "user-stu-1001",
+      "status": "active",
+      "dateLastModified": "2026-03-02T14:22:00.000Z",
+      "username": "1001847293",
+      "userIds": [
+        {
+          "type": "Fed",
+          "identifier": "1001847293"
+        }
+      ],
+      "enabledUser": "true",
+      "givenName": "Maya",
+      "familyName": "Johnson",
+      "metadata": {
+        "ell": "true",
+        "english_learner": "true"
+      },
+      "role": "student",
+      "identifier": "1001847293",
+      "email": "",
+      "grades": ["06"],
+      "orgs": [
+        {
+          "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+          "sourcedId": "org-parrott-0241",
+          "type": "org"
+        }
+      ]
+    },
+    {
+      "sourcedId": "user-stu-1002",
+      "status": "active",
+      "dateLastModified": "2026-03-02T14:22:00.000Z",
+      "username": "1001847294",
+      "userIds": [
+        {
+          "type": "Fed",
+          "identifier": "1001847294"
+        }
+      ],
+      "enabledUser": "true",
+      "givenName": "Ethan",
+      "familyName": "Martinez",
+      "role": "student",
+      "identifier": "1001847294",
+      "email": "",
+      "grades": ["06"],
+      "orgs": [
+        {
+          "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+          "sourcedId": "org-parrott-0241",
+          "type": "org"
+        }
+      ]
+    },
+    {
+      "sourcedId": "user-stu-1003",
+      "status": "active",
+      "dateLastModified": "2026-03-02T14:22:00.000Z",
+      "username": "1001847295",
+      "userIds": [
+        {
+          "type": "Fed",
+          "identifier": "1001847295"
+        }
+      ],
+      "enabledUser": "true",
+      "givenName": "Sofia",
+      "familyName": "Nguyen",
+      "metadata": {
+        "section504": "true",
+        "is_504": "yes"
+      },
+      "role": "student",
+      "identifier": "1001847295",
+      "email": "",
+      "grades": ["06"],
+      "orgs": [
+        {
+          "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+          "sourcedId": "org-parrott-0241",
+          "type": "org"
+        }
+      ]
+    },
+    {
+      "sourcedId": "user-stu-1004",
+      "status": "active",
+      "dateLastModified": "2026-03-02T14:22:00.000Z",
+      "username": "1001847296",
+      "userIds": [
+        {
+          "type": "Fed",
+          "identifier": "1001847296"
+        }
+      ],
+      "enabledUser": "true",
+      "givenName": "Noah",
+      "familyName": "Williams",
+      "role": "student",
+      "identifier": "1001847296",
+      "email": "",
+      "grades": ["06"],
+      "orgs": [
+        {
+          "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+          "sourcedId": "org-parrott-0241",
+          "type": "org"
+        }
+      ]
+    },
+    {
+      "sourcedId": "user-stu-1005",
+      "status": "active",
+      "dateLastModified": "2026-03-02T14:22:00.000Z",
+      "username": "1001847297",
+      "userIds": [
+        {
+          "type": "Fed",
+          "identifier": "1001847297"
+        }
+      ],
+      "enabledUser": "true",
+      "givenName": "Ava",
+      "familyName": "Thompson",
+      "metadata": {
+        "ese": "true",
+        "iep": "Y"
+      },
+      "role": "student",
+      "identifier": "1001847297",
+      "email": "",
+      "grades": ["06"],
+      "orgs": [
+        {
+          "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+          "sourcedId": "org-parrott-0241",
+          "type": "org"
+        }
+      ]
+    },
+    {
+      "sourcedId": "user-stu-1006",
+      "status": "active",
+      "dateLastModified": "2026-03-02T14:22:00.000Z",
+      "username": "1001847298",
+      "userIds": [
+        {
+          "type": "Fed",
+          "identifier": "1001847298"
+        }
+      ],
+      "enabledUser": "true",
+      "givenName": "Liam",
+      "familyName": "Garcia",
+      "role": "student",
+      "identifier": "1001847298",
+      "email": "",
+      "grades": ["06"],
+      "orgs": [
+        {
+          "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+          "sourcedId": "org-parrott-0241",
+          "type": "org"
+        }
+      ]
+    },
+    {
+      "sourcedId": "user-stu-1007",
+      "status": "active",
+      "dateLastModified": "2026-03-02T14:22:00.000Z",
+      "username": "1001847299",
+      "userIds": [
+        {
+          "type": "Fed",
+          "identifier": "1001847299"
+        }
+      ],
+      "enabledUser": "true",
+      "givenName": "Isabella",
+      "familyName": "Chen",
+      "role": "student",
+      "identifier": "1001847299",
+      "email": "",
+      "grades": ["06"],
+      "orgs": [
+        {
+          "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+          "sourcedId": "org-parrott-0241",
+          "type": "org"
+        }
+      ]
+    },
+    {
+      "sourcedId": "user-stu-1008",
+      "status": "active",
+      "dateLastModified": "2026-03-02T14:22:00.000Z",
+      "username": "1001847300",
+      "userIds": [
+        {
+          "type": "Fed",
+          "identifier": "1001847300"
+        }
+      ],
+      "enabledUser": "true",
+      "givenName": "James",
+      "familyName": "Davis",
+      "role": "student",
+      "identifier": "1001847300",
+      "email": "",
+      "grades": ["06"],
+      "orgs": [
+        {
+          "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+          "sourcedId": "org-parrott-0241",
+          "type": "org"
+        }
+      ]
+    },
+    {
+      "sourcedId": "user-tchr-2001",
+      "status": "active",
+      "dateLastModified": "2026-03-01T09:15:00.000Z",
+      "username": "rachel.brooks",
+      "userIds": [
+        {
+          "type": "Fed",
+          "identifier": "2001847001"
+        }
+      ],
+      "enabledUser": "true",
+      "givenName": "Rachel",
+      "familyName": "Brooks",
+      "role": "teacher",
+      "identifier": "2001847001",
+      "email": "rachel.brooks@hcsb.k12.fl.us",
+      "phone": "3525550101",
+      "orgs": [
+        {
+          "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+          "sourcedId": "org-parrott-0241",
+          "type": "org"
+        }
+      ]
+    },
+    {
+      "sourcedId": "user-tchr-2002",
+      "status": "active",
+      "dateLastModified": "2026-03-01T09:15:00.000Z",
+      "username": "marcus.rivera",
+      "userIds": [
+        {
+          "type": "Fed",
+          "identifier": "2001847002"
+        }
+      ],
+      "enabledUser": "true",
+      "givenName": "Marcus",
+      "familyName": "Rivera",
+      "role": "teacher",
+      "identifier": "2001847002",
+      "email": "marcus.rivera@hcsb.k12.fl.us",
+      "phone": "3525550102",
+      "orgs": [
+        {
+          "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+          "sourcedId": "org-parrott-0241",
+          "type": "org"
+        }
+      ]
+    },
+    {
+      "sourcedId": "user-tchr-2003",
+      "status": "active",
+      "dateLastModified": "2026-03-01T09:15:00.000Z",
+      "username": "dana.patel",
+      "userIds": [
+        {
+          "type": "Fed",
+          "identifier": "2001847003"
+        }
+      ],
+      "enabledUser": "true",
+      "givenName": "Dana",
+      "familyName": "Patel",
+      "role": "teacher",
+      "identifier": "2001847003",
+      "email": "dana.patel@hcsb.k12.fl.us",
+      "phone": "3525550103",
+      "orgs": [
+        {
+          "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+          "sourcedId": "org-parrott-0241",
+          "type": "org"
+        }
+      ]
+    },
+    {
+      "sourcedId": "user-admin-3001",
+      "status": "active",
+      "dateLastModified": "2026-03-01T09:15:00.000Z",
+      "username": "chris.clifford",
+      "userIds": [
+        {
+          "type": "Fed",
+          "identifier": "3001847001"
+        }
+      ],
+      "enabledUser": "true",
+      "givenName": "Chris",
+      "familyName": "Clifford",
+      "role": "administrator",
+      "identifier": "3001847001",
+      "email": "chris.clifford@hcsb.k12.fl.us",
+      "phone": "3525550199",
+      "orgs": [
+        {
+          "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+          "sourcedId": "org-parrott-0241",
+          "type": "org"
+        }
+      ]
+    }
+  ]
+}

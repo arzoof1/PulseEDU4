@@ -15,6 +15,7 @@ import {
 import { and, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { authenticator } from "otplib";
 import { encryptSecret, decryptSecret } from "../lib/secretCrypto.js";
+import { writeAuthAudit } from "../lib/authAudit.js";
 
 // otplib defaults to a 1-step window. Bump to allow ±1 step (≈±30s) of clock
 // skew on the parent's phone — same tolerance every major site uses.
@@ -75,7 +76,12 @@ import {
   issueParentAuthToken,
   verifyParentAuthToken,
 } from "../lib/authToken.js";
+import {
+  bumpParentAuthTokenVersion,
+  parentAuthTokenVersion,
+} from "../lib/parentBearerAuth.js";
 import { loadBrandingForSchool } from "./schoolBranding.js";
+import { ensureCsrfToken } from "../lib/csrf.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -110,7 +116,7 @@ router.use(async (req, _res, next) => {
   if (!pid) {
     const auth = req.headers.authorization;
     if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      pid = verifyParentAuthToken(auth.slice(7).trim());
+      pid = verifyParentAuthToken(auth.slice(7).trim())?.parentId ?? null;
     }
   }
   req.parentId = pid;
@@ -169,6 +175,17 @@ router.post("/parent-auth/login", async (req: Request, res) => {
       .set({ lastLoginAt: new Date() })
       .where(eq(parentsTable.id, parent.id));
 
+    // Parent-portal audit trail (Section 13.6).
+    void writeAuthAudit({
+      action: "parent_login",
+      schoolId: parent.schoolId,
+      ip: req.ip ?? null,
+      payload: { parentId: parent.id, email: normalizedEmail },
+    });
+
+    // DV-10: stamp the bearer token with the parent's current token version so
+    // it is honored by requireActiveParent until the next revoke/reset.
+    const authTokenVersion = await parentAuthTokenVersion(parent.id);
     req.session.regenerate((err) => {
       if (err) {
         res.status(500).json({ error: "Could not start session" });
@@ -179,6 +196,7 @@ router.post("/parent-auth/login", async (req: Request, res) => {
       // logged in twice in the same browser.
       delete req.session.staffId;
       delete req.session.activeSchoolId;
+      const csrfToken = ensureCsrfToken(req.session);
       req.session.save((saveErr) => {
         if (saveErr) {
           res.status(500).json({ error: "Could not save session" });
@@ -186,7 +204,8 @@ router.post("/parent-auth/login", async (req: Request, res) => {
         }
         res.json({
           ...publicParent(parent),
-          authToken: issueParentAuthToken(parent.id),
+          csrfToken,
+          authToken: issueParentAuthToken(parent.id, authTokenVersion),
         });
       });
     });
@@ -196,7 +215,11 @@ router.post("/parent-auth/login", async (req: Request, res) => {
   res.status(401).json({ error: GENERIC_LOGIN_ERROR });
 });
 
-router.post("/parent-auth/logout", (req, res) => {
+router.post("/parent-auth/logout", async (req, res) => {
+  // DV-10: bump the token version so any outstanding bearer token is revoked,
+  // not just the session cookie destroyed below.
+  const pid = req.session.parentId ?? null;
+  if (pid) await bumpParentAuthTokenVersion(pid);
   req.session.destroy((err) => {
     if (err) {
       res.status(500).json({ error: "Could not log out" });
@@ -239,9 +262,11 @@ router.get("/parent-auth/me", async (req, res) => {
     .innerJoin(studentsTable, eq(parentStudentsTable.studentId, studentsTable.id))
     .where(eq(parentStudentsTable.parentId, pid));
 
+  const authTokenVersion = await parentAuthTokenVersion(parent.id);
   res.json({
     ...publicParent(parent),
-    authToken: issueParentAuthToken(parent.id),
+    csrfToken: ensureCsrfToken(req.session),
+    authToken: issueParentAuthToken(parent.id, authTokenVersion),
     students: links.map((s) => ({
       id: s.studentRowId,
       studentId: s.studentId,
@@ -475,11 +500,20 @@ router.post("/parent-auth/accept-invite", async (req, res) => {
     })
     .where(eq(parentInvitesTable.id, invite.id));
 
+  // Parent-portal audit trail (Section 13.6): a new/activated portal account.
+  void writeAuthAudit({
+    action: "parent_invite_accepted",
+    schoolId: invite.schoolId,
+    ip: req.ip ?? null,
+    payload: { parentId, studentId: invite.studentId },
+  });
+
   // Auto-sign-in so the parent lands on their dashboard immediately.
   const [parent] = await db
     .select()
     .from(parentsTable)
     .where(eq(parentsTable.id, parentId));
+  const authTokenVersion = await parentAuthTokenVersion(parentId);
   req.session.regenerate((err) => {
     if (err) {
       res.status(500).json({ error: "Could not start session" });
@@ -488,6 +522,7 @@ router.post("/parent-auth/accept-invite", async (req, res) => {
     req.session.parentId = parentId;
     delete req.session.staffId;
     delete req.session.activeSchoolId;
+    const csrfToken = ensureCsrfToken(req.session);
     req.session.save((saveErr) => {
       if (saveErr) {
         res.status(500).json({ error: "Could not save session" });
@@ -495,7 +530,8 @@ router.post("/parent-auth/accept-invite", async (req, res) => {
       }
       res.json({
         ...publicParent(parent!),
-        authToken: issueParentAuthToken(parentId),
+        csrfToken,
+        authToken: issueParentAuthToken(parentId, authTokenVersion),
       });
     });
   });
@@ -847,6 +883,20 @@ router.post("/parent-auth/reset", async (req, res) => {
     .set({ passwordHash, lastLoginAt: new Date() })
     .where(eq(parentsTable.id, parentId));
 
+  // Parent-portal audit trail (Section 13.6).
+  void writeAuthAudit({
+    action: "parent_password_reset",
+    schoolId: parent.schoolId,
+    ip: req.ip ?? null,
+    payload: { parentId },
+  });
+
+  // DV-10: a completed password reset must invalidate every previously-issued
+  // bearer token. Bump the version, then stamp the fresh token with the new
+  // value so this session's token is the only one that still works.
+  await bumpParentAuthTokenVersion(parentId);
+  const authTokenVersion = await parentAuthTokenVersion(parentId);
+
   // Auto-sign-in so the parent lands on their dashboard — same pattern
   // as accept-invite. Clear any pre-existing staff session bits.
   req.session.regenerate((err) => {
@@ -857,6 +907,7 @@ router.post("/parent-auth/reset", async (req, res) => {
     req.session.parentId = parentId;
     delete req.session.staffId;
     delete req.session.activeSchoolId;
+    const csrfToken = ensureCsrfToken(req.session);
     req.session.save((saveErr) => {
       if (saveErr) {
         res.status(500).json({ error: "Could not save session" });
@@ -864,7 +915,8 @@ router.post("/parent-auth/reset", async (req, res) => {
       }
       res.json({
         ...publicParent({ ...parent, passwordHash }),
-        authToken: issueParentAuthToken(parentId),
+        csrfToken,
+        authToken: issueParentAuthToken(parentId, authTokenVersion),
       });
     });
   });
@@ -909,6 +961,13 @@ router.post("/parent-auth/change-password", async (req, res) => {
     .update(parentsTable)
     .set({ passwordHash })
     .where(eq(parentsTable.id, pid));
+  // Parent-portal audit trail (Section 13.6).
+  void writeAuthAudit({
+    action: "parent_password_changed",
+    schoolId: parent.schoolId,
+    ip: req.ip ?? null,
+    payload: { parentId: pid },
+  });
   res.json({ ok: true });
 });
 
@@ -1001,7 +1060,7 @@ router.post("/parent-auth/totp/confirm", async (req, res) => {
     });
     return;
   }
-  await db
+  const [enrolled] = await db
     .update(parentsTable)
     .set({
       // Encrypted at rest with an app-key derivative; the raw secret only
@@ -1009,7 +1068,15 @@ router.post("/parent-auth/totp/confirm", async (req, res) => {
       totpSecret: encryptSecret(secret),
       totpEnabledAt: new Date(),
     })
-    .where(eq(parentsTable.id, auth.pid));
+    .where(eq(parentsTable.id, auth.pid))
+    .returning({ schoolId: parentsTable.schoolId });
+  // Parent-portal audit trail (Section 13.6).
+  void writeAuthAudit({
+    action: "parent_totp_enrolled",
+    schoolId: enrolled?.schoolId ?? null,
+    ip: req.ip ?? null,
+    payload: { parentId: auth.pid },
+  });
   res.json({ ok: true, enabled: true });
 });
 
@@ -1055,6 +1122,13 @@ router.post("/parent-auth/totp/disable", async (req, res) => {
     .update(parentsTable)
     .set({ totpSecret: null, totpEnabledAt: null })
     .where(eq(parentsTable.id, auth.pid));
+  // Parent-portal audit trail (Section 13.6).
+  void writeAuthAudit({
+    action: "parent_totp_disabled",
+    schoolId: parent.schoolId,
+    ip: req.ip ?? null,
+    payload: { parentId: auth.pid },
+  });
   res.json({ ok: true, enabled: false });
 });
 

@@ -1,24 +1,14 @@
 import { Router, type IRouter } from "express";
 import { db, schoolsTable, studentsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { verifyParentAuthToken } from "../lib/authToken.js";
 import { buildParentSnapshot } from "../lib/parentSnapshot.js";
 import { renderSnapshotPdf } from "../lib/parentSnapshotPdf.js";
+import { requireActiveParent } from "../lib/parentAuthMiddleware.js";
 
 const router: IRouter = Router();
 
-// Same parent-id resolution pattern as the JSON snapshot.
-router.use(async (req, _res, next) => {
-  let pid: number | null = req.session.parentId ?? null;
-  if (!pid) {
-    const auth = req.headers.authorization;
-    if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      pid = verifyParentAuthToken(auth.slice(7).trim());
-    }
-  }
-  req.parentId = pid;
-  next();
-});
+// Resolve req.parentId AND enforce parents.active=true on every request (F02).
+router.use(requireActiveParent);
 
 function parsePositiveInt(raw: unknown): number | null {
   const n = typeof raw === "string" ? Number(raw) : (raw as number);

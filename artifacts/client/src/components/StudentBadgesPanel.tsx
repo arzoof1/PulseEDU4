@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { fetchAllStudents } from "../lib/students";
 import { CardDesignPanel } from "./CardDesignPanel";
 import { TeacherPicker } from "./TeacherPicker";
 
@@ -67,9 +68,8 @@ export function StudentBadgesPanel() {
   const [rosterLoading, setRosterLoading] = useState(false);
 
   useEffect(() => {
-    authFetch("/api/students")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((d) => setStudents(Array.isArray(d) ? d : d?.students ?? []))
+    fetchAllStudents<StudentRow>()
+      .then((rows) => setStudents(rows))
       .catch(() => setStudents([]));
     authFetch("/api/teacher-roster/teachers")
       .then((r) => (r.ok ? r.json() : { teachers: [] }))

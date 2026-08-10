@@ -8,6 +8,7 @@ import {
 } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { issueParentAuthToken } from "../lib/authToken.js";
+import { parentAuthTokenVersion } from "../lib/parentBearerAuth.js";
 
 const router: IRouter = Router();
 
@@ -160,6 +161,7 @@ router.post(
     const previewId = await setupPreviewParent(req, res);
     if (previewId == null) return;
 
+    const authTokenVersion = await parentAuthTokenVersion(previewId);
     // Swap session: drop staff identity, install parent identity.
     req.session.regenerate((err) => {
       if (err) {
@@ -181,7 +183,7 @@ router.post(
         res.json({
           ok: true,
           redirectTo: "/parent",
-          authToken: issueParentAuthToken(previewId),
+          authToken: issueParentAuthToken(previewId, authTokenVersion),
         });
       });
     });
@@ -198,7 +200,10 @@ router.post(
   async (req: Request, res: Response): Promise<void> => {
     const previewId = await setupPreviewParent(req, res);
     if (previewId == null) return;
-    const token = issueParentAuthToken(previewId);
+    const token = issueParentAuthToken(
+      previewId,
+      await parentAuthTokenVersion(previewId),
+    );
     const url = `${publicAppOrigin(req)}/parent#pt=${encodeURIComponent(token)}`;
     res.json({ ok: true, url });
   },

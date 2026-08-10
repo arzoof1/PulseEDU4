@@ -31,19 +31,7 @@ const objectStorage = new ObjectStorageService();
 // `downloadObject` (which writes to an Express response) and pipe
 // the GCS readStream directly into a buffer.
 async function fetchObjectBytes(objectPath: string): Promise<Buffer | null> {
-  try {
-    const file = await objectStorage.getObjectEntityFile(objectPath);
-    return await new Promise<Buffer | null>((resolve) => {
-      const chunks: Buffer[] = [];
-      const stream = file.createReadStream();
-      stream.on("data", (c: Buffer) => chunks.push(c));
-      stream.on("end", () => resolve(Buffer.concat(chunks)));
-      stream.on("error", () => resolve(null));
-    });
-  } catch (err) {
-    if (err instanceof ObjectNotFoundError) return null;
-    return null;
-  }
+  return objectStorage.readObjectAsBuffer(objectPath);
 }
 
 // Resolve the per-school card design once per batch: load the saved

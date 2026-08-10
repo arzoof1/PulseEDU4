@@ -15,7 +15,7 @@ import {
   housesTable,
   studentHouseChangesTable,
 } from "@workspace/db";
-import { eq, isNull, and, asc, inArray, or, ilike } from "drizzle-orm";
+import { eq, isNull, and, asc, inArray, or, ilike, gt } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import {
   canManageStudentPhoto,
@@ -25,6 +25,48 @@ import {
 import { bindObjectToSchool } from "./storage.js";
 
 const router: IRouter = Router();
+const DEFAULT_STUDENT_LIMIT = 100;
+const DEFAULT_SEARCH_LIMIT = 20;
+const MAX_STUDENT_LIMIT = 200;
+const MAX_SEARCH_LIMIT = 50;
+
+type StudentCursor = {
+  lastName: string;
+  firstName: string;
+  id: number;
+};
+
+function parseLimit(value: unknown, defaultLimit: number, maxLimit: number): number {
+  const raw = typeof value === "string" ? Number.parseInt(value, 10) : NaN;
+  if (!Number.isFinite(raw)) return defaultLimit;
+  return Math.min(Math.max(raw, 1), maxLimit);
+}
+
+function encodeCursor(row: StudentCursor): string {
+  return Buffer.from(JSON.stringify(row), "utf8").toString("base64url");
+}
+
+function parseCursor(value: unknown): StudentCursor | null | "invalid" {
+  if (value === undefined) return null;
+  if (typeof value !== "string" || value.length === 0) return "invalid";
+  try {
+    const data = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as
+      | Partial<StudentCursor>
+      | null;
+    if (
+      !data ||
+      typeof data.lastName !== "string" ||
+      typeof data.firstName !== "string" ||
+      typeof data.id !== "number" ||
+      !Number.isInteger(data.id)
+    ) {
+      return "invalid";
+    }
+    return { lastName: data.lastName, firstName: data.firstName, id: data.id };
+  } catch {
+    return "invalid";
+  }
+}
 
 // Inline requireStaff — every route file in this codebase has its own
 // copy following the pattern in pickup.ts / interventions.ts. Keeps
@@ -61,46 +103,82 @@ router.get("/students", async (req, res) => {
   // returning every student. Matches first/last/student_id (case-insensitive).
   const qRaw = typeof req.query.q === "string" ? req.query.q.trim() : "";
   const q = qRaw.slice(0, 64);
-  const where = q
+  const cursor = parseCursor(req.query.cursor);
+  if (cursor === "invalid") {
+    res.status(400).json({ error: "Invalid cursor" });
+    return;
+  }
+  const limit = parseLimit(
+    req.query.limit,
+    q ? DEFAULT_SEARCH_LIMIT : DEFAULT_STUDENT_LIMIT,
+    q ? MAX_SEARCH_LIMIT : MAX_STUDENT_LIMIT,
+  );
+  const searchFilter = q
     ? and(
-        eq(studentsTable.schoolId, schoolId),
+        // Prefix match: typing "joh" returns "John Smith" or
+        // "Mike Johnson" — but NOT "Stephanie Cohen". Matches the
+        // beginning of first or last name only. Student ID stays a
+        // prefix match too (admins typically know the leading digits).
         or(
-          // Prefix match: typing "joh" returns "John Smith" or
-          // "Mike Johnson" — but NOT "Stephanie Cohen". Matches the
-          // beginning of first or last name only. Student ID stays a
-          // prefix match too (admins typically know the leading digits).
           ilike(studentsTable.firstName, `${q}%`),
           ilike(studentsTable.lastName, `${q}%`),
           ilike(studentsTable.localSisId, `${q}%`),
         ),
       )
-    : eq(studentsTable.schoolId, schoolId);
+    : undefined;
+  const cursorFilter = cursor
+    ? or(
+        gt(studentsTable.lastName, cursor.lastName),
+        and(
+          eq(studentsTable.lastName, cursor.lastName),
+          gt(studentsTable.firstName, cursor.firstName),
+        ),
+        and(
+          eq(studentsTable.lastName, cursor.lastName),
+          eq(studentsTable.firstName, cursor.firstName),
+          gt(studentsTable.id, cursor.id),
+        ),
+      )
+    : undefined;
+  const where = and(
+    eq(studentsTable.schoolId, schoolId),
+    ...(searchFilter ? [searchFilter] : []),
+    ...(cursorFilter ? [cursorFilter] : []),
+  );
 
   const rows = await db
     .select()
     .from(studentsTable)
     .where(where)
-    .orderBy(studentsTable.lastName, studentsTable.firstName);
+    .orderBy(asc(studentsTable.lastName), asc(studentsTable.firstName), asc(studentsTable.id))
+    .limit(limit + 1);
+  const pageRows = rows.slice(0, limit);
+  const nextRow = rows.length > limit ? pageRows[pageRows.length - 1] : undefined;
+
   // student_id is NOT globally unique across schools, so an in-memory
   // membership filter on the school's roster would still mis-attribute an
   // assignment that belongs to a different school's student with the same
   // student_id. AND-filter the assignments themselves by schoolId in SQL.
-  const assignments = await db
-    .select({
-      studentId: studentAccommodationsTable.studentId,
-      name: schoolAccommodationsTable.name,
-    })
-    .from(studentAccommodationsTable)
-    .innerJoin(
-      schoolAccommodationsTable,
-      eq(studentAccommodationsTable.accommodationId, schoolAccommodationsTable.id),
-    )
-    .where(
-      and(
-        eq(studentAccommodationsTable.schoolId, schoolId),
-        isNull(studentAccommodationsTable.removedAt),
-      ),
-    );
+  const studentIds = pageRows.map((r) => r.studentId);
+  const assignments = studentIds.length
+    ? await db
+        .select({
+          studentId: studentAccommodationsTable.studentId,
+          name: schoolAccommodationsTable.name,
+        })
+        .from(studentAccommodationsTable)
+        .innerJoin(
+          schoolAccommodationsTable,
+          eq(studentAccommodationsTable.accommodationId, schoolAccommodationsTable.id),
+        )
+        .where(
+          and(
+            eq(studentAccommodationsTable.schoolId, schoolId),
+            inArray(studentAccommodationsTable.studentId, studentIds),
+            isNull(studentAccommodationsTable.removedAt),
+          ),
+        )
+    : [];
 
   const byStudent = new Map<string, string[]>();
   for (const a of assignments) {
@@ -109,12 +187,19 @@ router.get("/students", async (req, res) => {
     byStudent.set(a.studentId, list);
   }
 
-  res.json(
-    rows.map((r) => ({
+  res.json({
+    items: pageRows.map((r) => ({
       ...r,
       accommodations: byStudent.get(r.studentId) ?? [],
     })),
-  );
+    nextCursor: nextRow
+      ? encodeCursor({
+          lastName: nextRow.lastName,
+          firstName: nextRow.firstName,
+          id: nextRow.id,
+        })
+      : null,
+  });
 });
 
 // Single-student endpoint with emergency contacts (the 4 SIS-derived

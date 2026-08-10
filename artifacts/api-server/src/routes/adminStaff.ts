@@ -5,14 +5,35 @@ import {
   type Response,
   type NextFunction,
 } from "express";
-import bcrypt from "bcryptjs";
-import { db, staffTable, housesTable, schoolsTable } from "@workspace/db";
-import { and, eq, asc, inArray, sql } from "drizzle-orm";
-import { verifyAuthToken } from "../lib/authToken.js";
+import {
+  db,
+  staffTable,
+  housesTable,
+  schoolsTable,
+  staffMfaRecoveryCodesTable,
+  authAuditLogTable,
+} from "@workspace/db";
+import { and, eq, asc, desc, inArray, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
+import {
+  staffIdFromBearerToken,
+  bumpStaffAuthTokenVersion,
+} from "../lib/staffBearerAuth.js";
+import {
+  writeAuthAudit,
+  ensureAuthAuditChainColumns,
+} from "../lib/authAudit.js";
+import { verifyChain } from "../lib/authAuditChain.js";
+import { bcryptHash } from "../lib/bcrypt.js";
 import {
   getDistrictIdForSchool,
   getSchoolIdsForDistrict,
 } from "../lib/scope";
+import {
+  verifyPrivilegedReauth,
+  hasFreshPrivilegedReauth,
+} from "../lib/privilegedReauth.js";
+import { raiseSecurityAlert } from "../lib/securityAlerts.js";
 import { generateAndHashTempPassword } from "../lib/tempPassword";
 import { bindObjectToSchool } from "./storage.js";
 
@@ -30,7 +51,7 @@ async function loadStaff(req: Request): Promise<StaffRow | null> {
   if (!id) {
     const auth = req.headers.authorization;
     if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      id = verifyAuthToken(auth.slice(7).trim());
+      id = await staffIdFromBearerToken(auth.slice(7).trim());
     }
   }
   if (!id) return null;
@@ -48,6 +69,26 @@ function requireAdminOrSuper() {
       return;
     }
     if (!staff.isAdmin && !staff.isSuperUser && !staff.capStaffRoles) {
+      res.status(403).json({ error: "Admin access required" });
+      return;
+    }
+    (req as Request & { staff: StaffRow }).staff = staff;
+    next();
+  };
+}
+
+// Security-log viewer gate: any privileged role (Admin / District Admin /
+// SuperUser). Broader than requireAdminOrSuper (which guards staff mutations)
+// because a District Admin — who has no isAdmin flag of their own — must be
+// able to read the audit trail for a school they've switched into.
+function requirePrivileged() {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const staff = await loadStaff(req);
+    if (!staff) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    if (!staff.isAdmin && !staff.isDistrictAdmin && !staff.isSuperUser) {
       res.status(403).json({ error: "Admin access required" });
       return;
     }
@@ -362,6 +403,217 @@ router.get(
   },
 );
 
+// Security Events viewer (Section 3 — Logging & Monitoring). Read-only view of
+// the authentication / privileged-action audit trail (auth_audit_log), written
+// by the auth + MFA flows via writeAuthAudit. Scoped to the ACTIVE school
+// (req.schoolId) exactly like the staff roster above — a SuperUser switches
+// schools to view another, and no row from another tenant is ever returned.
+router.get(
+  "/admin/audit-log",
+  requirePrivileged(),
+  async (req: Request, res: Response) => {
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(400).json({ error: "No active school" });
+      return;
+    }
+
+    // limit: default 100, clamped to [1, 500]. action: optional exact filter.
+    const parsedLimit = Number.parseInt(String(req.query.limit ?? ""), 10);
+    const limit = Number.isFinite(parsedLimit)
+      ? Math.min(Math.max(parsedLimit, 1), 500)
+      : 100;
+    const action =
+      typeof req.query.action === "string" && req.query.action.trim()
+        ? req.query.action.trim()
+        : null;
+
+    const target = alias(staffTable, "audit_target");
+    const whereClause = action
+      ? and(
+          eq(authAuditLogTable.schoolId, schoolId),
+          eq(authAuditLogTable.action, action),
+        )
+      : eq(authAuditLogTable.schoolId, schoolId);
+
+    const [events, actionRows] = await Promise.all([
+      db
+        .select({
+          id: authAuditLogTable.id,
+          action: authAuditLogTable.action,
+          actorStaffId: authAuditLogTable.actorStaffId,
+          actorName: authAuditLogTable.actorName,
+          targetStaffId: authAuditLogTable.targetStaffId,
+          targetName: target.displayName,
+          ip: authAuditLogTable.ip,
+          payload: authAuditLogTable.payload,
+          createdAt: authAuditLogTable.createdAt,
+        })
+        .from(authAuditLogTable)
+        .leftJoin(target, eq(target.id, authAuditLogTable.targetStaffId))
+        .where(whereClause)
+        .orderBy(desc(authAuditLogTable.createdAt))
+        .limit(limit),
+      // Distinct action names for the client's filter dropdown (small table).
+      db
+        .selectDistinct({ action: authAuditLogTable.action })
+        .from(authAuditLogTable)
+        .where(eq(authAuditLogTable.schoolId, schoolId)),
+    ]);
+
+    res.json({
+      events,
+      actions: actionRows
+        .map((r) => r.action)
+        .filter((a): a is string => !!a)
+        .sort(),
+    });
+  },
+);
+
+// Verify the tamper-evidence hash chain over the entire auth audit log
+// (Section 3.8). Returns aggregate integrity only — no row content — so it is
+// safe for any privileged admin to run without exposing cross-school events.
+// Step-up reauth gated like the other sensitive audit/export actions.
+router.get(
+  "/admin/audit-log/verify",
+  requirePrivileged(),
+  async (req: Request, res: Response) => {
+    if (!hasFreshPrivilegedReauth(req.session)) {
+      res.status(401).json({ error: "reauth_required" });
+      return;
+    }
+
+    try {
+      // Self-heal on a DB that predates 3.8 (prod runs without boot
+      // migrations) so the query below never references a missing column.
+      await ensureAuthAuditChainColumns();
+
+      const rows = await db
+        .select({
+          id: authAuditLogTable.id,
+          schoolId: authAuditLogTable.schoolId,
+          action: authAuditLogTable.action,
+          actorStaffId: authAuditLogTable.actorStaffId,
+          actorName: authAuditLogTable.actorName,
+          targetStaffId: authAuditLogTable.targetStaffId,
+          ip: authAuditLogTable.ip,
+          payload: authAuditLogTable.payload,
+          createdAt: authAuditLogTable.createdAt,
+          prevHash: authAuditLogTable.prevHash,
+          entryHash: authAuditLogTable.entryHash,
+        })
+        .from(authAuditLogTable)
+        .orderBy(asc(authAuditLogTable.id));
+
+      const result = verifyChain(
+        rows.map((r) => ({
+          id: r.id,
+          schoolId: r.schoolId,
+          action: r.action,
+          actorStaffId: r.actorStaffId,
+          actorName: r.actorName,
+          targetStaffId: r.targetStaffId,
+          ip: r.ip,
+          payload: r.payload,
+          createdAtISO: r.createdAt.toISOString(),
+          prevHash: r.prevHash,
+          entryHash: r.entryHash,
+        })),
+      );
+
+      res.json({ ...result, totalRows: rows.length });
+    } catch (err) {
+      // Chain not yet provisioned (e.g. no DDL privilege to add columns).
+      // Degrade cleanly rather than 500 — the first successful audit write
+      // provisions the columns and this endpoint then verifies normally.
+      res.status(503).json({
+        ok: null,
+        pending: true,
+        error: "audit_chain_unavailable",
+        detail:
+          "Audit chain columns are being provisioned; retry after the next audited action.",
+      });
+    }
+  },
+);
+
+// Export the school's authentication / privileged-action audit trail as a CSV
+// (Section 2.5). Every row carries the required fields — timestamp, action,
+// actor, target, IP, and details — for a real privileged action. Privileged +
+// step-up-reauth gated like the audit viewer and the roster export.
+router.get(
+  "/admin/audit-log/export.csv",
+  requirePrivileged(),
+  async (req: Request, res: Response) => {
+    if (!hasFreshPrivilegedReauth(req.session)) {
+      res.status(403).json({ error: "reauth_required" });
+      return;
+    }
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(400).json({ error: "No active school" });
+      return;
+    }
+    const target = alias(staffTable, "audit_export_target");
+    const rows = await db
+      .select({
+        id: authAuditLogTable.id,
+        createdAt: authAuditLogTable.createdAt,
+        action: authAuditLogTable.action,
+        actorStaffId: authAuditLogTable.actorStaffId,
+        actorName: authAuditLogTable.actorName,
+        targetStaffId: authAuditLogTable.targetStaffId,
+        targetName: target.displayName,
+        ip: authAuditLogTable.ip,
+        payload: authAuditLogTable.payload,
+      })
+      .from(authAuditLogTable)
+      .leftJoin(target, eq(target.id, authAuditLogTable.targetStaffId))
+      .where(eq(authAuditLogTable.schoolId, schoolId))
+      .orderBy(desc(authAuditLogTable.createdAt))
+      .limit(5000);
+
+    const header = [
+      "ID",
+      "Timestamp (UTC)",
+      "Action",
+      "Actor ID",
+      "Actor",
+      "Target ID",
+      "Target",
+      "IP",
+      "Details",
+    ];
+    const lines = [header.map(csvCell).join(",")];
+    for (const r of rows) {
+      lines.push(
+        [
+          String(r.id),
+          r.createdAt ? new Date(r.createdAt).toISOString() : "",
+          r.action,
+          r.actorStaffId != null ? String(r.actorStaffId) : "",
+          r.actorName ?? "",
+          r.targetStaffId != null ? String(r.targetStaffId) : "",
+          r.targetName ?? "",
+          r.ip ?? "",
+          r.payload ? JSON.stringify(r.payload) : "",
+        ]
+          .map(csvCell)
+          .join(","),
+      );
+    }
+    const csv = "﻿" + lines.join("\r\n") + "\r\n";
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="security-audit-log-${stamp}.csv"`,
+    );
+    res.send(csv);
+  },
+);
+
 // Export the full staff roster as a CSV (opens in Excel). Same scoping as the
 // list endpoint: the active school only (SuperUsers switch schools to export
 // another). Cell phone is admin-gated (admin / district admin / super only).
@@ -370,6 +622,11 @@ router.get(
   requireAdminOrSuper(),
   async (req: Request, res: Response) => {
     const actor = (req as Request & { staff: StaffRow }).staff;
+    // Step-up reauth (Section 1.15): bulk roster export is a PII-exfil surface.
+    if (!hasFreshPrivilegedReauth(req.session)) {
+      res.status(403).json({ error: "reauth_required" });
+      return;
+    }
     const canSeeCell =
       actor.isAdmin || actor.isDistrictAdmin || actor.isSuperUser;
 
@@ -491,7 +748,8 @@ router.patch(
       res.status(400).json({ error: "Invalid staff id" });
       return;
     }
-    const updates: Record<string, unknown> = pickBoolUpdates(req.body);
+    const boolUpdates = pickBoolUpdates(req.body);
+    const updates: Record<string, unknown> = { ...boolUpdates };
     // Optional string field: defaultRoom. Empty string clears it (NULL).
     const body = (req.body ?? {}) as Record<string, unknown>;
     if ("defaultRoom" in body) {
@@ -592,6 +850,16 @@ router.patch(
     }
 
     const actor = (req as Request & { staff: StaffRow }).staff;
+    if (Object.keys(boolUpdates).length > 0) {
+      const reauth = await verifyPrivilegedReauth(
+        actor,
+        body.reauth as { currentPassword?: unknown; code?: unknown } | undefined,
+      );
+      if (!reauth.ok) {
+        res.status(reauth.status).json({ error: reauth.error });
+        return;
+      }
+    }
 
     // Core-Team-without-full-authority actors are admitted to this PATCH ONLY
     // to delegate the four data-import caps. Strip every other field BEFORE the
@@ -772,6 +1040,44 @@ router.patch(
             ),
       )
       .returning(STAFF_SELECT);
+
+    // Audit any change to a role / capability / active flag (item 3.6). Only
+    // security-relevant fields are recorded — routine edits (room, title, house)
+    // are intentionally left out so the security log stays signal, not noise.
+    const roleChanges: Record<string, { from: unknown; to: unknown }> = {};
+    for (const field of ALL_BOOL_FIELDS) {
+      const before = (target as Record<string, unknown>)[field];
+      const after = (updates as Record<string, unknown>)[field];
+      if (field in updates && before !== after) {
+        roleChanges[field] = { from: before, to: after };
+      }
+    }
+    if (Object.keys(roleChanges).length > 0) {
+      await writeAuthAudit({
+        action: "role_changed",
+        schoolId: target.schoolId,
+        actorStaffId: actor.id,
+        actorName: actor.displayName,
+        targetStaffId: targetId,
+        ip: req.ip ?? null,
+        payload: { targetName: target.displayName, changes: roleChanges },
+      });
+      // Security alert (3.6): notify admins of the role/access change with a
+      // human-readable before→after summary.
+      const changesSummary = Object.entries(roleChanges)
+        .map(([k, v]) => `${k}: ${v.from ? "on" : "off"}→${v.to ? "on" : "off"}`)
+        .join(", ");
+      await raiseSecurityAlert({
+        schoolId: target.schoolId,
+        type: "security_role_changed",
+        payload: {
+          actorName: actor.displayName,
+          targetName: target.displayName,
+          changesSummary,
+        },
+      });
+    }
+
     res.json(updated);
   },
 );
@@ -856,7 +1162,7 @@ router.post(
       targetSchoolId = bodySchoolId;
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcryptHash(password, 10);
     const [row] = await db
       .insert(staffTable)
       .values({
@@ -867,6 +1173,15 @@ router.post(
         ...updates,
       })
       .returning(STAFF_SELECT);
+    await writeAuthAudit({
+      action: "staff_created",
+      schoolId: row.schoolId ?? targetSchoolId,
+      actorStaffId: actor.id,
+      actorName: actor.displayName,
+      targetStaffId: row.id,
+      ip: req.ip ?? null,
+      payload: { email: normEmail, displayName: displayName.trim() },
+    });
     res.status(201).json(row);
   },
 );
@@ -969,11 +1284,20 @@ router.post(
       return;
     }
 
-    const passwordHash = await bcrypt.hash(newPassword, 10);
+    const passwordHash = await bcryptHash(newPassword, 10);
     await db
       .update(staffTable)
       .set({ passwordHash })
       .where(eq(staffTable.id, targetId));
+    await writeAuthAudit({
+      action: "admin_password_reset",
+      schoolId: target.schoolId,
+      actorStaffId: actor.id,
+      actorName: actor.displayName,
+      targetStaffId: targetId,
+      ip: req.ip ?? null,
+      payload: { targetName: target.displayName, mode: "set_password" },
+    });
 
     res.json({ ok: true });
   },
@@ -1072,6 +1396,15 @@ router.post(
       .update(staffTable)
       .set({ passwordHash })
       .where(eq(staffTable.id, targetId));
+    await writeAuthAudit({
+      action: "admin_password_reset",
+      schoolId: target.schoolId,
+      actorStaffId: actor.id,
+      actorName: actor.displayName,
+      targetStaffId: targetId,
+      ip: req.ip ?? null,
+      payload: { targetName: target.displayName, mode: "temp_password" },
+    });
 
     res.json({
       ok: true,
@@ -1079,6 +1412,134 @@ router.post(
       displayName: target.displayName,
       email: target.email,
     });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Staff MFA admin controls (Gate A / Section 1). Load a target staff row
+// scoped to the actor's authority (SuperUser = own district; else own school),
+// then enforce the same role hierarchy as reset-temp-password (only a
+// SuperUser may act on a SuperUser / District Admin).
+// ---------------------------------------------------------------------------
+async function loadScopedTargetStaff(
+  actor: StaffRow,
+  targetId: number,
+): Promise<StaffRow | null> {
+  const actorDistrictSchoolIds = actor.isSuperUser
+    ? await (async () => {
+        const did = await getDistrictIdForSchool(actor.schoolId);
+        return did !== null ? await getSchoolIdsForDistrict(did) : [];
+      })()
+    : null;
+  const [target] = await db
+    .select()
+    .from(staffTable)
+    .where(
+      actor.isSuperUser
+        ? and(
+            eq(staffTable.id, targetId),
+            actorDistrictSchoolIds && actorDistrictSchoolIds.length > 0
+              ? inArray(staffTable.schoolId, actorDistrictSchoolIds)
+              : sql`false`,
+          )
+        : and(
+            eq(staffTable.id, targetId),
+            eq(staffTable.schoolId, actor.schoolId),
+          ),
+    );
+  return target ?? null;
+}
+
+function mfaAdminGuardError(actor: StaffRow, target: StaffRow): string | null {
+  if (!actor.isAdmin && !actor.isSuperUser)
+    return "Only Admin or SuperUser can manage staff two-factor.";
+  if (target.isSuperUser && !actor.isSuperUser)
+    return "Only a SuperUser can act on a SuperUser.";
+  if (target.isDistrictAdmin && !actor.isSuperUser)
+    return "Only a SuperUser can act on a District Admin.";
+  return null;
+}
+
+// Force sign-out: invalidate every active session (authenticated OR mid-MFA)
+// for a target user, plus bearer tokens. Item 1.14.
+router.post(
+  "/admin/staff/:id/revoke-sessions",
+  requireAdminOrSuper(),
+  async (req: Request, res: Response) => {
+    const actor = (req as Request & { staff: StaffRow }).staff;
+    const targetId = Number(req.params.id);
+    if (!Number.isFinite(targetId)) {
+      res.status(400).json({ error: "Invalid staff id" });
+      return;
+    }
+    const target = await loadScopedTargetStaff(actor, targetId);
+    if (!target) {
+      res.status(404).json({ error: "Staff not found" });
+      return;
+    }
+    const guardErr = mfaAdminGuardError(actor, target);
+    if (guardErr) {
+      res.status(403).json({ error: guardErr });
+      return;
+    }
+    await db.execute(
+      sql`DELETE FROM user_sessions
+          WHERE (sess->>'staffId')::int = ${targetId}
+             OR (sess->>'pendingMfaStaffId')::int = ${targetId}`,
+    );
+    await bumpStaffAuthTokenVersion(targetId);
+    await writeAuthAudit({
+      action: "sessions_revoked",
+      schoolId: target.schoolId,
+      actorStaffId: actor.id,
+      actorName: actor.displayName,
+      targetStaffId: targetId,
+      ip: req.ip ?? null,
+    });
+    res.json({ ok: true });
+  },
+);
+
+// Admin reset of a locked-out user's MFA: clear the secret + enrollment and
+// delete recovery codes so they can re-enroll (or log in without MFA until a
+// policy flag requires it again). Also revokes bearer tokens.
+router.post(
+  "/admin/staff/:id/mfa-reset",
+  requireAdminOrSuper(),
+  async (req: Request, res: Response) => {
+    const actor = (req as Request & { staff: StaffRow }).staff;
+    const targetId = Number(req.params.id);
+    if (!Number.isFinite(targetId)) {
+      res.status(400).json({ error: "Invalid staff id" });
+      return;
+    }
+    const target = await loadScopedTargetStaff(actor, targetId);
+    if (!target) {
+      res.status(404).json({ error: "Staff not found" });
+      return;
+    }
+    const guardErr = mfaAdminGuardError(actor, target);
+    if (guardErr) {
+      res.status(403).json({ error: guardErr });
+      return;
+    }
+    await db
+      .update(staffTable)
+      .set({ mfaSecretEnc: null, mfaEnrolledAt: null })
+      .where(eq(staffTable.id, targetId));
+    await db
+      .delete(staffMfaRecoveryCodesTable)
+      .where(eq(staffMfaRecoveryCodesTable.staffId, targetId));
+    await bumpStaffAuthTokenVersion(targetId);
+    await writeAuthAudit({
+      action: "mfa_admin_reset",
+      schoolId: target.schoolId,
+      actorStaffId: actor.id,
+      actorName: actor.displayName,
+      targetStaffId: targetId,
+      ip: req.ip ?? null,
+    });
+    res.json({ ok: true });
   },
 );
 

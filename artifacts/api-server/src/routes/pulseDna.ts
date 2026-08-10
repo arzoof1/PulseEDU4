@@ -31,6 +31,7 @@ import {
   deleteStoredObject,
 } from "./storage.js";
 import { transcodePulseDnaVideo } from "../lib/videoTranscode.js";
+import { describeAiRequestError } from "../lib/aiRequestError.js";
 
 const router: IRouter = Router();
 
@@ -339,8 +340,13 @@ router.post("/pulse-dna/draft", rateLimitDraft, async (req, res) => {
       .join("")
       .trim();
   } catch (err) {
-    req.log?.error({ err }, "pulse-dna draft failed");
-    res.status(502).json({ error: "ai_request_failed" });
+    const detail = describeAiRequestError(err, { model: MODEL });
+    req.log?.error({ err, detail }, "pulse-dna draft failed");
+    res.status(502).json({
+      error: "ai_request_failed",
+      message: detail.message,
+      detail,
+    });
     return;
   }
 

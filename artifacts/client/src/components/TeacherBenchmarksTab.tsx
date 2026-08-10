@@ -8,7 +8,7 @@
 // Empty-state handling is explicit: a school that hasn't imported any
 // Florida per-student xlsx yet sees a friendly "no item-level data"
 // banner pointing them to Data Importer, not an empty grid.
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import BenchmarkStar from "./BenchmarkStar";
 
@@ -643,6 +643,33 @@ export default function TeacherBenchmarksTab({
     return out;
   }, [growth]);
 
+  // Measure the category header row so the second sticky header row
+  // pins below it (global th padding + wrapped category names make a
+  // hardcoded top:32 overlap). Only one heatmap table mounts at a time.
+  const categoryRowRef = useRef<HTMLTableRowElement>(null);
+  const [categoryHeaderHeight, setCategoryHeaderHeight] = useState(40);
+  useEffect(() => {
+    const el = categoryRowRef.current;
+    if (!el) return;
+    const measure = () => {
+      const h = el.getBoundingClientRect().height;
+      if (h > 0) setCategoryHeaderHeight(h);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [
+    mode,
+    grouped,
+    growthGrouped,
+    expandedCats,
+    data,
+    growth,
+    loading,
+    growthLoading,
+  ]);
+
   if (teacherId == null) {
     return (
       <div style={{ color: "#6b7280", padding: 12 }}>
@@ -1238,15 +1265,17 @@ export default function TeacherBenchmarksTab({
             }}
           >
             <table
+              className="benchmark-heatmap-table"
               style={{
                 borderCollapse: "separate",
                 borderSpacing: 0,
                 fontSize: 11,
                 tableLayout: "fixed",
+                overflow: "visible",
               }}
             >
               <thead>
-                <tr style={{ background: "#f3f4f6" }}>
+                <tr ref={categoryRowRef} style={{ background: "#f3f4f6" }}>
                   <th
                     rowSpan={2}
                     style={{
@@ -1259,7 +1288,8 @@ export default function TeacherBenchmarksTab({
                       minWidth: 180,
                       width: 180,
                       borderRight: "1px solid #d4d4d4",
-                      zIndex: 5,
+                      zIndex: 12,
+                      boxShadow: "2px 0 4px rgba(0,0,0,0.06)",
                     }}
                   >
                     Student
@@ -1297,7 +1327,8 @@ export default function TeacherBenchmarksTab({
                           lineHeight: 1.2,
                           position: "sticky",
                           top: 0,
-                          zIndex: 4,
+                          zIndex: 10,
+                          boxShadow: "0 2px 4px rgba(0,0,0,0.06)",
                         }}
                         title={`${g.category} — click to ${expanded ? "collapse" : "expand"} (${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"})`}
                         onClick={() => toggleCat(g.category)}
@@ -1352,8 +1383,6 @@ export default function TeacherBenchmarksTab({
                                 top: 4,
                                 left: 4,
                                 lineHeight: 0,
-                                opacity: expanded ? 0.25 : 1,
-                                transition: "opacity 120ms ease",
                               }}
                               onClick={(e) => e.stopPropagation()}
                               title={`${total} instructional delivery${total === 1 ? "" : "s"} this year across ${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"}`}
@@ -1385,9 +1414,10 @@ export default function TeacherBenchmarksTab({
                           minWidth: 44,
                           textAlign: "center",
                           position: "sticky",
-                          top: 32,
+                          top: categoryHeaderHeight,
                           background: "#f3f4f6",
-                          zIndex: 3,
+                          zIndex: 9,
+                          boxShadow: "0 2px 4px rgba(0,0,0,0.06)",
                           borderLeft:
                             i === 0
                               ? "4px solid #1e3a8a"
@@ -1448,7 +1478,8 @@ export default function TeacherBenchmarksTab({
                         background: "white",
                         borderRight: "1px solid #d4d4d4",
                         whiteSpace: "nowrap",
-                        zIndex: 1,
+                        zIndex: 2,
+                        boxShadow: "2px 0 4px rgba(0,0,0,0.06)",
                       }}
                     >
                       {s.lastName}, {s.firstName}
@@ -1977,16 +2008,18 @@ export default function TeacherBenchmarksTab({
             }}
           >
             <table
+              className="benchmark-heatmap-table"
               style={{
                 borderCollapse: "separate",
                 borderSpacing: 0,
                 fontSize: 14,
                 fontWeight: 600,
                 tableLayout: "fixed",
+                overflow: "visible",
               }}
             >
               <thead>
-                <tr style={{ background: "#f3f4f6" }}>
+                <tr ref={categoryRowRef} style={{ background: "#f3f4f6" }}>
                   <th
                     rowSpan={2}
                     style={{
@@ -1999,9 +2032,10 @@ export default function TeacherBenchmarksTab({
                       minWidth: 200,
                       width: 200,
                       borderRight: "1px solid #d4d4d4",
-                      zIndex: 5,
+                      zIndex: 12,
                       fontSize: 13,
                       fontWeight: 700,
+                      boxShadow: "2px 0 4px rgba(0,0,0,0.06)",
                     }}
                   >
                     Student
@@ -2039,7 +2073,8 @@ export default function TeacherBenchmarksTab({
                           lineHeight: 1.2,
                           position: "sticky",
                           top: 0,
-                          zIndex: 4,
+                          zIndex: 10,
+                          boxShadow: "0 2px 4px rgba(0,0,0,0.06)",
                         }}
                         title={`${g.category} — click to ${expanded ? "collapse" : "expand"} (${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"})`}
                         onClick={() => toggleCat(g.category)}
@@ -2094,8 +2129,6 @@ export default function TeacherBenchmarksTab({
                                 top: 4,
                                 left: 4,
                                 lineHeight: 0,
-                                opacity: expanded ? 0.25 : 1,
-                                transition: "opacity 120ms ease",
                               }}
                               onClick={(e) => e.stopPropagation()}
                               title={`${total} instructional delivery${total === 1 ? "" : "s"} this year across ${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"}`}
@@ -2127,9 +2160,10 @@ export default function TeacherBenchmarksTab({
                           minWidth: 84,
                           textAlign: "center",
                           position: "sticky",
-                          top: 32,
+                          top: categoryHeaderHeight,
                           background: "#f3f4f6",
-                          zIndex: 3,
+                          zIndex: 9,
+                          boxShadow: "0 2px 4px rgba(0,0,0,0.06)",
                           borderLeft:
                             i === 0
                               ? "4px solid #1e3a8a"
@@ -2204,7 +2238,8 @@ export default function TeacherBenchmarksTab({
                         background: "white",
                         borderRight: "1px solid #d4d4d4",
                         whiteSpace: "nowrap",
-                        zIndex: 1,
+                        zIndex: 2,
+                        boxShadow: "2px 0 4px rgba(0,0,0,0.06)",
                         fontWeight: 700,
                         fontSize: 14,
                         cursor: "pointer",

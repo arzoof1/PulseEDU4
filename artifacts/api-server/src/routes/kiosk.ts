@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import bcrypt from "bcryptjs";
 import { randomBytes, createHash } from "node:crypto";
+import { Readable } from "node:stream";
 import { genUrlSafeToken } from "../lib/urlSafeToken.js";
 import {
   db,
@@ -26,6 +26,7 @@ import {
 } from "@workspace/db";
 import { renderKioskCardsPdf } from "../lib/kioskCardsPdf.js";
 import { encryptSecret, decryptSecret } from "../lib/secretCrypto.js";
+import { writeAuthAudit } from "../lib/authAudit.js";
 import {
   renderTeacherBadgesPdf,
   type TeacherBadgeInput,
@@ -35,9 +36,24 @@ import {
   ObjectStorageService,
   ObjectNotFoundError,
 } from "../lib/objectStorage.js";
+import {
+  headStoredObject,
+  openStoredObjectWebStream,
+} from "../lib/storedObject.js";
 import { and, eq, inArray, isNull, gt, gte, lt, desc, sql, ne, asc, like, or } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+import { bcryptCompare, bcryptHash } from "../lib/bcrypt.js";
+import {
+  checkLoginAllowed,
+  recordLoginFailure,
+  recordLoginSuccess,
+  sendLoginRateLimited,
+  clientIp,
+  checkThrottleKey,
+  recordThrottleKeyFailure,
+  clearThrottleKey,
+} from "../lib/loginThrottle.js";
 import { autoEndStalePasses } from "../lib/hallPassLifecycle.js";
 import {
   findEscortHold,
@@ -544,20 +560,31 @@ router.post("/kiosk/activate", async (req, res) => {
   }
 
   const normalizedEmail = email.trim().toLowerCase();
+
+  const blocked = await checkLoginAllowed(req, "staff", normalizedEmail);
+  if (blocked) {
+    sendLoginRateLimited(res, blocked);
+    return;
+  }
+
   const [staff] = await db
     .select()
     .from(staffTable)
     .where(eq(staffTable.email, normalizedEmail));
 
   if (!staff || !staff.active) {
+    await recordLoginFailure(req, "staff", normalizedEmail);
     res.status(401).json({ error: "Invalid email or password" });
     return;
   }
-  const ok = await bcrypt.compare(password, staff.passwordHash);
+  const ok = await bcryptCompare(password, staff.passwordHash);
   if (!ok) {
+    await recordLoginFailure(req, "staff", normalizedEmail);
     res.status(401).json({ error: "Invalid email or password" });
     return;
   }
+
+  await recordLoginSuccess(req, "staff", normalizedEmail);
 
   const { deviceLabel, deviceFingerprint } = cleanDeviceFields(req);
   const outcome = await resolveActivation({
@@ -1731,19 +1758,20 @@ router.get("/kiosk/photo/:token", async (req, res) => {
   }
 
   try {
-    const file = await kioskPhotoStorage.getObjectEntityFile(key);
-    const [metadata] = await file.getMetadata();
+    const ref = await kioskPhotoStorage.getObjectEntityFile(key);
+    const metadata = await headStoredObject(ref);
     res.setHeader(
       "Content-Type",
-      (metadata.contentType as string) || "application/octet-stream",
+      metadata.contentType || "application/octet-stream",
     );
     res.setHeader("Cache-Control", "private, max-age=3600");
-    const stream = file.createReadStream();
-    stream.on("error", () => {
+    const webStream = await openStoredObjectWebStream(ref);
+    const nodeStream = Readable.fromWeb(webStream as import("stream/web").ReadableStream);
+    nodeStream.on("error", () => {
       if (!res.headersSent) res.status(404);
       res.end();
     });
-    stream.pipe(res);
+    nodeStream.pipe(res);
   } catch (err) {
     if (err instanceof ObjectNotFoundError) {
       res.status(404).end();
@@ -1788,7 +1816,7 @@ async function findEnrollTokenByPin(
   for (const row of candidates) {
     if (!row.pinHash) continue;
     // eslint-disable-next-line no-await-in-loop
-    if (await bcrypt.compare(pin, row.pinHash)) return row;
+    if (await bcryptCompare(pin, row.pinHash)) return row;
   }
   return null;
 }
@@ -1897,19 +1925,6 @@ async function activateForTeacher(args: {
       .select()
       .from(staffDefaultsTable)
       .where(eq(staffDefaultsTable.staffId, teacher.id));
-    // Resolve the preview room with the SAME fallback chain as
-    // resolveActivation (kiosk default-room picker → admin staff-editor
-    // room). Without the staff.default_room fallback, a teacher whose
-    // room was only set in the staff editor gets previewRoom:null here,
-    // the client can't auto-confirm, and the QR/PIN scan drops to the
-    // manual room-entry screen — even though the password sign-in path
-    // (which calls resolveActivation) already knows the room. This kept
-    // the four sign-in methods from agreeing on the room assignment.
-    const previewRoom =
-      (room && room.trim()) ||
-      defaultRow?.defaultLocationName?.trim() ||
-      teacher.defaultRoom?.trim() ||
-      null;
     // Ship the valid origin rooms too, so when manual entry IS needed
     // (no default configured, or a sub) the QR/PIN confirm screen can
     // render the SAME searchable room picker as the password sign-in
@@ -1926,6 +1941,27 @@ async function activateForTeacher(args: {
           ),
         )
     ).map((l) => l.name);
+    // Resolve the preview room with the SAME fallback chain as
+    // resolveActivation (kiosk default-room picker → admin staff-editor
+    // room), but only PRESENT it as a preset when it is actually an
+    // activatable origin room. A saved default that isn't a valid kiosk
+    // room (a renamed/deactivated location, or a room only ever set in the
+    // staff editor and never added as an origin) must NOT be previewed:
+    // the client would otherwise auto-activate — or pre-fill the "Yes,
+    // activate for X" button — with a room the activation endpoint then
+    // rejects as "not a valid kiosk room", stranding the user in that
+    // error loop. Nulling it here makes the confirm screen fall back to
+    // the searchable picker of valid rooms, mirroring resolveActivation's
+    // own needs_room fallback on the password path (kiosk.ts ~316).
+    const rawPreviewRoom =
+      (room && room.trim()) ||
+      defaultRow?.defaultLocationName?.trim() ||
+      teacher.defaultRoom?.trim() ||
+      null;
+    const previewRoom =
+      rawPreviewRoom && locations.includes(rawPreviewRoom)
+        ? rawPreviewRoom
+        : null;
     res.status(200).json({
       requiresConfirm: true,
       staffId: teacher.id,
@@ -2822,6 +2858,22 @@ router.post("/kiosk/activate-by-enrollment", async (req, res) => {
   });
 });
 
+// Public, unauthenticated list of active schools, used ONLY to populate
+// the kiosk's "6-digit code" tab school picker. A teacher standing at a
+// fresh device has no session, so the frontend has no other way to learn
+// which tenant's PIN namespace to scope the (schoolId-required) bcrypt
+// scan to. Returns just id + name — school names are public, and this
+// leaks nothing that helps a PIN brute force: the per-school + per-IP
+// throttles on activate-by-pin are the real defense and are untouched.
+router.get("/kiosk/schools", async (_req, res) => {
+  const schools = await db
+    .select({ id: schoolsTable.id, name: schoolsTable.name })
+    .from(schoolsTable)
+    .where(eq(schoolsTable.active, true))
+    .orderBy(asc(schoolsTable.name));
+  res.json(schools);
+});
+
 router.post("/kiosk/activate-by-pin", async (req, res) => {
   const { pin, room, replaceExisting, confirm, schoolId: bodySchoolId } =
     req.body ?? {};
@@ -2830,63 +2882,79 @@ router.post("/kiosk/activate-by-pin", async (req, res) => {
     return;
   }
 
-  // Abuse control: PIN endpoint is unauthenticated and a bcrypt
-  // miss is expensive. Throttle per source IP. (See PIN_THROTTLE_*.)
-  const clientIp =
-    (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ??
-    req.ip ??
-    "unknown";
-  if (isPinThrottled(clientIp)) {
-    res
-      .status(429)
-      .json({
-        error:
-          "Too many PIN attempts from this device. Wait a minute and try again, or use the QR code on your card.",
-      });
+  // PIN is per-school; require an explicit schoolId so the bcrypt scan
+  // is scoped to a single tenant. Omitting it used to fan out a bcrypt
+  // scan across EVERY school (letting an attacker brute all schools at
+  // once), so we now reject the request outright.
+  if (typeof bodySchoolId !== "number" || !Number.isInteger(bodySchoolId)) {
+    res.status(400).json({ error: "schoolId is required" });
+    return;
+  }
+  const schoolId = bodySchoolId;
+
+  // Abuse control: the PIN endpoint is unauthenticated and a bcrypt
+  // miss is expensive.
+  //
+  // 1) Per-source-IP throttle. Uses the proxy-aware req.ip (via
+  //    `trust proxy`), NOT the raw X-Forwarded-For header, so an
+  //    attacker cannot mint a fresh bucket by spoofing the header.
+  // 2) Per-target lockout, keyed on the school PIN-namespace and
+  //    INDEPENDENT of source IP, so rotating IPs cannot lift the
+  //    ceiling on how many PINs can be guessed against a school. Both
+  //    counters are DB-backed (login_throttle table) so they survive
+  //    restarts and are shared across processes.
+  const ip = clientIp(req);
+  const ipKey = `kioskpin-ip:${ip}`;
+  const targetKey = `kioskpin:${schoolId}`;
+
+  const ipBlocked = await checkThrottleKey(ipKey, {
+    max: PIN_THROTTLE_MAX_FAILS,
+    windowMs: PIN_THROTTLE_WINDOW_MS,
+    lockoutMs: PIN_THROTTLE_WINDOW_MS,
+  });
+  if (ipBlocked) {
+    res.setHeader("Retry-After", String(ipBlocked.retryAfterSec));
+    res.status(429).json({
+      error:
+        "Too many PIN attempts from this device. Wait a minute and try again, or use the QR code on your card.",
+    });
     return;
   }
 
-  // PIN is per-school. We REQUIRE an unambiguous match to preserve
-  // tenant isolation: if the caller provided a schoolId we scan only
-  // that school; otherwise we scan all schools and accept only a
-  // single live match. Multiple cross-school matches → 409 with a
-  // hint to use the QR token (which is globally unique).
-  let schoolIds: number[] = [];
-  if (typeof bodySchoolId === "number" && Number.isInteger(bodySchoolId)) {
-    schoolIds = [bodySchoolId];
-  } else {
-    const allSchools = await db
-      .select({ id: schoolsTable.id })
-      .from(schoolsTable);
-    schoolIds = allSchools.map((s) => s.id);
+  const targetBlocked = await checkThrottleKey(targetKey, {
+    max: PIN_TARGET_MAX_FAILS,
+    windowMs: PIN_TARGET_WINDOW_MS,
+    lockoutMs: PIN_TARGET_LOCKOUT_MS,
+  });
+  if (targetBlocked) {
+    res.setHeader("Retry-After", String(targetBlocked.retryAfterSec));
+    res.status(429).json({
+      error:
+        "Too many PIN attempts for this school. Try again later, or use the QR code on your card.",
+    });
+    return;
   }
 
-  const matches: Array<typeof kioskEnrollTokensTable.$inferSelect> = [];
-  for (const sid of schoolIds) {
-    // eslint-disable-next-line no-await-in-loop
-    const m = await findEnrollTokenByPin(sid, pin);
-    if (m) matches.push(m);
-    if (matches.length > 1) break;
-  }
-  if (matches.length === 0) {
-    recordPinFailure(clientIp);
+  const match = await findEnrollTokenByPin(schoolId, pin);
+  if (!match) {
+    // Bump BOTH the per-IP and per-target counters. The per-target
+    // counter is what stops header-rotation brute force.
+    await recordThrottleKeyFailure(ipKey, {
+      max: PIN_THROTTLE_MAX_FAILS,
+      windowMs: PIN_THROTTLE_WINDOW_MS,
+      lockoutMs: PIN_THROTTLE_WINDOW_MS,
+    });
+    await recordThrottleKeyFailure(targetKey, {
+      max: PIN_TARGET_MAX_FAILS,
+      windowMs: PIN_TARGET_WINDOW_MS,
+      lockoutMs: PIN_TARGET_LOCKOUT_MS,
+    });
     res.status(401).json({
       error:
         "PIN not recognized — check the digits or ask an admin to reissue.",
     });
     return;
   }
-  if (matches.length > 1) {
-    // Ambiguous across schools — refuse rather than guess. Caller
-    // should re-attempt with explicit schoolId, or scan the QR.
-    res.status(409).json({
-      error:
-        "That PIN is in use at more than one school. Scan the QR code on your card instead, or contact your admin.",
-      ambiguous: true,
-    });
-    return;
-  }
-  const match = matches[0];
   const [teacher] = await db
     .select()
     .from(staffTable)
@@ -2895,6 +2963,10 @@ router.post("/kiosk/activate-by-pin", async (req, res) => {
     res.status(401).json({ error: "Teacher account is inactive — ask an admin to reissue." });
     return;
   }
+
+  // Successful PIN match: clear the per-target lockout counter so a
+  // legitimate activation doesn't leave the school throttled.
+  await clearThrottleKey(targetKey);
   const { deviceLabel, deviceFingerprint } = cleanDeviceFields(req);
   await activateForTeacher({
     teacher,
@@ -3076,10 +3148,18 @@ router.get("/kiosk/my-pin", requireStaff, async (req, res) => {
     return;
   }
   try {
-    res.json({
-      pin: decryptSecret(row.pinEncrypted, KIOSK_PIN_PURPOSE),
-      status: "ok",
+    const pin = decryptSecret(row.pinEncrypted, KIOSK_PIN_PURPOSE);
+    // Secret-access audit logging (Section 11.5): record every read of a stored
+    // encrypted secret. Best-effort; recorded in the tamper-evident trail.
+    void writeAuthAudit({
+      action: "secret_accessed",
+      schoolId: staff.schoolId,
+      actorStaffId: staff.id,
+      actorName: staff.displayName,
+      ip: req.ip ?? null,
+      payload: { secretType: "kiosk_pin", targetStaffId: staff.id },
     });
+    res.json({ pin, status: "ok" });
   } catch (err) {
     // A decrypt failure (e.g. SESSION_SECRET rotated since issuance) is not
     // fatal — the badge still works on the kiosk. Treat it like a legacy
@@ -3270,7 +3350,7 @@ async function issueEnrollToken(args: {
   const rawToken = generateEnrollToken();
   const tokenHash = hashToken(rawToken);
   const rawPin = generatePin();
-  const pinHash = await bcrypt.hash(rawPin, 10);
+  const pinHash = await bcryptHash(rawPin, 10);
   // Reversibly-encrypted copy so the owning teacher can read this exact
   // code back from the Hall Pass gear ("Get kiosk URL" tab). Owner-only
   // reveal — see GET /kiosk/my-pin. Distinct purpose tag from parent TOTP.
@@ -3323,31 +3403,26 @@ async function issueEnrollToken(args: {
   return { rawToken, rawPin, tokenId };
 }
 
-// Simple in-memory PIN attempt throttle. Per-IP bucket of recent
-// failures; once a bucket exceeds the cap inside the window we refuse
-// further attempts from that IP. Resets on process restart — fine for
-// Phase 1 (the API server runs as a single process). If we ever
-// scale horizontally this should move to Redis.
+// PIN attempt throttle tuning. Counters are DB-backed via the shared
+// login_throttle table (see lib/loginThrottle.ts) so they survive
+// process restarts and are shared across multiple API processes.
+//
+// Two independent dimensions:
+//   * per source IP  — modest burst cap (uses proxy-aware req.ip).
+//   * per target     — a HARD ceiling on failed guesses against a
+//                      single school's PIN namespace, independent of
+//                      source IP, so header/IP rotation cannot lift it.
 const PIN_THROTTLE_WINDOW_MS = 60 * 1000;
 const PIN_THROTTLE_MAX_FAILS = 8;
-const pinFailures = new Map<string, number[]>();
-function recordPinFailure(ip: string): boolean {
-  const now = Date.now();
-  const arr = (pinFailures.get(ip) ?? []).filter(
-    (t) => now - t < PIN_THROTTLE_WINDOW_MS,
-  );
-  arr.push(now);
-  pinFailures.set(ip, arr);
-  return arr.length >= PIN_THROTTLE_MAX_FAILS;
-}
-function isPinThrottled(ip: string): boolean {
-  const now = Date.now();
-  const arr = (pinFailures.get(ip) ?? []).filter(
-    (t) => now - t < PIN_THROTTLE_WINDOW_MS,
-  );
-  pinFailures.set(ip, arr);
-  return arr.length >= PIN_THROTTLE_MAX_FAILS;
-}
+const PIN_TARGET_WINDOW_MS = Number(
+  process.env.KIOSK_PIN_TARGET_WINDOW_MS ?? 15 * 60 * 1000,
+);
+const PIN_TARGET_MAX_FAILS = Number(
+  process.env.KIOSK_PIN_TARGET_MAX_FAILS ?? 20,
+);
+const PIN_TARGET_LOCKOUT_MS = Number(
+  process.env.KIOSK_PIN_TARGET_LOCKOUT_MS ?? 15 * 60 * 1000,
+);
 
 // ---- Admin: printable card PDF -------------------------------------
 // Two modes, controlled by request body:
@@ -3449,7 +3524,7 @@ router.post("/kiosk/cards.pdf", requireAdmin, async (req, res) => {
         return;
       }
       // eslint-disable-next-line no-await-in-loop
-      const pinOk = await bcrypt.compare(p.pin, row.pinHash);
+      const pinOk = await bcryptCompare(p.pin, row.pinHash);
       if (!pinOk) {
         res.status(400).json({
           error: "Supplied PIN does not match the live card for this teacher.",
@@ -3641,20 +3716,7 @@ const teacherBadgeObjectStorage = new ObjectStorageService();
 async function fetchTeacherPhotoBytes(
   objectPath: string,
 ): Promise<Buffer | null> {
-  try {
-    const file =
-      await teacherBadgeObjectStorage.getObjectEntityFile(objectPath);
-    return await new Promise<Buffer | null>((resolve) => {
-      const chunks: Buffer[] = [];
-      const stream = file.createReadStream();
-      stream.on("data", (c: Buffer) => chunks.push(c));
-      stream.on("end", () => resolve(Buffer.concat(chunks)));
-      stream.on("error", () => resolve(null));
-    });
-  } catch (err) {
-    if (err instanceof ObjectNotFoundError) return null;
-    return null;
-  }
+  return teacherBadgeObjectStorage.readObjectAsBuffer(objectPath);
 }
 
 // Resolve the per-school card design once per batch (shared with the
@@ -3752,7 +3814,7 @@ router.post("/kiosk/teacher-badges.pdf", requireAdmin, async (req, res) => {
         return;
       }
       // eslint-disable-next-line no-await-in-loop
-      const pinOk = await bcrypt.compare(p.pin, row.pinHash);
+      const pinOk = await bcryptCompare(p.pin, row.pinHash);
       if (!pinOk) {
         res.status(400).json({
           error: "Supplied PIN does not match the live card for this teacher.",

@@ -5,6 +5,8 @@ import { requireSchool } from "../lib/scope.js";
 import { bindObjectToSchool } from "./storage.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { reconcileSchoolYearFlip } from "../lib/schoolYearFlip.js";
+import { clearMfaPolicyCache } from "../lib/mfaPolicyCache.js";
+import { writeAuthAudit } from "../lib/authAudit.js";
 
 const router: IRouter = Router();
 
@@ -49,6 +51,7 @@ export const FEATURE_KEYS = [
   "Gradebook",
   "SchoolGrade",
   "SafetyPlans",
+  "AiAssist",
 ] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 type SettingsRow = typeof schoolSettingsTable.$inferSelect;
@@ -108,9 +111,64 @@ router.get("/school-settings", async (req, res) => {
   res.json(withEffective(row));
 });
 
+// Fields a non-admin may change here — each ALSO carries its own per-field
+// role check below (e.g. a PBIS coordinator adjusting intervention windows).
+// Every other setting is admin-only. Without this base gate, any authenticated
+// staff member (incl. a plain teacher) could persist the ungated fields
+// (schoolName, hall-pass limits, kiosk welcome text, security toggles, ...).
+const NON_ADMIN_SETTINGS_FIELDS = new Set<string>([
+  "interventionEffectivenessDays",
+  "pbisNegativeAffectsTotal",
+  "schoolStoreInventoryMode",
+  "issDailyCapacity",
+  "issCapacityBehavior",
+]);
+
 router.put("/school-settings", async (req, res): Promise<void> => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
+  // Base authorization: school settings is an admin surface. Non-admins are
+  // permitted only when every submitted field is in the coordinator allowlist
+  // (the per-field checks below then enforce the exact role). This closes the
+  // broken-access-control gap where ungated fields were writable by any staff.
+  {
+    const actorId = req.staffId;
+    let actor:
+      | {
+          isAdmin: boolean | null;
+          isDistrictAdmin: boolean | null;
+          isSuperUser: boolean | null;
+          active: boolean | null;
+        }
+      | undefined;
+    if (actorId) {
+      [actor] = await db
+        .select({
+          isAdmin: staffTable.isAdmin,
+          isDistrictAdmin: staffTable.isDistrictAdmin,
+          isSuperUser: staffTable.isSuperUser,
+          active: staffTable.active,
+        })
+        .from(staffTable)
+        .where(eq(staffTable.id, actorId));
+    }
+    const isSettingsAdmin = Boolean(
+      actor &&
+        actor.active &&
+        (actor.isAdmin || actor.isDistrictAdmin || actor.isSuperUser),
+    );
+    if (!isSettingsAdmin) {
+      const disallowed = Object.keys(req.body ?? {}).filter(
+        (k) => !NON_ADMIN_SETTINGS_FIELDS.has(k),
+      );
+      if (disallowed.length > 0) {
+        res
+          .status(403)
+          .json({ error: "Only a school admin may change school settings." });
+        return;
+      }
+    }
+  }
   const current = await getOrCreate(schoolId);
   const {
     schoolName,
@@ -172,6 +230,8 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     watchlistBehaviorThreshold,
     watchlistTardyThreshold,
     watchlistIssThreshold,
+    mfaRequiredPrivileged,
+    mfaRequiredStaff,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -732,6 +792,46 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.restroomAccessControlEnabled = restroomAccessControlEnabled;
+  }
+
+  // MFA enforcement policy (Gate A / Section 1) — a security control, so only
+  // Admin / District Admin / SuperUser may change it (not every settings
+  // editor). Both flags default FALSE; turning one on requires MFA at login
+  // for that tier (privileged = SuperUser/District Admin/School Admin).
+  if (mfaRequiredPrivileged !== undefined || mfaRequiredStaff !== undefined) {
+    const [actor] = req.staffId
+      ? await db
+          .select({
+            isAdmin: staffTable.isAdmin,
+            isDistrictAdmin: staffTable.isDistrictAdmin,
+            isSuperUser: staffTable.isSuperUser,
+          })
+          .from(staffTable)
+          .where(eq(staffTable.id, req.staffId))
+          .limit(1)
+      : [];
+    if (!actor || !(actor.isAdmin || actor.isDistrictAdmin || actor.isSuperUser)) {
+      res
+        .status(403)
+        .json({ error: "Only an admin can change two-factor policy." });
+      return;
+    }
+    if (mfaRequiredPrivileged !== undefined) {
+      if (typeof mfaRequiredPrivileged !== "boolean") {
+        res
+          .status(400)
+          .json({ error: "mfaRequiredPrivileged must be a boolean" });
+        return;
+      }
+      updates.mfaRequiredPrivileged = mfaRequiredPrivileged;
+    }
+    if (mfaRequiredStaff !== undefined) {
+      if (typeof mfaRequiredStaff !== "boolean") {
+        res.status(400).json({ error: "mfaRequiredStaff must be a boolean" });
+        return;
+      }
+      updates.mfaRequiredStaff = mfaRequiredStaff;
+    }
   }
   if (staffDirectoryShowCellPhone !== undefined) {
     if (typeof staffDirectoryShowCellPhone !== "boolean") {
@@ -1345,6 +1445,33 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       ),
     )
     .returning();
+
+  // A change to the MFA policy flags must take effect immediately, not after
+  // the enrollment gate's cache TTL — drop the cached decisions now.
+  if ("mfaRequiredPrivileged" in updates || "mfaRequiredStaff" in updates) {
+    clearMfaPolicyCache();
+    const [actor] = req.staffId
+      ? await db
+          .select({ name: staffTable.displayName })
+          .from(staffTable)
+          .where(eq(staffTable.id, req.staffId))
+      : [];
+    await writeAuthAudit({
+      action: "mfa_policy_changed",
+      schoolId,
+      actorStaffId: req.staffId ?? null,
+      actorName: actor?.name ?? null,
+      ip: req.ip ?? null,
+      payload: {
+        ...("mfaRequiredPrivileged" in updates
+          ? { mfaRequiredPrivileged: updated?.mfaRequiredPrivileged }
+          : {}),
+        ...("mfaRequiredStaff" in updates
+          ? { mfaRequiredStaff: updated?.mfaRequiredStaff }
+          : {}),
+      },
+    });
+  }
 
   // A flip-date change may activate or reverse the reporting-year flip and
   // re-tag the outgoing year's FAST rows. Reconcile, then return the fresh

@@ -3,10 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { rm } from "node:fs/promises";
+import { copyFile, rm } from "node:fs/promises";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
-globalThis.require = createRequire(import.meta.url);
+const require = createRequire(import.meta.url);
+globalThis.require = require;
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -15,7 +16,12 @@ async function buildAll() {
   await rm(distDir, { recursive: true, force: true });
 
   await esbuild({
-    entryPoints: [path.resolve(artifactDir, "src/index.ts")],
+    entryPoints: [
+      path.resolve(artifactDir, "src/index.ts"),
+      path.resolve(artifactDir, "src/seedCli.ts"),
+      path.resolve(artifactDir, "src/scheduledJobsWorker.ts"),
+      path.resolve(artifactDir, "src/bcryptWorker.ts"),
+    ],
     platform: "node",
     bundle: true,
     format: "esm",
@@ -109,6 +115,11 @@ async function buildAll() {
       // loads from node_modules where the data/ folder lives.
       "pdfkit",
       "fontkit",
+      // geoip-lite loads its ~binary .dat GeoIP database from its own
+      // node_modules/geoip-lite/data dir at runtime; bundling would leave the
+      // data behind (same failure mode as pdfkit's .afm fonts). Externalize so
+      // it resolves the DB from node_modules on the server.
+      "geoip-lite",
     ],
     sourcemap: "linked",
     plugins: [
@@ -127,6 +138,13 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     `,
     },
   });
+
+  // connect-pg-simple reads this file at runtime when createTableIfMissing is
+  // enabled. Because the API is bundled into dist, copy the package asset too.
+  await copyFile(
+    require.resolve("connect-pg-simple/table.sql"),
+    path.join(distDir, "table.sql"),
+  );
 }
 
 buildAll().catch((err) => {

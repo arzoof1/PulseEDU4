@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { authFetch } from "../../lib/authToken";
+import { useFeatures } from "../../lib/features";
 import { WL_COLORS as C } from "./colors";
 import ConsistencyPanel, { type ConsistencyState } from "./ConsistencyPanel";
 
@@ -42,6 +43,8 @@ interface Props {
 }
 
 export default function ConsistencyPill({ caseId, onAnyChange }: Props) {
+  const features = useFeatures();
+  const aiEnabled = features.has("aiAssist");
   const [state, setState] = useState<ConsistencyState | null>(null);
   const [forbidden, setForbidden] = useState(false);
   const [open, setOpen] = useState(false);
@@ -68,7 +71,7 @@ export default function ConsistencyPill({ caseId, onAnyChange }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [caseId]);
 
-  if (forbidden) return null;
+  if (forbidden || !aiEnabled) return null;
 
   const score = state?.score ?? null;
   const openCount = state?.openFindingCount ?? 0;

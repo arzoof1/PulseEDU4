@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import MfaEnrollmentBoundary from "./components/MfaEnrollmentBoundary";
 import Kiosk from "./Kiosk";
 import KioskViewer from "./KioskViewer";
 import KioskCodeMirror from "./KioskCodeMirror";
@@ -10,6 +11,7 @@ import PickupApp from "./pickup/PickupApp";
 import TourApp from "./tour/TourApp";
 import ScannerApp from "./scan/ScannerApp";
 import StaffResetApp from "./StaffResetApp";
+import SmsPolicyPage from "./SmsPolicyPage";
 import SignApp from "./sign/SignApp";
 import RecordingStudio from "./studio/RecordingStudio";
 import "./index.css";
@@ -45,6 +47,8 @@ const isTour = path.includes("/tour");
 //   /scan             — staff scanner (requires staff session)
 //   /scan/<linkToken> — no-login volunteer scanner
 const isScan = path.includes("/scan");
+// Public SMS opt-in / policy page for AWS SNS registration (no auth).
+const isSmsPolicy = path.includes("/sms-policy");
 // Public, unauthenticated document e-sign page (/sign/<token>). Must be
 // checked AFTER isSignage — "/signage" also contains the "/sign" substring,
 // and the signage player must win that dispatch.
@@ -65,6 +69,11 @@ createRoot(document.getElementById("root")!).render(
     : isPickup ? <PickupApp />
     : isTour ? <TourApp />
     : isScan ? <ScannerApp />
+    : isSmsPolicy ? <SmsPolicyPage />
     : isSign ? <SignApp />
-    : <App />,
+    : (
+        <MfaEnrollmentBoundary>
+          <App />
+        </MfaEnrollmentBoundary>
+      ),
 );

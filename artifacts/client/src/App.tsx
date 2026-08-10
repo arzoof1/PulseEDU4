@@ -22,6 +22,7 @@ import FamilyMessagesHub from "./components/FamilyMessagesHub";
 import ParentNotificationsPanel from "./components/ParentNotificationsPanel";
 import PulloutNotificationsPanel from "./components/PulloutNotificationsPanel";
 import PulseDnaStudio from "./components/PulseDnaStudio";
+import TwoFactorSettings from "./components/TwoFactorSettings";
 import { TeacherPicker } from "./components/TeacherPicker";
 import HelpAssistant from "./components/HelpAssistant";
 import { TileHome, type Tile as TileHomeTile } from "./pages/TileHome";
@@ -84,6 +85,7 @@ import DataChatsAdminPage, {
   DataChatQueueModal,
 } from "./components/DataChats";
 import FeatureLicensingAdminPage from "./components/featureLicensing/FeatureLicensingAdminPage";
+import SecurityEvents from "./components/SecurityEvents";
 import SuperUserHomeRollups from "./components/districtOverview/SuperUserHomeRollups";
 import DistrictOverviewRollups from "./components/districtOverview/DistrictOverviewRollups";
 import AuditHealthPanel from "./components/districtOverview/AuditHealthPanel";
@@ -97,6 +99,7 @@ import {
   LockedBadge,
   FeatureGate,
 } from "./lib/features";
+import { fetchAllStudents } from "./lib/students";
 import { StudentFinderModal } from "./components/StudentFinderModal";
 import StaffDirectoryPage from "./components/StaffDirectoryPage";
 import OnboardingChecklist from "./components/OnboardingChecklist";
@@ -180,7 +183,11 @@ import DataManagementHub from "./components/DataManagementHub";
 import SchoolSwitcher from "./components/SchoolSwitcher";
 import SchoolBrandingPanel from "./components/SchoolBrandingPanel";
 import { useSchoolBranding } from "./lib/branding";
-import { authFetch } from "./lib/authToken";
+import {
+  authFetch,
+  setMfaEnrollmentRequiredHandler,
+  clearMfaEnrollmentBlocked,
+} from "./lib/authToken";
 import {
   AreaChart,
   Area,
@@ -4096,7 +4103,7 @@ const INSIGHTS_TILES: InsightsTile[] = [
 // pbisReports etc. all live under Recognition because that's where their
 // nav items render. Keep this in sync with the sidebar JSX below.
 const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
-  administration: ["superUserHome", "featureLicensing", "districtAdmin"],
+  administration: ["superUserHome", "featureLicensing", "districtAdmin", "securityEvents"],
   insights: ["insights", "insightsWatchlist", "myWatchList", "studentProfile", "classComposer", "contactRate"],
   recognition: [
     "pbis",
@@ -4417,6 +4424,122 @@ function PlaceholderCard({
         </div>
       )}
     </div>
+  );
+}
+
+
+// Per-category accommodation chip with fixed-position popover (mirrors
+// TeacherRosterPage ProgramPill) so the panel anchors under the chip, not
+// the student name column.
+function ClassViewAccChip({
+  category,
+  names,
+  color,
+}: {
+  category: string;
+  names: string[];
+  color: string;
+}) {
+  const label =
+    names.length > 1 ? `${category} · ${names.length}` : category;
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLSpanElement | null>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!open || !anchorRef.current) return;
+    const measure = () => {
+      const r = anchorRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const W = 280;
+      let left = r.left;
+      if (left + W > window.innerWidth - 8) left = window.innerWidth - W - 8;
+      if (left < 8) left = 8;
+      setCoords({ top: r.bottom + 4, left });
+    };
+    measure();
+    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("scroll", measure, true);
+      window.removeEventListener("resize", measure);
+    };
+  }, [open]);
+  return (
+    <span
+      style={{ position: "relative", display: "inline-block", marginRight: 4 }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+    >
+      <span
+        ref={anchorRef}
+        tabIndex={0}
+        aria-label={`${category} accommodations`}
+        style={{
+          display: "inline-block",
+          padding: "1px 7px",
+          borderRadius: 999,
+          background: color,
+          color: "white",
+          fontSize: 11,
+          fontWeight: 600,
+          lineHeight: "16px",
+          cursor: "default",
+          outline: "none",
+        }}
+      >
+        {label}
+      </span>
+      {open && coords && (
+        <div
+          role="tooltip"
+          style={{
+            position: "fixed",
+            top: coords.top,
+            left: coords.left,
+            zIndex: 10000,
+            background: "white",
+            border: "1px solid var(--border)",
+            borderTop: `3px solid ${color}`,
+            borderRadius: 6,
+            padding: "0.55rem 0.75rem",
+            boxShadow: "0 6px 18px rgba(0,0,0,0.14)",
+            minWidth: 240,
+            maxWidth: 360,
+            color: "var(--text)",
+            textAlign: "left",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              color,
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+              marginBottom: 6,
+            }}
+          >
+            {category}
+          </div>
+          <ul
+            style={{
+              margin: 0,
+              paddingLeft: 16,
+              fontSize: 12,
+              lineHeight: 1.5,
+            }}
+          >
+            {names.map((n) => (
+              <li key={n}>{n}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </span>
   );
 }
 
@@ -5614,6 +5737,25 @@ function App() {
   >(null);
   const currentStaffUser = authUser?.displayName ?? "";
   const [showChangePw, setShowChangePw] = useState(false);
+  const [showTwoFactor, setShowTwoFactor] = useState(false);
+  // Staff MFA state. `mfaStatus` is fetched from /auth/mfa/status (server
+  // resolves required = role+school+district policy, enrolled = has a set-up
+  // authenticator). When required && !enrolled the server ALSO blocks every
+  // non-enrollment API route (403 mfa_enrollment_required), so the client
+  // shows a mandatory, non-dismissable enrollment modal — there is no grace
+  // period. Endpoint 404s when the deployment master switch is off → we store
+  // null and show nothing.
+  const [mfaStatus, setMfaStatus] = useState<{
+    enrolled: boolean;
+    required: boolean;
+  } | null>(null);
+  // Whether the MFA status check has completed for the current user. We do NOT
+  // mount the dashboard until this is true: a required-but-unenrolled user's
+  // data loads all 403, and some views crash rendering the error body. Gating
+  // on this lets us short-circuit to the enrollment screen instead of ever
+  // mounting (and crashing) the dashboard. Reset on each user change; set true
+  // in loadMfaStatus's finally so a 404/error still lets the app through.
+  const [mfaChecked, setMfaChecked] = useState(false);
   // Student Finder state. `null` = closed. Otherwise a discriminated
   // open-state: either { kind: "search", query } for the top-bar entry
   // point (search field shown) or { kind: "student", studentId,
@@ -5819,6 +5961,7 @@ function App() {
     | "superUserHome"
     | "featureLicensing"
     | "districtAdmin"
+    | "securityEvents"
     | "insights"
     | "insightsWatchlist"
     | "myWatchList"
@@ -6006,6 +6149,8 @@ function App() {
     schoolYearFlipDate: string | null;
     firstDayOfSchool: string | null;
     teacherFamilyMessagingEnabled: boolean;
+    mfaRequiredPrivileged: boolean;
+    mfaRequiredStaff: boolean;
     watchlistAbsenceThreshold: number;
     watchlistBehaviorThreshold: number;
     watchlistTardyThreshold: number;
@@ -6069,6 +6214,8 @@ function App() {
     superFeatureSchoolGrade: boolean;
     featureSafetyPlans: boolean;
     superFeatureSafetyPlans: boolean;
+    featureAiAssist: boolean;
+    superFeatureAiAssist: boolean;
   }>({
     schoolName: "",
     fromName: "",
@@ -6102,6 +6249,8 @@ function App() {
     schoolYearFlipDate: null,
     firstDayOfSchool: null,
     teacherFamilyMessagingEnabled: false,
+    mfaRequiredPrivileged: false,
+    mfaRequiredStaff: false,
     watchlistAbsenceThreshold: 10,
     watchlistBehaviorThreshold: 3,
     watchlistTardyThreshold: 5,
@@ -6162,6 +6311,8 @@ function App() {
     superFeatureSchoolGrade: true,
     featureSafetyPlans: true,
     superFeatureSafetyPlans: true,
+    featureAiAssist: true,
+    superFeatureAiAssist: true,
   });
   const [settingsStatus, setSettingsStatus] = useState<
     "idle" | "saving" | "saved" | "error"
@@ -6294,7 +6445,6 @@ function App() {
   >("classView");
   const [accStudentId, setAccStudentId] = useState("");
   const [classViewPeriod, setClassViewPeriod] = useState<number | null>(null);
-  const [classViewHoverId, setClassViewHoverId] = useState<string | null>(null);
   const [classViewTeacherId, setClassViewTeacherId] = useState<number | null>(
     null,
   );
@@ -7551,6 +7701,32 @@ function App() {
       .catch(() => setStaffUsers([]));
   }, [authUser?.id]);
 
+  // Refreshes the staff-MFA nudge signal. Any non-OK response (401 when the
+  // session is gone, 404 when STAFF_MFA_ENABLED is off) collapses to null so
+  // the banner/dot simply don't render. Called on auth change and after the
+  // enrollment modal closes so the nudge clears the moment 2FA is set up.
+  const loadMfaStatus = () => {
+    if (!authUser) {
+      setMfaStatus(null);
+      setMfaChecked(true);
+      return;
+    }
+    authFetch("/api/auth/mfa/status")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { enrolled?: boolean; required?: boolean } | null) =>
+        setMfaStatus(
+          data && typeof data.enrolled === "boolean"
+            ? { enrolled: !!data.enrolled, required: !!data.required }
+            : null,
+        ),
+      )
+      .catch(() => setMfaStatus(null))
+      // Always mark the check complete — a 404 (feature off) or a network
+      // error must not wedge the app on the loading gate; those users simply
+      // fall through to the dashboard (mfaStatus stays null → not blocked).
+      .finally(() => setMfaChecked(true));
+  };
+
   const loadHallPasses = () => {
     authFetch("/api/hall-passes")
       .then((res) => res.json())
@@ -7571,16 +7747,19 @@ function App() {
 
   useEffect(() => {
     import("./lib/authToken").then(({ authFetch, setAuthToken }) => {
+      import("./lib/csrf").then(({ setCsrfToken }) => {
       authFetch("/api/auth/me")
         .then((res) => (res.ok ? res.json() : null))
         .then(
-          (user: (typeof authUser & { authToken?: string }) | null) => {
+          (user: (typeof authUser & { authToken?: string; csrfToken?: string }) | null) => {
             if (user?.authToken) setAuthToken(user.authToken);
+            if (user?.csrfToken) setCsrfToken(user.csrfToken);
             setAuthUser(user);
           },
         )
         .catch(() => setAuthUser(null))
         .finally(() => setAuthLoading(false));
+      });
     });
   }, []);
 
@@ -7598,6 +7777,29 @@ function App() {
       clearFeatures();
     }
   }, [authUser?.id]);
+
+  // Re-check MFA status whenever the signed-in user changes. Reset mfaChecked
+  // FIRST so the dashboard is gated behind the loading screen until the new
+  // user's status resolves — otherwise a fresh sign-in could mount the
+  // dashboard (and 403-crash) before we know they must enroll.
+  useEffect(() => {
+    clearMfaEnrollmentBlocked();
+    setMfaChecked(false);
+    loadMfaStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser?.id]);
+
+  // Register the global 403-mfa_enrollment_required handler. The fetch layer
+  // fires it when the server blocks a request pending enrollment; we re-pull
+  // status (which flips `required` on), raising the blocking modal — this is
+  // what catches users who were already signed in when the policy was flipped.
+  // A ref keeps the latest loadMfaStatus without re-registering each render.
+  const loadMfaStatusRef = useRef(loadMfaStatus);
+  loadMfaStatusRef.current = loadMfaStatus;
+  useEffect(() => {
+    setMfaEnrollmentRequiredHandler(() => loadMfaStatusRef.current());
+    return () => setMfaEnrollmentRequiredHandler(null);
+  }, []);
 
   useEffect(() => {
     if (!authUser) return;
@@ -8068,6 +8270,14 @@ function App() {
             typeof data.teacherFamilyMessagingEnabled === "boolean"
               ? data.teacherFamilyMessagingEnabled
               : false,
+          mfaRequiredPrivileged:
+            typeof data.mfaRequiredPrivileged === "boolean"
+              ? data.mfaRequiredPrivileged
+              : false,
+          mfaRequiredStaff:
+            typeof data.mfaRequiredStaff === "boolean"
+              ? data.mfaRequiredStaff
+              : false,
           watchlistAbsenceThreshold:
             typeof data.watchlistAbsenceThreshold === "number"
               ? data.watchlistAbsenceThreshold
@@ -8148,6 +8358,8 @@ function App() {
           superFeatureSchoolGrade: boolOrTrue(data.superFeatureSchoolGrade),
           featureSafetyPlans: boolOrTrue(data.featureSafetyPlans),
           superFeatureSafetyPlans: boolOrTrue(data.superFeatureSafetyPlans),
+          featureAiAssist: boolOrTrue(data.featureAiAssist),
+          superFeatureAiAssist: boolOrTrue(data.superFeatureAiAssist),
         }),
       )
       .catch((err) => console.error("Failed to load school settings:", err));
@@ -8293,6 +8505,14 @@ function App() {
           typeof data.teacherFamilyMessagingEnabled === "boolean"
             ? data.teacherFamilyMessagingEnabled
             : false,
+        mfaRequiredPrivileged:
+          typeof data.mfaRequiredPrivileged === "boolean"
+            ? data.mfaRequiredPrivileged
+            : false,
+        mfaRequiredStaff:
+          typeof data.mfaRequiredStaff === "boolean"
+            ? data.mfaRequiredStaff
+            : false,
         watchlistAbsenceThreshold:
           typeof data.watchlistAbsenceThreshold === "number"
             ? data.watchlistAbsenceThreshold
@@ -8369,6 +8589,8 @@ function App() {
         superFeatureSchoolGrade: boolOrTrue(data.superFeatureSchoolGrade),
         featureSafetyPlans: boolOrTrue(data.featureSafetyPlans),
         superFeatureSafetyPlans: boolOrTrue(data.superFeatureSafetyPlans),
+        featureAiAssist: boolOrTrue(data.featureAiAssist),
+        superFeatureAiAssist: boolOrTrue(data.superFeatureAiAssist),
       });
       setSettingsStatus("saved");
       setTimeout(() => setSettingsStatus("idle"), 2000);
@@ -8402,9 +8624,8 @@ function App() {
   };
 
   const loadStudents = () => {
-    authFetch("/api/students")
-      .then((res) => res.json())
-      .then((data: Student[]) => setStudents(data))
+    fetchAllStudents<Student>()
+      .then((data) => setStudents(data))
       .catch((err) => console.error("Failed to load students:", err));
   };
 
@@ -10774,6 +10995,8 @@ function App() {
     ParentPortal:
       schoolSettings.featureParentPortal &&
       schoolSettings.superFeatureParentPortal,
+    AiAssist:
+      schoolSettings.featureAiAssist && schoolSettings.superFeatureAiAssist,
   };
   const allBaseNavSections: NavSection[] = [
     { key: "hallPasses", label: "Hall Passes", icon: IconDoor },
@@ -11116,6 +11339,7 @@ function App() {
   const brainLabVis = useFeatureVisible("brainLab");
   const schoolGradeVis = useFeatureVisible("schoolGrade");
   const safetyPlansVis = useFeatureVisible("safetyPlans");
+  const aiAssistVis = useFeatureVisible("aiAssist");
   const renderGatedNavItem = (
     s: NavSection,
     vis: { visible: boolean; locked: boolean },
@@ -11193,6 +11417,35 @@ function App() {
           )
         }
       />
+    );
+  }
+
+  // ---- MFA enrollment wall (Gate A / Section 1) -------------------------
+  // Do NOT render the dashboard until we know this user's MFA status: while
+  // unknown we show the loading screen, and if their role requires two-factor
+  // but they haven't enrolled we render ONLY the enrollment screen. The
+  // dashboard fires dozens of data loads that the server 403s for a blocked
+  // user, and some views crash rendering the error body — so it must never
+  // mount for them. On completion the modal reloads for a clean bootstrap.
+  if (!mfaChecked) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "var(--text-subtle, #64748b)",
+          fontFamily: "system-ui, sans-serif",
+        }}
+      >
+        Loading…
+      </div>
+    );
+  }
+  if (mfaStatus?.required && !mfaStatus.enrolled) {
+    return (
+      <TwoFactorSettings forced onClose={() => window.location.reload()} />
     );
   }
 
@@ -11841,6 +12094,10 @@ function App() {
               setChangePwOk(false);
               setShowChangePw(true);
             }}
+            onManageTwoFactor={() => setShowTwoFactor(true)}
+            twoFactorAttention={
+              !!mfaStatus?.required && !mfaStatus.enrolled
+            }
             onSignOut={async () => {
               await authFetch("/api/auth/logout", { method: "POST" });
               setAuthUser(null);
@@ -11995,6 +12252,19 @@ function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Voluntary 2FA management from the account menu. The MANDATORY
+          (forced) case is handled by a top-level early return above, before
+          the dashboard mounts — so this only covers the opt-in path. */}
+      {showTwoFactor && (
+        <TwoFactorSettings
+          onClose={() => {
+            setShowTwoFactor(false);
+            // Re-pull status so an enrolled/disabled change is reflected.
+            loadMfaStatus();
+          }}
+        />
       )}
 
       {(() => {
@@ -12318,6 +12588,11 @@ function App() {
                 {renderNavItem({
                   key: "districtAdmin",
                   label: "District Overview",
+                  icon: IconClipboard,
+                })}
+                {renderNavItem({
+                  key: "securityEvents",
+                  label: "Security Events",
                   icon: IconClipboard,
                 })}
               </NavGroup>
@@ -12669,6 +12944,7 @@ function App() {
               >
                 {effectiveFeatures.FamilyComm &&
                   isCoreTeamMember &&
+                  aiAssistVis.visible &&
                   renderNavItem({
                     key: "pulseDnaStudio",
                     label: "PulseDNA Studio",
@@ -17133,29 +17409,6 @@ function App() {
                       ELL: "#0891b2",
                       Strategy: "#64748b",
                     };
-                    const renderChip = (
-                      label: string,
-                      bg: string,
-                      title?: string,
-                    ) => (
-                      <span
-                        key={label}
-                        title={title}
-                        style={{
-                          display: "inline-block",
-                          padding: "1px 7px",
-                          marginRight: 4,
-                          borderRadius: 999,
-                          background: bg,
-                          color: "white",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          lineHeight: "16px",
-                        }}
-                      >
-                        {label}
-                      </span>
-                    );
                     return (
                       <>
                         <div
@@ -17198,7 +17451,6 @@ function App() {
                                     onClick={() => {
                                       if (disabled) return;
                                       setClassViewPeriod(p);
-                                      setClassViewHoverId(null);
                                     }}
                                     disabled={disabled}
                                     title={
@@ -17269,12 +17521,10 @@ function App() {
                                   if (v === "") {
                                     setClassViewTeacherId(null);
                                     setClassViewPeriod(null);
-                                    setClassViewHoverId(null);
                                     return;
                                   }
                                   setClassViewTeacherId(Number(v));
                                   setClassViewPeriod(null);
-                                  setClassViewHoverId(null);
                                 }}
                                 style={{ minWidth: 220 }}
                               >
@@ -17354,28 +17604,10 @@ function App() {
                                   list.push(name);
                                   byCat.set(cat, list);
                                 }
-                                const isHover =
-                                  classViewHoverId === s.studentId;
                                 return (
                                   <div
                                     key={s.studentId}
-                                    onMouseEnter={() =>
-                                      setClassViewHoverId(s.studentId)
-                                    }
-                                    onMouseLeave={() =>
-                                      setClassViewHoverId((cur) =>
-                                        cur === s.studentId ? null : cur,
-                                      )
-                                    }
-                                    onClick={() =>
-                                      setClassViewHoverId((cur) =>
-                                        cur === s.studentId
-                                          ? null
-                                          : s.studentId,
-                                      )
-                                    }
                                     style={{
-                                      position: "relative",
                                       display: "grid",
                                       gridTemplateColumns:
                                         "minmax(200px, 1.4fr) minmax(160px, 1fr) auto",
@@ -17388,9 +17620,6 @@ function App() {
                                         accs.length > 0
                                           ? "rgba(14,116,144,0.04)"
                                           : "transparent",
-                                      cursor: accs.length > 0
-                                        ? "pointer"
-                                        : "default",
                                     }}
                                   >
                                     <div>
@@ -17418,14 +17647,16 @@ function App() {
                                         </span>
                                       ) : (
                                         Array.from(byCat.entries()).map(
-                                          ([cat, names]) =>
-                                            renderChip(
-                                              names.length > 1
-                                                ? `${cat} · ${names.length}`
-                                                : cat,
-                                              catColor[cat] ?? "#475569",
-                                              names.join(", "),
-                                            ),
+                                          ([cat, names]) => (
+                                            <ClassViewAccChip
+                                              key={cat}
+                                              category={cat}
+                                              names={names}
+                                              color={
+                                                catColor[cat] ?? "#475569"
+                                              }
+                                            />
+                                          ),
                                         )
                                       )}
                                     </div>
@@ -17443,68 +17674,6 @@ function App() {
                                         </button>
                                       )}
                                     </div>
-                                    {isHover && accs.length > 0 && (
-                                      <div
-                                        style={{
-                                          position: "absolute",
-                                          top: "100%",
-                                          left: 8,
-                                          marginTop: 4,
-                                          zIndex: 5,
-                                          background: "white",
-                                          border: "1px solid var(--border)",
-                                          borderRadius: 6,
-                                          padding: "0.5rem 0.7rem",
-                                          boxShadow:
-                                            "0 4px 14px rgba(0,0,0,0.12)",
-                                          minWidth: 240,
-                                          maxWidth: 360,
-                                          color: "var(--text)",
-                                        }}
-                                      >
-                                        <div
-                                          style={{
-                                            fontSize: 11,
-                                            color: "var(--text-subtle)",
-                                            marginBottom: 4,
-                                          }}
-                                        >
-                                          Accommodations
-                                        </div>
-                                        {Array.from(byCat.entries()).map(
-                                          ([cat, names]) => (
-                                            <div
-                                              key={cat}
-                                              style={{ marginBottom: 4 }}
-                                            >
-                                              <div
-                                                style={{
-                                                  fontSize: 10,
-                                                  fontWeight: 700,
-                                                  color:
-                                                    catColor[cat] ?? "#475569",
-                                                  textTransform: "uppercase",
-                                                  letterSpacing: 0.5,
-                                                }}
-                                              >
-                                                {cat}
-                                              </div>
-                                              <ul
-                                                style={{
-                                                  margin: "2px 0 0 0",
-                                                  paddingLeft: 16,
-                                                  fontSize: 12,
-                                                }}
-                                              >
-                                                {names.map((n) => (
-                                                  <li key={n}>{n}</li>
-                                                ))}
-                                              </ul>
-                                            </div>
-                                          ),
-                                        )}
-                                      </div>
-                                    )}
                                   </div>
                                 );
                               })}
@@ -25042,6 +25211,7 @@ function App() {
 
       {activeSection === "pulseDnaStudio" &&
         effectiveFeatures.FamilyComm &&
+        effectiveFeatures.AiAssist &&
         isCoreTeamMember && <PulseDnaStudio />}
 
       {activeSection === "parentNotifications" && canManageSettings && (
@@ -25389,6 +25559,12 @@ function App() {
         />
       )}
 
+      {activeSection === "securityEvents" && canActAsDistrict && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <SecurityEvents />
+        </div>
+      )}
+
       {activeSection === "districtAdmin" && canActAsDistrict && (
         <div className="card" style={{ marginBottom: "1rem" }}>
           <h2 style={{ marginTop: 0 }}>District Overview</h2>
@@ -25493,6 +25669,61 @@ function App() {
                       in <strong>{p.chosenRoom}</strong> but has no default
                       room set in Staff Defaults. Update their default so they
                       don't have to pick on every activation.
+                    </>
+                  );
+                } else if (n.type === "security_failed_logins") {
+                  body = (
+                    <>
+                      🔒 <strong>{p.failCount} failed sign-in attempts</strong>{" "}
+                      {p.scope === "ip" ? (
+                        <>from IP <strong>{p.ip}</strong></>
+                      ) : (
+                        <>for <strong>{p.email}</strong></>
+                      )}{" "}
+                      in the last {p.windowMinutes} min —{" "}
+                      {p.scope === "ip" ? "that IP" : "the account"} is now
+                      temporarily locked. Review for a possible brute-force
+                      attempt.
+                    </>
+                  );
+                } else if (n.type === "security_role_changed") {
+                  body = (
+                    <>
+                      🛡️ <strong>{p.actorName}</strong> changed roles/access for{" "}
+                      <strong>{p.targetName}</strong> — {p.changesSummary}.
+                    </>
+                  );
+                } else if (n.type === "security_data_export") {
+                  body = (
+                    <>
+                      📤 <strong>{p.actorName}</strong> exported{" "}
+                      <strong>{p.rowCount}</strong> rows from the{" "}
+                      <strong>{p.datasetKey}</strong> dataset ({p.format}).
+                      Confirm this export was expected.
+                    </>
+                  );
+                } else if (n.type === "security_api_volume") {
+                  body = (
+                    <>
+                      ⚡ <strong>Unusually high API volume</strong> —{" "}
+                      <strong>{p.count}</strong> requests in {p.windowMinutes}{" "}
+                      min from{" "}
+                      {p.scope === "account" ? (
+                        <>an account</>
+                      ) : (
+                        <>IP <strong>{p.ip}</strong></>
+                      )}
+                      . Review for scripted abuse or a runaway integration.
+                    </>
+                  );
+                } else if (n.type === "security_impossible_travel") {
+                  body = (
+                    <>
+                      🌍 <strong>Impossible travel</strong> — this account
+                      signed in from two locations{" "}
+                      <strong>{p.distanceKm} km</strong> apart just{" "}
+                      {p.minutesApart} min apart (implied {p.impliedKmh} km/h).
+                      Possible account takeover — review immediately.
                     </>
                   );
                 } else {
@@ -27174,6 +27405,93 @@ function App() {
                 </span>
               </label>
             )}
+            {Boolean(
+              authUser?.isAdmin ||
+                authUser?.isDistrictAdmin ||
+                authUser?.isSuperUser,
+            ) && (
+              <>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: "0.5rem",
+                    padding: "0.6rem 0.75rem",
+                    border: "1px solid var(--border-subtle, #e2e8f0)",
+                    borderRadius: 6,
+                    background: "var(--surface-subtle, #f8fafc)",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={schoolSettings.mfaRequiredPrivileged}
+                    onChange={(e) =>
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        mfaRequiredPrivileged: e.target.checked,
+                      })
+                    }
+                    style={{ marginTop: "0.2rem" }}
+                  />
+                  <span style={{ display: "grid", gap: "0.15rem" }}>
+                    <span style={{ fontWeight: 600 }}>
+                      Require two-factor for admins
+                    </span>
+                    <span
+                      style={{
+                        color: "var(--text-subtle, #64748b)",
+                        fontSize: "0.85rem",
+                        fontWeight: "normal",
+                      }}
+                    >
+                      When on, SuperUsers, District Admins, and School Admins
+                      must enter an authenticator code at sign-in. Staff who
+                      haven't set up two-factor yet can still sign in and are
+                      prompted to enroll (grace period).
+                    </span>
+                  </span>
+                </label>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: "0.5rem",
+                    padding: "0.6rem 0.75rem",
+                    border: "1px solid var(--border-subtle, #e2e8f0)",
+                    borderRadius: 6,
+                    background: "var(--surface-subtle, #f8fafc)",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={schoolSettings.mfaRequiredStaff}
+                    onChange={(e) =>
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        mfaRequiredStaff: e.target.checked,
+                      })
+                    }
+                    style={{ marginTop: "0.2rem" }}
+                  />
+                  <span style={{ display: "grid", gap: "0.15rem" }}>
+                    <span style={{ fontWeight: 600 }}>
+                      Require two-factor for all staff
+                    </span>
+                    <span
+                      style={{
+                        color: "var(--text-subtle, #64748b)",
+                        fontSize: "0.85rem",
+                        fontWeight: "normal",
+                      }}
+                    >
+                      Extends the two-factor requirement to every staff member
+                      with a login (teachers, support staff, and specialist
+                      roles), with the same enroll-on-first-login grace period.
+                    </span>
+                  </span>
+                </label>
+              </>
+            )}
             {Boolean(authUser?.isAdmin || authUser?.isSuperUser) && (
               <label style={{ display: "grid", gap: "0.25rem" }}>
                 <span>
@@ -27416,7 +27734,9 @@ function App() {
         }}
       />
       </main>
-      <HelpAssistant />
+      <FeatureGate feature="aiAssist" label="AI Assistance">
+        <HelpAssistant />
+      </FeatureGate>
     </div>
     </RoleProvider>
   );

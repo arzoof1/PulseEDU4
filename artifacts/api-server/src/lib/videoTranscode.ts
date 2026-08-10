@@ -13,12 +13,13 @@
 // the binary is on PATH in this environment (nix). On any failure the row flips
 // to status="failed" with an errorReason so the client can show a retry.
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { db, pulseDnaVideosTable } from "@workspace/db";
 import { and, eq, sql } from "drizzle-orm";
 import { ObjectStorageService } from "./objectStorage.js";
+import { readStoredObjectBuffer } from "./storedObject.js";
 import {
   issueSchoolUploadUrl,
   bindObjectToSchool,
@@ -117,7 +118,8 @@ export async function transcodePulseDnaVideo(
     const mp4Path = join(workDir, "output.mp4");
     const mp3Path = join(workDir, "output.mp3");
 
-    await file.download({ destination: inPath });
+    const inputBytes = await readStoredObjectBuffer(file);
+    await writeFile(inPath, inputBytes);
 
     // MP4: H.264 baseline-friendly + AAC, faststart so the moov atom is at the
     // front and the file streams before it's fully downloaded.

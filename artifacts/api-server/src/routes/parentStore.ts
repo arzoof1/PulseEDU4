@@ -6,7 +6,7 @@ import {
   studentsTable,
   schoolStoreItemsTable,
 } from "@workspace/db";
-import { verifyParentAuthToken } from "../lib/authToken.js";
+import { requireActiveParent } from "../lib/parentAuthMiddleware.js";
 import { isFeatureEnabled } from "../lib/featureLicensing.js";
 import { streamObjectToResponse } from "./storage.js";
 import {
@@ -18,20 +18,10 @@ import {
 
 const router: IRouter = Router();
 
-// Parent identity middleware — mirrors parentSnapshot.ts. Resolves the parent
-// from the session OR a Bearer token (the preview iframe falls back to the
-// token because the session cookie is blocked inside it).
-router.use(async (req, _res, next) => {
-  let pid: number | null = req.session.parentId ?? null;
-  if (!pid) {
-    const auth = req.headers.authorization;
-    if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      pid = verifyParentAuthToken(auth.slice(7).trim());
-    }
-  }
-  req.parentId = pid;
-  next();
-});
+// Parent identity middleware — resolves req.parentId from the session OR a
+// Bearer token AND enforces parents.active=true, so a revoked guardian is
+// locked out here too (F02).
+router.use(requireActiveParent);
 
 // Resolve a parent-owned student. The client passes the NUMERIC students.id
 // row id (same value as ParentMe.students[].id / the snapshot's studentId

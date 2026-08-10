@@ -8,6 +8,7 @@ import {
 } from "@workspace/db";
 import { and, eq, gte, lt, or, isNull, inArray } from "drizzle-orm";
 import { getUncachableResendClient } from "./resendClient";
+import { formatFromHeader } from "./emailFrom";
 
 export type DailyDigestResult = {
   schoolId: number;
@@ -250,7 +251,7 @@ export async function sendDailyDigestEmailForSchool(
   const recipientStr = recipients.join(", ");
   try {
     const { client, fromEmail } = await getUncachableResendClient();
-    const fromHeader = `${fromName} <${fromEmail}>`;
+    const fromHeader = formatFromHeader(fromName, fromEmail);
     const sendRes = await client.emails.send({
       from: fromHeader,
       to: recipients,

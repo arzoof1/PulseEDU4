@@ -684,4 +684,21 @@ describe("feature licensing — end-to-end propagation", () => {
 
     await deleteOverride("parentPortal");
   });
+
+  it("/api/help-assistant/* returns 404 when aiAssist license is off", async () => {
+    await request(app)
+      .get("/api/help-assistant/suggestions?path=/")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(200);
+
+    await upsertOverride("aiAssist", false);
+
+    const off = await request(app)
+      .get("/api/help-assistant/suggestions?path=/")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(404);
+    expect(off.body.error).toBe("ai_features_disabled");
+
+    await deleteOverride("aiAssist");
+  });
 });

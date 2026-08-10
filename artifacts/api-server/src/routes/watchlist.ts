@@ -75,6 +75,7 @@ import {
   caseFootageRequestsTable,
   caseOutcomeTypesTable,
 } from "@workspace/db";
+import { writeAuthAudit } from "../lib/authAudit.js";
 import { createHash } from "node:crypto";
 import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -1706,6 +1707,17 @@ router.get("/watchlist/cases/:id", async (req: Request, res: Response) => {
     })
     .filter(Boolean)
     .sort((x, y) => (y as { total: number }).total - (x as { total: number }).total);
+
+  // DV-11: log the VIEW of a full investigation case (incidents, participants,
+  // witness statements, notes) into the audit trail. writeAuthAudit is
+  // internally fail-safe and never throws, so it can't break the read.
+  await writeAuthAudit({
+    action: "watchlist_case_viewed",
+    schoolId,
+    actorStaffId: req.staffId ?? null,
+    ip: req.ip ?? null,
+    payload: { caseId: id },
+  });
 
   res.json({
     case: c,

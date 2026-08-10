@@ -394,6 +394,7 @@ export function KioskCardsPanel({
     try {
       const res = await authFetch("/api/kiosk/activate-proxy", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           forStaffId: subDraft.forStaffId,
           room: subDraft.room.trim(),

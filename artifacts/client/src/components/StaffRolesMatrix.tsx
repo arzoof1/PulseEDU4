@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import {
+  usePrivilegedReauth,
+  fetchWithReauth,
+} from "../lib/usePrivilegedReauth";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 import StudentPhoto from "./StudentPhoto";
 
@@ -370,6 +374,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
   const [savingId, setSavingId] = useState<number | null>(null);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
+  const { ensureReauth, reauthModal } = usePrivilegedReauth();
   const [showAddStaff, setShowAddStaff] = useState(false);
   const [showAddRole, setShowAddRole] = useState(false);
   const [accessTarget, setAccessTarget] = useState<StaffRow | null>(null);
@@ -548,7 +553,8 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
   async function patchStaff(
     id: number,
     body: Record<string, boolean | string | number | null>,
-  ) {
+    reauth?: { currentPassword: string; code?: string },
+  ): Promise<boolean> {
     setSavingId(id);
     setError("");
     // optimistic
@@ -559,17 +565,25 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
       const res = await authFetch(`/api/admin/staff/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(reauth ? { ...body, reauth } : body),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
+        if (j.error === "reauth_required") {
+          throw new Error("Enter your current password to save access changes.");
+        }
+        if (j.error === "mfa_code_required") {
+          throw new Error("Enter your MFA code or recovery code, then try again.");
+        }
         throw new Error(j.error || `Save failed (${res.status})`);
       }
       const updated = await res.json();
       setStaff((prev) => prev.map((s) => (s.id === id ? updated : s)));
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       await refresh();
+      return false;
     } finally {
       setSavingId(null);
     }
@@ -626,9 +640,10 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
     setExporting(true);
     setError("");
     try {
-      const res = await authFetch(
-        `/api/admin/staff/export.csv?status=${staffScope}`,
+      const res = await fetchWithReauth(ensureReauth, () =>
+        authFetch(`/api/admin/staff/export.csv?status=${staffScope}`),
       );
+      if (!res) return; // step-up cancelled
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || `Export failed (${res.status})`);
@@ -653,6 +668,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
 
   return (
     <div className="card" style={{ marginTop: "1rem" }}>
+      {reauthModal}
       <div
         style={{
           display: "flex",
@@ -1220,9 +1236,10 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
           currentUser={currentUser}
           saving={savingId === accessTarget.id}
           onClose={() => setAccessTarget(null)}
-          onSave={(b) => {
-            patchStaff(accessTarget.id, b);
-            setAccessTarget(null);
+          onSave={async (b, reauth) => {
+            if (await patchStaff(accessTarget.id, b, reauth)) {
+              setAccessTarget(null);
+            }
           }}
         />
       )}
@@ -1477,7 +1494,10 @@ function StaffAccessModal({
   currentUser: Props["currentUser"];
   saving: boolean;
   onClose: () => void;
-  onSave: (body: Record<string, boolean>) => void;
+  onSave: (
+    body: Record<string, boolean>,
+    reauth: { currentPassword: string; code?: string },
+  ) => Promise<void> | void;
 }) {
   const isSelf = staff.id === currentUser.id;
   const canManageSensitiveCaps =
@@ -1497,6 +1517,9 @@ function StaffAccessModal({
     for (const r of ROLE_PRESETS) m[r.flag] = Boolean(staff[r.flag]);
     return m;
   });
+  const [reauthPassword, setReauthPassword] = useState("");
+  const [reauthCode, setReauthCode] = useState("");
+  const [reauthError, setReauthError] = useState("");
 
   function canSetRole(flag: BoolKey): boolean {
     // Import-only delegators cannot change ANY role — only the import caps.
@@ -1583,6 +1606,11 @@ function StaffAccessModal({
     });
 
   function handleSave() {
+    if (!reauthPassword.trim()) {
+      setReauthError("Enter your current password to save changes.");
+      return;
+    }
+    setReauthError("");
     const body: Record<string, boolean> = {};
     for (const p of PAGES) {
       if (capLocked(p.key)) continue;
@@ -1591,7 +1619,10 @@ function StaffAccessModal({
     for (const r of ROLE_PRESETS) {
       if (canSetRole(r.flag)) body[r.flag] = Boolean(roleFlags[r.flag]);
     }
-    onSave(body);
+    onSave(body, {
+      currentPassword: reauthPassword,
+      code: reauthCode.trim() || undefined,
+    });
   }
 
   return (
@@ -1768,6 +1799,41 @@ function StaffAccessModal({
           <span className="tdp-count" style={{ marginRight: "auto" }}>
             {caps.size} of {PAGES.length} pages selected
           </span>
+          <div
+            style={{
+              display: "grid",
+              gap: 6,
+              minWidth: 280,
+              marginRight: 12,
+            }}
+          >
+            <label style={{ display: "grid", gap: 3, fontSize: 12 }}>
+              <span>Current password</span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={reauthPassword}
+                onChange={(e) => setReauthPassword(e.target.value)}
+                placeholder="Required to save access changes"
+                style={{ width: "100%" }}
+              />
+            </label>
+            <label style={{ display: "grid", gap: 3, fontSize: 12 }}>
+              <span>MFA code or recovery code</span>
+              <input
+                type="text"
+                value={reauthCode}
+                onChange={(e) => setReauthCode(e.target.value)}
+                placeholder="If your account uses two-factor"
+                style={{ width: "100%" }}
+              />
+            </label>
+            {reauthError && (
+              <div style={{ color: "#991b1b", fontSize: 12 }}>
+                {reauthError}
+              </div>
+            )}
+          </div>
           <button
             type="button"
             className="cp-send"

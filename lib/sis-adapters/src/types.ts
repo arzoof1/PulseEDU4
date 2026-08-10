@@ -21,6 +21,34 @@ export interface SisStudent {
   firstName: string;
   lastName: string;
   gradeLevel: string | null;
+  /** `undefined` = not provided by feed (preserve existing DB value on update). */
+  gender?: string | null;
+  ell?: boolean;
+  ese?: boolean;
+  is504?: boolean;
+  race?: string | null;
+  ethnicity?: string | null;
+}
+
+export interface SisSchoolOrg {
+  sourcedId: string;
+  identifier: string | null;
+  name: string;
+  type: string;
+}
+
+export interface SisClassSection {
+  /** OneRoster class `sourcedId` — used to wire enrollments. */
+  externalId: string;
+  teacherExternalId: string;
+  period: number;
+  courseName: string;
+  isPlanning?: boolean;
+}
+
+export interface SisEnrollment {
+  classExternalId: string;
+  studentId: string;
 }
 
 export interface SisRoomAssignment {
@@ -39,6 +67,19 @@ export interface RosterAdapter {
   listStaff(): Promise<SisStaff[]>;
   listStudents(): Promise<SisStudent[]>;
   listRoomAssignments(): Promise<SisRoomAssignment[]>;
+  listClassSections(): Promise<SisClassSection[]>;
+  listEnrollments(): Promise<SisEnrollment[]>;
+  listSchoolOrgs(): Promise<SisSchoolOrg[]>;
+  /** Full OneRoster org feed (district + schools) for school mapping validation. */
+  listOrgs(): Promise<
+    Array<{
+      sourcedId: string;
+      status?: string;
+      name: string;
+      type: string;
+      identifier?: string;
+    }>
+  >;
 }
 
 export interface SsoAdapter {

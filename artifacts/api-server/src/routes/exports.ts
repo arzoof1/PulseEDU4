@@ -24,6 +24,9 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
+import { hasFreshPrivilegedReauth } from "../lib/privilegedReauth.js";
+import { writeAuthAudit } from "../lib/authAudit.js";
+import { raiseSecurityAlert } from "../lib/securityAlerts.js";
 import * as ExcelJS from "exceljs";
 import {
   getDataset,
@@ -232,6 +235,12 @@ router.post("/exports/download", async (req, res) => {
     res.status(401).json({ error: "Sign-in required" });
     return;
   }
+  // Step-up reauth (Section 1.15): a full-dataset export is the primary
+  // student-PII exfil surface, so require a recent privileged step-up.
+  if (!hasFreshPrivilegedReauth(req.session)) {
+    res.status(403).json({ error: "reauth_required" });
+    return;
+  }
   const parsed = bodySchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid request" });
@@ -262,6 +271,28 @@ router.post("/exports/download", async (req, res) => {
     rowCount: rows.length,
     actorStaffId: staff.id,
     actorName: staff.displayName ?? staff.email ?? null,
+  });
+  // Mirror the export into auth_audit_log so it also shows in the admin
+  // Security Events viewer (3.7 — the detailed row lives in
+  // data_export_audit_log; this is the lightweight security-event entry).
+  await writeAuthAudit({
+    action: "data_export",
+    schoolId,
+    actorStaffId: staff.id,
+    actorName: staff.displayName ?? staff.email ?? null,
+    ip: req.ip ?? null,
+    payload: { datasetKey: dataset.key, format, rowCount: rows.length },
+  });
+  // Security alert (3.7): notify admins that student data left the app.
+  await raiseSecurityAlert({
+    schoolId,
+    type: "security_data_export",
+    payload: {
+      actorName: staff.displayName ?? staff.email ?? null,
+      datasetKey: dataset.key,
+      rowCount: rows.length,
+      format,
+    },
   });
 
   const stamp = new Date().toISOString().slice(0, 10);

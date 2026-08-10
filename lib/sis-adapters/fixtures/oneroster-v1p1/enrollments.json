@@ -1,0 +1,868 @@
+{
+  "enrollments": [
+    {
+      "sourcedId": "enr-tchr-2001-ela",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:05:00.000Z",
+      "role": "teacher",
+      "primary": "true",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-tchr-2001",
+        "sourcedId": "user-tchr-2001",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ela-p1",
+        "sourcedId": "class-ela-p1",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-tchr-2002-math",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:05:00.000Z",
+      "role": "teacher",
+      "primary": "true",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-tchr-2002",
+        "sourcedId": "user-tchr-2002",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-math-p2",
+        "sourcedId": "class-math-p2",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-tchr-2003-sci",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:05:00.000Z",
+      "role": "teacher",
+      "primary": "true",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-tchr-2003",
+        "sourcedId": "user-tchr-2003",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-sci-p3",
+        "sourcedId": "class-sci-p3",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-tchr-2001-ss",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:05:00.000Z",
+      "role": "teacher",
+      "primary": "true",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-tchr-2001",
+        "sourcedId": "user-tchr-2001",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ss-p4",
+        "sourcedId": "class-ss-p4",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1001-ela",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1001",
+        "sourcedId": "user-stu-1001",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ela-p1",
+        "sourcedId": "class-ela-p1",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1001-math",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1001",
+        "sourcedId": "user-stu-1001",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-math-p2",
+        "sourcedId": "class-math-p2",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1001-sci",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1001",
+        "sourcedId": "user-stu-1001",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-sci-p3",
+        "sourcedId": "class-sci-p3",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1001-ss",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1001",
+        "sourcedId": "user-stu-1001",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ss-p4",
+        "sourcedId": "class-ss-p4",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1002-ela",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1002",
+        "sourcedId": "user-stu-1002",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ela-p1",
+        "sourcedId": "class-ela-p1",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1002-math",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1002",
+        "sourcedId": "user-stu-1002",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-math-p2",
+        "sourcedId": "class-math-p2",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1002-sci",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1002",
+        "sourcedId": "user-stu-1002",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-sci-p3",
+        "sourcedId": "class-sci-p3",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1002-ss",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1002",
+        "sourcedId": "user-stu-1002",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ss-p4",
+        "sourcedId": "class-ss-p4",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1003-ela",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1003",
+        "sourcedId": "user-stu-1003",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ela-p1",
+        "sourcedId": "class-ela-p1",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1003-math",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1003",
+        "sourcedId": "user-stu-1003",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-math-p2",
+        "sourcedId": "class-math-p2",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1003-sci",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1003",
+        "sourcedId": "user-stu-1003",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-sci-p3",
+        "sourcedId": "class-sci-p3",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1003-ss",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1003",
+        "sourcedId": "user-stu-1003",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ss-p4",
+        "sourcedId": "class-ss-p4",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1004-ela",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1004",
+        "sourcedId": "user-stu-1004",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ela-p1",
+        "sourcedId": "class-ela-p1",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1004-math",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1004",
+        "sourcedId": "user-stu-1004",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-math-p2",
+        "sourcedId": "class-math-p2",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1004-sci",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1004",
+        "sourcedId": "user-stu-1004",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-sci-p3",
+        "sourcedId": "class-sci-p3",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1004-ss",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1004",
+        "sourcedId": "user-stu-1004",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ss-p4",
+        "sourcedId": "class-ss-p4",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1005-ela",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1005",
+        "sourcedId": "user-stu-1005",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ela-p1",
+        "sourcedId": "class-ela-p1",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1005-math",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1005",
+        "sourcedId": "user-stu-1005",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-math-p2",
+        "sourcedId": "class-math-p2",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1005-sci",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1005",
+        "sourcedId": "user-stu-1005",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-sci-p3",
+        "sourcedId": "class-sci-p3",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1005-ss",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1005",
+        "sourcedId": "user-stu-1005",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ss-p4",
+        "sourcedId": "class-ss-p4",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1006-ela",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1006",
+        "sourcedId": "user-stu-1006",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ela-p1",
+        "sourcedId": "class-ela-p1",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1006-math",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1006",
+        "sourcedId": "user-stu-1006",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-math-p2",
+        "sourcedId": "class-math-p2",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1006-sci",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1006",
+        "sourcedId": "user-stu-1006",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-sci-p3",
+        "sourcedId": "class-sci-p3",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1006-ss",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1006",
+        "sourcedId": "user-stu-1006",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ss-p4",
+        "sourcedId": "class-ss-p4",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1007-ela",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1007",
+        "sourcedId": "user-stu-1007",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ela-p1",
+        "sourcedId": "class-ela-p1",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1007-math",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1007",
+        "sourcedId": "user-stu-1007",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-math-p2",
+        "sourcedId": "class-math-p2",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1007-sci",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1007",
+        "sourcedId": "user-stu-1007",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-sci-p3",
+        "sourcedId": "class-sci-p3",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1007-ss",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1007",
+        "sourcedId": "user-stu-1007",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ss-p4",
+        "sourcedId": "class-ss-p4",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1008-ela",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1008",
+        "sourcedId": "user-stu-1008",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ela-p1",
+        "sourcedId": "class-ela-p1",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1008-math",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1008",
+        "sourcedId": "user-stu-1008",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-math-p2",
+        "sourcedId": "class-math-p2",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1008-sci",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1008",
+        "sourcedId": "user-stu-1008",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-sci-p3",
+        "sourcedId": "class-sci-p3",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    },
+    {
+      "sourcedId": "enr-stu-1008-ss",
+      "status": "active",
+      "dateLastModified": "2026-02-20T10:10:00.000Z",
+      "role": "student",
+      "primary": "false",
+      "user": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/users/user-stu-1008",
+        "sourcedId": "user-stu-1008",
+        "type": "user"
+      },
+      "class": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/classes/class-ss-p4",
+        "sourcedId": "class-ss-p4",
+        "type": "class"
+      },
+      "school": {
+        "href": "https://demo.classlink.com/oneroster/v1p1/orgs/org-parrott-0241",
+        "sourcedId": "org-parrott-0241",
+        "type": "org"
+      },
+      "beginDate": "2025-08-11T00:00:00.000Z",
+      "endDate": "2026-05-29T00:00:00.000Z"
+    }
+  ]
+}

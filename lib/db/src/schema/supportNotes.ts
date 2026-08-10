@@ -1,11 +1,12 @@
 import { pgTable, serial, text, integer } from "drizzle-orm/pg-core";
+import { encryptedText } from "./_encrypted";
 
 export const supportNotesTable = pgTable("support_notes", {
   id: serial("id").primaryKey(),
   schoolId: integer("school_id").notNull(),
   studentId: text("student_id").notNull(),
   noteType: text("note_type").notNull(),
-  noteText: text("note_text").notNull(),
+  noteText: encryptedText("note_text").notNull(),
   staffName: text("staff_name").notNull(),
   createdAt: text("created_at").notNull(),
   // Set when the row was inserted by a CSV behavior importer. Powers

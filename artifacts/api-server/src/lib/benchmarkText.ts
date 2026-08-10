@@ -27,6 +27,7 @@ export function normalizeBenchmarkCode(raw: string): string | null {
   const bare = (i >= 0 ? code.slice(i + 1) : code).trim();
   if (!bare || bare.toUpperCase() === "N/A") return null;
   return bare;
+
 }
 
 // Map of ORIGINAL code (exactly as it appears in the caller's rows) → full

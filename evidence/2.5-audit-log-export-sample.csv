@@ -1,0 +1,13 @@
+ID,Timestamp (UTC),Action,Actor ID,Actor,Target ID,Target,IP,Details
+95,2026-07-14T17:30:51.034Z,privileged_reauth,83,Chris Clifford,83,Chris Clifford,205.164.132.13,{}
+94,2026-07-14T17:30:50.193Z,login_success,83,Chris Clifford,83,Chris Clifford,205.164.132.13,"{""mfa"":false}"
+93,2026-07-14T17:30:00.115Z,logout,83,Chris Clifford,83,Chris Clifford,205.164.132.13,{}
+92,2026-07-14T17:29:59.216Z,privileged_reauth,83,Chris Clifford,83,Chris Clifford,205.164.132.13,{}
+91,2026-07-14T17:29:58.672Z,login_success,83,Chris Clifford,83,Chris Clifford,205.164.132.13,"{""mfa"":false}"
+90,2026-07-14T16:38:40.706Z,logout,83,Chris Clifford,83,Chris Clifford,205.164.132.13,{}
+81,2026-07-14T15:27:22.554Z,login_success,83,Chris Clifford,83,Chris Clifford,205.164.132.13,"{""mfa"":false}"
+80,2026-07-14T13:50:19.749Z,logout,83,Chris Clifford,83,Chris Clifford,205.164.132.13,{}
+79,2026-07-14T13:50:19.296Z,secret_accessed,83,Chris Clifford,,,205.164.132.13,"{""secretType"":""kiosk_pin"",""targetStaffId"":83}"
+78,2026-07-14T13:50:19.044Z,login_success,83,Chris Clifford,83,Chris Clifford,205.164.132.13,"{""mfa"":false}"
+77,2026-07-14T12:26:41.684Z,logout,83,Chris Clifford,83,Chris Clifford,205.164.132.13,{}
+76,2026-07-14T12:26:40.719Z,import_approval_policy_changed,83,Chris Clifford,,,205.164.132.13,"{""importRequiresApproval"":false}"

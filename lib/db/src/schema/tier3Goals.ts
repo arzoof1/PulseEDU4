@@ -6,6 +6,7 @@ import {
   timestamp,
   index,
 } from "drizzle-orm/pg-core";
+import { encryptedText } from "./_encrypted";
 
 // Tier 3 goal versions. Goals are EDIT-AS-INSERT: every time the Core
 // Team (Admin / BS / MTSS / School Psych) edits a goal, a new row is
@@ -26,7 +27,7 @@ export const tier3GoalsTable = pgTable(
     schoolId: integer("school_id").notNull(),
     studentId: text("student_id").notNull(),
     slot: integer("slot").notNull(), // 1..5
-    text: text("text").notNull(),
+    text: encryptedText("text").notNull(),
     // School-local "YYYY-MM-DD"; defaults to today when a Core Team
     // member writes the goal for the first time.
     effectiveFrom: text("effective_from").notNull(),

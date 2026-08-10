@@ -47,3 +47,25 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Environment files
+.env
+**/.env
+!.env.example
+!.env.production.example
+!.env.development
+
+# Internal security deliverables (remediation tracker, security docs, etc.).
+# Kept OUT of the repo/git history on purpose — these describe the app's
+# vulnerabilities and architecture and must not ship in the codebase.
+deliverables/
+
+
+# Playwright MCP screenshot/snapshot cache (local testing)
+.playwright-mcp/
+
+# District security documentation package (confidential — same rationale as deliverables/)
+tracker docs/
+
+# Throwaway local pentest env (isolated DB)
+.env.pentest
