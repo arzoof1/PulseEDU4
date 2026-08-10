@@ -161,7 +161,13 @@ export type ResolveSchoolOrgResult =
  * Resolve the ClassLink school org for a sync using config + OneRoster org feed.
  * Cross-validates `schoolOrgSourcedId`, `schoolOrgIdentifier`, and `stateSchoolCode`.
  *
- * Resilience for mislabeled configs (common in the wild):
+ * Priority when hints disagree (common with duplicate ClassLink campus rows,
+ * e.g. Wilton ENT8351/8351 vs ENT8400/8400):
+ * 1. `stateSchoolCode` / Pulse school code exact org match (authoritative)
+ * 2. `schoolOrgIdentifier` when it matches an org
+ * 3. `schoolOrgSourcedId` (often stale after a prior wrong sync)
+ *
+ * Resilience for mislabeled configs:
  * - If `schoolOrgSourcedId` is missing from the feed (e.g. `ENT0342` was stored
  *   as a sourcedId when it is really an identifier), fall back to identifier
  *   matching instead of hard-failing.
@@ -175,67 +181,82 @@ export function resolveSchoolOrg(
   const index = buildSchoolOrgIndex(orgs);
 
   const wantSourcedId = config.schoolOrgSourcedId?.trim();
-  const wantIdentifier =
-    config.schoolOrgIdentifier?.trim() ||
-    config.stateSchoolCode?.trim() ||
-    undefined;
+  const wantStateCode = config.stateSchoolCode?.trim() || undefined;
+  const wantConfigIdentifier = config.schoolOrgIdentifier?.trim() || undefined;
 
-  let candidate: OneRosterOrg | null = null;
+  let bySourcedId: OneRosterOrg | null = null;
+  let byStateCode: OneRosterOrg | null = null;
+  let byConfigIdentifier: OneRosterOrg | null = null;
 
   if (wantSourcedId) {
-    const byId = findOrgBySourcedId(index, wantSourcedId);
-    if (byId) {
-      if (!isSchoolOrg(byId)) {
+    const hit = findOrgBySourcedId(index, wantSourcedId);
+    if (hit) {
+      if (!isSchoolOrg(hit)) {
         return {
           ok: false,
           errors: [
-            `ClassLink org "${wantSourcedId}" is type "${byId.type}", expected a school org.`,
+            `ClassLink org "${wantSourcedId}" is type "${hit.type}", expected a school org.`,
           ],
         };
       }
-      candidate = byId;
+      bySourcedId = hit;
     } else {
       // Misconfigured: identifier stuffed into schoolOrgSourcedId (e.g. ENT0342).
       const asIdentifier = findSchoolByIdentifier(index, wantSourcedId);
       if (asIdentifier) {
-        candidate = asIdentifier;
+        bySourcedId = asIdentifier;
         warnings.push(
           `sis_config.schoolOrgSourcedId "${wantSourcedId}" was not a live ClassLink sourcedId; matched org "${asIdentifier.name}" (${asIdentifier.sourcedId}) via identifier instead. Update sis_config.schoolOrgSourcedId to "${asIdentifier.sourcedId}".`,
         );
       } else {
-        errors.push(
+        // Soft miss — stateSchoolCode / schoolOrgIdentifier may still resolve
+        // (stale sourcedId is common). Hard-fail only if nothing matches later.
+        warnings.push(
           `ClassLink school org "${wantSourcedId}" was not found in the OneRoster org feed (tried as sourcedId and as identifier).`,
         );
       }
     }
   }
 
-  if (wantIdentifier) {
-    const byCode = findSchoolByIdentifier(index, wantIdentifier);
-    if (!byCode) {
-      // Only hard-error identifier miss when we have no candidate yet.
-      if (!candidate) {
-        errors.push(
-          `No ClassLink school org matched identifier/state code "${wantIdentifier}".`,
-        );
-      } else {
-        warnings.push(
-          `No ClassLink school org matched identifier/state code "${wantIdentifier}" (continuing with resolved org "${candidate.name}").`,
-        );
-      }
-    } else if (candidate && candidate.sourcedId !== byCode.sourcedId) {
-      // Prefer the identifier/state-code org — sourcedId field is often stale
-      // or mislabeled (ENT0342), while state school codes stay stable.
+  if (wantStateCode) {
+    byStateCode = findSchoolByIdentifier(index, wantStateCode);
+    if (!byStateCode) {
       warnings.push(
-        `ClassLink org sourcedId "${candidate.sourcedId}" does not match org for identifier "${wantIdentifier}" (${byCode.sourcedId} / ${byCode.name}). Using identifier match.`,
+        `No ClassLink school org matched Pulse/state school code "${wantStateCode}".`,
       );
-      candidate = byCode;
-    } else if (!candidate) {
-      candidate = byCode;
     }
   }
 
-  if (!candidate && !wantSourcedId && !wantIdentifier) {
+  if (wantConfigIdentifier) {
+    byConfigIdentifier = findSchoolByIdentifier(index, wantConfigIdentifier);
+    if (!byConfigIdentifier) {
+      warnings.push(
+        `No ClassLink school org matched configured schoolOrgIdentifier "${wantConfigIdentifier}".`,
+      );
+    }
+  }
+
+  let candidate: OneRosterOrg | null = null;
+
+  // Prefer a live org whose identifier matches the Pulse state school code.
+  // Stale sis_config often keeps schoolOrgSourcedId=ENT8400 after an earlier
+  // wrong pick while schools.state_school_code stays 8351. Prefer the code match
+  // without treating the heal as a sync failure/partial warning — callers
+  // persist the corrected sourcedId after a successful resolve.
+  if (byStateCode) {
+    candidate = byStateCode;
+  } else if (byConfigIdentifier) {
+    candidate = byConfigIdentifier;
+    if (bySourcedId && bySourcedId.sourcedId !== byConfigIdentifier.sourcedId) {
+      warnings.push(
+        `ClassLink org sourcedId "${bySourcedId.sourcedId}" does not match org for identifier "${wantConfigIdentifier}" (${byConfigIdentifier.sourcedId} / ${byConfigIdentifier.name}). Using identifier match.`,
+      );
+    }
+  } else if (bySourcedId) {
+    candidate = bySourcedId;
+  }
+
+  if (!candidate && !wantSourcedId && !wantStateCode && !wantConfigIdentifier) {
     if (index.schools.length === 1) {
       candidate = index.schools[0]!;
     } else {
@@ -248,29 +269,58 @@ export function resolveSchoolOrg(
     }
   }
 
+  // Hard-fail when a required code was given and nothing resolved.
   if (!candidate) {
-    return { ok: false, errors };
+    if (wantSourcedId && !bySourcedId) {
+      errors.push(
+        `ClassLink school org "${wantSourcedId}" was not found in the OneRoster org feed (tried as sourcedId and as identifier).`,
+      );
+    }
+    if (wantStateCode && !byStateCode) {
+      errors.push(
+        `No ClassLink school org matched identifier/state code "${wantStateCode}".`,
+      );
+    } else if (
+      wantConfigIdentifier &&
+      !byConfigIdentifier &&
+      !bySourcedId
+    ) {
+      errors.push(
+        `No ClassLink school org matched identifier/state code "${wantConfigIdentifier}".`,
+      );
+    }
+    return {
+      ok: false,
+      errors: errors.length ? errors : ["School org could not be resolved."],
+    };
   }
 
   if (
-    config.stateSchoolCode?.trim() &&
+    wantStateCode &&
     candidate.identifier?.trim() &&
-    !schoolCodesMatch(config.stateSchoolCode, candidate.identifier)
+    !schoolCodesMatch(wantStateCode, candidate.identifier)
   ) {
-    // Trust the resolved ClassLink org; Pulse/state codes can drift (e.g.
-    // Wilton Pulse 8351 vs ClassLink 8400). Warn, do not block the sync.
+    // No org existed for the Pulse code (byStateCode was null) — continue with
+    // the sourcedId/identifier fallback and warn, do not block the sync.
     warnings.push(
-      `PulseEDU state school code "${config.stateSchoolCode}" does not match ClassLink org identifier "${candidate.identifier}" for org ${candidate.sourcedId} (${candidate.name}). Syncing against ClassLink org anyway — update schools.state_school_code when convenient.`,
+      `PulseEDU state school code "${wantStateCode}" does not match ClassLink org identifier "${candidate.identifier}" for org ${candidate.sourcedId} (${candidate.name}). Syncing against ClassLink org anyway — update schools.state_school_code or sis_config when convenient.`,
     );
   }
 
   if (
-    config.schoolOrgIdentifier?.trim() &&
+    wantConfigIdentifier &&
     candidate.identifier?.trim() &&
-    !schoolCodesMatch(config.schoolOrgIdentifier, candidate.identifier)
+    !schoolCodesMatch(wantConfigIdentifier, candidate.identifier) &&
+    // Skip when Pulse state code already chose the correct campus — stale
+    // schoolOrgIdentifier (e.g. 8400 vs 8351) is rewritten on persist.
+    !(
+      wantStateCode &&
+      candidate.identifier?.trim() &&
+      schoolCodesMatch(wantStateCode, candidate.identifier)
+    )
   ) {
     warnings.push(
-      `Configured schoolOrgIdentifier "${config.schoolOrgIdentifier}" does not match ClassLink org identifier "${candidate.identifier}". Using ClassLink org "${candidate.name}".`,
+      `Configured schoolOrgIdentifier "${wantConfigIdentifier}" does not match ClassLink org identifier "${candidate.identifier}". Using ClassLink org "${candidate.name}".`,
     );
   }
 

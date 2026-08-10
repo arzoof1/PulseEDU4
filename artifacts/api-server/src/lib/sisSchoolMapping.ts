@@ -58,9 +58,12 @@ export async function resolveSisSchoolMapping(
   const cfg = parseMappingConfig(row.sisConfig);
   const orgFeed = (await adapter.listOrgs()) as OneRosterOrg[];
 
+  // Pulse school code is authoritative for which campus we sync into. Prefer it
+  // over sis_config.stateSchoolCode so a stale ClassLink identifier (e.g. 8400)
+  // cannot override schools.state_school_code (e.g. Wilton 8351).
   const stateCode =
-    cfg.stateSchoolCode?.trim() ||
     pulseSchool.stateSchoolCode?.trim() ||
+    cfg.stateSchoolCode?.trim() ||
     undefined;
 
   const resolved = resolveSchoolOrg(orgFeed, {

@@ -641,6 +641,7 @@ async function persistSyncStatus(
   integrationId: number,
   status: SisSyncStatus,
   errors: string[],
+  sisConfigPatch?: Record<string, unknown> | null,
 ): Promise<void> {
   const payload =
     errors.length === 0
@@ -653,8 +654,20 @@ async function persistSyncStatus(
       sisLastSyncAt: new Date(),
       sisLastSyncStatus: payload,
       updatedAt: new Date(),
+      ...(sisConfigPatch ? { sisConfig: sisConfigPatch } : {}),
     })
     .where(eq(districtIntegrationsTable.id, integrationId));
+}
+
+/** Keep sis_config.schoolOrgSourcedId aligned with the org actually used. */
+function withResolvedOrgConfig(
+  row: DistrictIntegrationRow,
+  adapterConfig: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ...(row.sisConfig ?? {}),
+    ...adapterConfig,
+  };
 }
 
 export async function runSisSyncForIntegration(
@@ -805,6 +818,7 @@ export async function runSisSync(
     for (const w of mappingResult.warnings) {
       errors.push(w);
     }
+    const correctedSisConfig = withResolvedOrgConfig(row, mapping.adapterConfig);
     const adapter =
       buildAdapter(row, mapping.adapterConfig) ?? probeAdapter;
     const schoolMapping = toSyncSchoolMapping(resolved, mapping.classLinkOrg);
@@ -841,7 +855,7 @@ export async function runSisSync(
         errors,
         message: statusMessage(status, errors),
       };
-      await persistSyncStatus(row.id, status, errors);
+      await persistSyncStatus(row.id, status, errors, correctedSisConfig);
       logger.warn(
         {
           schoolId,
@@ -900,7 +914,7 @@ export async function runSisSync(
       errors,
       message: statusMessage(status, errors),
     };
-    await persistSyncStatus(row.id, status, errors);
+    await persistSyncStatus(row.id, status, errors, correctedSisConfig);
     logger.info({ schoolId, integrationId: row.id, counts, status }, "SIS roster sync finished");
     return result;
   } catch (err: unknown) {
