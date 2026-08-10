@@ -18,8 +18,6 @@ import {
   housesTable,
   schoolSettingsTable,
   classSigninsTable,
-  bellSchedulesTable,
-  bellSchedulePeriodsTable,
   teacherDestinationAllowlistTable,
   attendanceCheckinsTable,
   onTimeRejectedScansTable,
@@ -44,7 +42,6 @@ import {
 } from "../lib/storedObject.js";
 import { and, eq, inArray, isNull, gt, gte, lt, desc, sql, ne, asc, like, or } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
-import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
 import { bcryptCompare, bcryptHash } from "../lib/bcrypt.js";
 import {
@@ -58,6 +55,11 @@ import {
   clearThrottleKey,
 } from "../lib/loginThrottle.js";
 import { autoEndStalePasses } from "../lib/hallPassLifecycle.js";
+import {
+  findEscortHold,
+  ESCORT_KIOSK_MESSAGE,
+} from "../lib/safetyPlanEscort.js";
+import { kioskPassMinutesFor } from "../lib/kioskPassMinutes.js";
 import { loadSchoolWideDefaults } from "../lib/restroomAreas.js";
 import { getSchoolTimezone, startOfDayUtc } from "../lib/schoolYear.js";
 import { loadBrandingForSchool } from "./schoolBranding.js";
@@ -81,10 +83,19 @@ import {
   getCurrentPeriodKey,
 } from "./hallPassQueue";
 import {
-  loadAttendanceWindow,
+  loadAttendanceEnv,
+  attendanceWindowForVariant,
+  attendanceWindowForGrade,
   computePoints,
+  type AttendanceEnv,
   type AttendanceWindow,
 } from "../lib/onTimeAttendance.js";
+import {
+  loadDayTypeContext,
+  contextForVariant,
+  variantForGrade,
+  type ScheduleVariant,
+} from "../lib/scheduleResolver.js";
 
 // Default TTL for the legacy email-+-password activation flow. The
 // printed-card path (`/kiosk/activate-by-enrollment`,
@@ -1302,6 +1313,16 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     return;
   }
 
+  // Escort-required safety plan: HARD block at the kiosk — no queue, no
+  // override, and a deliberately neutral message (a shared student-facing
+  // screen must never mention "safety plan" or a reason). Applies to the
+  // "Go now" bypass too: an escort requirement wins over a summons.
+  const escortHold = await findEscortHold(act.schoolId, normalizedStudentId);
+  if (escortHold) {
+    res.status(409).json({ error: ESCORT_KIOSK_MESSAGE });
+    return;
+  }
+
   // Polarity / keep-apart enforcement. The kiosk activation carries the
   // school it was bound to, so the daily limit is read from that school's
   // settings (not the singleton row).
@@ -1432,7 +1453,7 @@ router.post("/kiosk/hall-passes", async (req, res) => {
       contactedAcknowledged: false,
       status: "active",
       createdAt: new Date().toISOString(),
-      maxDurationMinutes: config.defaultHallPassDurationMinutes,
+      maxDurationMinutes: await kioskPassMinutesFor(act.schoolId),
       endedAt: null,
       priorityBypass: bypassQueue,
     })
@@ -1618,6 +1639,33 @@ router.post("/kiosk/hall-passes/arrive", async (req, res) => {
     act.staffId,
   );
   if (!passHeadsToKiosk(pass, act.room, kioskTeacher)) {
+    // Record the refused attempt on the pass — "headed to Clinic, tried to
+    // check in at Room 214" is exactly the discrepancy staff want to see.
+    // Best-effort (never blocks the refusal response), capped at 10, and
+    // only while the pass is still active.
+    if (pass.status === "active") {
+      try {
+        let attempts: { room: string; at: string }[] = [];
+        if (pass.arrivalAttempts) {
+          const parsed = JSON.parse(pass.arrivalAttempts) as unknown;
+          if (Array.isArray(parsed)) {
+            attempts = parsed.filter(
+              (a): a is { room: string; at: string } =>
+                !!a && typeof a === "object" && typeof (a as { room?: unknown }).room === "string",
+            );
+          }
+        }
+        if (attempts.length < 10) {
+          attempts.push({ room: act.room, at: new Date().toISOString() });
+          await db
+            .update(hallPassesTable)
+            .set({ arrivalAttempts: JSON.stringify(attempts) })
+            .where(eq(hallPassesTable.id, pass.id));
+        }
+      } catch (err) {
+        console.error("Failed to record wrong-kiosk attempt:", err);
+      }
+    }
     res.status(403).json({
       error: `That pass is headed to ${pass.destination}, not ${act.room}.`,
     });
@@ -2035,7 +2083,7 @@ router.get(
       day: "2-digit",
     }).format(startOfDay);
 
-    const periods = await loadDefaultBellPeriods(schoolId);
+    const periodsForGrade = await loadGradeBellPeriodLookup(schoolId);
 
     const rows = await db
       .select({
@@ -2067,7 +2115,7 @@ router.get(
 
     const signins = rows.map((r) => {
       const p = r.signedInAt
-        ? periodForTime(periods, hhmmInTz(r.signedInAt, tz))
+        ? periodForTime(periodsForGrade(r.grade), hhmmInTz(r.signedInAt, tz))
         : null;
       return {
         ...r,
@@ -2079,48 +2127,46 @@ router.get(
   },
 );
 
-// Phase 4 (date+period filters) — load the school's default+active
-// bell-schedule periods once, normalized to HH:MM bounds, for
-// inferring a sign-in's period from its time-of-day. Best-effort:
-// any error or missing schedule yields an empty list (period renders
-// blank, never blocks the roll-call list).
-async function loadDefaultBellPeriods(
+// Phase 4 (date+period filters) — grade-aware period lookup for inferring
+// a sign-in's period from its time-of-day. MULTI-SCHEDULE: each grade may
+// follow a different variant of the active Day Type, so the lookup is a
+// function of the student's grade. Best-effort: any error or missing
+// schedule yields empty lists (period renders blank, never blocks the
+// roll-call list).
+type BellPeriodRow = { periodNumber: number; name: string; start: string; end: string };
+
+function variantToBellRows(v: ScheduleVariant | null): BellPeriodRow[] {
+  if (!v) return [];
+  const fmt = (min: number) =>
+    `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+  return v.blocks
+    .filter((b) => b.blockType === "period" && b.periodNumber != null)
+    .map((b) => ({
+      periodNumber: b.periodNumber as number,
+      name: b.name || `Period ${b.periodNumber}`,
+      start: fmt(b.startMin),
+      end: fmt(b.endMin),
+    }));
+}
+
+async function loadGradeBellPeriodLookup(
   schoolId: number,
-): Promise<
-  { periodNumber: number; name: string; start: string; end: string }[]
-> {
+): Promise<(grade: number | string | null | undefined) => BellPeriodRow[]> {
   try {
-    const [schedule] = await db
-      .select({ id: bellSchedulesTable.id })
-      .from(bellSchedulesTable)
-      .where(
-        and(
-          eq(bellSchedulesTable.schoolId, schoolId),
-          eq(bellSchedulesTable.isDefault, true),
-          eq(bellSchedulesTable.active, true),
-        ),
-      );
-    if (!schedule) return [];
-    const periods = await db
-      .select({
-        periodNumber: bellSchedulePeriodsTable.periodNumber,
-        name: bellSchedulePeriodsTable.name,
-        startTime: bellSchedulePeriodsTable.startTime,
-        endTime: bellSchedulePeriodsTable.endTime,
-      })
-      .from(bellSchedulePeriodsTable)
-      .where(eq(bellSchedulePeriodsTable.scheduleId, schedule.id));
-    return periods
-      .map((p) => ({
-        periodNumber: p.periodNumber ?? 0,
-        name:
-          p.name ?? (p.periodNumber != null ? `Period ${p.periodNumber}` : ""),
-        start: (p.startTime ?? "").slice(0, 5),
-        end: (p.endTime ?? "").slice(0, 5),
-      }))
-      .filter((p) => p.start && p.end);
+    const ctx = await loadDayTypeContext(schoolId);
+    if (ctx.status !== "ok") return () => [];
+    const cache = new Map<number, BellPeriodRow[]>();
+    return (grade) => {
+      const v = variantForGrade(ctx, grade);
+      if (!v) return [];
+      const hit = cache.get(v.id);
+      if (hit) return hit;
+      const rows = variantToBellRows(v);
+      cache.set(v.id, rows);
+      return rows;
+    };
   } catch {
-    return [];
+    return () => [];
   }
 }
 
@@ -2179,53 +2225,27 @@ function substituteWelcome(
 // any DB error degrades to no period info, never blocks sign-in.
 async function resolveActivePeriod(
   schoolId: number,
+  grade: number | string | null | undefined,
 ): Promise<{ name: string; number: string }> {
   try {
-    const [schedule] = await db
-      .select({ id: bellSchedulesTable.id })
-      .from(bellSchedulesTable)
-      .where(
-        and(
-          eq(bellSchedulesTable.schoolId, schoolId),
-          eq(bellSchedulesTable.isDefault, true),
-          eq(bellSchedulesTable.active, true),
-        ),
-      );
-    if (!schedule) return { name: "", number: "" };
-    const periods = await db
-      .select({
-        periodNumber: bellSchedulePeriodsTable.periodNumber,
-        name: bellSchedulePeriodsTable.name,
-        startTime: bellSchedulePeriodsTable.startTime,
-        endTime: bellSchedulePeriodsTable.endTime,
-      })
-      .from(bellSchedulePeriodsTable)
-      .where(eq(bellSchedulePeriodsTable.scheduleId, schedule.id));
-    // Compute current HH:MM in the school's own IANA timezone (from
-    // schools.timezone), NOT the server's local clock — Replit hosts
-    // can drift to UTC and the period-name lookup would silently
-    // mis-match for most of the day.
-    const tz = await getSchoolTimezone(schoolId);
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz,
-      hour12: false,
-      hour: "2-digit",
-      minute: "2-digit",
-    }).formatToParts(new Date());
-    const hh = parts.find((p) => p.type === "hour")?.value ?? "00";
-    const mm = parts.find((p) => p.type === "minute")?.value ?? "00";
-    const hhmm = `${hh.padStart(2, "0")}:${mm.padStart(2, "0")}`;
-    for (const p of periods) {
-      const start = (p.startTime ?? "").slice(0, 5);
-      const end = (p.endTime ?? "").slice(0, 5);
-      if (start && end && hhmm >= start && hhmm < end) {
-        return {
-          name: p.name ?? `Period ${p.periodNumber}`,
-          number: String(p.periodNumber ?? ""),
-        };
-      }
+    // MULTI-SCHEDULE: the welcome-message {period} must reflect the
+    // SIGNING-IN STUDENT's own schedule variant (their grade may be at
+    // lunch while another grade is in class). The resolver also handles
+    // the school-timezone clock math.
+    const ctx = await loadDayTypeContext(schoolId);
+    const sc = contextForVariant(ctx, variantForGrade(ctx, grade), new Date());
+    if (sc.status !== "ok" || !sc.currentBlock) return { name: "", number: "" };
+    if (sc.currentBlock.blockType !== "period") {
+      // Lunch/advisory read naturally in a welcome message; passing gets
+      // no label (matches the old between-bells behavior).
+      return sc.currentBlock.blockType === "passing"
+        ? { name: "", number: "" }
+        : { name: sc.currentBlock.name, number: "" };
     }
-    return { name: "", number: "" };
+    return {
+      name: sc.currentBlock.name || `Period ${sc.periodNumber ?? ""}`,
+      number: String(sc.periodNumber ?? ""),
+    };
   } catch {
     return { name: "", number: "" };
   }
@@ -2362,7 +2382,7 @@ router.post("/kiosk/class-signin", async (req, res) => {
   } catch {
     teacherName = "";
   }
-  const period = await resolveActivePeriod(act.schoolId);
+  const period = await resolveActivePeriod(act.schoolId, student.grade);
 
   const welcomeMessage = substituteWelcome(chosenTemplate, {
     firstName: student.firstName,
@@ -2410,6 +2430,7 @@ async function resolveAttendanceContext(token: unknown): Promise<
       enabled: boolean;
       maxPoints: number;
       win: AttendanceWindow;
+      env: AttendanceEnv;
       // Roster gate result for the incoming class:
       //   sectionId  — the teacher's class_sections row for the incoming
       //                period (null = no section → OPEN FALLBACK, accept all).
@@ -2451,7 +2472,11 @@ async function resolveAttendanceContext(token: unknown): Promise<
     .from(schoolSettingsTable)
     .where(eq(schoolSettingsTable.schoolId, act.schoolId));
 
-  const win = await loadAttendanceWindow(act.schoolId);
+  // Kiosk MODE follows the Day Type's default variant; each individual
+  // scan is re-evaluated against the scanning student's own grade variant
+  // (multi-schedule schools) in the checkin route below.
+  const env = await loadAttendanceEnv(act.schoolId);
+  const win = attendanceWindowForVariant(env, env.ctx.defaultVariant);
 
   // Test loop is a self-contained admin demo: when its synthetic window is
   // active (periodKey prefixed "testloop:") the kiosk must flip to Attendance
@@ -2489,6 +2514,7 @@ async function resolveAttendanceContext(token: unknown): Promise<
     enabled: (settings?.enabled ?? false) || isTestLoopWindow,
     maxPoints: settings?.maxPoints ?? 4,
     win,
+    env,
     sectionId,
     isPlanning,
     endedByTeacher,
@@ -2601,8 +2627,9 @@ router.post("/kiosk/attendance/checkin", async (req, res) => {
     res.status(ctx.error.status).json(ctx.error.body);
     return;
   }
-  const { act, enabled, maxPoints, win, sectionId, isPlanning, endedByTeacher } =
+  const { act, enabled, maxPoints, env, sectionId, isPlanning, endedByTeacher } =
     ctx;
+  let { win } = ctx;
 
   if (!enabled || win.phase === "off" || isPlanning || endedByTeacher) {
     res.status(409).json({ status: "closed", error: "Attendance is not open" });
@@ -2640,17 +2667,67 @@ router.post("/kiosk/attendance/checkin", async (req, res) => {
     return;
   }
 
+  // MULTI-SCHEDULE: credit is decided by the SCANNING STUDENT's own grade
+  // variant, not the school-wide default. A student whose grade follows a
+  // different lunch pattern may be mid-class while the default schedule is
+  // passing — that scan must NOT earn credit ("not your bell").
+  let gateSectionId = sectionId;
+  if (env.hasGradeVariants && !env.testLoop) {
+    const studentWin = attendanceWindowForGrade(env, student.grade);
+    if (studentWin.phase === "off") {
+      await db.insert(onTimeRejectedScansTable).values({
+        schoolId: act.schoolId,
+        studentId: student.studentId,
+        scannedLocalSisId: scanned,
+        kioskActivationId: act.id,
+        staffId: act.staffId,
+        periodNumber: win.incomingPeriodNumber,
+        periodKey: win.periodKey,
+        day: win.dayKey,
+        reason: "not_their_window",
+      });
+      res.status(200).json({
+        status: "rejected",
+        firstName: student.firstName,
+        message: "Not your passing time yet — check your schedule.",
+      });
+      return;
+    }
+    if (studentWin.incomingPeriodNumber !== win.incomingPeriodNumber) {
+      // Different incoming class for this student → re-resolve the roster
+      // gate section for THEIR period.
+      gateSectionId = null;
+      if (studentWin.incomingPeriodNumber !== null) {
+        const [section] = await db
+          .select({
+            id: classSectionsTable.id,
+            isPlanning: classSectionsTable.isPlanning,
+          })
+          .from(classSectionsTable)
+          .where(
+            and(
+              eq(classSectionsTable.schoolId, act.schoolId),
+              eq(classSectionsTable.teacherStaffId, act.staffId),
+              eq(classSectionsTable.period, studentWin.incomingPeriodNumber),
+            ),
+          );
+        if (section && !section.isPlanning) gateSectionId = section.id;
+      }
+    }
+    win = studentWin;
+  }
+
   // Roster gate: when the teacher HAS a roster for the incoming class, only
   // its students earn credit. No section row → open fallback (shared rooms /
   // schools that don't load class_sections).
-  if (sectionId !== null) {
+  if (gateSectionId !== null) {
     const [rostered] = await db
       .select({ id: sectionRosterTable.id })
       .from(sectionRosterTable)
       .where(
         and(
           eq(sectionRosterTable.schoolId, act.schoolId),
-          eq(sectionRosterTable.sectionId, sectionId),
+          eq(sectionRosterTable.sectionId, gateSectionId),
           eq(sectionRosterTable.studentId, student.studentId),
         ),
       );

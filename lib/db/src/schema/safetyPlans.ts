@@ -72,6 +72,14 @@ export const safetyPlansTable = pgTable(
     // SP pill on rosters. Closing a plan keeps the row (history) but
     // hides the pill.
     status: text("status").notNull().default("active"),
+    // Escort flag — set by the counselor via an explicit "Does this student
+    // need an escort?" question in the editor. When TRUE (and the plan is
+    // active + within its dates) the student is hard-blocked from creating
+    // passes at kiosks and teachers see an acknowledge-to-proceed safety
+    // flag when creating a pass. Other safety plans never affect passes.
+    escortRequired: boolean("escort_required").notNull().default(false),
+    // Encrypted at rest (DV sensitive free-text) — keep both escort flag
+    // and production encryption helpers.
     items: encryptedJsonb("items").$type<SafetyPlanItem[]>().notNull().default([]),
     notes: encryptedText("notes").notNull().default(""),
     startDate: text("start_date"),

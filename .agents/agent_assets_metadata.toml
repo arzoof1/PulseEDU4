@@ -540,3 +540,115 @@ id = "-XIk3PahlkG-jpiukU8tR"
 uri = "file://docs/migrations/2026-07-05_to_07-complete-go-live-runbook.pdf"
 type = "pdf"
 title = "Complete Go-Live Runbook — July 5–7, 2026 (all sessions)"
+
+[[outputs]]
+id = "S_j2yDEegkn4Us7gw46px"
+uri = "file://attached_assets/generated/ClassLink_RosterServer_Data_Request.docx"
+type = "word_document"
+title = "ClassLink RosterServer Data Request"
+description = "Word document listing exactly what to request from the district via ClassLink RosterServer (OneRoster), plus the two supplemental items (bell schedule times, parent contact info if not in the share)."
+
+[[outputs]]
+id = "ydo-O8ZZcb_nfH2fFfQ3y"
+uri = "file://attached_assets/generated/PulseEDU_Onboarding_Playbook.docx"
+type = "word_document"
+title = "PulseEDU Onboarding Playbook (branded)"
+description = "Same step-by-step onboarding content, now with the PulseEDU indigo banner, colored headings, and branded footer."
+
+[[outputs]]
+id = "LTrnwEmwLi29V-uZlzydr"
+uri = "file://attached_assets/generated/PulseEDU_School_Request_Checklist.docx"
+type = "word_document"
+title = "What to Request from the School (branded)"
+description = "Same request checklist, now PulseEDU-branded to match the other documents."
+
+[[outputs]]
+id = "0g-ZPWgfjLZ-dnuEtpTrB"
+uri = "file://attached_assets/generated/PulseEDU_Teacher_Kiosk_Setup.docx"
+type = "word_document"
+title = "Teacher Kiosk Setup Guide (branded)"
+description = "PulseEDU-branded, teacher-facing step-by-step Word doc: generate a kiosk code, activate the classroom device (QR / 6-digit code / sign-in), test the flow, and a troubleshooting table."
+
+[[outputs]]
+id = "kKCXE0nHioD35iOZ31TFt"
+uri = "file://attached_assets/generated/PulseEDU_Pick_Lists_Reference.docx"
+type = "word_document"
+title = "PulseEDU Pick Lists Reference"
+description = "Every school-configurable pick list at D. S. Parrott Middle School — current entries plus where in the software to rebuild each list after the pre-launch data reset."
+
+[[outputs]]
+id = "PbhjAshR_e3fhRP7JEXmW"
+uri = "file://attached_assets/PulseEDU-Multiple-Pass-Receivers-Directions.docx"
+type = "word_document"
+title = "Multiple Pass Receivers — Directions"
+description = "Step-by-step Word doc for assigning multiple staff to receive hall passes at a location."
+
+[[outputs]]
+id = "AxPToJo8meL8kraT20sGm"
+uri = "file://attached_assets/PulseEDU-Behavior-Supports-Directions.docx"
+type = "word_document"
+title = "Behavior Supports — Directions"
+description = "Word document covering what the Behavior Supports module does, who can edit/view, and step-by-step setup for the MTSS team plus what teachers see."
+
+[[outputs]]
+id = "xZn1Aoi881IGcNxEC55sq"
+uri = "file://attached_assets/PulseEDU-Student-Support-Meetings-Revised-Spec.docx"
+type = "word_document"
+title = "Student Support Meetings — Revised Spec"
+description = "The approved spec with all confirmed decisions: universal input forms, private feedback, sensitive-type masking, participation percentages, 7/3/same-morning reminders, and a staff-only V1 release plan."
+
+[[outputs]]
+id = "B82vQhcwC1uhEv4Dll1n9"
+uri = "file://attached_assets/pullout-icon-preview.png"
+type = "image"
+title = "Pull-out icon preview"
+description = "Person + arrow icon at real button size, in all three states (none / gray / amber)."
+
+[[outputs]]
+id = "m0dSKW1WeSgXX21ntXlZW"
+uri = "file://attached_assets/roster-layout-options.png"
+type = "image"
+title = "Roster layout options"
+description = "Side-by-side comparison: current one-line layout, dedicated Actions column, and the stacked layout."
+
+[[outputs]]
+id = "Khz6fflSCv2RQK075XVdc"
+uri = "file://attached_assets/roster-compact-option.png"
+type = "image"
+title = "Option D — compact roster mockup"
+description = "Icon-only action buttons, Programs merged into fixed pill slots, no Actions header — tighter rows and columns."
+
+[[outputs]]
+id = "FW2kLtDWmvVHrWMp6Gn58"
+uri = "file://attached_assets/roster-stacked-pairs.png"
+type = "image"
+title = "Roster — stacked pairs mockup"
+description = "R under SP, FAST under Spider, Chat under Log, tall pull-out button spanning both rows. Full-word buttons kept."
+
+[[outputs]]
+id = "GL0UOdes_JxfzdMPCOCZG"
+uri = "file://attached_assets/generated/PulseEDU_Migration_Report_2026-08-06.docx"
+type = "word_document"
+title = "PulseEDU Production Migration Report (7/30–8/6) — updated"
+description = "Now explicitly describes the Starter Lists one-time dropdown fill: an admin button that loads a curated default set into all pick lists (insert-only, safe to re-run, no schema changes)."
+
+[[outputs]]
+id = "iXdKxyZsjQYLVhGq5KWLn"
+uri = "file://attached_assets/generated/PulseEDU_v1_Final_Migration_Report.docx"
+type = "word_document"
+title = "PulseEDU — Final Migration Report (Version 1)"
+description = "One complete document: a simple 3-step migration path up front, then full detail — all new tables/columns, ready-to-run SQL, every feature shipped in Version 1 (photos, escort plans, Starter Lists, PBIS controls, and more), config, verification checklist, and rollback notes. Onboarding connection errors intentionally excluded."
+
+[[outputs]]
+id = "T1k33L3QYO741RybeUp2f"
+uri = "file://docs/multi-grade-bell-schedule-migration.docx"
+type = "word_document"
+title = "Multi-Grade Bell Schedule — Developer Migration Report (updated)"
+description = "Updated to include the new in-editor 'How this works' guidance banner in the Client Changes section."
+
+[[outputs]]
+id = "d6TNy1-cWiRBhNkv6Z6m4"
+uri = "file://docs/fast-xlsx-2026-format-migration.docx"
+type = "word_document"
+title = "CRITICAL — Florida FAST Excel Import Fix (Aug 2026 Format Change)"
+description = "Developer migration report: problem description, new fallback Excel reader, safety limits, parser changes, verification results, and deployment steps. No schema/dependency changes — publish to fix production uploads."

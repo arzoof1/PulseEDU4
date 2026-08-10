@@ -7,6 +7,8 @@ import {
   ensureAcademicEvidenceSchema,
   ensureAstSchema,
   ensureBadgePrintEventsSchema,
+  ensureBehaviorSupportsSchema,
+  ensureBellScheduleVariantsSchema,
   ensureBenchmarkDeliveriesSchema,
   ensureClassComposerPlansSchema,
   ensureClassComposerSkillClusterSchema,
@@ -31,12 +33,15 @@ import {
   ensureOneWayPassSchema,
   ensureParentMessagesSchema,
   ensurePbisInvisibleTierColumns,
+  ensurePlanUpdatesSchema,
   ensurePickupDemoFamily,
   ensurePickupOverrideAuditSchema,
   ensurePickupSchema,
   ensurePulseBrainLabGroupsSchema,
   ensurePulseDnaVideosSchema,
+  ensureSafetyPlanEscortSchema,
   ensureSectionSupportSchema,
+  ensureSupportMeetingsSchema,
   ensureClassSectionsSchema,
   ensureSchoolBenchmarksCatalogBackfill,
   ensureSchoolGradeSchema,
@@ -161,6 +166,11 @@ export async function runSeed(): Promise<void> {
   await ensureHallPassPriorityBypassColumn();
   await ensureHallPassAllowlistSchema();
   await ensureOneWayPassSchema();
+  await ensureBehaviorSupportsSchema();
+  await ensureSafetyPlanEscortSchema();
+  await ensureSupportMeetingsSchema();
+  await ensurePlanUpdatesSchema();
+  await ensureBellScheduleVariantsSchema();
   await ensureKioskWelcomeSchema();
   await ensurePbisInvisibleTierColumns();
   await ensureBadgePrintEventsSchema();
@@ -304,6 +314,11 @@ export async function runMigrations(): Promise<void> {
     ["ensureHallPassPriorityBypassColumn", ensureHallPassPriorityBypassColumn],
     ["ensureHallPassAllowlistSchema", ensureHallPassAllowlistSchema],
     ["ensureOneWayPassSchema", ensureOneWayPassSchema],
+    ["ensureBehaviorSupportsSchema", ensureBehaviorSupportsSchema],
+    ["ensureSafetyPlanEscortSchema", ensureSafetyPlanEscortSchema],
+    ["ensureSupportMeetingsSchema", ensureSupportMeetingsSchema],
+    ["ensurePlanUpdatesSchema", ensurePlanUpdatesSchema],
+    ["ensureBellScheduleVariantsSchema", ensureBellScheduleVariantsSchema],
     ["ensurePbisInvisibleTierColumns", ensurePbisInvisibleTierColumns],
     ["ensurePbisPointMigrationsSchema", ensurePbisPointMigrationsSchema],
     ["ensureSpotlightPbisReason", ensureSpotlightPbisReason],

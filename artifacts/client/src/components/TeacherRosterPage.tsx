@@ -16,6 +16,7 @@
 import {
   createContext,
   Fragment,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -24,7 +25,7 @@ import {
 } from "react";
 import { authFetch } from "../lib/authToken";
 import SuggestSeparationModal from "./SuggestSeparationModal";
-import StudentPhoto from "./StudentPhoto";
+import EnlargeableStudentPhoto from "./EnlargeableStudentPhoto";
 import TeacherBenchmarksTab from "./TeacherBenchmarksTab";
 import GroupInsightsTab from "./GroupInsightsTab";
 import TeacherInstructionLogTab from "./TeacherInstructionLogTab";
@@ -113,6 +114,9 @@ interface SafetyPlanItem {
 
 interface SafetyPlanSummary {
   itemCount: number;
+  // Explicit "needs an escort" answer from the plan editor. Drives the
+  // amber E badge next to the SP pill + a bold line in the popover.
+  escortRequired?: boolean;
   items: SafetyPlanItem[];
   notes: string;
   updatedAt: string | null;
@@ -167,6 +171,26 @@ interface RosterRow {
     daysTardy: number | null;
     attendancePct: number | null;
   } | null;
+  // Active Behavior Supports snapshot (or null) — teacher-facing guidance
+  // written by the MTSS team. Drives the purple Behavior pill + hover
+  // card. Sits BESIDE ESE/504/ELL; never replaces them.
+  behaviorSupport?: {
+    behaviors: string[];
+    triggers: string[];
+    responses: string[];
+    replacementBehaviors: string[];
+    reinforcement: string[];
+    reviewDate: string | null;
+    updatedAt: string;
+  } | null;
+  // This teacher's pull-out requests for the student this school year
+  // (referring-teacher attribution — includes requests an admin logged
+  // on the teacher's behalf). Null when none. Drives the count badge on
+  // the row's Pull-out button + the hover history card.
+  pullouts?: {
+    count: number;
+    recent: Array<{ date: string; reason: string; status: string }>;
+  } | null;
 }
 
 interface RosterResponse {
@@ -201,6 +225,11 @@ interface Props {
   // active safety plans) but is non-clickable — hover still shows the
   // contents popover.
   onOpenSafetyPlan?: (studentId: string) => void;
+  // When provided, each row shows a "Pull-out" button (with this
+  // teacher's YTD request count for that student). Clicking hands the
+  // studentId to the host, which opens the Request Pullout flow with
+  // the student prefilled. Hover shows the recent request history.
+  onRequestPullout?: (studentId: string) => void;
   // When provided, the Benchmarks tab's "Suggest small group" modal
   // shows a "Open in Class Composer" button that calls this. Gated by
   // the host (admin / Core Team only); regular teachers see the
@@ -268,6 +297,26 @@ function SafetyPlanPill({
       >
         SP
       </Tag>
+      {plan.escortRequired && (
+        <span
+          title="Escort required — this student cannot create kiosk passes"
+          aria-label="Escort required"
+          style={{
+            display: "inline-block",
+            marginLeft: 2,
+            padding: "2px 6px",
+            borderRadius: 999,
+            background: "#f59e0b",
+            color: "#fff",
+            fontSize: 11,
+            fontWeight: 800,
+            letterSpacing: 0.4,
+            lineHeight: 1.4,
+          }}
+        >
+          E
+        </span>
+      )}
       {open && (
         <div
           role="tooltip"
@@ -301,6 +350,23 @@ function SafetyPlanPill({
           >
             Safety plan — {studentName}
           </div>
+          {plan.escortRequired && (
+            <div
+              style={{
+                fontSize: 12,
+                fontWeight: 800,
+                color: "#92400e",
+                background: "#fef3c7",
+                border: "1px solid #fcd34d",
+                borderRadius: 4,
+                padding: "3px 8px",
+                marginBottom: 6,
+              }}
+            >
+              ESCORT REQUIRED — no kiosk passes; acknowledge before issuing a
+              pass.
+            </div>
+          )}
           {plan.items.length === 0 ? (
             <div style={{ color: "#6b7280", fontSize: 12 }}>
               (No active items)
@@ -1182,6 +1248,116 @@ function SubjectCells({
 // the three chips are visually distinct from the BQ pill (dark brown)
 // and from each other while staying calm enough not to dominate the
 // row. Title text spells the abbreviation out for screen readers.
+// One outstanding "plan changed — re-read + acknowledge" notice for the
+// logged-in teacher, keyed by student + plan type. Drives the amber dot on
+// the matching roster pill and the acknowledge checkbox in its hover box.
+export type PlanUpdateNotice = {
+  id: number;
+  planType: string;
+  studentId: string;
+  summary: string;
+  effectiveDate: string;
+  createdByName: string;
+};
+
+function fmtPlanDate(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+// Amber notification dot pinned to the pill's top-right corner.
+function UpdateDot() {
+  return (
+    <span
+      aria-hidden
+      style={{
+        position: "absolute",
+        top: -3,
+        right: -3,
+        width: 9,
+        height: 9,
+        borderRadius: "50%",
+        background: "#f59e0b",
+        border: "1.5px solid #fff",
+        boxShadow: "0 0 0 1px rgba(245,158,11,0.35)",
+      }}
+    />
+  );
+}
+
+// Amber "plan updated" block rendered inside a pill's hover box, with the
+// change summary, effective date, and the acknowledge checkbox.
+function PlanUpdateSection({
+  update,
+  onAck,
+}: {
+  update: PlanUpdateNotice;
+  onAck: (id: number) => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <div
+      style={{
+        marginTop: 8,
+        padding: "8px 10px",
+        background: "#fffbeb",
+        border: "1px solid #fde68a",
+        borderRadius: 6,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          color: "#b45309",
+          textTransform: "uppercase",
+          letterSpacing: 0.4,
+          marginBottom: 4,
+        }}
+      >
+        Plan updated — effective {fmtPlanDate(update.effectiveDate)}
+      </div>
+      <div style={{ fontSize: 12, color: "#374151", lineHeight: 1.45, marginBottom: 4 }}>
+        {update.summary}
+      </div>
+      <div style={{ fontSize: 11, color: "#92400e", marginBottom: 6 }}>
+        Logged by {update.createdByName}
+      </div>
+      <label
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          fontSize: 12,
+          fontWeight: 600,
+          color: "#78350f",
+          cursor: busy ? "wait" : "pointer",
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={false}
+          disabled={busy}
+          onChange={async () => {
+            setBusy(true);
+            try {
+              await onAck(update.id);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+        I've re-read this plan
+      </label>
+    </div>
+  );
+}
+
 const PROGRAM_META: Record<
   "ese" | "504" | "ell",
   { label: string; bg: string; fg: string; title: string }
@@ -1213,9 +1389,13 @@ const PROGRAM_META: Record<
 function ProgramPill({
   kind,
   row,
+  update,
+  onAck,
 }: {
   kind: "ese" | "504" | "ell";
   row: RosterRow;
+  update?: PlanUpdateNotice;
+  onAck?: (id: number) => Promise<void>;
 }) {
   const meta = PROGRAM_META[kind];
   const [open, setOpen] = useState(false);
@@ -1271,9 +1451,12 @@ function ProgramPill({
           letterSpacing: 0.2,
           cursor: "default",
           outline: "none",
+          position: "relative",
+          boxShadow: update ? "0 0 0 1.5px #f59e0b" : undefined,
         }}
       >
         {meta.label}
+        {update && <UpdateDot />}
       </span>
       {open && coords && (
         <div
@@ -1346,13 +1529,371 @@ function ProgramPill({
               </ul>
             </>
           )}
+          {update && onAck && (
+            <PlanUpdateSection update={update} onAck={onAck} />
+          )}
         </div>
       )}
     </span>
   );
 }
 
-function ProgramPills({ row }: { row: RosterRow }) {
+// Purple "Behavior" pill — shown only when the student has an ACTIVE
+// Behavior Supports snapshot. Hover/focus opens a compact card with the
+// teacher-facing guidance (behaviors observed, responses, replacement
+// behaviors, plus triggers/reinforcement when present). The snapshot is
+// sanitized at the source — it never contains confidential material —
+// and the 15-bullet entry cap keeps the card scannable. Mirrors the
+// ProgramPill fixed-position popover so it escapes table overflow.
+function BehaviorPill({
+  row,
+  update,
+  onAck,
+}: {
+  row: RosterRow;
+  update?: PlanUpdateNotice;
+  onAck?: (id: number) => Promise<void>;
+}) {
+  const bs = row.behaviorSupport;
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLSpanElement | null>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!open || !anchorRef.current) return;
+    const measure = () => {
+      const r = anchorRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const W = 300;
+      let left = r.left;
+      if (left + W > window.innerWidth - 8) left = window.innerWidth - W - 8;
+      if (left < 8) left = 8;
+      setCoords({ top: r.bottom + 6, left });
+    };
+    measure();
+    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("scroll", measure, true);
+      window.removeEventListener("resize", measure);
+    };
+  }, [open]);
+  if (!bs) return null;
+  const reviewOverdue =
+    !!bs.reviewDate && bs.reviewDate < new Date().toISOString().slice(0, 10);
+  const sections: Array<{ title: string; items: string[] }> = [
+    { title: "Behaviors You May Observe", items: bs.behaviors },
+    { title: "Common Triggers", items: bs.triggers },
+    { title: "Recommended Teacher Responses", items: bs.responses },
+    {
+      title: "Replacement Behaviors to Reinforce",
+      items: bs.replacementBehaviors,
+    },
+    { title: "Positive Reinforcement", items: bs.reinforcement },
+  ].filter((s) => s.items.length > 0);
+  return (
+    <span
+      style={{ position: "relative", display: "inline-block" }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+    >
+      <span
+        ref={anchorRef}
+        tabIndex={0}
+        aria-label="Behavior Supports — hover for classroom strategies"
+        style={{
+          display: "inline-block",
+          padding: "2px 8px",
+          borderRadius: 6,
+          background: "#f3e8ff",
+          color: "#6b21a8",
+          border: reviewOverdue ? "1px solid #f59e0b" : "1px solid transparent",
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: 0.2,
+          cursor: "default",
+          outline: "none",
+          position: "relative",
+          boxShadow: update ? "0 0 0 1.5px #f59e0b" : undefined,
+        }}
+      >
+        Behavior
+        {update && <UpdateDot />}
+      </span>
+      {open && coords && (
+        <div
+          role="tooltip"
+          style={{
+            position: "fixed",
+            top: coords.top,
+            left: coords.left,
+            zIndex: 10000,
+            background: "white",
+            border: "1px solid #e5e7eb",
+            borderTop: "3px solid #6b21a8",
+            borderRadius: 6,
+            padding: "0.55rem 0.75rem",
+            boxShadow: "0 6px 18px rgba(0,0,0,0.14)",
+            minWidth: 260,
+            maxWidth: 380,
+            color: "#111827",
+            textAlign: "left",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: "#6b21a8",
+              textTransform: "uppercase",
+              letterSpacing: 0.4,
+              marginBottom: 6,
+            }}
+          >
+            Behavior Supports — {row.firstName} {row.lastName}
+          </div>
+          {reviewOverdue && (
+            <div
+              style={{
+                fontSize: 11,
+                color: "#92400e",
+                background: "#fef3c7",
+                border: "1px solid #fcd34d",
+                borderRadius: 4,
+                padding: "2px 6px",
+                marginBottom: 6,
+              }}
+            >
+              Review date passed ({bs.reviewDate}) — guidance may be stale.
+            </div>
+          )}
+          {sections.map((s) => (
+            <div key={s.title} style={{ marginBottom: 6 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: "#374151",
+                  marginBottom: 2,
+                }}
+              >
+                {s.title}
+              </div>
+              <ul
+                style={{
+                  margin: 0,
+                  paddingLeft: 16,
+                  fontSize: 12,
+                  lineHeight: 1.45,
+                }}
+              >
+                {s.items.map((it, i) => (
+                  <li key={i}>{it}</li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          {update && onAck && (
+            <PlanUpdateSection update={update} onAck={onAck} />
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
+// Row-level Pull-out button: the teacher's inline entry into the Request
+// Pullout flow (student prefilled) AND the at-a-glance YTD count of their
+// own requests for this student. Quiet by default — no number badge when
+// the count is 0, gray at 1–2, amber at 3+ ("this student is out of your
+// class a lot"). Hover shows the recent history; same fixed-position
+// popover pattern as BehaviorPill so it never clips inside the table.
+function PulloutButton({
+  row,
+  onOpen,
+}: {
+  row: RosterRow;
+  onOpen: () => void;
+}) {
+  const info = row.pullouts ?? null;
+  const count = info?.count ?? 0;
+  const hot = count >= 3;
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLSpanElement | null>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!open || !anchorRef.current) return;
+    const measure = () => {
+      const r = anchorRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const W = 300;
+      let left = r.left;
+      if (left + W > window.innerWidth - 8) left = window.innerWidth - W - 8;
+      if (left < 8) left = 8;
+      setCoords({ top: r.bottom + 6, left });
+    };
+    measure();
+    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("scroll", measure, true);
+      window.removeEventListener("resize", measure);
+    };
+  }, [open]);
+  const statusLabel = (s: string) =>
+    s === "pending"
+      ? "pending verification"
+      : s === "enroute"
+        ? "en route"
+        : s;
+  return (
+    <span
+      ref={anchorRef}
+      style={{ position: "relative", display: "inline-block" }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        onClick={onOpen}
+        title={
+          count > 0
+            ? `${count} pull-out request${count === 1 ? "" : "s"} for ${row.firstName} this year — click to request another`
+            : `Request a pull-out for ${row.firstName} ${row.lastName}`
+        }
+        aria-label={`Request a pull-out for ${row.firstName} ${row.lastName}${count > 0 ? ` (${count} this year)` : ""}`}
+        style={{
+          // Tall button: spans the full height of the two stacked
+          // button rows beside it (Spider/FAST and Log/Chat).
+          display: "inline-flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 2,
+          width: 38,
+          height: 56,
+          padding: 0,
+          borderRadius: 10,
+          border: hot
+            ? "1px solid #fcd34d"
+            : count > 0
+              ? "1px solid #cbd5e1"
+              : "1px solid #e2e8f0",
+          background: hot ? "#fffbeb" : count > 0 ? "#f1f5f9" : "#f8fafc",
+          color: hot ? "#92400e" : "#475569",
+          fontSize: 11,
+          fontWeight: 600,
+          lineHeight: 1.2,
+          cursor: "pointer",
+          flexShrink: 0,
+        }}
+      >
+        {/* Person-being-led-out icon (approved over the 📤 emoji, which
+            was hard to make out at this size). Drawn inline so it stays
+            crisp and inherits the button's gray/amber via currentColor. */}
+        <svg
+          aria-hidden="true"
+          width="20"
+          height="18"
+          viewBox="0 0 100 88"
+          style={{ display: "block", flexShrink: 0 }}
+        >
+          <g fill="currentColor">
+            <circle cx="26" cy="12" r="10" />
+            <path d="M26 24 c-8 0 -12 6 -12 14 v18 h6 l3 20 h6 l2 -16 2 16 h6 l3 -20 h6 v-18 c0 -8 -4 -14 -12 -14 z" />
+          </g>
+          <g
+            stroke="currentColor"
+            strokeWidth="9"
+            fill="none"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M58 44 h30" />
+            <path d="M78 30 l16 14 -16 14" />
+          </g>
+        </svg>
+        {count > 0 && <span>{count}</span>}
+      </button>
+      {open && coords && count > 0 && info && (
+        <div
+          role="tooltip"
+          style={{
+            position: "fixed",
+            top: coords.top,
+            left: coords.left,
+            zIndex: 10000,
+            background: "white",
+            border: "1px solid #e5e7eb",
+            borderTop: hot ? "3px solid #f59e0b" : "3px solid #64748b",
+            borderRadius: 6,
+            padding: "0.55rem 0.75rem",
+            boxShadow: "0 6px 18px rgba(0,0,0,0.14)",
+            minWidth: 260,
+            maxWidth: 380,
+            color: "#111827",
+            textAlign: "left",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: hot ? "#92400e" : "#475569",
+              textTransform: "uppercase",
+              letterSpacing: 0.4,
+              marginBottom: 6,
+            }}
+          >
+            Your pull-outs — {row.firstName} {row.lastName}
+          </div>
+          <div style={{ fontSize: 12, marginBottom: 6 }}>
+            {count} request{count === 1 ? "" : "s"} this school year
+            {hot ? " — this student is out of your class often." : "."}
+          </div>
+          <ul
+            style={{ margin: 0, paddingLeft: 16, fontSize: 12, lineHeight: 1.5 }}
+          >
+            {info.recent.map((p, i) => (
+              <li key={i}>
+                {new Date(p.date).toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                })}{" "}
+                — {p.reason}{" "}
+                <span style={{ color: "#6b7280" }}>
+                  ({statusLabel(p.status)})
+                </span>
+              </li>
+            ))}
+          </ul>
+          {count > info.recent.length && (
+            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>
+              …and {count - info.recent.length} earlier.
+            </div>
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
+function ProgramPills({
+  row,
+  planUpdates,
+  onAckPlanUpdate,
+}: {
+  row: RosterRow;
+  planUpdates?: Map<string, PlanUpdateNotice>;
+  onAckPlanUpdate?: (id: number) => Promise<void>;
+}) {
   const chips: Array<"ese" | "504" | "ell"> = [];
   if (row.ese) chips.push("ese");
   if (row.is504) chips.push("504");
@@ -1362,15 +1903,29 @@ function ProgramPills({ row }: { row: RosterRow }) {
   // placeholder em-dash, regardless of whether they have
   // accommodations on file. (Students with accommodations but no
   // program flag indicate a SIS data-quality issue — the source
-  // system should be reflagged, not the UI.)
-  if (chips.length === 0) {
+  // system should be reflagged, not the UI.) Behavior Supports sits
+  // BESIDE these program flags (a student can have all four).
+  if (chips.length === 0 && !row.behaviorSupport) {
     return <span style={{ color: "#9ca3af", fontSize: 12 }}>—</span>;
   }
   return (
     <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
       {chips.map((c) => (
-        <ProgramPill key={c} kind={c} row={row} />
+        <ProgramPill
+          key={c}
+          kind={c}
+          row={row}
+          update={planUpdates?.get(`${row.studentId}:${c}`)}
+          onAck={onAckPlanUpdate}
+        />
       ))}
+      {row.behaviorSupport && (
+        <BehaviorPill
+          row={row}
+          update={planUpdates?.get(`${row.studentId}:behavior`)}
+          onAck={onAckPlanUpdate}
+        />
+      )}
     </div>
   );
 }
@@ -2287,6 +2842,7 @@ export default function TeacherRosterPage({
   onBack,
   onOpenSpider,
   onOpenSafetyPlan,
+  onRequestPullout,
   onOpenClassComposer,
   onTeacherChange,
 }: Props) {
@@ -2455,6 +3011,51 @@ export default function TeacherRosterPage({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ----- Plan-update notices (mine) -----
+  // Outstanding "plan changed — re-read + acknowledge" items for the
+  // logged-in teacher. Keyed studentId:planType so the matching program
+  // pill gets an amber dot + acknowledge checkbox in its hover box.
+  // Notices are per logged-in user (not the viewed teacher), so a Core
+  // Team member browsing another teacher's roster sees only their own.
+  const [planUpdateList, setPlanUpdateList] = useState<PlanUpdateNotice[]>([]);
+  const loadPlanUpdates = useCallback(async () => {
+    try {
+      const res = await authFetch("/api/plan-updates/mine");
+      if (!res.ok) return;
+      const body = (await res.json()) as { updates: PlanUpdateNotice[] };
+      setPlanUpdateList(body.updates);
+    } catch {
+      /* non-fatal — pills simply show no dot */
+    }
+  }, []);
+  useEffect(() => {
+    loadPlanUpdates();
+  }, [loadPlanUpdates, reloadTick]);
+  const planUpdateMap = useMemo(() => {
+    const m = new Map<string, PlanUpdateNotice>();
+    // Newest-first from the server; keep the newest per student+plan.
+    for (const u of planUpdateList) {
+      const key = `${u.studentId}:${u.planType}`;
+      if (!m.has(key)) m.set(key, u);
+    }
+    return m;
+  }, [planUpdateList]);
+  const ackPlanUpdate = useCallback(
+    async (id: number) => {
+      try {
+        const res = await authFetch(`/api/plan-updates/${id}/ack`, {
+          method: "POST",
+        });
+        if (res.ok) {
+          setPlanUpdateList((prev) => prev.filter((u) => u.id !== id));
+        }
+      } catch {
+        /* leave the dot lit; teacher can retry */
+      }
+    },
+    [],
+  );
 
   // Reload roster when teacher or period changes, or when refresh() is
   // called (reloadTick bumps).
@@ -3519,9 +4120,10 @@ export default function TeacherRosterPage({
                         gap: 8,
                       }}
                     >
-                      <StudentPhoto
+                      <EnlargeableStudentPhoto
                         firstName={row.firstName}
                         lastName={row.lastName}
+                        grade={row.grade}
                         photoObjectKey={row.photoObjectKey}
                         photoConsent={row.photoConsent}
                         size={28}
@@ -3534,16 +4136,57 @@ export default function TeacherRosterPage({
                           </span>
                         )}
                       </span>
-                      {row.safetyPlan && (
-                        <SafetyPlanPill
-                          plan={row.safetyPlan}
-                          studentName={`${row.firstName} ${row.lastName}`}
-                          onOpen={
-                            onOpenSafetyPlan
-                              ? () => onOpenSafetyPlan(row.studentId)
-                              : undefined
-                          }
-                        />
+                      {/* SP + Retention stacked pair — R sits directly
+                          under the SP pill (approved mockup). Either can
+                          appear alone. */}
+                      {(row.safetyPlan ||
+                        (row.retainedGrades && row.retainedGrades.length > 0)) && (
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            flexDirection: "column",
+                            alignItems: "center",
+                            gap: 3,
+                          }}
+                        >
+                          {row.safetyPlan && (
+                            <SafetyPlanPill
+                              plan={row.safetyPlan}
+                              studentName={`${row.firstName} ${row.lastName}`}
+                              onOpen={
+                                onOpenSafetyPlan
+                                  ? () => onOpenSafetyPlan(row.studentId)
+                                  : undefined
+                              }
+                            />
+                          )}
+                          {row.retainedGrades && row.retainedGrades.length > 0 && (
+                            <span
+                              title={`Retained: ${row.retainedGrades
+                                .map((g) => `Grade ${g}`)
+                                .join(", ")}`}
+                              aria-label={`Retained at ${row.retainedGrades
+                                .map((g) => `Grade ${g}`)
+                                .join(", ")}`}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                width: 18,
+                                height: 18,
+                                borderRadius: "50%",
+                                background: "#0f172a",
+                                color: "white",
+                                fontSize: 11,
+                                fontWeight: 800,
+                                lineHeight: 1,
+                                cursor: "help",
+                              }}
+                            >
+                              R
+                            </span>
+                          )}
+                        </span>
                       )}
                       {row.mtssTier != null && row.mtssTier >= 3 && (
                         <Tier3Pill
@@ -3558,124 +4201,154 @@ export default function TeacherRosterPage({
                           }
                         />
                       )}
-                      {onOpenSpider && (
+                      {/* Spider + FAST stacked pair (approved mockup). */}
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          flexDirection: "column",
+                          alignItems: "stretch",
+                          gap: 3,
+                        }}
+                      >
+                        {onOpenSpider && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenSpider(row.studentId)}
+                            title={`Open whole-child radar for ${row.firstName} ${row.lastName}`}
+                            aria-label={`Open whole-child radar for ${row.firstName} ${row.lastName}`}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              gap: 4,
+                              padding: "2px 8px",
+                              borderRadius: 999,
+                              border: "1px solid #c7d2fe",
+                              background: "#eef2ff",
+                              color: "#3730a3",
+                              fontSize: 11,
+                              fontWeight: 600,
+                              lineHeight: 1.2,
+                              cursor: "pointer",
+                            }}
+                          >
+                            <span aria-hidden="true">🕸️</span>
+                            <span>Spider</span>
+                          </button>
+                        )}
                         <button
                           type="button"
-                          onClick={() => onOpenSpider(row.studentId)}
-                          title={`Open whole-child radar for ${row.firstName} ${row.lastName}`}
-                          aria-label={`Open whole-child radar for ${row.firstName} ${row.lastName}`}
+                          onClick={() =>
+                            setFastHistModal({
+                              studentId: row.studentId,
+                              studentName: `${row.firstName} ${row.lastName}`,
+                              localSisId: row.localSisId ?? null,
+                            })
+                          }
+                          title={`View FAST PM3 history for ${row.firstName} ${row.lastName}`}
+                          aria-label={`View FAST PM3 history for ${row.firstName} ${row.lastName}`}
                           style={{
                             display: "inline-flex",
                             alignItems: "center",
+                            justifyContent: "center",
                             gap: 4,
                             padding: "2px 8px",
                             borderRadius: 999,
-                            border: "1px solid #c7d2fe",
-                            background: "#eef2ff",
-                            color: "#3730a3",
+                            border: "1px solid #bfdbfe",
+                            background: "#eff6ff",
+                            color: "#1d4ed8",
                             fontSize: 11,
                             fontWeight: 600,
                             lineHeight: 1.2,
                             cursor: "pointer",
                           }}
                         >
-                          <span aria-hidden="true">🕸️</span>
-                          <span>Spider</span>
+                          <span aria-hidden="true">📖</span>
+                          <span>FAST</span>
                         </button>
+                      </span>
+                      {/* Log + Chat stacked pair (approved mockup). */}
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          flexDirection: "column",
+                          alignItems: "stretch",
+                          gap: 3,
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setLogModal({
+                              studentId: row.studentId,
+                              studentName: `${row.firstName} ${row.lastName}`,
+                              localSisId: row.localSisId,
+                            })
+                          }
+                          title={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
+                          aria-label={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 4,
+                            padding: "2px 8px",
+                            borderRadius: 999,
+                            border: "1px solid #fbcfe8",
+                            background: "#fdf2f8",
+                            color: "#9d174d",
+                            fontSize: 11,
+                            fontWeight: 600,
+                            lineHeight: 1.2,
+                            cursor: "pointer",
+                          }}
+                        >
+                          <span aria-hidden="true">📝</span>
+                          <span>Log</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setChatModal(row.studentId)}
+                          title={
+                            pendingChatIds.has(row.studentId)
+                              ? `Data chat pending for ${row.firstName} ${row.lastName} — log it now`
+                              : `Log a data chat with ${row.firstName} ${row.lastName}`
+                          }
+                          aria-label={`Log a data chat with ${row.firstName} ${row.lastName}`}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 4,
+                            padding: "2px 8px",
+                            borderRadius: 999,
+                            border: pendingChatIds.has(row.studentId)
+                              ? "1px solid #c4b5fd"
+                              : "1px solid #e2e8f0",
+                            background: pendingChatIds.has(row.studentId)
+                              ? "#f5f3ff"
+                              : "#f8fafc",
+                            color: pendingChatIds.has(row.studentId)
+                              ? "#6d28d9"
+                              : "#475569",
+                            fontSize: 11,
+                            fontWeight: 600,
+                            lineHeight: 1.2,
+                            cursor: "pointer",
+                          }}
+                        >
+                          <span aria-hidden="true">💬</span>
+                          <span>
+                            {pendingChatIds.has(row.studentId) ? "Chat!" : "Chat"}
+                          </span>
+                        </button>
+                      </span>
+                      {onRequestPullout && (
+                        <PulloutButton
+                          row={row}
+                          onOpen={() => onRequestPullout(row.studentId)}
+                        />
                       )}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setLogModal({
-                            studentId: row.studentId,
-                            studentName: `${row.firstName} ${row.lastName}`,
-                            localSisId: row.localSisId,
-                          })
-                        }
-                        title={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
-                        aria-label={`Log a behavior & intervention for ${row.firstName} ${row.lastName}`}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          border: "1px solid #fbcfe8",
-                          background: "#fdf2f8",
-                          color: "#9d174d",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          lineHeight: 1.2,
-                          cursor: "pointer",
-                        }}
-                      >
-                        <span aria-hidden="true">📝</span>
-                        <span>Log</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setChatModal(row.studentId)}
-                        title={
-                          pendingChatIds.has(row.studentId)
-                            ? `Data chat pending for ${row.firstName} ${row.lastName} — log it now`
-                            : `Log a data chat with ${row.firstName} ${row.lastName}`
-                        }
-                        aria-label={`Log a data chat with ${row.firstName} ${row.lastName}`}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          border: pendingChatIds.has(row.studentId)
-                            ? "1px solid #c4b5fd"
-                            : "1px solid #e2e8f0",
-                          background: pendingChatIds.has(row.studentId)
-                            ? "#f5f3ff"
-                            : "#f8fafc",
-                          color: pendingChatIds.has(row.studentId)
-                            ? "#6d28d9"
-                            : "#475569",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          lineHeight: 1.2,
-                          cursor: "pointer",
-                        }}
-                      >
-                        <span aria-hidden="true">💬</span>
-                        <span>
-                          {pendingChatIds.has(row.studentId) ? "Chat!" : "Chat"}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setFastHistModal({
-                            studentId: row.studentId,
-                            studentName: `${row.firstName} ${row.lastName}`,
-                            localSisId: row.localSisId ?? null,
-                          })
-                        }
-                        title={`View FAST PM3 history for ${row.firstName} ${row.lastName}`}
-                        aria-label={`View FAST PM3 history for ${row.firstName} ${row.lastName}`}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          border: "1px solid #bfdbfe",
-                          background: "#eff6ff",
-                          color: "#1d4ed8",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          lineHeight: 1.2,
-                          cursor: "pointer",
-                        }}
-                      >
-                        <span aria-hidden="true">📖</span>
-                        <span>FAST</span>
-                      </button>
                       {sepSectionId != null && (() => {
                         const n = sepCountByStudent.get(row.studentId) ?? 0;
                         // Two-state icon per the product spec:
@@ -3726,32 +4399,6 @@ export default function TeacherRosterPage({
                           </button>
                         );
                       })()}
-                      {row.retainedGrades && row.retainedGrades.length > 0 && (
-                        <span
-                          title={`Retained: ${row.retainedGrades
-                            .map((g) => `Grade ${g}`)
-                            .join(", ")}`}
-                          aria-label={`Retained at ${row.retainedGrades
-                            .map((g) => `Grade ${g}`)
-                            .join(", ")}`}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            width: 18,
-                            height: 18,
-                            borderRadius: "50%",
-                            background: "#0f172a",
-                            color: "white",
-                            fontSize: 11,
-                            fontWeight: 800,
-                            lineHeight: 1,
-                            cursor: "help",
-                          }}
-                        >
-                          R
-                        </span>
-                      )}
                       {row.issToday && (
                         <span
                           title="On In-School Suspension today"
@@ -3795,7 +4442,11 @@ export default function TeacherRosterPage({
                   </td>
                   {visibility.programs && (
                     <td style={{ padding: "6px 10px" }}>
-                      <ProgramPills row={row} />
+                      <ProgramPills
+                        row={row}
+                        planUpdates={planUpdateMap}
+                        onAckPlanUpdate={ackPlanUpdate}
+                      />
                     </td>
                   )}
                   <td style={{ padding: "6px 10px" }}>{row.grade}</td>

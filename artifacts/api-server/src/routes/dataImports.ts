@@ -69,6 +69,7 @@ import { writeAuthAudit } from "../lib/authAudit.js";
 import { evaluateImportApproval } from "../lib/importApproval.js";
 import Papa from "papaparse";
 import ExcelJS from "exceljs";
+import { xlsxToGrid } from "../lib/xlsxGrid";
 
 // Resolve the "YY-YY" school-year label for a given school, honoring the
 // per-school IANA timezone column (falls back to DEFAULT_SCHOOL_TZ).
@@ -3695,36 +3696,22 @@ function detectSubjectFromScaleHeader(
   };
 }
 
-async function parseFloridaXlsx(
+export async function parseFloridaXlsx(
   buffer: Buffer,
 ): Promise<FloridaParse> {
-  let wb: ExcelJS.Workbook;
-  try {
-    wb = new ExcelJS.Workbook();
-    // exceljs typings prefer ArrayBuffer here; Node Buffer's .buffer
-    // is fine in practice but we slice to the right window in case
-    // the Buffer is a view into a larger pool.
-    const ab = buffer.buffer.slice(
-      buffer.byteOffset,
-      buffer.byteOffset + buffer.byteLength,
-    );
-    await wb.xlsx.load(ab as ArrayBuffer);
-  } catch (e) {
-    return {
-      ok: false,
-      error: `Could not read xlsx: ${(e as Error).message}`,
-    };
+  // xlsxToGrid tries exceljs first, then a dependency-free minimal
+  // OOXML reader — the 2026 Florida FAST portal ships stripped-down
+  // xlsx files that exceljs cannot open.
+  const gridRes = await xlsxToGrid(buffer);
+  if (!gridRes.ok) {
+    return { ok: false, error: `Could not read xlsx: ${gridRes.error}` };
   }
-  const ws = wb.worksheets[0];
-  if (!ws || ws.rowCount < 2) {
+  const grid = gridRes.grid;
+  if (grid.length < 2) {
     return { ok: false, error: "xlsx is empty (no data rows)." };
   }
 
-  const headerRow = ws.getRow(1);
-  const headers: string[] = [];
-  for (let c = 1; c <= ws.columnCount; c++) {
-    headers.push(parseCellString(headerRow.getCell(c).value));
-  }
+  const headers: string[] = (grid[0] ?? []).map((v) => parseCellString(v));
 
   // Required columns (case-insensitive exact match).
   const findIdx = (predicate: (h: string) => boolean): number =>
@@ -3770,13 +3757,15 @@ async function parseFloridaXlsx(
   // Earned / Points Possible quadruplets. Each quad starts where a
   // "Category" header is followed by Benchmark / Points Earned /
   // Points Possible in that exact order.
+  // The 2026 portal format numbers each quad ("1. Category",
+  // "1. Benchmark", …); older exports used bare "Category". Accept both.
   const quadStarts: number[] = [];
   for (let i = 0; i + 3 < headers.length; i++) {
     if (
-      /^category$/i.test(headers[i]) &&
-      /^benchmark$/i.test(headers[i + 1]) &&
-      /^points earned$/i.test(headers[i + 2]) &&
-      /^points possible$/i.test(headers[i + 3])
+      /^(?:\d+\.\s*)?category$/i.test(headers[i]) &&
+      /^(?:\d+\.\s*)?benchmark$/i.test(headers[i + 1]) &&
+      /^(?:\d+\.\s*)?points earned$/i.test(headers[i + 2]) &&
+      /^(?:\d+\.\s*)?points possible$/i.test(headers[i + 3])
     ) {
       quadStarts.push(i);
     }
@@ -3794,13 +3783,13 @@ async function parseFloridaXlsx(
   let totalItems = 0;
   const windowsSeen = new Set<string>();
 
-  for (let r = 2; r <= ws.rowCount; r++) {
-    const row = ws.getRow(r);
-    // exceljs treats trailing empty cells lazily; skip rows where
-    // the Student ID cell is blank.
-    const studentId = parseCellString(row.getCell(idxStudentId + 1).value);
+  for (let r = 2; r <= grid.length; r++) {
+    const row = grid[r - 1] ?? [];
+    const cell = (idx0: number): unknown => row[idx0];
+    // Skip rows where the Student ID cell is blank.
+    const studentId = parseCellString(cell(idxStudentId));
     if (!studentId) continue;
-    const testReason = parseCellString(row.getCell(idxTestReason + 1).value);
+    const testReason = parseCellString(cell(idxTestReason));
     const window = detectWindow(testReason);
     if (!window) {
       // Per task requirement: reject the entire file rather than
@@ -3816,25 +3805,25 @@ async function parseFloridaXlsx(
     }
     windowsSeen.add(window);
 
-    const scaleScore = parseCellNumber(row.getCell(idxScaleScore + 1).value);
+    const scaleScore = parseCellNumber(cell(idxScaleScore));
     const achievement = idxAchievement >= 0
-      ? parseCellString(row.getCell(idxAchievement + 1).value) || null
+      ? parseCellString(cell(idxAchievement)) || null
       : null;
     const administeredAt = idxCompletionDate >= 0
-      ? parseCellDate(row.getCell(idxCompletionDate + 1).value)
+      ? parseCellDate(cell(idxCompletionDate))
       : null;
     const studentName = idxStudentName >= 0
-      ? parseCellString(row.getCell(idxStudentName + 1).value) || null
+      ? parseCellString(cell(idxStudentName)) || null
       : null;
 
     const items: FloridaItemResponse[] = [];
     for (let qi = 0; qi < quadStarts.length; qi++) {
       const base = quadStarts[qi];
-      const benchmarkRaw = parseCellString(row.getCell(base + 2).value);
+      const benchmarkRaw = parseCellString(cell(base + 1));
       if (!benchmarkRaw) continue; // blank item slot
-      const category = parseCellString(row.getCell(base + 1).value) || null;
-      const pe = parseCellNumber(row.getCell(base + 3).value);
-      const pp = parseCellNumber(row.getCell(base + 4).value);
+      const category = parseCellString(cell(base)) || null;
+      const pe = parseCellNumber(cell(base + 2));
+      const pp = parseCellNumber(cell(base + 3));
       items.push({
         category,
         benchmarkCode: stripBenchmarkStrand(benchmarkRaw),

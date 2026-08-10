@@ -37,6 +37,37 @@ export function isCoreTeam(staff: {
   );
 }
 
+// Hall Pass Research school-wide gate. Per product spec (Aug 2026): the
+// Core Team proper PLUS the student-support roles the director named for
+// this surface — Guidance Counselor / School Counselor, Social Worker, and
+// Dean of Students. They get the school-wide research dashboard, whole-
+// school student search, and per-period lost-instruction analytics.
+// Client mirror: `canResearchSchoolwide` in App.tsx — keep in sync.
+export function canResearchSchoolwide(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  isBehaviorSpecialist?: boolean | null;
+  isMtssCoordinator?: boolean | null;
+  isSchoolPsychologist?: boolean | null;
+  isCoreTeam?: boolean | null;
+  isConfidentialSecretary?: boolean | null;
+  isGuidanceCounselor?: boolean | null;
+  isCounselor?: boolean | null;
+  isSocialWorker?: boolean | null;
+  isDean?: boolean | null;
+}): boolean {
+  return (
+    isCoreTeam(staff) ||
+    Boolean(
+      staff.isGuidanceCounselor ||
+        staff.isCounselor ||
+        staff.isSocialWorker ||
+        staff.isDean,
+    )
+  );
+}
+
 // Strict admin gate used by the admin-only case enhancement suite
 // (mention insights, video evidence, AI consistency check, Case
 // Insights dashboard). Excludes Behavior Specialist / MTSS / School

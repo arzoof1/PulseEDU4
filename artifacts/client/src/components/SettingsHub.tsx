@@ -4,6 +4,7 @@ import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowTo
 export type SettingsTileId =
   | "notifications"
   | "kiosk-setup"
+  | "pass-timers"
   | "allowlist"
   | "restroom-access"
   | "locations"
@@ -36,6 +37,7 @@ export type SettingsTileId =
   | "staff-directory"
   | "cameras"
   | "case-outcomes"
+  | "starter-lists"
   | "fast-coverage"
   | "kiosk-welcome"
   | "student-id-badges"

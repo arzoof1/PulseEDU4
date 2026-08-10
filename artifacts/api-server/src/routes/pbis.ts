@@ -8,8 +8,6 @@ import {
   classSectionsTable,
   recordEditsTable,
   schoolSettingsTable,
-  bellSchedulesTable,
-  bellSchedulePeriodsTable,
   studentMtssPlansTable,
 } from "@workspace/db";
 import { eq, and, isNull, gte, lt, inArray } from "drizzle-orm";
@@ -18,6 +16,11 @@ import {
   processMilestonesForStudents,
 } from "../lib/pbisMilestones";
 import { requireSchool } from "../lib/scope.js";
+import {
+  loadDayTypeContext,
+  minutesOfDayInTz,
+} from "../lib/scheduleResolver.js";
+import { isCoreTeam } from "../lib/coreTeam";
 
 const router: IRouter = Router();
 
@@ -194,12 +197,14 @@ router.post("/pbis", async (req, res) => {
   let resolvedStaffId: number | null = null;
   let resolvedStaffName =
     typeof staffName === "string" ? staffName : "";
+  let sessionStaffRow: typeof staffTable.$inferSelect | undefined;
   if (sessionStaffId) {
     const [s] = await db
       .select()
       .from(staffTable)
       .where(eq(staffTable.id, sessionStaffId));
     if (s && s.active) {
+      sessionStaffRow = s;
       resolvedStaffId = s.id;
       resolvedStaffName = s.displayName;
     }
@@ -276,17 +281,35 @@ router.post("/pbis", async (req, res) => {
     polarity = "negative";
   }
 
-  let storedPoints = pts;
+  // School point-control policy (server-authoritative — the client hides or
+  // caps the stepper, but this is the real gate). Core Team is exempt.
+  const [settingsRow] = await db
+    .select()
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
+  let effPts = pts;
+  const exempt = sessionStaffRow ? isCoreTeam(sessionStaffRow) : false;
+  if (!exempt) {
+    const allowAdjust = settingsRow?.pbisAllowPointAdjust ?? true;
+    const maxPts = settingsRow?.pbisMaxPointsPerAward ?? 10;
+    if (!allowAdjust && matched) {
+      // Adjustment disabled: silently pin to the reason's configured value.
+      effPts = Math.abs(matched.defaultPoints);
+    } else if (Math.abs(pts) > maxPts) {
+      res.status(400).json({
+        error: `Point value exceeds this school's limit of ${maxPts} per award`,
+      });
+      return;
+    }
+  }
+
+  let storedPoints = effPts;
   if (polarity === "negative") {
-    const [settingsRow] = await db
-      .select()
-      .from(schoolSettingsTable)
-      .where(eq(schoolSettingsTable.schoolId, schoolId));
     const subtract = settingsRow?.pbisNegativeAffectsTotal ?? false;
-    const magnitude = Math.abs(pts);
+    const magnitude = Math.abs(effPts);
     storedPoints = subtract ? -magnitude : 0;
   } else {
-    storedPoints = Math.abs(pts);
+    storedPoints = Math.abs(effPts);
   }
 
   // Optional teacher note (trim, cap to 500 chars to keep rows reasonable).
@@ -424,17 +447,33 @@ router.post("/pbis/bulk", async (req: Request, res: Response) => {
   } else if (pts < 0) {
     polarity = "negative";
   }
-  let storedPoints = pts;
+  // School point-control policy — mirrors the single-award endpoint so a
+  // bulk award can't bypass the adjust lock / per-award cap. Core Team exempt.
+  const [settingsRow] = await db
+    .select()
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, req.schoolId!));
+  let effPts = pts;
+  if (!isCoreTeam(staff)) {
+    const allowAdjust = settingsRow?.pbisAllowPointAdjust ?? true;
+    const maxPts = settingsRow?.pbisMaxPointsPerAward ?? 10;
+    if (!allowAdjust && matched) {
+      effPts = Math.abs(matched.defaultPoints);
+    } else if (Math.abs(pts) > maxPts) {
+      res.status(400).json({
+        error: `Point value exceeds this school's limit of ${maxPts} per award`,
+      });
+      return;
+    }
+  }
+
+  let storedPoints = effPts;
   if (polarity === "negative") {
-    const [settingsRow] = await db
-      .select()
-      .from(schoolSettingsTable)
-      .where(eq(schoolSettingsTable.schoolId, req.schoolId!));
     const subtract = settingsRow?.pbisNegativeAffectsTotal ?? false;
-    const magnitude = Math.abs(pts);
+    const magnitude = Math.abs(effPts);
     storedPoints = subtract ? -magnitude : 0;
   } else {
-    storedPoints = Math.abs(pts);
+    storedPoints = Math.abs(effPts);
   }
 
   // Optional shared note attached to every entry in this bulk.
@@ -539,6 +578,23 @@ router.patch("/pbis/:id", async (req: Request, res: Response) => {
     if (!Number.isFinite(pts)) {
       res.status(400).json({ error: "points must be a number" });
       return;
+    }
+    // Same per-award cap as the award endpoints (Core Team exempt) so an
+    // edit can't smuggle in a value the award flow would reject. The
+    // adjust-off lock isn't re-applied here because an edit has no single
+    // authoritative reason row to pin to.
+    if (!isCoreTeam(staff)) {
+      const [settingsRow] = await db
+        .select()
+        .from(schoolSettingsTable)
+        .where(eq(schoolSettingsTable.schoolId, schoolId));
+      const maxPts = settingsRow?.pbisMaxPointsPerAward ?? 10;
+      if (Math.abs(pts) > maxPts) {
+        res.status(400).json({
+          error: `Point value exceeds this school's limit of ${maxPts} per award`,
+        });
+        return;
+      }
     }
     updates.points = pts;
   }
@@ -1002,6 +1058,9 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
       and(
         eq(pbisEntriesTable.schoolId, req.schoolId!),
         isNull(pbisEntriesTable.voidedAt),
+        // Only POSITIVE interactions clear invisibility (keep in sync with
+        // the Teacher Roster eyeball query in teacherRoster.ts).
+        eq(pbisEntriesTable.polarity, "positive"),
         gte(pbisEntriesTable.createdAt, widestInvisibleWindow.toISOString()),
       ),
     );
@@ -1141,44 +1200,20 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     schoolAverage: number;
   }> = [];
   {
-    // D4: bell schedule is per-school. Cold-period analysis must use
-    // THIS school's default schedule, not whichever happens to be first.
-    const [defaultSched] = await db
-      .select({ id: bellSchedulesTable.id })
-      .from(bellSchedulesTable)
-      .where(
-        and(
-          eq(bellSchedulesTable.isDefault, true),
-          eq(bellSchedulesTable.active, true),
-          eq(bellSchedulesTable.schoolId, req.schoolId!),
-        ),
-      )
-      .limit(1);
-    if (defaultSched) {
-      const periods = await db
-        .select({
-          periodNumber: bellSchedulePeriodsTable.periodNumber,
-          name: bellSchedulePeriodsTable.name,
-          startTime: bellSchedulePeriodsTable.startTime,
-          endTime: bellSchedulePeriodsTable.endTime,
-        })
-        .from(bellSchedulePeriodsTable)
-        .where(eq(bellSchedulePeriodsTable.scheduleId, defaultSched.id));
-
-      // Parse "HH:MM" → minutes since midnight.
-      const toMin = (t: string): number => {
-        const [hh, mm] = t.split(":").map((x) => parseInt(x, 10));
-        if (!Number.isFinite(hh) || !Number.isFinite(mm)) return -1;
-        return hh * 60 + mm;
-      };
-      const periodWindows = periods
-        .map((p) => ({
-          number: p.periodNumber,
-          name: p.name,
-          start: toMin(p.startTime),
-          end: toMin(p.endTime),
-        }))
-        .filter((p) => p.start >= 0 && p.end >= 0);
+    // D4: bell schedule is per-school. Cold-period analysis is a
+    // school-level dashboard, so it buckets by the active Day Type's
+    // DEFAULT variant via the central schedule resolver (per-student
+    // variant precision isn't meaningful for an aggregate heat map).
+    const dayCtx = await loadDayTypeContext(req.schoolId!);
+    if (dayCtx.status === "ok" && dayCtx.defaultVariant) {
+      const periodWindows = dayCtx.defaultVariant.blocks
+        .filter((b) => b.blockType === "period" && b.periodNumber != null)
+        .map((b) => ({
+          number: b.periodNumber as number,
+          name: b.name,
+          start: b.startMin,
+          end: b.endMin,
+        }));
 
       const totals = new Map<number, number>();
       for (const p of periodWindows) totals.set(p.number, 0);
@@ -1187,7 +1222,9 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
         const d = new Date(e.createdAt);
         const dow = d.getDay();
         if (dow === 0 || dow === 6) continue;
-        const minutes = d.getHours() * 60 + d.getMinutes();
+        // Bucket in the SCHOOL's timezone (resolver carries it), not the
+        // server's local clock.
+        const minutes = minutesOfDayInTz(d, dayCtx.timezone);
         const match = periodWindows.find(
           (p) => minutes >= p.start && minutes < p.end,
         );

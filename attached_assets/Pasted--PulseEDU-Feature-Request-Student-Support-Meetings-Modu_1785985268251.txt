@@ -1,0 +1,539 @@
+# PulseEDU Feature Request: Student Support Meetings Module
+
+## Objective
+
+Design and build a new **Student Support Meetings** module within PulseEDU that centralizes the scheduling, communication, attendance tracking, and documentation for all student support meetings.
+
+This module should replace the current process of emailing teachers and manually collecting feedback by providing an integrated workflow inside PulseEDU.
+
+The architecture should be scalable so the same module can support:
+
+* 504 Meetings
+* IEP Meetings
+* MTSS Problem-Solving Meetings
+* Eligibility Meetings
+* Reevaluation Meetings
+* Parent Conferences
+* Manifestation Determination Meetings
+* Other district-defined meeting types
+
+The module should be flexible enough that additional meeting types can be added in the future without requiring database redesign.
+
+---
+
+# Global Navigation
+
+Add a **Meetings** icon (calendar) to the global header navigation.
+
+The icon should display a notification badge whenever the logged-in user has:
+
+* Upcoming meetings
+* Pending attendance confirmations
+* Required teacher feedback
+* Meeting updates
+
+Example:
+
+📅 Meetings (3)
+
+Selecting the icon should open the user's meeting dashboard.
+
+---
+
+# User Roles & Permissions
+
+### Guidance Counselor
+
+Can:
+
+* Schedule meetings
+* Edit meetings
+* Cancel meetings
+* View attendance
+* View teacher responses
+* Send reminders
+* Create and manage feedback templates
+
+---
+
+### ESE Case Manager
+
+Can:
+
+* Schedule and manage IEP-related meetings
+* View responses
+* Edit assigned meetings
+
+---
+
+### MTSS Coordinator
+
+Can:
+
+* Schedule MTSS meetings
+* View responses
+* Manage MTSS meeting templates
+
+---
+
+### Principal / Assistant Principal
+
+Full administrative access.
+
+Can:
+
+* View all meetings
+* Edit meetings
+* Monitor participation
+* View reporting dashboards
+
+---
+
+### Teachers
+
+Can:
+
+* View assigned meetings
+* Confirm attendance
+* Decline attendance
+* Submit required feedback
+* View meeting details
+
+Teachers cannot edit meeting information.
+
+---
+
+# Meeting Creation Workflow
+
+When a counselor creates a meeting, require:
+
+### Meeting Type
+
+Dropdown (configurable)
+
+Examples:
+
+* 504 Annual Review
+* 504 Initial
+* IEP Annual Review
+* IEP Amendment
+* MTSS Meeting
+* Parent Conference
+* Eligibility Meeting
+* Reevaluation
+* Other
+
+---
+
+### Student
+
+Search by student name.
+
+Selecting the student automatically retrieves:
+
+* Grade
+* Current schedule
+* Assigned teachers
+* Assigned counselor
+* Case manager (if applicable)
+
+---
+
+### Meeting Information
+
+* Date
+* Start Time
+* End Time
+* Location
+* Virtual Meeting Link (optional)
+* Organizer
+* Notes (staff only)
+
+---
+
+# Automatic Teacher Assignment
+
+Once a student is selected:
+
+Automatically identify every teacher currently assigned to the student's schedule.
+
+Populate these teachers as required attendees.
+
+Allow the organizer to:
+
+* Add attendees
+* Remove attendees
+* Add administrators
+* Add specialists
+* Add interpreters
+* Add additional staff
+
+---
+
+# Automatic Notifications
+
+Immediately after saving the meeting:
+
+Send in-app notifications to all required attendees.
+
+Include:
+
+Student Name
+
+Meeting Type
+
+Date
+
+Time
+
+Location
+
+Buttons:
+
+* Confirm Attendance
+* Unable to Attend
+* View Details
+
+---
+
+# Reminder Schedule
+
+Automatically remind attendees:
+
+* 7 days before
+* 3 days before
+* 24 hours before
+* 1 hour before
+
+Reminder intervals should be configurable.
+
+---
+
+# Teacher Dashboard
+
+Teachers should have a dedicated Meetings dashboard displaying:
+
+Upcoming Meetings
+
+Past Meetings
+
+Meetings Requiring Action
+
+Each meeting card should include:
+
+Meeting Type
+
+Student
+
+Date
+
+Time
+
+Location
+
+Attendance Status
+
+Required Action
+
+Buttons:
+
+Confirm Attendance
+
+Unable to Attend
+
+View Details
+
+---
+
+# Unable to Attend Workflow
+
+If a teacher selects **Unable to Attend**, automatically display a feedback form.
+
+The form should support configurable questions based on meeting type.
+
+Default questions:
+
+### Academic Performance
+
+Large text field
+
+---
+
+### Student Strengths
+
+Large text field
+
+---
+
+### Areas of Concern
+
+Large text field
+
+---
+
+### Current Accommodations
+
+"What accommodations are working well?"
+
+Large text field
+
+---
+
+### Recommendations
+
+Large text field
+
+---
+
+### Additional Information
+
+Optional comments
+
+Large text field
+
+---
+
+Teachers submit the form directly through PulseEDU.
+
+Responses are automatically attached to the meeting.
+
+No emails required.
+
+---
+
+# Counselor Dashboard
+
+Create a meeting management dashboard displaying:
+
+Upcoming Meetings
+
+Completed Meetings
+
+Canceled Meetings
+
+For each meeting display:
+
+Student
+
+Meeting Type
+
+Date
+
+Organizer
+
+Teacher attendance status
+
+Teacher feedback received
+
+Outstanding responses
+
+Allow counselors to:
+
+Open responses
+
+Send reminder notifications
+
+Edit meetings
+
+Cancel meetings
+
+Duplicate recurring meetings
+
+---
+
+# Administrator Dashboard
+
+Provide reporting including:
+
+Upcoming meetings
+
+Meeting types by month
+
+Teacher response rates
+
+Attendance percentages
+
+Outstanding responses
+
+Canceled meetings
+
+Average teacher response time
+
+Counselor workload
+
+Include filters by:
+
+School Year
+
+Meeting Type
+
+Grade Level
+
+Counselor
+
+Teacher
+
+---
+
+# Meeting Templates
+
+Allow counselors to create reusable templates.
+
+Example templates:
+
+504 Annual Review
+
+IEP Annual
+
+MTSS Meeting
+
+Parent Conference
+
+Each template should store:
+
+Default attendees
+
+Default questions
+
+Default reminders
+
+Default meeting length
+
+Default notes
+
+---
+
+# Calendar Views
+
+Provide:
+
+Month View
+
+Week View
+
+Agenda View
+
+Allow filtering by:
+
+My Meetings
+
+504
+
+IEP
+
+MTSS
+
+Counselor
+
+Teacher
+
+Administrator
+
+---
+
+# Search
+
+Allow searching meetings by:
+
+Student
+
+Teacher
+
+Meeting Type
+
+Date
+
+Counselor
+
+Status
+
+---
+
+# Notifications Center
+
+Meeting notifications should integrate into PulseEDU's notification center.
+
+Support:
+
+New Meeting
+
+Meeting Updated
+
+Meeting Canceled
+
+Reminder
+
+Teacher Response Received
+
+Teacher Feedback Submitted
+
+---
+
+# Audit Log
+
+Track:
+
+Meeting Created
+
+Meeting Updated
+
+Meeting Canceled
+
+Attendance Confirmed
+
+Attendance Declined
+
+Feedback Submitted
+
+Reminder Sent
+
+Store:
+
+User
+
+Timestamp
+
+Action
+
+---
+
+# Design Requirements
+
+Use PulseEDU's existing interface components and design language.
+
+Requirements:
+
+* Responsive design
+* Desktop
+* Tablet
+* Mobile
+
+Use clean modern cards.
+
+Use color-coded meeting types.
+
+Include status badges.
+
+Provide fast navigation between meetings.
+
+---
+
+# Future Expansion
+
+Build the data model so future enhancements can be added without redesign.
+
+Future enhancements may include:
+
+* Outlook/Google Calendar synchronization
+* Microsoft Teams or Google Meet integration
+* Electronic signatures
+* Meeting agendas
+* Meeting minutes
+* Parent portal notifications
+* AI-generated meeting summaries
+* Follow-up task assignments
+* Document attachments
+* Compliance reporting
+* District-wide analytics
+
+The architecture should be modular, scalable, and consistent with the rest of PulseEDU, making this the centralized hub for all student support meetings and associated communication across the school.

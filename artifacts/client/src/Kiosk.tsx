@@ -4882,12 +4882,25 @@ function TimerScreen({
       >
         {overdue ? "Overdue" : "Out on pass"}
       </div>
-      <div style={{ marginBottom: "0.5rem" }}>
+      {/* Large door-check photo: big enough that someone opening the door
+          can verify the returning student against the kiosk from across
+          the room. Shown on BOTH green (out) and red (overdue) states —
+          identity still needs verifying when the student is late. White
+          ring makes the circle read against the solid green/red field. */}
+      <div
+        style={{
+          marginBottom: "0.75rem",
+          borderRadius: "50%",
+          border: "5px solid rgba(255,255,255,0.9)",
+          boxShadow: "0 6px 28px rgba(0,0,0,0.3)",
+          lineHeight: 0,
+        }}
+      >
         <KioskPhoto
           token={token}
           photoObjectKey={activePass.photoObjectKey}
           firstName={activePass.studentFirstName}
-          size={88}
+          size={230}
         />
       </div>
       <div

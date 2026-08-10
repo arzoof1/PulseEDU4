@@ -27,3 +27,5 @@ timestamp, then flag `lastSeen === undefined || lastSeen < tierCutoff` where
 the cutoff is `subtractSchoolDays(windowForTier)`. Any change to one surface's
 window math, tier resolution, or comparison strictness (`<` vs `<=`) must be
 mirrored in the other.
+
+**Positive-only rule (Aug 2026):** invisibility clears ONLY on `polarity = 'positive'` pbis_entries (user decision: eyeball = "no positive interaction"). Negative quick-log behaviors also write pbis_entries and must NOT clear it. Filter must exist in BOTH queries (teacherRoster + /pbis/needs-attention).

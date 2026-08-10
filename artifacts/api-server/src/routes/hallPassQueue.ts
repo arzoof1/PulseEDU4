@@ -12,18 +12,25 @@ import {
   kioskActivationsTable,
   kioskViewerTokensTable,
   hallPassesTable,
-  bellSchedulesTable,
-  bellSchedulePeriodsTable,
   studentsTable,
   staffTable,
   schoolsTable,
 } from "@workspace/db";
 import { and, eq, inArray, isNull, gt, asc, ne, sql } from "drizzle-orm";
 import { genUrlSafeToken } from "../lib/urlSafeToken.js";
+import {
+  loadDayTypeContext,
+  contextForVariant,
+  minutesOfDayInTz,
+} from "../lib/scheduleResolver.js";
 import { autoEndStalePasses } from "../lib/hallPassLifecycle.js";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { findPolarityConflict } from "./polarityPairs";
+import {
+  findEscortHold,
+  ESCORT_KIOSK_MESSAGE,
+} from "../lib/safetyPlanEscort.js";
 import { findDailyLimitConflict } from "./studentHallPassLimits";
 import {
   loadRestroomDestinationNames,
@@ -127,34 +134,29 @@ async function loadActivationByToken(token: unknown) {
 //     onboarding; the onboarding doc instructs admins to configure a bell
 //     schedule for proper period-based reset.
 export async function getCurrentPeriodKey(schoolId: number): Promise<string> {
-  const [schedule] = await db
-    .select()
-    .from(bellSchedulesTable)
-    .where(
-      and(
-        eq(bellSchedulesTable.schoolId, schoolId),
-        eq(bellSchedulesTable.isDefault, true),
-        eq(bellSchedulesTable.active, true),
-      ),
-    );
+  // MULTI-SCHEDULE: the queue is a per-ROOM construct, so its rollover key
+  // follows the Day Type's DEFAULT variant (a kiosk queue can hold students
+  // from several grades; per-student keys would fragment the line). Uses
+  // the central resolver — school timezone included (the old version used
+  // the server's local clock).
   const now = new Date();
-  const dayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  if (schedule) {
-    const periods = await db
-      .select()
-      .from(bellSchedulePeriodsTable)
-      .where(eq(bellSchedulePeriodsTable.scheduleId, schedule.id));
-    const hh = String(now.getHours()).padStart(2, "0");
-    const mm = String(now.getMinutes()).padStart(2, "0");
-    const nowHm = `${hh}:${mm}`;
-    for (const p of periods) {
-      if (nowHm >= p.startTime && nowHm < p.endTime) {
-        return `s${schedule.id}:p${p.periodNumber}:${dayKey}`;
-      }
+  const ctx = await loadDayTypeContext(schoolId);
+  const dayKeyParts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: ctx.timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now); // en-CA → YYYY-MM-DD
+  const dayKey = dayKeyParts;
+  if (ctx.status === "ok" && ctx.dayType && ctx.defaultVariant) {
+    const sc = contextForVariant(ctx, ctx.defaultVariant, now);
+    if (sc.currentBlock && sc.periodNumber != null) {
+      return `s${ctx.dayType.id}:p${sc.periodNumber}:${dayKey}`;
     }
-    return `s${schedule.id}:between:${dayKey}`;
+    return `s${ctx.dayType.id}:between:${dayKey}`;
   }
-  const bucket = Math.floor((now.getHours() * 60 + now.getMinutes()) / 45);
+  const mod = Math.floor(minutesOfDayInTz(now, ctx.timezone));
+  const bucket = Math.floor(mod / 45);
   return `idle:${dayKey}:${bucket}`;
 }
 
@@ -403,6 +405,15 @@ router.post("/kiosk/queue/:token/add", async (req, res) => {
     return;
   }
   const trimmedId = student.studentId;
+
+  // Escort-required safety plan: hard block from the queue too (a queued
+  // student would eventually be issued a pass). Neutral message — this is
+  // a shared student-facing screen.
+  const escortHold = await findEscortHold(act.schoolId, trimmedId);
+  if (escortHold) {
+    res.status(409).json({ error: ESCORT_KIOSK_MESSAGE });
+    return;
+  }
 
   // Don't queue someone who's currently out on a pass from this room — they
   // already have one. Saves a footgun and a confusing queue display.

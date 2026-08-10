@@ -27,6 +27,10 @@ export const schoolSettingsTable = pgTable(
   hallPassAutoEndMinutes: integer("hall_pass_auto_end_minutes")
     .notNull()
     .default(20),
+  // Kiosk self-serve pass length (minutes). Drives the green→red flip and
+  // the countdown on kiosk-created passes; teacher-created passes use the
+  // duration the teacher picked. Historically hardcoded at 4.
+  kioskPassMinutes: integer("kiosk_pass_minutes").notNull().default(4),
   // Optional school-wide cap on the number of hall passes a student can take
   // in one school day. Null means no global cap.
   globalDailyHallPassLimit: integer("global_daily_hall_pass_limit"),
@@ -70,6 +74,16 @@ export const schoolSettingsTable = pgTable(
   pbisColdPeriodMultiple: integer("pbis_cold_period_multiple")
     .notNull()
     .default(5),
+  // Whether teachers may change the point value on an award (vs locked to
+  // the reason's default). Core Team is always exempt server-side.
+  pbisAllowPointAdjust: boolean("pbis_allow_point_adjust")
+    .notNull()
+    .default(true),
+  // Hard ceiling per single award when adjustment is allowed (Core Team
+  // exempt). Enforced server-side at the award endpoints.
+  pbisMaxPointsPerAward: integer("pbis_max_points_per_award")
+    .notNull()
+    .default(10),
   // -----------------------------------------------------------------
   // Watch List (Insights) "Needs Attention" thresholds.
   //
@@ -408,6 +422,10 @@ export const schoolSettingsTable = pgTable(
   // ---------------------------------------------------------------------------
   schoolYearFlipDate: text("school_year_flip_date"),
   schoolYearFlipActive: text("school_year_flip_active"),
+  // First student day of the school year (YYYY-MM-DD, school-local),
+  // admin-set. Drives YTD windows (e.g. hall-pass reporting) instead of the
+  // hardcoded Aug-1 convention. Null = fall back to Aug 1.
+  firstDayOfSchool: text("first_day_of_school"),
   // Advisory pointer to the tier_presets row last applied to this
   // school. The actual flags above are still authoritative — this is
   // purely so the School Plans grid can show "Currently: Pro" badges.

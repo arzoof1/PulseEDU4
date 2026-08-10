@@ -178,6 +178,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     hallPassMaxMinutes,
     hallPassDefaultMinutes,
     hallPassAutoEndMinutes,
+    kioskPassMinutes,
     globalDailyHallPassLimit,
     pbisQuietTeacherDays,
     pbisInvisibleStudentDays,
@@ -188,6 +189,8 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     pbisColdPeriodMultiple,
     interventionEffectivenessDays,
     pbisNegativeAffectsTotal,
+    pbisAllowPointAdjust,
+    pbisMaxPointsPerAward,
     schoolWideExpectationAcronym,
     schoolWideExpectationLetters,
     issDailyCapacity,
@@ -268,6 +271,20 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.hallPassMaxMinutes = hallPassMaxMinutes;
+  }
+  if (kioskPassMinutes !== undefined) {
+    if (
+      typeof kioskPassMinutes !== "number" ||
+      !Number.isInteger(kioskPassMinutes) ||
+      kioskPassMinutes < 1 ||
+      kioskPassMinutes > 60
+    ) {
+      res.status(400).json({
+        error: "kioskPassMinutes must be an integer between 1 and 60",
+      });
+      return;
+    }
+    updates.kioskPassMinutes = kioskPassMinutes;
   }
   if (hallPassAutoEndMinutes !== undefined) {
     if (
@@ -530,6 +547,64 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.pbisNegativeAffectsTotal = pbisNegativeAffectsTotal;
+  }
+
+  // Teacher point-adjustment toggle + per-award cap — same school-wide PBIS
+  // policy gate as pbisNegativeAffectsTotal (admin / PBIS coordinator /
+  // behavior specialist / SuperUser only). The cap is validated and written
+  // HERE (not via intRange) so it gets the same role gate as the toggle.
+  if (pbisAllowPointAdjust !== undefined || pbisMaxPointsPerAward !== undefined) {
+    if (
+      pbisAllowPointAdjust !== undefined &&
+      typeof pbisAllowPointAdjust !== "boolean"
+    ) {
+      res
+        .status(400)
+        .json({ error: "pbisAllowPointAdjust must be a boolean" });
+      return;
+    }
+    if (
+      pbisMaxPointsPerAward !== undefined &&
+      (typeof pbisMaxPointsPerAward !== "number" ||
+        !Number.isInteger(pbisMaxPointsPerAward) ||
+        pbisMaxPointsPerAward < 1 ||
+        pbisMaxPointsPerAward > 100)
+    ) {
+      res.status(400).json({
+        error: "pbisMaxPointsPerAward must be an integer between 1 and 100",
+      });
+      return;
+    }
+    const staffId = req.staffId;
+    let allowed = false;
+    if (staffId) {
+      const [s] = await db
+        .select()
+        .from(staffTable)
+        .where(eq(staffTable.id, staffId));
+      if (
+        s &&
+        s.active &&
+        (s.isSuperUser ||
+          s.isAdmin ||
+          s.isPbisCoordinator ||
+          s.isBehaviorSpecialist)
+      ) {
+        allowed = true;
+      }
+    }
+    if (!allowed) {
+      res
+        .status(403)
+        .json({ error: "Only admin, PBIS coordinator, or behavior specialist may change this" });
+      return;
+    }
+    if (pbisAllowPointAdjust !== undefined) {
+      updates.pbisAllowPointAdjust = pbisAllowPointAdjust;
+    }
+    if (pbisMaxPointsPerAward !== undefined) {
+      updates.pbisMaxPointsPerAward = pbisMaxPointsPerAward;
+    }
   }
 
   // School Store inventory mode — `simple` (in-stock boolean) vs `quantity`
@@ -1310,6 +1385,44 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     } else {
       res.status(400).json({
         error: "schoolYearFlipDate must be YYYY-MM-DD or null",
+      });
+      return;
+    }
+  }
+
+  // First day of school (YYYY-MM-DD, school-local) — admin/SuperUser only,
+  // enforced inline like the flip date (no route-level admin guard here).
+  // Drives YTD reporting windows; null = Aug-1 fallback.
+  if ("firstDayOfSchool" in (req.body ?? {})) {
+    const staffId = req.staffId;
+    let actor: typeof staffTable.$inferSelect | undefined;
+    if (staffId) {
+      const [s] = await db
+        .select()
+        .from(staffTable)
+        .where(eq(staffTable.id, staffId));
+      actor = s;
+    }
+    const isAdminUser = Boolean(
+      actor?.active && (actor?.isAdmin || actor?.isSuperUser),
+    );
+    if (!isAdminUser) {
+      res.status(403).json({
+        error: "Only an admin may set the first day of school",
+      });
+      return;
+    }
+    const raw = req.body.firstDayOfSchool;
+    if (raw === null || raw === "") {
+      updates.firstDayOfSchool = null;
+    } else if (
+      typeof raw === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(raw.trim())
+    ) {
+      updates.firstDayOfSchool = raw.trim();
+    } else {
+      res.status(400).json({
+        error: "firstDayOfSchool must be YYYY-MM-DD or null",
       });
       return;
     }

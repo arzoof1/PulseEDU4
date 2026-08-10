@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import EnlargeableStudentPhoto from "./EnlargeableStudentPhoto";
 
 // "Where is this student right now?" — top-bar finder available to every
 // signed-in staff member. The payload returned by /api/student-finder/* is
@@ -14,6 +15,8 @@ interface SearchHit {
   firstName: string;
   lastName: string;
   grade: number;
+  photoObjectKey?: string | null;
+  photoConsent?: boolean | null;
   // Current-period enrichment (server resolves the bell-schedule period
   // active right now, then joins each hit's section roster against it).
   // Null when no default bell schedule is configured or the lookup runs
@@ -288,6 +291,16 @@ export function StudentFinderModal({
           }}
         >
           <span aria-hidden="true" style={{ fontSize: 20 }}>📍</span>
+          {selected && today ? (
+            <EnlargeableStudentPhoto
+              firstName={today.student.firstName}
+              lastName={today.student.lastName}
+              grade={today.student.grade}
+              photoObjectKey={today.student.photoObjectKey}
+              photoConsent={today.student.photoConsent}
+              size={44}
+            />
+          ) : null}
           <h2 style={{ margin: 0, fontSize: 18, flex: 1 }}>
             Student Finder
             {selected && today ? (
@@ -518,16 +531,38 @@ export function StudentFinderModal({
                     h.currentWorkExtension ||
                     h.currentTeacherName;
                   return (
-                    <li key={h.studentId}>
+                    <li
+                      key={h.studentId}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 0,
+                        background: "white",
+                        borderBottom: "1px solid var(--border)",
+                      }}
+                    >
+                      {/* Photo sits OUTSIDE the row button so the enlarge
+                          trigger is a sibling control, not a nested
+                          interactive element inside a <button>. */}
+                      <div style={{ paddingLeft: 12, flexShrink: 0 }}>
+                        <EnlargeableStudentPhoto
+                          firstName={h.firstName}
+                          lastName={h.lastName}
+                          grade={h.grade}
+                          photoObjectKey={h.photoObjectKey}
+                          photoConsent={h.photoConsent}
+                          size={36}
+                        />
+                      </div>
                       <button
                         type="button"
                         onClick={() => setSelected(h.studentId)}
                         style={{
-                          width: "100%",
+                          flex: 1,
+                          minWidth: 0,
                           textAlign: "left",
-                          background: "white",
+                          background: "transparent",
                           border: "none",
-                          borderBottom: "1px solid var(--border)",
                           padding: "10px 12px",
                           cursor: "pointer",
                           display: "flex",
@@ -536,17 +571,19 @@ export function StudentFinderModal({
                           fontSize: 14,
                         }}
                         onMouseEnter={(e) =>
-                          (e.currentTarget.style.background = "#f8fafc")
+                          ((e.currentTarget.parentElement as HTMLElement).style.background =
+                            "#f8fafc")
                         }
                         onMouseLeave={(e) =>
-                          (e.currentTarget.style.background = "white")
+                          ((e.currentTarget.parentElement as HTMLElement).style.background =
+                            "white")
                         }
                       >
                         <div
                           style={{
                             display: "flex",
                             gap: 12,
-                            alignItems: "baseline",
+                            alignItems: "center",
                           }}
                         >
                           <strong>

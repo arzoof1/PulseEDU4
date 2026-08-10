@@ -116,6 +116,9 @@ export async function loadScheduleSectionsForStudent(
       and(
         eq(sectionRosterTable.schoolId, schoolId),
         eq(sectionRosterTable.studentId, studentId),
+        // Joined table carries its own tenant predicate — never rely on
+        // section ids alone being globally consistent.
+        eq(classSectionsTable.schoolId, schoolId),
         eq(classSectionsTable.isPlanning, false),
       ),
     );

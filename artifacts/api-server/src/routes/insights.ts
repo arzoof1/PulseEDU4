@@ -1996,6 +1996,9 @@ router.get("/insights/watchlist", async (req, res) => {
         lastName: s.lastName,
         grade: s.grade,
         gender: s.gender,
+        // Consent-gated roster photo for the tap-to-enlarge avatar.
+        photoObjectKey: s.photoObjectKey ?? null,
+        photoConsent: s.photoConsent ?? null,
         flags: {
           ell: s.ell,
           ese: s.ese,

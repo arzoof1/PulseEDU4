@@ -5,8 +5,6 @@ import {
   staffTable,
   classSectionsTable,
   sectionRosterTable,
-  bellSchedulesTable,
-  bellSchedulePeriodsTable,
   hallPassesTable,
   studentAttendanceDayTable,
   schoolSettingsTable,
@@ -14,6 +12,13 @@ import {
 import { and, asc, eq, ilike, inArray, or } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
+import {
+  loadDayTypeContext,
+  variantForGrade,
+  contextForVariant,
+  minutesOfDayInTz,
+  type DayTypeContext,
+} from "../lib/scheduleResolver.js";
 
 const router: IRouter = Router();
 
@@ -26,28 +31,31 @@ const router: IRouter = Router();
 // student profile and we do not want this finder to become a side door
 // around them.
 
-// School-local clock. Replit servers run UTC, so `new Date().getHours()` /
-// `getDate()` would silently use UTC and break "is right now in P7?" by 4–5
-// hours during the school day. We mirror the SCHOOL_TZ pattern from
-// interventionsBell.ts (per-school timezones live on `schools.timezone` but
-// the rest of the app currently treats America/New_York as the canonical
-// HCSB zone). Switch to the per-school value when we generalize this app.
-const SCHOOL_TZ = "America/New_York";
-
-function localToday(): string {
+// School-local clock — uses the per-school IANA timezone the schedule
+// resolver carries (schools.timezone). MULTI-SCHEDULE: "what period is it"
+// is now resolved per STUDENT via their grade's schedule variant; nothing
+// here assumes one school-wide bell schedule.
+function localToday(tz: string): string {
   // en-CA gives ISO-style YYYY-MM-DD.
-  return new Date().toLocaleDateString("en-CA", { timeZone: SCHOOL_TZ });
+  return new Date().toLocaleDateString("en-CA", { timeZone: tz });
 }
 
-function nowHHMM(): string {
-  // 24h HH:MM in school-local time, suitable for direct string comparison
-  // against bell_schedule_periods.start_time / end_time.
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: SCHOOL_TZ,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date());
+function fmtHm(min: number): string {
+  return `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+}
+
+// Current instructional period for a grade under the active Day Type, or
+// null between bells / outside the school day / unconfigured.
+function currentPeriodForGrade(
+  ctx: DayTypeContext,
+  grade: number | null | undefined,
+  now: Date,
+): { periodNumber: number; name: string } | null {
+  const sc = contextForVariant(ctx, variantForGrade(ctx, grade), now);
+  if (sc.status !== "ok" || sc.periodNumber === null || !sc.currentBlock) {
+    return null;
+  }
+  return { periodNumber: sc.periodNumber, name: sc.currentBlock.name };
 }
 
 // Typeahead — name or student_id, school-scoped, capped at 20 results.
@@ -79,6 +87,10 @@ router.get("/student-finder/search", async (req: Request, res: Response) => {
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
       grade: studentsTable.grade,
+      // Photo fields feed the tap-to-enlarge avatar on the finder rows.
+      // Same consent-gated photo the Teacher Roster shows — no new exposure.
+      photoObjectKey: studentsTable.photoObjectKey,
+      photoConsent: studentsTable.photoConsent,
     })
     .from(studentsTable)
     .where(
@@ -114,30 +126,32 @@ router.get("/student-finder/search", async (req: Request, res: Response) => {
   const enrichmentByStudent = new Map<string, Enrichment>();
 
   if (rows.length > 0) {
-    const [schedule] = await db
-      .select()
-      .from(bellSchedulesTable)
-      .where(
-        and(
-          eq(bellSchedulesTable.schoolId, schoolId),
-          eq(bellSchedulesTable.isDefault, true),
-          eq(bellSchedulesTable.active, true),
-        ),
-      );
-    if (schedule) {
-      const now = nowHHMM();
-      const bellPeriods = await db
-        .select()
-        .from(bellSchedulePeriodsTable)
-        .where(eq(bellSchedulePeriodsTable.scheduleId, schedule.id));
-      const current = bellPeriods.find(
-        (bp) => now >= bp.startTime && now < bp.endTime,
-      );
-      if (current) {
-        const ids = rows.map((r) => r.studentId);
+    // MULTI-SCHEDULE: resolve each hit's CURRENT period through their own
+    // grade's schedule variant — a 6th grader may be at lunch while an 8th
+    // grader is in Period 5. One bulk section query covers the union of
+    // current periods across all variants, then each row keeps only the
+    // match for ITS period.
+    const ctx = await loadDayTypeContext(schoolId);
+    if (ctx.status === "ok") {
+      const now = new Date();
+      const currentByStudent = new Map<
+        string,
+        { periodNumber: number; name: string }
+      >();
+      const periodSet = new Set<number>();
+      for (const r of rows) {
+        const cur = currentPeriodForGrade(ctx, r.grade, now);
+        if (cur) {
+          currentByStudent.set(r.studentId, cur);
+          periodSet.add(cur.periodNumber);
+        }
+      }
+      if (periodSet.size > 0) {
+        const ids = Array.from(currentByStudent.keys());
         const sectionRows = await db
           .select({
             studentId: sectionRosterTable.studentId,
+            period: classSectionsTable.period,
             room: staffTable.defaultRoom,
             teacherName: staffTable.displayName,
             workExtension: staffTable.workExtension,
@@ -157,15 +171,17 @@ router.get("/student-finder/search", async (req: Request, res: Response) => {
               eq(classSectionsTable.schoolId, schoolId),
               eq(staffTable.schoolId, schoolId),
               eq(classSectionsTable.isPlanning, false),
-              eq(classSectionsTable.period, current.periodNumber),
+              inArray(classSectionsTable.period, Array.from(periodSet)),
               inArray(sectionRosterTable.studentId, ids),
             ),
           );
         // First-row-wins on co-teaching; the locator just needs A room.
         for (const r of sectionRows) {
+          const cur = currentByStudent.get(r.studentId);
+          if (!cur || cur.periodNumber !== r.period) continue;
           if (enrichmentByStudent.has(r.studentId)) continue;
           enrichmentByStudent.set(r.studentId, {
-            currentPeriodName: current.name,
+            currentPeriodName: cur.name,
             currentRoom: r.room ?? null,
             currentTeacherName: r.teacherName ?? null,
             currentWorkExtension: r.workExtension ?? null,
@@ -324,6 +340,10 @@ router.get(
         firstName: studentsTable.firstName,
         lastName: studentsTable.lastName,
         grade: studentsTable.grade,
+        // Feed the tap-to-enlarge avatar in the finder detail header —
+        // same consent-gated photo as the roster.
+        photoObjectKey: studentsTable.photoObjectKey,
+        photoConsent: studentsTable.photoConsent,
       })
       .from(studentsTable)
       .where(
@@ -337,25 +357,20 @@ router.get(
       return;
     }
 
-    // 2. Default bell schedule for the school + its periods.
-    const [schedule] = await db
-      .select()
-      .from(bellSchedulesTable)
-      .where(
-        and(
-          eq(bellSchedulesTable.schoolId, schoolId),
-          eq(bellSchedulesTable.isDefault, true),
-          eq(bellSchedulesTable.active, true),
-        ),
-      );
-
-    const bellPeriods = schedule
-      ? await db
-          .select()
-          .from(bellSchedulePeriodsTable)
-          .where(eq(bellSchedulePeriodsTable.scheduleId, schedule.id))
-          .orderBy(asc(bellSchedulePeriodsTable.periodNumber))
-      : [];
+    // 2. THIS STUDENT's schedule variant under the active Day Type
+    // (multi-schedule aware — their grade decides the timing they follow).
+    const ctx = await loadDayTypeContext(schoolId);
+    const variant =
+      ctx.status === "ok" ? variantForGrade(ctx, student.grade) : null;
+    const bellPeriods = (variant?.blocks ?? [])
+      .filter((b) => b.blockType === "period" && b.periodNumber != null)
+      .map((b) => ({
+        periodNumber: b.periodNumber as number,
+        name: b.name,
+        startTime: fmtHm(b.startMin),
+        endTime: fmtHm(b.endMin),
+      }))
+      .sort((a, b) => a.periodNumber - b.periodNumber);
 
     // 3. Sections this student is rostered into, with teacher info.
     const sectionRows = await db
@@ -447,7 +462,8 @@ router.get(
     // class" rather than being hidden, per the no-muting requirement).
     // If the school has no default bell schedule, fall back to just the
     // periods the student is rostered into.
-    const now = nowHHMM();
+    const nowMin = minutesOfDayInTz(new Date(), ctx.timezone);
+    const now = fmtHm(Math.floor(nowMin));
     interface PeriodOut {
       periodNumber: number;
       periodName: string;
@@ -560,7 +576,7 @@ router.get(
           and(
             eq(studentAttendanceDayTable.schoolId, schoolId),
             eq(studentAttendanceDayTable.studentId, studentIdParam),
-            eq(studentAttendanceDayTable.day, localToday()),
+            eq(studentAttendanceDayTable.day, localToday(ctx.timezone)),
           ),
         )
         .limit(1);
@@ -577,9 +593,14 @@ router.get(
     // boolean the finder needs.
     res.json({
       student,
-      today: localToday(),
+      today: localToday(ctx.timezone),
       now,
-      scheduleName: schedule?.name ?? null,
+      scheduleName:
+        ctx.status === "ok" && ctx.dayType
+          ? variant && !variant.isDefault
+            ? `${ctx.dayType.name} — ${variant.name}`
+            : ctx.dayType.name
+          : null,
       periods,
       activeHallPass: activePass ?? null,
       absentToday,

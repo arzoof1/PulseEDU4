@@ -43,7 +43,7 @@ import {
 } from "./fastParity.js";
 import { loadRestroomDestinationNames } from "./oneWayPass.js";
 import {
-  loadDefaultPeriodWindows,
+  loadGradePeriodWindows,
   tardyLostMinutes,
   hallPassLostMinutes,
 } from "./lostInstruction.js";
@@ -828,7 +828,10 @@ async function assembleSnapshot(
   let tardiesYtd = 0;
   let lostInstructionMinutesYtd = 0;
   if (sectionsAvailable.attendance) {
-    const windows = await loadDefaultPeriodWindows(student.schoolId);
+    // MULTI-SCHEDULE: use THIS student's grade-variant period windows.
+    const windows = (
+      await loadGradePeriodWindows(student.schoolId)
+    ).windowsForGrade(student.grade);
 
     // Tardies — count works even with no bell schedule; minutes need it.
     const syTardyRows = await db

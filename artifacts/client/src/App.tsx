@@ -32,6 +32,8 @@ import StaffTimeHub from "./components/StaffTimeHub";
 import TimeTrackingPanel from "./components/comp/TimeTrackingPanel";
 import WatchlistHub from "./components/WatchlistHub";
 import CaseOutcomesPage from "./components/CaseOutcomesPage";
+import EnlargeableStudentPhoto from "./components/EnlargeableStudentPhoto";
+import StarterListsPanel from "./components/StarterListsPanel";
 import WatchlistNetwork from "./components/WatchlistNetwork";
 import WatchlistStudentGraph from "./components/WatchlistStudentGraph";
 import WatchlistCaseDetail from "./components/WatchlistCaseDetail";
@@ -88,6 +90,7 @@ import SuperUserHomeRollups from "./components/districtOverview/SuperUserHomeRol
 import DistrictOverviewRollups from "./components/districtOverview/DistrictOverviewRollups";
 import AuditHealthPanel from "./components/districtOverview/AuditHealthPanel";
 import CrossDistrictReports from "./components/districtOverview/CrossDistrictReports";
+import TeacherHallPassResearch from "./components/TeacherHallPassResearch";
 import BulkOverridesPanel from "./components/districtOverview/BulkOverridesPanel";
 import {
   clearFeatures,
@@ -109,6 +112,7 @@ import Tier3StrategiesAdmin from "./components/Tier3StrategiesAdmin";
 import TrustedAdultInterventionsAdmin from "./components/TrustedAdultInterventionsAdmin";
 import MtssPlansAdmin from "./components/MtssPlansAdmin";
 import TeacherRosterPage from "./components/TeacherRosterPage";
+import SupportMeetingsPage from "./components/SupportMeetingsPage";
 import PrivacyGate from "./components/PrivacyGate";
 import SeparationSuggestionsPage from "./components/SeparationSuggestionsPage";
 import FastBenchmarksDashboard from "./components/FastBenchmarksDashboard";
@@ -167,6 +171,7 @@ import EarlyWarningDashboard from "./components/EarlyWarningDashboard";
 import StudentProfile from "./components/StudentProfile";
 import StudentLookupPage from "./components/StudentLookupPage";
 import SafetyPlansAdminPage from "./components/SafetyPlansAdminPage";
+import BehaviorSupportsPage from "./components/BehaviorSupportsPage";
 import TrustedAdultsAdmin from "./components/TrustedAdultsAdmin";
 import SettingsHub, {
   SettingsBackBar,
@@ -224,6 +229,9 @@ interface Student {
   firstName: string;
   lastName: string;
   grade: number;
+  /** Object-storage key for the roster photo (server returns full row). */
+  photoObjectKey?: string | null;
+  photoConsent?: boolean | null;
 }
 
 interface HallPass {
@@ -243,6 +251,10 @@ interface HallPass {
   arrivedAt?: string | null;
   endedBy?: string | null;
   isTardyReturn?: boolean;
+  /** JSON array string of refused wrong-kiosk check-in attempts: [{room, at}]. */
+  arrivalAttempts?: string | null;
+  /** True for restroom round-trips (which legitimately close without an arrival stamp). */
+  isRoundTrip?: boolean;
 }
 
 const teachers = ["Ms. Rivera", "Mr. Johnson", "Coach Lee"];
@@ -348,6 +360,45 @@ function isCreatedToday(createdAt: string): boolean {
   );
 }
 
+// ---- Tardy list date filtering -------------------------------------
+// Local-day comparisons (matches isCreatedToday semantics). Range inputs
+// are yyyy-mm-dd from <input type="date">, compared as local date keys.
+type TardyDateFilter = "all" | "today" | "week" | "month" | "range";
+
+function localDateKey(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function matchesTardyDateFilter(
+  createdAt: string,
+  filter: TardyDateFilter,
+  rangeStart: string,
+  rangeEnd: string,
+): boolean {
+  if (filter === "all") return true;
+  const d = new Date(createdAt);
+  if (Number.isNaN(d.getTime())) return false;
+  const key = localDateKey(d);
+  const now = new Date();
+  const todayKey = localDateKey(now);
+  if (filter === "today") return key === todayKey;
+  if (filter === "week") {
+    // Monday of the current week through today.
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    return key >= localDateKey(monday) && key <= todayKey;
+  }
+  if (filter === "month") {
+    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+    return key >= localDateKey(first) && key <= todayKey;
+  }
+  // range: blank ends are open-ended (inclusive on both bounds).
+  if (rangeStart && key < rangeStart) return false;
+  if (rangeEnd && key > rangeEnd) return false;
+  return true;
+}
+
 function getTimeStatusColor(pass: HallPass, now: number): string {
   if (pass.status !== "active") return "#e2e8f0";
   const totalMs = pass.maxDurationMinutes * 60 * 1000;
@@ -391,13 +442,21 @@ function RequestPulloutSection({
   interventionTypes,
   reasonOptions,
   isAdmin,
+  initialStudentId,
 }: {
   students: Student[];
   interventionTypes: InterventionTypeLite[];
   reasonOptions: PulloutReasonLite[];
   isAdmin?: boolean;
+  // Prefill handed off from the Teacher Roster row's Pull-out button.
+  // The StudentPicker stays fully usable — the teacher can clear it and
+  // pick a different student (the off-roster escape hatch).
+  initialStudentId?: string | null;
 }) {
-  const [studentId, setStudentId] = useState<string>("");
+  const [studentId, setStudentId] = useState<string>(initialStudentId ?? "");
+  useEffect(() => {
+    if (initialStudentId) setStudentId(initialStudentId);
+  }, [initialStudentId]);
   const [reasonChoice, setReasonChoice] = useState<string>("");
   const [reasonOther, setReasonOther] = useState<string>("");
   const reason =
@@ -987,6 +1046,9 @@ function VerifyPulloutsSection({
     return s ? `${s.firstName} ${s.lastName}` : `Student ${id}`;
   };
 
+  const studentFor = (id: string) =>
+    students.find((x) => x.studentId === id) ?? null;
+
   const studentParts = (id: string) => {
     const s = students.find((x) => x.studentId === id);
     return s
@@ -1519,11 +1581,27 @@ function VerifyPulloutsSection({
                     gap: 8,
                   }}
                 >
-                  <div>
-                    <strong>{studentName(p.studentId)}</strong>{" "}
-                    <span style={{ color: "#64748b" }}>
-                      (#{p.localSisId ?? "—"}) · pullout #{p.id}
-                    </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    {(() => {
+                      const stu = studentFor(p.studentId);
+                      if (!stu) return null;
+                      return (
+                        <EnlargeableStudentPhoto
+                          firstName={stu.firstName}
+                          lastName={stu.lastName}
+                          grade={stu.grade}
+                          photoObjectKey={stu.photoObjectKey}
+                          photoConsent={stu.photoConsent}
+                          size={96}
+                        />
+                      );
+                    })()}
+                    <div>
+                      <strong>{studentName(p.studentId)}</strong>{" "}
+                      <span style={{ color: "#64748b" }}>
+                        (#{p.localSisId ?? "—"}) · pullout #{p.id}
+                      </span>
+                    </div>
                   </div>
                   <div style={{ color: "#64748b", fontSize: "0.85rem" }}>
                     Requested by {p.requestedByName} ·{" "}
@@ -1864,6 +1942,24 @@ function IssDashboardSection({ students }: { students: Student[] }) {
     return s ? `${s.firstName} ${s.lastName}` : `Student ${id}`;
   };
 
+  // Tap-to-enlarge avatar next to the name (same shared component as the
+  // pullout queue / finder / roster). Null when the roster prop hasn't
+  // resolved this student.
+  const studentPhotoFor = (id: string, size: number) => {
+    const s = students.find((x) => x.studentId === id);
+    if (!s) return null;
+    return (
+      <EnlargeableStudentPhoto
+        firstName={s.firstName}
+        lastName={s.lastName}
+        grade={s.grade}
+        photoObjectKey={s.photoObjectKey}
+        photoConsent={s.photoConsent}
+        size={size}
+      />
+    );
+  };
+
   const refresh = async () => {
     setLoading(true);
     setMsg(null);
@@ -2124,11 +2220,14 @@ function IssDashboardSection({ students }: { students: Student[] }) {
           gap: 8,
         }}
       >
-        <div>
-          <strong>{studentName(p.studentId)}</strong>{" "}
-          <span style={{ color: "#64748b" }}>
-            (#{p.localSisId ?? "—"}) · pullout #{p.id}
-          </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {studentPhotoFor(p.studentId, 56)}
+          <div>
+            <strong>{studentName(p.studentId)}</strong>{" "}
+            <span style={{ color: "#64748b" }}>
+              (#{p.localSisId ?? "—"}) · pullout #{p.id}
+            </span>
+          </div>
         </div>
         <div style={{ color: "#64748b", fontSize: "0.85rem" }}>
           {p.referringTeacherName}
@@ -2601,7 +2700,15 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                         alignItems: "center",
                       }}
                     >
-                      <div>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                        }}
+                      >
+                        {studentPhotoFor(entry.studentId, 44)}
+                        <div>
                         <strong>{studentName(entry.studentId)}</strong>{" "}
                         <span style={{ color: "#64748b" }}>
                           (#{entry.localSisId ?? "—"})
@@ -2630,6 +2737,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                         >
                           {rosterStyle.label}
                         </span>
+                        </div>
                       </div>
                       {!isEditing && !isConfirming && entry.kind !== "admin-day" && (
                         <div style={{ display: "flex", gap: 6 }}>
@@ -4019,6 +4127,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
   behaviorSupport: [
     "logIntervention",
     "mtssPlans",
+    "supportMeetings",
     "interventionReports",
     // Phase 3 (heal MTSS split): the MTSS Coordinator hub + its Templates
     // sub-page moved here from the Insights group so the whole MTSS
@@ -4026,6 +4135,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
     // group where the coordinator's sidebar row now lives.
     "mtssCoordinator",
     "mtssTemplates",
+    "behaviorSupports",
     "requestPullout",
     "behaviorSpecialist",
     "trustedAdultInterventions",
@@ -5462,6 +5572,15 @@ function App() {
     onConfirm: () => void;
     onCancel: () => void;
   } | null>(null);
+  // Forced-acknowledgement modal for escort-required safety plans. The
+  // server returns 409 ESCORT_REQUIRED when the student's active safety
+  // plan has the escort flag; the teacher must confirm an escort is
+  // arranged before the pass is issued.
+  const [escortOverride, setEscortOverride] = useState<{
+    planItems: string[];
+    onConfirm: () => void;
+    onCancel: () => void;
+  } | null>(null);
   const [logTardyOpen, setLogTardyOpen] = useState(false);
   const [checkInOutOpen, setCheckInOutOpen] = useState(false);
   // Tier-aware Log Intervention launcher state. The launcher routes to
@@ -5526,6 +5645,10 @@ function App() {
     string[]
   >([]);
   const [editingPassId, setEditingPassId] = useState<number | null>(null);
+  // Server refusal from an End / Receive attempt (e.g. "Only staff at
+  // Guidance can end this pass") — shown inline; dialogs are blocked in the
+  // preview iframe and console.error is invisible to staff.
+  const [passActionError, setPassActionError] = useState<string | null>(null);
   const [editEndedAt, setEditEndedAt] = useState<string>("");
   const [editCreatedAt, setEditCreatedAt] = useState<string>("");
   const [tardies, setTardies] = useState<Tardy[]>([]);
@@ -5657,6 +5780,13 @@ function App() {
   const [changePwError, setChangePwError] = useState("");
   const [changePwOk, setChangePwOk] = useState(false);
   const [dateFilter, setDateFilter] = useState<"today" | "all">("all");
+  // Tardy / Check-In History page owns its own richer date filter
+  // (All / Today / This week / This month / custom range) — independent
+  // of the global header "Show" control above.
+  const [tardyDateFilter, setTardyDateFilter] =
+    useState<TardyDateFilter>("all");
+  const [tardyRangeStart, setTardyRangeStart] = useState("");
+  const [tardyRangeEnd, setTardyRangeEnd] = useState("");
   const [staffFilter, setStaffFilter] = useState<"all" | "mine">("all");
   // "mine" is the combined "Mine & heading to me" view (passes I created OR
   // passes routed to me); "all" is every active pass school-wide.
@@ -5696,6 +5826,12 @@ function App() {
     "overview",
   );
   const [hpReportSection, setHpReportSection] = useState<"hub" | "overview" | "byDay" | "ytd" | "research">("hub");
+  // Research page tabs: School-wide dashboard / Student lookup / raw Pass
+  // log. Which tabs a user actually gets is role-derived at render time
+  // (hpResearchTabs); this just remembers the last selection.
+  const [hpResearchTab, setHpResearchTab] = useState<
+    "school" | "student" | "log"
+  >("school");
   const [researchStart, setResearchStart] = useState<string>(() => {
     const d = new Date();
     return `${d.getFullYear()}-01-01`;
@@ -5722,8 +5858,35 @@ function App() {
   const [hpReportDate, setHpReportDate] = useState<string>(() =>
     new Date().toISOString().slice(0, 10),
   );
+  interface HpFeedPass {
+    id: number;
+    studentId: string;
+    grade: number | null;
+    destination: string;
+    teacherName: string;
+    status: string;
+    maxDurationMinutes: number;
+    createdAt: string;
+    endedAt: string | null;
+    arrivedAt?: string | null;
+    isRoundTrip?: boolean;
+    day: string;
+  }
+  interface HpFeed {
+    firstDay: string | null;
+    scoped: boolean;
+    passes: HpFeedPass[];
+    students: {
+      studentId: string;
+      firstName: string;
+      lastName: string;
+      grade: number;
+      localSisId: string | null;
+    }[];
+  }
   interface HpReportData {
     date: string;
+    scoped?: boolean;
     asOf: string;
     totalPasses: number;
     totalLostMinutes: number;
@@ -5744,6 +5907,9 @@ function App() {
     topDestinations: Array<{ destination: string; count: number }>;
   }
   const [hpReportData, setHpReportData] = useState<HpReportData | null>(null);
+  // School-year pass feed powering Overview + YTD — visibility-scoped on
+  // the server (teachers only ever receive their own students' passes).
+  const [hpFeed, setHpFeed] = useState<HpFeed | null>(null);
   const [hpReportLoading, setHpReportLoading] = useState(false);
   const [hpReportError, setHpReportError] = useState("");
   const [activeSection, setActiveSection] = useState<
@@ -5778,7 +5944,9 @@ function App() {
     | "mtssCoordinator"
     | "mtssTemplates"
     | "mtssPlans"
+    | "supportMeetings"
     | "safetyPlans"
+    | "behaviorSupports"
     | "teacherRoster"
     | "studentLookup"
     | "settings"
@@ -5915,6 +6083,21 @@ function App() {
   // own staff id. Only matters for core team / SuperUsers — a regular
   // teacher can only see themselves anyway. Null on first load (App
   // falls back to authUser.id).
+  // Student handed off from a Teacher Roster row's 📤 Pull-out button to
+  // the Request Pullout section (prefill). Cleared implicitly on next
+  // handoff; the picker inside the section remains fully editable.
+  const [pulloutPrefillStudentId, setPulloutPrefillStudentId] = useState<
+    string | null
+  >(null);
+  // The prefill is consumed by one visit to the Request Pullout section.
+  // Clear it whenever the user is anywhere else, so a later visit via
+  // the sidebar (support/admin roles) never preselects a stale student.
+  useEffect(() => {
+    if (activeSection !== "requestPullout" && pulloutPrefillStudentId) {
+      setPulloutPrefillStudentId(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection]);
   const [teacherRosterTeacherId, setTeacherRosterTeacherId] = useState<
     number | null
   >(null);
@@ -5941,6 +6124,7 @@ function App() {
     hallPassMaxMinutes: number;
     hallPassDefaultMinutes: number;
     hallPassAutoEndMinutes: number;
+    kioskPassMinutes: number;
     globalDailyHallPassLimit: number | null;
     pbisQuietTeacherDays: number;
     pbisInvisibleStudentDays: number;
@@ -5949,6 +6133,8 @@ function App() {
     pbisInvisibleDaysTier3: number;
     pbisReasonImbalancePct: number;
     pbisColdPeriodMultiple: number;
+    pbisAllowPointAdjust: boolean;
+    pbisMaxPointsPerAward: number;
     onTimeAttendanceEnabled: boolean;
     onTimeMaxPoints: number;
     onTimeLotteryEnabled: boolean;
@@ -5961,6 +6147,7 @@ function App() {
     strictHouseNameMatch: boolean;
     gpaEnabled: boolean;
     schoolYearFlipDate: string | null;
+    firstDayOfSchool: string | null;
     teacherFamilyMessagingEnabled: boolean;
     mfaRequiredPrivileged: boolean;
     mfaRequiredStaff: boolean;
@@ -6037,6 +6224,7 @@ function App() {
     hallPassMaxMinutes: 30,
     hallPassDefaultMinutes: 5,
     hallPassAutoEndMinutes: 20,
+    kioskPassMinutes: 4,
     globalDailyHallPassLimit: null,
     pbisQuietTeacherDays: 5,
     pbisInvisibleStudentDays: 10,
@@ -6045,6 +6233,8 @@ function App() {
     pbisInvisibleDaysTier3: 3,
     pbisReasonImbalancePct: 60,
     pbisColdPeriodMultiple: 5,
+    pbisAllowPointAdjust: true,
+    pbisMaxPointsPerAward: 10,
     onTimeAttendanceEnabled: false,
     onTimeMaxPoints: 4,
     onTimeLotteryEnabled: false,
@@ -6057,6 +6247,7 @@ function App() {
     strictHouseNameMatch: false,
     gpaEnabled: false,
     schoolYearFlipDate: null,
+    firstDayOfSchool: null,
     teacherFamilyMessagingEnabled: false,
     mfaRequiredPrivileged: false,
     mfaRequiredStaff: false,
@@ -7797,7 +7988,7 @@ function App() {
 
   const hpReportReqIdRef = useRef(0);
   const loadHpReport = async () => {
-    if (!authUser || (!authUser.isAdmin && !authUser.isSuperUser && !authUser.isEseCoordinator)) return;
+    if (!authUser) return;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(hpReportDate)) {
       setHpReportError("Pick a valid date.");
       setHpReportData(null);
@@ -7827,38 +8018,36 @@ function App() {
     }
   };
 
+  // Load the scoped Overview/YTD pass feed whenever the reports hub opens.
+  useEffect(() => {
+    if (!(activeSection === "hallPasses" && hpView === "reports" && authUser)) {
+      return;
+    }
+    let cancelled = false;
+    authFetch("/api/hall-passes/research/report-feed")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: HpFeed | null) => {
+        if (!cancelled) setHpFeed(d);
+      })
+      .catch(() => {
+        if (!cancelled) setHpFeed(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection, hpView, authUser?.id]);
+
   // Auto-reload hall pass report when its tab is open and the date changes.
   useEffect(() => {
-    if (
-      activeSection === "hallPasses" &&
-      hpView === "reports" &&
-      authUser &&
-      (authUser.isAdmin || authUser.isSuperUser || authUser.isEseCoordinator)
-    ) {
+    if (activeSection === "hallPasses" && hpView === "reports" && authUser) {
       loadHpReport();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSection, hpView, hpReportDate, authUser?.id]);
 
-  // Force hpView back to "overview" if the current user lacks admin/ESE access
-  // (e.g., after sign-out/sign-in within same SPA session).
-  useEffect(() => {
-    if (
-      authUser &&
-      !authUser.isAdmin &&
-      !authUser.isSuperUser &&
-      !authUser.isEseCoordinator &&
-      hpView === "reports"
-    ) {
-      setHpView("overview");
-    }
-  }, [
-    authUser?.id,
-    authUser?.isAdmin,
-    authUser?.isSuperUser,
-    authUser?.isEseCoordinator,
-    hpView,
-  ]);
+  // Hall Pass Reports is open to all staff now (teachers get a
+  // roster-scoped Research view), so no force-back is needed on role change.
 
   // On sign-in, default the Hall Passes scope to "mine" for teachers and
   // "all" for admins. Users can still flip the toggle either way after.
@@ -7982,6 +8171,10 @@ function App() {
             typeof data.hallPassAutoEndMinutes === "number"
               ? data.hallPassAutoEndMinutes
               : 20,
+          kioskPassMinutes:
+            typeof data.kioskPassMinutes === "number"
+              ? data.kioskPassMinutes
+              : 4,
           globalDailyHallPassLimit:
             typeof data.globalDailyHallPassLimit === "number"
               ? data.globalDailyHallPassLimit
@@ -8014,6 +8207,14 @@ function App() {
             typeof data.pbisColdPeriodMultiple === "number"
               ? data.pbisColdPeriodMultiple
               : 5,
+          pbisAllowPointAdjust:
+            typeof data.pbisAllowPointAdjust === "boolean"
+              ? data.pbisAllowPointAdjust
+              : true,
+          pbisMaxPointsPerAward:
+            typeof data.pbisMaxPointsPerAward === "number"
+              ? data.pbisMaxPointsPerAward
+              : 10,
           onTimeAttendanceEnabled:
             typeof data.onTimeAttendanceEnabled === "boolean"
               ? data.onTimeAttendanceEnabled
@@ -8060,6 +8261,10 @@ function App() {
           schoolYearFlipDate:
             typeof data.schoolYearFlipDate === "string"
               ? data.schoolYearFlipDate
+              : null,
+          firstDayOfSchool:
+            typeof data.firstDayOfSchool === "string"
+              ? data.firstDayOfSchool
               : null,
           teacherFamilyMessagingEnabled:
             typeof data.teacherFamilyMessagingEnabled === "boolean"
@@ -8168,8 +8373,11 @@ function App() {
       // it in the payload for admins/SuperUsers; otherwise a non-admin save
       // (e.g. Core Team editing other fields) would 403 on that one field.
       const canSetFlip = Boolean(authUser?.isAdmin || authUser?.isSuperUser);
-      const { schoolYearFlipDate: _flipDate, ...settingsWithoutFlip } =
-        schoolSettings;
+      const {
+        schoolYearFlipDate: _flipDate,
+        firstDayOfSchool: _firstDay,
+        ...settingsWithoutFlip
+      } = schoolSettings;
       const res = await authFetch("/api/school-settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -8200,6 +8408,10 @@ function App() {
           typeof data.hallPassAutoEndMinutes === "number"
             ? data.hallPassAutoEndMinutes
             : 20,
+        kioskPassMinutes:
+          typeof data.kioskPassMinutes === "number"
+            ? data.kioskPassMinutes
+            : 4,
         globalDailyHallPassLimit:
           typeof data.globalDailyHallPassLimit === "number"
             ? data.globalDailyHallPassLimit
@@ -8232,6 +8444,14 @@ function App() {
           typeof data.pbisColdPeriodMultiple === "number"
             ? data.pbisColdPeriodMultiple
             : 5,
+        pbisAllowPointAdjust:
+          typeof data.pbisAllowPointAdjust === "boolean"
+            ? data.pbisAllowPointAdjust
+            : true,
+        pbisMaxPointsPerAward:
+          typeof data.pbisMaxPointsPerAward === "number"
+            ? data.pbisMaxPointsPerAward
+            : 10,
         onTimeAttendanceEnabled:
           typeof data.onTimeAttendanceEnabled === "boolean"
             ? data.onTimeAttendanceEnabled
@@ -8276,6 +8496,10 @@ function App() {
         schoolYearFlipDate:
           typeof data.schoolYearFlipDate === "string"
             ? data.schoolYearFlipDate
+            : null,
+        firstDayOfSchool:
+          typeof data.firstDayOfSchool === "string"
+            ? data.firstDayOfSchool
             : null,
         teacherFamilyMessagingEnabled:
           typeof data.teacherFamilyMessagingEnabled === "boolean"
@@ -9712,6 +9936,7 @@ function App() {
     const post = async (
       overrideStudentActive: boolean,
       overridePolarityAck: boolean,
+      overrideEscortAck: boolean,
     ): Promise<void> => {
       const res = await authFetch("/api/hall-passes", {
         method: "POST",
@@ -9720,6 +9945,7 @@ function App() {
           ...payload,
           overrideStudentActive,
           overridePolarityAck,
+          overrideEscortAck,
         }),
       });
       if (res.ok) {
@@ -9744,6 +9970,7 @@ function App() {
                 lastName?: string | null;
                 destination?: string;
               };
+              planItems?: unknown[];
             },
         );
       if (res.status === 409 && body?.code === "STUDENT_HAS_ACTIVE_PASS") {
@@ -9756,7 +9983,7 @@ function App() {
           `${detail}\n\nEnd that pass and create the new one?`,
         );
         if (!ok) throw new Error("Cancelled.");
-        return post(true, overridePolarityAck);
+        return post(true, overridePolarityAck, overrideEscortAck);
       }
       if (res.status === 409 && body?.code === "KEEP_APART_CONFLICT") {
         const partner = body.partner;
@@ -9779,27 +10006,57 @@ function App() {
             },
           });
         });
-        return post(overrideStudentActive, true);
+        return post(overrideStudentActive, true, overrideEscortAck);
+      }
+      if (res.status === 409 && body?.code === "ESCORT_REQUIRED") {
+        const planItems = Array.isArray(body.planItems)
+          ? body.planItems.filter(
+              (s: unknown): s is string => typeof s === "string",
+            )
+          : [];
+        await new Promise<void>((resolve, reject) => {
+          setEscortOverride({
+            planItems,
+            onConfirm: () => {
+              setEscortOverride(null);
+              resolve();
+            },
+            onCancel: () => {
+              setEscortOverride(null);
+              reject(new Error("Cancelled."));
+            },
+          });
+        });
+        return post(overrideStudentActive, overridePolarityAck, true);
       }
       const text = body?.error ?? (await res.text());
       throw new Error(text || "Failed to create pass.");
     };
 
-    await post(false, false);
+    await post(false, false, false);
   };
 
   const handleEndPass = async (id: number) => {
     try {
+      setPassActionError(null);
       const res = await authFetch(`/api/hall-passes/${id}/end`, {
         method: "PATCH",
       });
       if (!res.ok) {
-        console.error("Failed to end hall pass:", await res.text());
+        let msg = "Could not end that pass.";
+        try {
+          const j = (await res.json()) as { error?: string };
+          if (j?.error) msg = j.error;
+        } catch {
+          /* non-JSON error body */
+        }
+        setPassActionError(msg);
         return;
       }
       loadHallPasses();
     } catch (err) {
       console.error("Failed to end hall pass:", err);
+      setPassActionError("Could not end that pass — please try again.");
     }
   };
 
@@ -9809,6 +10066,7 @@ function App() {
   // friendly no-op that still refreshes the list.
   const handleReceivePass = async (id: number) => {
     try {
+      setPassActionError(null);
       const res = await authFetch(`/api/hall-passes/${id}/end`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -9818,12 +10076,20 @@ function App() {
         }),
       });
       if (!res.ok) {
-        console.error("Failed to check in hall pass:", await res.text());
+        let msg = "Could not check in that pass.";
+        try {
+          const j = (await res.json()) as { error?: string };
+          if (j?.error) msg = j.error;
+        } catch {
+          /* non-JSON error body */
+        }
+        setPassActionError(msg);
         return;
       }
       loadHallPasses();
     } catch (err) {
       console.error("Failed to check in hall pass:", err);
+      setPassActionError("Could not check in that pass — please try again.");
     }
   };
 
@@ -9989,6 +10255,31 @@ function App() {
     authUser?.isSchoolPsychologist === true ||
     authUser?.isCoreTeam === true ||
     authUser?.isConfidentialSecretary === true;
+  // Hall Pass Research school-wide gate — mirrors canResearchSchoolwide()
+  // in lib/coreTeam.ts: Core Team plus guidance/school counselor, social
+  // worker, and dean of students. Unlocks the school-wide research
+  // dashboard + whole-school student search in Hall Passes → Reports.
+  const canResearchSchoolwideClient =
+    isCoreTeamMember ||
+    authUser?.isGuidanceCounselor === true ||
+    authUser?.isCounselor === true ||
+    authUser?.isSocialWorker === true ||
+    authUser?.isDean === true;
+  // Hall Pass Research tabs by role: Core Team-style users get the
+  // school-wide dashboard + whole-school student lookup; Admin/SuperUser/
+  // ESE also get the raw Pass log explorer. Teachers get no tabs — just
+  // their roster-scoped lookup.
+  const hpResearchTabs: ("school" | "student" | "log")[] = [
+    ...(canResearchSchoolwideClient
+      ? (["school", "student"] as const)
+      : (["student"] as const)),
+    ...(authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator
+      ? (["log"] as const)
+      : []),
+  ];
+  const hpResearchActiveTab = hpResearchTabs.includes(hpResearchTab)
+    ? hpResearchTab
+    : hpResearchTabs[0];
   // Pickup-tag management gate — mirrors canManagePickup() in
   // lib/coreTeam.ts. Admin / Core Team (BS, MTSS, school psych,
   // district admin, super) / counselor (school OR guidance) /
@@ -10209,6 +10500,25 @@ function App() {
     isBehaviorSpec ||
     isMtss ||
     Boolean(authUser?.isSchoolPsychologist);
+  // Behavior Supports (teacher-facing snapshots) — mirrors the server
+  // gates in routes/behaviorSupports.ts. Edit = Core Team-shaped set
+  // (Admin/AP/Principal, MTSS Coordinator, School Psychologist, Behavior
+  // Specialist, assignable Core Team, Confidential Secretary, SuperUser,
+  // District Admin). View adds Guidance Counselors (read-only). Teachers
+  // get neither — their read-only view is the roster hover card.
+  const canEditBehaviorSupportsClient =
+    Boolean(authUser?.isSuperUser) ||
+    Boolean(authUser?.isDistrictAdmin) ||
+    isAdmin ||
+    isBehaviorSpec ||
+    isMtss ||
+    Boolean(authUser?.isSchoolPsychologist) ||
+    Boolean(authUser?.isCoreTeam) ||
+    Boolean(authUser?.isConfidentialSecretary);
+  const canViewBehaviorSupportsClient =
+    canEditBehaviorSupportsClient ||
+    Boolean(authUser?.isGuidanceCounselor) ||
+    Boolean(authUser?.isCounselor);
   // Print Overall Report — mirrors the server gate `canPrintReport` in
   // routes/studentReportPdf.ts: SU / DistrictAdmin / Admin / BS / MTSS
   // / ESE Coord / School Psych / Guidance Counselor.
@@ -10550,6 +10860,9 @@ function App() {
     if (!canManageMtssPlans && activeSection === "mtssPlans") {
       setActiveSection("hallPasses");
     }
+    if (!canViewBehaviorSupportsClient && activeSection === "behaviorSupports") {
+      setActiveSection("hallPasses");
+    }
     if (!canManageEligibility && activeSection === "eligibility") {
       setActiveSection("hallPasses");
     }
@@ -10739,6 +11052,24 @@ function App() {
     !authUser?.isSuperUser &&
     !authUser?.isDistrictAdmin;
   const isFrontOfficeOnly = Boolean(authUser?.isFrontOffice);
+  // Classroom teachers now request pull-outs from the person-with-arrow button on their
+  // Teacher Roster rows (student prefilled), so the sidebar "Request
+  // Pullout" entry is hidden for them to reduce clutter. It stays for
+  // support/admin roles — they have no roster of their own and often
+  // request on a teacher's behalf. The requestPullout SECTION remains
+  // reachable by teachers (the roster button navigates there).
+  const hideRequestPulloutNav = !(
+    isAdminTier ||
+    isBehaviorSpec ||
+    isMtss ||
+    Boolean(authUser?.isEseCoordinator) ||
+    Boolean(authUser?.isDean) ||
+    Boolean(authUser?.isCounselor) ||
+    Boolean(authUser?.isGuidanceCounselor) ||
+    Boolean(authUser?.isSocialWorker) ||
+    Boolean(authUser?.isSchoolPsychologist) ||
+    isFrontOfficeOnly
+  );
   const NON_EXEMPT_ALLOWED_KEYS = new Set(["hallPasses", "comp"]);
   const baseNavSections: NavSection[] = allBaseNavSections.filter((s) => {
     if (isNonExemptOnly && !NON_EXEMPT_ALLOWED_KEYS.has(s.key)) return false;
@@ -10774,6 +11105,12 @@ function App() {
   ];
   const mtssCoordNavSections: NavSection[] = [
     { key: "mtssCoordinator", label: "MTSS Coordinator", icon: IconClipboard },
+  ];
+  // Behavior Supports — own sidebar row (not inside the MTSS hub gate)
+  // because School Psychologists and Guidance Counselors need it but
+  // don't all have canAccessMtssHub.
+  const behaviorSupportsNavSections: NavSection[] = [
+    { key: "behaviorSupports", label: "Behavior Supports", icon: IconClipboard },
   ];
   // canAccessMtssHub hoisted above the bounce-back useEffect — see note there.
   const pbisHubNavSections: NavSection[] = [
@@ -10817,6 +11154,24 @@ function App() {
   // Pending AST approvals count for the "AST Approvals" sidebar badge.
   // Polls so an approver notices new requests without opening the page.
   // The route returns { count } and { count: 0 } for non-approvers.
+  // Actionable Support Meetings count for the "Meetings" nav badge
+  // (my pending confirmations + declines still owing feedback). Polled so
+  // a meeting scheduled from another device shows up within 15s.
+  const [meetingsPendingCount, setMeetingsPendingCount] = useState<number>(0);
+  const refreshMeetingsPendingCount = useCallback(() => {
+    authFetch("/api/support-meetings/pending-count")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { count?: number } | null) => {
+        if (j) setMeetingsPendingCount(j.count ?? 0);
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    refreshMeetingsPendingCount();
+    const interval = setInterval(refreshMeetingsPendingCount, 15000);
+    return () => clearInterval(interval);
+  }, [refreshMeetingsPendingCount]);
+
   const [astPendingCount, setAstPendingCount] = useState<number>(0);
   useEffect(() => {
     if (!canApproveAst) {
@@ -10917,6 +11272,9 @@ function App() {
     }
     if (key === "contactFixes" && contactFixesCount > 0) {
       return <span style={badgeStyle}>{contactFixesCount}</span>;
+    }
+    if (key === "supportMeetings" && meetingsPendingCount > 0) {
+      return <span style={badgeStyle}>{meetingsPendingCount}</span>;
     }
     if (key === "staffTime" && astPendingCount + compPendingCount > 0) {
       return (
@@ -11180,7 +11538,7 @@ function App() {
       emoji: "📋",
       group: "quick",
     });
-    add(effectiveFeatures.RequestPullout && !isFrontOfficeOnly && !isNonExemptOnly, {
+    add(effectiveFeatures.RequestPullout && !isFrontOfficeOnly && !isNonExemptOnly && !hideRequestPulloutNav, {
       key: "requestPullout",
       label: "Request Pullout",
       description: "Refer a student for behavior/intervention pullout.",
@@ -11953,6 +12311,7 @@ function App() {
           canReviewPullouts ||
           canManageMtssPlans ||
           canEditSafetyPlanClient ||
+          canViewBehaviorSupportsClient ||
           canAccessMtssHub ||
           isDistrictAdmin ||
           isDean ||
@@ -11961,7 +12320,12 @@ function App() {
           // an MTSS/behavior capability. Keep this a superset of the item
           // gates rendered inside.
           canManageSettings ||
-          (canManageBehaviorLists && !isBehaviorSpec);
+          (canManageBehaviorLists && !isBehaviorSpec) ||
+          // Support Meetings (504/IEP/MTSS scheduling + teacher responses)
+          // lives in this group and is visible to EVERY staff member —
+          // teachers must reach it to confirm/decline — so the group must
+          // always render (superset rule for NavGroup wrapper gates).
+          true;
         const showSpecialPrograms =
           effectiveFeatures.Accommodations || isEseCoord;
         // Phase 5 — role-aware nav: like showBehaviorSupport, this must be the
@@ -12030,7 +12394,7 @@ function App() {
             key: "requestPullout",
             label: "Request Pullout",
             icon: IconClipboard,
-            canShow: effectiveFeatures.RequestPullout,
+            canShow: effectiveFeatures.RequestPullout && !hideRequestPulloutNav,
           },
           { key: "pbis", label: "PBIS Points", icon: IconStar, canShow: effectiveFeatures.Pbis },
           {
@@ -12363,6 +12727,14 @@ function App() {
                   activeSection,
                 )}
               >
+                {/* Support Meetings — visible to EVERY staff member:
+                    organizers schedule, teachers confirm/decline + leave
+                    feedback. The badge counts my actionable items. */}
+                {renderNavItem({
+                  key: "supportMeetings",
+                  label: "Meetings",
+                  icon: IconClipboard,
+                })}
                 {effectiveFeatures.LogIntervention &&
                   renderNavItem({
                     key: "logIntervention",
@@ -12413,6 +12785,11 @@ function App() {
                     force-expand ownership now lives on behaviorSupport. */}
                 {canAccessMtssHub &&
                   mtssCoordNavSections.map(renderNavItem)}
+                {/* Behavior Supports — teacher-translation snapshots.
+                    Editors + view-only counselors see the row; teachers
+                    never do (their read-only view is the roster pill). */}
+                {canViewBehaviorSupportsClient &&
+                  behaviorSupportsNavSections.map(renderNavItem)}
                 {/* Phase 4a: Request Pullout restored to its permanent
                     Student Support home so the grouped nav is the complete
                     map. Same gate as the Quick Access copy
@@ -12421,6 +12798,7 @@ function App() {
                     already owns the key. Also still appears in the static
                     Quick Access list until 4b (interim duplication). */}
                 {effectiveFeatures.RequestPullout &&
+                  !hideRequestPulloutNav &&
                   renderNavItem({
                     key: "requestPullout",
                     label: "Request Pullout",
@@ -12769,10 +13147,7 @@ function App() {
           Hall Pass Mgmt.
         </RoleSection>
       </HowToUseHelp>
-      {(authUser?.isAdmin ||
-        authUser?.isSuperUser ||
-        authUser?.isEseCoordinator ||
-        isCoreTeamMember) && (
+      {authUser && (
         <div className="card no-print" style={{ paddingTop: "0.75rem", paddingBottom: "0.75rem" }}>
           <button
             type="button"
@@ -12782,21 +13157,17 @@ function App() {
           >
             Create
           </button>
-          {(authUser?.isAdmin ||
-            authUser?.isSuperUser ||
-            authUser?.isEseCoordinator) && (
-            <button
-              type="button"
-              onClick={() => {
-                setHpView("reports");
-                setHpReportSection("hub");
-              }}
-              disabled={hpView === "reports"}
-              style={{ marginRight: "0.25rem" }}
-            >
-              Reports
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => {
+              setHpView("reports");
+              setHpReportSection("hub");
+            }}
+            disabled={hpView === "reports"}
+            style={{ marginRight: "0.25rem" }}
+          >
+            Reports
+          </button>
           {isCoreTeamMember && (
             <button
               type="button"
@@ -12821,16 +13192,52 @@ function App() {
             }}
           >
             <h2 style={{ margin: 0 }}>Tardy / Check-In History</h2>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: "0.5rem",
+                flexWrap: "wrap",
+                alignItems: "center",
+              }}
+            >
               <select
-                value={dateFilter}
+                value={tardyDateFilter}
                 onChange={(e) =>
-                  setDateFilter(e.target.value as "today" | "all")
+                  setTardyDateFilter(e.target.value as TardyDateFilter)
                 }
               >
-                <option value="today">Today</option>
                 <option value="all">All dates</option>
+                <option value="today">Today</option>
+                <option value="week">This week</option>
+                <option value="month">This month</option>
+                <option value="range">Date range…</option>
               </select>
+              {tardyDateFilter === "range" && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "0.35rem",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  <input
+                    type="date"
+                    value={tardyRangeStart}
+                    max={tardyRangeEnd || undefined}
+                    onChange={(e) => setTardyRangeStart(e.target.value)}
+                    aria-label="Range start date"
+                  />
+                  <span style={{ color: "var(--text-subtle)" }}>to</span>
+                  <input
+                    type="date"
+                    value={tardyRangeEnd}
+                    min={tardyRangeStart || undefined}
+                    onChange={(e) => setTardyRangeEnd(e.target.value)}
+                    aria-label="Range end date"
+                  />
+                </span>
+              )}
               <select
                 value={staffFilter}
                 onChange={(e) =>
@@ -12927,12 +13334,24 @@ function App() {
             <tbody>
               {tardies
                 .filter((t) =>
-                  dateFilter === "today" ? isCreatedToday(t.createdAt) : true,
+                  matchesTardyDateFilter(
+                    t.createdAt,
+                    tardyDateFilter,
+                    tardyRangeStart,
+                    tardyRangeEnd,
+                  ),
                 )
                 .filter((t) =>
                   staffFilter === "mine"
                     ? t.teacherName === currentStaffUser
                     : true,
+                )
+                // Newest first. Sort here (not on the shared array) so other
+                // consumers of `tardies` keep the API's chronological order.
+                .slice()
+                .sort(
+                  (a, b) =>
+                    b.createdAt.localeCompare(a.createdAt) || b.id - a.id,
                 )
                 .map((t) => (
                   <tr key={t.id}>
@@ -13107,6 +13526,13 @@ function App() {
         }}
       />
 
+      {escortOverride && (
+        <EscortOverrideModal
+          planItems={escortOverride.planItems}
+          onCancel={escortOverride.onCancel}
+          onConfirm={escortOverride.onConfirm}
+        />
+      )}
       {keepApartOverride && (
         <KeepApartOverrideModal
           partnerName={keepApartOverride.partnerName}
@@ -13177,6 +13603,41 @@ function App() {
             </button>
           </div>
         </div>
+
+        {passActionError && (
+          <div
+            role="alert"
+            style={{
+              margin: "0.5rem 0",
+              padding: "0.6rem 0.9rem",
+              background: "#fef2f2",
+              border: "1px solid #fecaca",
+              borderRadius: 8,
+              color: "#991b1b",
+              fontSize: "0.9rem",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: "0.75rem",
+            }}
+          >
+            <span>{passActionError}</span>
+            <button
+              type="button"
+              onClick={() => setPassActionError(null)}
+              style={{
+                background: "none",
+                border: "none",
+                color: "#991b1b",
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+              aria-label="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         {passListView === "active" ? (
           (() => {
@@ -13372,6 +13833,17 @@ function App() {
                     authUser?.isAdmin === true ||
                     authUser?.isSuperUser === true;
                   const isEditing = editingPassId === p.id;
+                  // Three ways a pass closes, each with its own badge so
+                  // unverified closes can't hide: confirmed arrival (green
+                  // check), ended with NO check-in (amber — someone closed it
+                  // without the student being received at the destination),
+                  // and auto/system timeout (red). Restroom round-trips
+                  // legitimately close without an arrival stamp, so they
+                  // just show "Returned".
+                  const unconfirmedClose =
+                    p.status === "ended" &&
+                    !p.arrivedAt &&
+                    p.isRoundTrip !== true;
                   const statusClass =
                     p.status === "active"
                       ? "badge badge-active"
@@ -13383,7 +13855,33 @@ function App() {
                       ? "System Ended"
                       : p.status === "auto_ended"
                         ? "Auto Ended"
-                        : p.status;
+                        : p.status === "ended"
+                          ? p.isRoundTrip === true
+                            ? "Returned"
+                            : p.arrivedAt
+                              ? "Arrived ✓"
+                              : "No check-in"
+                          : p.status;
+                  // Refused wrong-kiosk check-ins recorded on the pass.
+                  let attemptRooms: string[] = [];
+                  if (p.arrivalAttempts) {
+                    try {
+                      const parsed = JSON.parse(p.arrivalAttempts) as {
+                        room?: string;
+                      }[];
+                      if (Array.isArray(parsed)) {
+                        attemptRooms = Array.from(
+                          new Set(
+                            parsed
+                              .map((a) => a?.room)
+                              .filter((r): r is string => !!r),
+                          ),
+                        );
+                      }
+                    } catch {
+                      /* malformed JSON — skip badge */
+                    }
+                  }
                   return (
                     <tr key={p.id}>
                       <td>
@@ -13412,7 +13910,62 @@ function App() {
                       </td>
                       <td>{p.originRoom}</td>
                       <td>
-                        <span className={statusClass}>{statusLabel}</span>
+                        <span
+                          className={statusClass}
+                          style={
+                            unconfirmedClose
+                              ? {
+                                  background: "#fef3c7",
+                                  color: "#92400e",
+                                  border: "1px solid #fcd34d",
+                                }
+                              : p.status === "ended" && p.arrivedAt
+                                ? {
+                                    background: "#dcfce7",
+                                    color: "#166534",
+                                    border: "1px solid #86efac",
+                                  }
+                                : undefined
+                          }
+                          title={
+                            unconfirmedClose
+                              ? `Closed${p.endedBy ? ` by ${p.endedBy}` : ""} without a destination check-in`
+                              : p.status === "ended" && p.arrivedAt
+                                ? `Received${p.endedBy ? ` by ${p.endedBy}` : ""}`
+                                : undefined
+                          }
+                        >
+                          {statusLabel}
+                        </span>
+                        {unconfirmedClose && p.endedBy && (
+                          <div
+                            style={{
+                              fontSize: 10,
+                              color: "#92400e",
+                              marginTop: 2,
+                            }}
+                          >
+                            by {p.endedBy}
+                          </div>
+                        )}
+                        {attemptRooms.length > 0 && (
+                          <div
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 700,
+                              color: "#92400e",
+                              background: "#fef3c7",
+                              border: "1px solid #fcd34d",
+                              borderRadius: 6,
+                              padding: "1px 5px",
+                              marginTop: 3,
+                              display: "inline-block",
+                            }}
+                            title="The student tried to check in at a kiosk that wasn't this pass's destination"
+                          >
+                            ⚠ tried {attemptRooms.join(", ")}
+                          </div>
+                        )}
                       </td>
                       <td>
                         {(() => {
@@ -13534,6 +14087,8 @@ function App() {
         let active = 0;
         let overdue = 0;
         let ended = 0;
+        let autoEnded = 0;
+        let unconfirmed = 0;
         const today = new Date();
         for (const p of hallPasses) {
           const created = new Date(p.createdAt);
@@ -13544,6 +14099,16 @@ function App() {
           if (!isToday) continue;
           if (p.status !== "active") {
             ended++;
+            if (p.status === "auto_ended" || p.status === "system_ended") {
+              autoEnded++;
+            } else if (
+              p.status === "ended" &&
+              !p.arrivedAt &&
+              p.isRoundTrip !== true
+            ) {
+              // One-way pass closed without any destination check-in.
+              unconfirmed++;
+            }
           } else if (p.status === "active") {
             const expiresAt =
               new Date(p.createdAt).getTime() +
@@ -13689,6 +14254,34 @@ function App() {
                   Ended Passes
                 </span>
                 <span className="stat-value">{ended}</span>
+                {(unconfirmed > 0 || autoEnded > 0) && (
+                  <span
+                    style={{
+                      display: "block",
+                      fontSize: "0.78rem",
+                      lineHeight: 1.5,
+                      marginTop: "0.35rem",
+                    }}
+                  >
+                    {unconfirmed > 0 && (
+                      <span
+                        style={{ color: "#92400e", fontWeight: 600 }}
+                        title="One-way passes closed without a destination check-in"
+                      >
+                        ⚠ {unconfirmed} without check-in
+                      </span>
+                    )}
+                    {unconfirmed > 0 && autoEnded > 0 && <br />}
+                    {autoEnded > 0 && (
+                      <span
+                        style={{ color: "#b91c1c", fontWeight: 600 }}
+                        title="Passes closed by the timer, not a person"
+                      >
+                        ⏱ {autoEnded} timed out
+                      </span>
+                    )}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -13704,7 +14297,7 @@ function App() {
       <CompanionQueuePanel user={authUser} />
 
       </>)}
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "hub" && (() => {
+      {hpView === "reports" && authUser && hpReportSection === "hub" && (() => {
         type ReportTool = {
           key: "overview" | "byDay" | "ytd" | "research";
           label: string;
@@ -13801,7 +14394,7 @@ function App() {
         );
       })()}
 
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "overview" && (() => {
+      {hpView === "reports" && authUser && hpReportSection === "overview" && (() => {
         // Build a time series of concurrently-active passes for the selected day,
         // every 15 minutes from 7:00 AM to 4:00 PM local time.
         const [yy, mm, dd] = hpOverviewDate.split("-").map((n) => parseInt(n, 10));
@@ -13815,7 +14408,12 @@ function App() {
             d.getDate() === today.getDate()
           );
         };
-        const todaysPasses = hallPasses.filter((p) => isSameLocalDay(p.createdAt));
+        void isSameLocalDay;
+        // Server-scoped feed: teachers only receive their own students'
+        // passes; the school-local `day` avoids UTC-midnight drift.
+        const todaysPasses = (hpFeed?.passes ?? []).filter(
+          (p) => p.day === dayStr,
+        );
         const buckets: { label: string; t: number; count: number }[] = [];
         const base = new Date(today);
         base.setHours(7, 0, 0, 0);
@@ -13869,6 +14467,11 @@ function App() {
                 }}
               >
                 Overview
+                {hpFeed?.scoped && (
+                  <span style={{ marginLeft: "0.75rem", fontSize: "0.85rem", color: "#64748b", fontWeight: 400 }}>
+                    your students only
+                  </span>
+                )}
                 <input
                   type="date"
                   value={hpOverviewDate}
@@ -13975,7 +14578,7 @@ function App() {
               const counts = new Map<string, number>();
               let totalMs = 0;
               let endedCount = 0;
-              for (const p of hallPasses) {
+              for (const p of hpFeed?.passes ?? []) {
                 if (p.destination) {
                   counts.set(p.destination, (counts.get(p.destination) || 0) + 1);
                 }
@@ -14180,16 +14783,26 @@ function App() {
         );
       })()}
 
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "ytd" && (() => {
+      {hpView === "reports" && authUser && hpReportSection === "ytd" && (() => {
         const today = new Date();
+        // Server-scoped feed: teachers only ever receive their own
+        // students' passes; grades and names come with the feed so no
+        // school-wide roster is needed here.
+        const feedPasses = hpFeed?.passes ?? [];
+        const feedStudents = hpFeed?.students ?? [];
         const studentGrade = new Map<string, number>();
-        for (const s of students) studentGrade.set(s.studentId, s.grade);
-        const grades = Array.from(new Set(students.map((s) => s.grade))).sort(
-          (a, b) => a - b,
-        );
+        for (const s of feedStudents) studentGrade.set(s.studentId, s.grade);
+        const grades = Array.from(
+          new Set(feedStudents.map((s) => s.grade)),
+        ).sort((a, b) => a - b);
         const gradeColors = ["#0f766e", "#0e7490", "#6366f1", "#7c3aed", "#0ea5e9", "#a855f7"];
 
-        const yearStart = new Date(today.getFullYear(), 0, 1);
+        // YTD starts on the school's configured first day of school
+        // (server fallback: Aug 1 of the school year).
+        const firstDay = hpFeed?.firstDay ?? null;
+        const yearStart = firstDay
+          ? new Date(`${firstDay}T00:00:00`)
+          : new Date(today.getFullYear(), 0, 1);
         const dayMs = 24 * 60 * 60 * 1000;
         const days: { key: string; label: string; t: number }[] = [];
         for (let t = yearStart.getTime(); t <= today.getTime(); t += dayMs) {
@@ -14210,17 +14823,28 @@ function App() {
         const indexByKey = new Map(days.map((d, i) => [d.key, i]));
 
         let totalYtd = 0;
-        for (const p of hallPasses) {
-          const dt = new Date(p.createdAt);
-          if (dt.getFullYear() !== today.getFullYear()) continue;
-          if (dt.getTime() > today.getTime() + dayMs) continue;
-          const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-          const idx = indexByKey.get(key);
+        for (const p of feedPasses) {
+          const idx = indexByKey.get(p.day);
           if (idx == null) continue;
-          const g = studentGrade.get(p.studentId);
+          const g = p.grade ?? studentGrade.get(p.studentId);
           if (g == null) continue;
           series[idx][`G${g}`] = (series[idx][`G${g}`] as number) + 1;
           totalYtd++;
+        }
+        // How the year's closed one-way passes ended — confirmed arrival vs
+        // closed with no destination check-in vs timed out. Restroom
+        // round-trips are excluded (they never carry an arrival stamp).
+        let ytdOneWayClosed = 0;
+        let ytdUnconfirmed = 0;
+        let ytdAutoEnded = 0;
+        for (const p of feedPasses) {
+          if (p.isRoundTrip === true || p.status === "active") continue;
+          ytdOneWayClosed++;
+          if (p.status === "auto_ended" || p.status === "system_ended") {
+            ytdAutoEnded++;
+          } else if (!p.arrivedAt) {
+            ytdUnconfirmed++;
+          }
         }
 
         return (
@@ -14256,7 +14880,10 @@ function App() {
               >
                 Year to Date Summary
                 <span style={{ marginLeft: "0.75rem", fontSize: "0.85rem", color: "#64748b", fontWeight: 400 }}>
-                  {today.getFullYear()}
+                  {firstDay
+                    ? `since ${new Date(`${firstDay}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`
+                    : today.getFullYear()}
+                  {hpFeed?.scoped ? " · your students only" : ""}
                 </span>
               </h2>
             </div>
@@ -14271,8 +14898,25 @@ function App() {
                 }}
               >
                 <h3 style={{ margin: 0 }}>Daily Passes</h3>
-                <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
+                <div style={{ fontSize: "0.85rem", color: "#64748b", textAlign: "right" }}>
                   Total passes YTD: <strong>{totalYtd.toLocaleString()}</strong>
+                  {ytdOneWayClosed > 0 && (
+                    <div style={{ fontSize: "0.78rem", marginTop: 2 }}>
+                      <span
+                        style={{ color: "#92400e", fontWeight: 600 }}
+                        title="One-way passes closed without a destination check-in"
+                      >
+                        {Math.round((ytdUnconfirmed / ytdOneWayClosed) * 100)}% closed without check-in
+                      </span>
+                      {" · "}
+                      <span
+                        style={{ color: "#b91c1c", fontWeight: 600 }}
+                        title="Passes closed by the timer, not a person"
+                      >
+                        {Math.round((ytdAutoEnded / ytdOneWayClosed) * 100)}% timed out
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
               {totalYtd === 0 ? (
@@ -14321,7 +14965,7 @@ function App() {
                 string,
                 { name: string; grade: number }
               >();
-              for (const s of students) {
+              for (const s of feedStudents) {
                 studentInfo.set(s.studentId, {
                   name: `${s.firstName} ${s.lastName}`,
                   grade: s.grade,
@@ -14330,9 +14974,7 @@ function App() {
 
               const byGrade = new Map<number, number>();
               const byStudent = new Map<string, number>();
-              for (const p of hallPasses) {
-                const dt = new Date(p.createdAt);
-                if (dt.getFullYear() !== today.getFullYear()) continue;
+              for (const p of feedPasses) {
                 const info = studentInfo.get(p.studentId);
                 if (!info) continue;
                 byGrade.set(info.grade, (byGrade.get(info.grade) || 0) + 1);
@@ -14510,7 +15152,7 @@ function App() {
                   localSisId: string | null;
                 }
               >();
-              for (const s of students) {
+              for (const s of feedStudents) {
                 studentInfo.set(s.studentId, {
                   first: s.firstName,
                   last: s.lastName,
@@ -14522,9 +15164,7 @@ function App() {
                 string,
                 { passes: number; autoEnded: number; lostMin: number }
               >();
-              for (const p of hallPasses) {
-                const dt = new Date(p.createdAt);
-                if (dt.getFullYear() !== today.getFullYear()) continue;
+              for (const p of feedPasses) {
                 if (!studentInfo.has(p.studentId)) continue;
                 const cur = stats.get(p.studentId) || {
                   passes: 0,
@@ -14893,7 +15533,72 @@ function App() {
         );
       })()}
 
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "research" && (() => {
+      {/* Research header: back button + role-derived tabs (School-wide /
+          Student lookup / Pass log). Teachers get just the back button. */}
+      {hpView === "reports" && authUser && hpReportSection === "research" && (
+        <>
+          <div
+            style={{
+              borderTopLeftRadius: "var(--radius-lg, 8px)",
+              borderTopRightRadius: "var(--radius-lg, 8px)",
+              overflow: "hidden",
+              marginBottom: "-1px",
+            }}
+          >
+            <div className="section-header-bar-teal" style={{ width: "100%", margin: 0 }} />
+            <div
+              className="section-header-band-hub"
+              style={{
+                width: "100%",
+                margin: 0,
+                display: "flex",
+                alignItems: "center",
+                gap: "0.75rem",
+                flexWrap: "wrap",
+              }}
+            >
+              <button
+                type="button"
+                className="back-button-purple"
+                style={{ marginBottom: 0 }}
+                onClick={() => setHpReportSection("hub")}
+              >
+                ← Back
+              </button>
+              {hpResearchTabs.length > 1 &&
+                hpResearchTabs.map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setHpResearchTab(t)}
+                    style={{
+                      padding: "0.4rem 1rem",
+                      fontSize: "0.9rem",
+                      fontWeight: 700,
+                      borderRadius: 8,
+                      cursor: "pointer",
+                      border:
+                        hpResearchActiveTab === t
+                          ? "1px solid #7c3aed"
+                          : "1px solid #cbd5e1",
+                      background:
+                        hpResearchActiveTab === t ? "#7c3aed" : "white",
+                      color: hpResearchActiveTab === t ? "white" : "#475569",
+                    }}
+                  >
+                    {t === "school"
+                      ? "School-wide"
+                      : t === "student"
+                        ? "Student lookup"
+                        : "Pass log"}
+                  </button>
+                ))}
+            </div>
+          </div>
+        </>
+      )}
+
+      {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "research" && hpResearchActiveTab === "log" && (() => {
         const studentInfo = new Map<
           string,
           { name: string; grade: number; localSisId: string | null }
@@ -14953,28 +15658,10 @@ function App() {
           return "#22c55e";
         };
 
+        // Header (back button + tabs) is rendered once for the whole
+        // Research page above; this tab starts straight at the filters.
         return (
           <>
-            <div
-              style={{
-                borderTopLeftRadius: "var(--radius-lg, 8px)",
-                borderTopRightRadius: "var(--radius-lg, 8px)",
-                overflow: "hidden",
-                marginBottom: "-1px",
-              }}
-            >
-              <div className="section-header-bar-teal" style={{ width: "100%", margin: 0 }} />
-              <div className="section-header-band-hub" style={{ width: "100%", margin: 0 }}>
-                <button
-                  type="button"
-                  className="back-button-purple"
-                  style={{ marginBottom: 0 }}
-                  onClick={() => setHpReportSection("hub")}
-                >
-                  ← Back
-                </button>
-              </div>
-            </div>
             <div className="card">
               <h2
                 style={{
@@ -15020,6 +15707,54 @@ function App() {
                       style={{ padding: "0.35rem 0.5rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem" }}
                     />
                   </label>
+                  {(() => {
+                    const toKey = (d: Date) =>
+                      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+                    const now = new Date();
+                    const dow = (now.getDay() + 6) % 7; // Mon=0 … Sun=6
+                    const mon = new Date(now);
+                    mon.setDate(now.getDate() - dow);
+                    const sun = new Date(mon);
+                    sun.setDate(mon.getDate() + 6);
+                    const presets: {
+                      label: string;
+                      from: string;
+                      to: string;
+                    }[] = [
+                      { label: "Today", from: toKey(now), to: toKey(now) },
+                      { label: "This week", from: toKey(mon), to: toKey(sun) },
+                      {
+                        label: "This month",
+                        from: toKey(new Date(now.getFullYear(), now.getMonth(), 1)),
+                        to: toKey(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
+                      },
+                    ];
+                    return presets.map((p) => {
+                      const active = researchStart === p.from && researchEnd === p.to;
+                      return (
+                        <button
+                          key={p.label}
+                          type="button"
+                          onClick={() => {
+                            setResearchStart(p.from);
+                            setResearchEnd(p.to);
+                          }}
+                          style={{
+                            padding: "0.45rem 0.9rem",
+                            fontSize: "0.85rem",
+                            borderRadius: 6,
+                            border: active ? "1px solid #7c3aed" : "1px solid #cbd5e1",
+                            background: active ? "#7c3aed" : "white",
+                            color: active ? "white" : "#475569",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                          }}
+                        >
+                          {p.label}
+                        </button>
+                      );
+                    });
+                  })()}
                   <button
                     type="button"
                     onClick={() => {
@@ -15205,7 +15940,23 @@ function App() {
         );
       })()}
 
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "byDay" && (<>
+      {/* Research: roster-scoped for teachers; Core Team (+ guidance /
+          social worker / dean) get the school-wide dashboard + whole-school
+          student search, split across the School-wide / Student lookup
+          tabs. Served by dedicated endpoints (never the whole-school pass
+          list). Stays mounted across those two tabs so the selected
+          student and window survive tab switches. */}
+      {hpView === "reports" &&
+        authUser &&
+        hpReportSection === "research" &&
+        hpResearchActiveTab !== "log" && (
+          <TeacherHallPassResearch
+            coreTeam={canResearchSchoolwideClient}
+            tab={hpResearchActiveTab === "school" ? "school" : "student"}
+          />
+        )}
+
+      {hpView === "reports" && authUser && hpReportSection === "byDay" && (<>
         <div
           style={{
             borderTopLeftRadius: "var(--radius-lg, 8px)",
@@ -15286,6 +16037,7 @@ function App() {
               <div style={{ marginBottom: "0.5rem", fontSize: "0.85rem", color: "#555" }}>
                 Reporting on {hpReportData.date} (as of{" "}
                 {new Date(hpReportData.asOf).toLocaleString()})
+                {hpReportData.scoped ? " · your students only" : ""}
               </div>
               <div className="stat-grid" style={{ marginBottom: "1rem" }}>
                 <div className="stat-card">
@@ -19409,7 +20161,11 @@ function App() {
               Use this when you need a student picked up from your
               room — not for routine scheduled pullouts. Include the
               specific reason so the receiving staff knows whether
-              this is urgent.
+              this is urgent. Fastest path: the person-with-arrow
+              button on the
+              student's row on your Teacher Roster — it opens this
+              form with the student already filled in and shows how
+              many pull-outs you've called for them this year.
             </RoleSection>
           </HowToUseHelp>
           <RequestPulloutSection
@@ -19417,6 +20173,7 @@ function App() {
             isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
             interventionTypes={interventionList}
             reasonOptions={pulloutReasonList}
+            initialStudentId={pulloutPrefillStudentId}
           />
         </>
       )}
@@ -20317,6 +21074,10 @@ function App() {
         );
       })()}
 
+      {activeSection === "supportMeetings" && (
+        <SupportMeetingsPage onCountsChanged={refreshMeetingsPendingCount} />
+      )}
+
       {activeSection === "mtssPlans" && canManageMtssPlans && (
         <FeatureGate feature="mtssPlans" label="MTSS Plans">
         <>
@@ -20348,6 +21109,30 @@ function App() {
           />
         </>
         </FeatureGate>
+      )}
+
+      {activeSection === "behaviorSupports" && canViewBehaviorSupportsClient && (
+        <>
+          <HowToUseHelp title="How to use Behavior Supports">
+            <HowToSection title="What this page is">
+              Write the teacher-facing snapshot for students with active
+              behavior supports: behaviors teachers may observe, common
+              triggers, recommended responses, replacement behaviors, and
+              what reinforcement works. Teachers see it as a purple
+              Behavior pill on their roster — hover shows the card.
+            </HowToSection>
+            <HowToSection title="Keep it clean">
+              This is a translation layer, not a BIP or FBA. Never enter
+              diagnoses, evaluations, or counseling notes — everything on
+              this page is visible to classroom teachers. The 15-bullet
+              cap keeps the card readable mid-class.
+            </HowToSection>
+          </HowToUseHelp>
+          <BehaviorSupportsPage
+            canManage={canEditBehaviorSupportsClient}
+            onBack={() => setActiveSection("hallPasses")}
+          />
+        </>
       )}
 
       {activeSection === "safetyPlans" && canEditSafetyPlanClient && safetyPlansVis.visible && (
@@ -20419,6 +21204,14 @@ function App() {
             setStudentProfileReturnTo("teacherRoster");
             setActiveSection("studentProfile");
           }}
+          onRequestPullout={
+            effectiveFeatures.RequestPullout
+              ? (studentId) => {
+                  setPulloutPrefillStudentId(studentId);
+                  setActiveSection("requestPullout");
+                }
+              : undefined
+          }
           /* SP pill is intentionally read-only on the roster for every
              role. Counselors / Core Team manage plans from the dedicated
              Safety Plans page or from Student Profile. The hover popover
@@ -23383,6 +24176,265 @@ function App() {
         <KioskWelcomePanel />
       )}
 
+      {activeSection === "settings" && canManageSettings && settingsTile === "pass-timers" && (
+        <div className="card" style={{ maxWidth: 720 }}>
+          <h2 style={{ marginTop: 0 }}>Pass Timers &amp; Kiosk</h2>
+          <p style={{ color: "var(--text-subtle, #64748b)", marginTop: "-0.25rem" }}>
+            School-wide timing rules for hall passes — teacher-created passes
+            and the self-serve kiosk timer. Changes apply to new passes only.
+          </p>
+          <div style={{ display: "grid", gap: "1.1rem" }}>
+            <div style={{ display: "grid", gap: "0.5rem" }}>
+              <span>
+                Hall Pass Time Limit
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontWeight: "normal",
+                    marginLeft: "0.5rem",
+                  }}
+                >
+                  (caps the slider in the Create Pass modal)
+                </span>
+              </span>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.75rem",
+                }}
+              >
+                <input
+                  type="range"
+                  min={1}
+                  max={240}
+                  step={1}
+                  value={schoolSettings.hallPassMaxMinutes}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    const next = Number.isFinite(n)
+                      ? Math.max(1, Math.min(240, Math.trunc(n)))
+                      : schoolSettings.hallPassMaxMinutes;
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      hallPassMaxMinutes: next,
+                      hallPassDefaultMinutes: Math.min(
+                        schoolSettings.hallPassDefaultMinutes,
+                        next,
+                      ),
+                    });
+                  }}
+                  style={{ flex: 1 }}
+                />
+                <input
+                  type="number"
+                  min={1}
+                  max={240}
+                  step={1}
+                  value={schoolSettings.hallPassMaxMinutes}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    const next = Number.isFinite(n)
+                      ? Math.max(1, Math.min(240, Math.trunc(n)))
+                      : schoolSettings.hallPassMaxMinutes;
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      hallPassMaxMinutes: next,
+                      hallPassDefaultMinutes: Math.min(
+                        schoolSettings.hallPassDefaultMinutes,
+                        next,
+                      ),
+                    });
+                  }}
+                  style={{ width: "5rem" }}
+                />
+                <span style={{ color: "var(--text-subtle, #64748b)" }}>
+                  min
+                </span>
+              </div>
+              <span style={{ fontSize: "0.85rem" }}>
+                Default starting value
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontWeight: "normal",
+                    marginLeft: "0.5rem",
+                  }}
+                >
+                  (where the slider opens — must be ≤ time limit)
+                </span>
+              </span>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.75rem",
+                }}
+              >
+                <input
+                  type="range"
+                  min={1}
+                  max={schoolSettings.hallPassMaxMinutes}
+                  step={1}
+                  value={schoolSettings.hallPassDefaultMinutes}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      hallPassDefaultMinutes: Number.isFinite(n)
+                        ? Math.max(
+                            1,
+                            Math.min(
+                              schoolSettings.hallPassMaxMinutes,
+                              Math.trunc(n),
+                            ),
+                          )
+                        : schoolSettings.hallPassDefaultMinutes,
+                    });
+                  }}
+                  style={{ flex: 1 }}
+                />
+                <input
+                  type="number"
+                  min={1}
+                  max={schoolSettings.hallPassMaxMinutes}
+                  step={1}
+                  value={schoolSettings.hallPassDefaultMinutes}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      hallPassDefaultMinutes: Number.isFinite(n)
+                        ? Math.max(
+                            1,
+                            Math.min(
+                              schoolSettings.hallPassMaxMinutes,
+                              Math.trunc(n),
+                            ),
+                          )
+                        : schoolSettings.hallPassDefaultMinutes,
+                    });
+                  }}
+                  style={{ width: "5rem" }}
+                />
+                <span style={{ color: "var(--text-subtle, #64748b)" }}>
+                  min
+                </span>
+              </div>
+            </div>
+            <div style={{ display: "grid", gap: "0.25rem" }}>
+              <span>
+                Auto-end forgotten passes after
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontWeight: "normal",
+                    marginLeft: "0.5rem",
+                  }}
+                >
+                  (a still-active pass this old is closed automatically, marked
+                  “Auto Ended,” with its end time capped here)
+                </span>
+              </span>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.75rem",
+                }}
+              >
+                <input
+                  type="number"
+                  min={1}
+                  max={240}
+                  step={1}
+                  value={schoolSettings.hallPassAutoEndMinutes}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      hallPassAutoEndMinutes: Number.isFinite(n)
+                        ? Math.max(1, Math.min(240, Math.trunc(n)))
+                        : schoolSettings.hallPassAutoEndMinutes,
+                    });
+                  }}
+                  style={{ width: "5rem" }}
+                />
+                <span style={{ color: "var(--text-subtle, #64748b)" }}>
+                  min
+                </span>
+              </div>
+            </div>
+            <div style={{ display: "grid", gap: "0.25rem" }}>
+              <span>
+                Kiosk pass length
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontWeight: "normal",
+                    marginLeft: "0.5rem",
+                  }}
+                >
+                  (every kiosk self-serve pass runs this long; the kiosk screen
+                  turns red when time is up)
+                </span>
+              </span>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.75rem",
+                }}
+              >
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  step={1}
+                  value={schoolSettings.kioskPassMinutes}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      kioskPassMinutes: Number.isFinite(n)
+                        ? Math.max(1, Math.min(60, Math.trunc(n)))
+                        : schoolSettings.kioskPassMinutes,
+                    });
+                  }}
+                  style={{ width: "5rem" }}
+                />
+                <span style={{ color: "var(--text-subtle, #64748b)" }}>
+                  min
+                </span>
+              </div>
+            </div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.75rem",
+              }}
+            >
+              <button
+                type="button"
+                onClick={saveSchoolSettings}
+                disabled={settingsStatus === "saving"}
+              >
+                {settingsStatus === "saving" ? "Saving…" : "Save Timers"}
+              </button>
+              {settingsStatus === "saved" && (
+                <span style={{ color: "var(--ok, #0a7a3b)" }}>Saved</span>
+              )}
+              {settingsStatus === "error" && (
+                <span style={{ color: "var(--danger, #b00020)" }}>
+                  {settingsError || "Save failed"}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {activeSection === "settings" && canManageSettings && settingsTile === "student-id-badges" && (
         <StudentBadgesPanel />
       )}
@@ -23452,6 +24504,14 @@ function App() {
                 badge: adminNotifications.length,
                 group: "admin-tenancy",
                 // ^ kept in admin-tenancy after the regroup.
+              },
+              {
+                id: "pass-timers",
+                icon: "⏱️",
+                title: "Pass Timers & Kiosk",
+                subtitle:
+                  "Time limit, default length, auto-end, and the kiosk pass timer.",
+                group: "hall-pass-locations",
               },
               {
                 id: "kiosk-setup",
@@ -23874,6 +24934,19 @@ function App() {
                 group: "people-access",
               });
             }
+            // One-click starter pack: loads the curated default entries
+            // into every configurable pick list, skipping duplicates.
+            // Intended for brand-new school onboarding / post-reset.
+            if (isAdmin || isDistrictAdmin || isSuperUser) {
+              tiles.push({
+                id: "starter-lists",
+                icon: "🧰",
+                title: "Starter Pick Lists",
+                subtitle:
+                  "One click loads default entries into every pick list (PBIS, interventions, outcomes, tags…). Skips anything you already have.",
+                group: "behavior-pbis",
+              });
+            }
             if (isAdmin || isDistrictAdmin || isSuperUser) {
               tiles.push({
                 id: "case-outcomes",
@@ -24025,6 +25098,10 @@ function App() {
 
       {activeSection === "settings" && canManageSettings && settingsTile === "case-outcomes" && (isAdmin || isDistrictAdmin || isSuperUser) && (
         <CaseOutcomesPage />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "starter-lists" && (isAdmin || isDistrictAdmin || isSuperUser) && (
+        <StarterListsPanel />
       )}
 
       {activeSection === "separationSuggestions" && (
@@ -25049,6 +26126,91 @@ function App() {
             unit: "×",
           },
         ];
+        const pointControls = (
+          <>
+            {/* Award point controls — adjust toggle + per-award cap. */}
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "0.6rem",
+                paddingTop: "0.5rem",
+                borderTop: "1px solid var(--border, #e2e8f0)",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={schoolSettings.pbisAllowPointAdjust}
+                onChange={(e) =>
+                  setSchoolSettings({
+                    ...schoolSettings,
+                    pbisAllowPointAdjust: e.target.checked,
+                  })
+                }
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                <span style={{ fontWeight: 600 }}>
+                  Teachers can adjust points on an award
+                </span>
+                <br />
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontSize: "0.82rem",
+                  }}
+                >
+                  Off = every award uses the reason&apos;s default point
+                  value. Core Team members can always adjust.
+                </span>
+              </span>
+            </label>
+            {schoolSettings.pbisAllowPointAdjust && (
+              <label style={{ display: "grid", gap: "0.25rem" }}>
+                <span>
+                  Maximum points per award
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontWeight: "normal",
+                      marginLeft: "0.5rem",
+                      fontSize: "0.85rem",
+                    }}
+                  >
+                    (1–100)
+                  </span>
+                </span>
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontSize: "0.82rem",
+                  }}
+                >
+                  Hard ceiling for a single award when adjusting is allowed.
+                  Core Team members are exempt.
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  step={1}
+                  value={schoolSettings.pbisMaxPointsPerAward}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    const next = Number.isFinite(n)
+                      ? Math.max(1, Math.min(100, Math.trunc(n)))
+                      : schoolSettings.pbisMaxPointsPerAward;
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      pbisMaxPointsPerAward: next,
+                    });
+                  }}
+                  style={{ width: "6rem" }}
+                />
+              </label>
+            )}
+          </>
+        );
         return (
           <div className="card" style={{ marginTop: "1rem" }}>
             <h2>PBIS Thresholds</h2>
@@ -25114,6 +26276,7 @@ function App() {
                   </div>
                 </label>
               ))}
+              {pointControls}
               <div
                 style={{
                   display: "flex",
@@ -26392,6 +27555,48 @@ function App() {
                   </span>
                 </label>
               )}
+            {Boolean(authUser?.isAdmin || authUser?.isSuperUser) && (
+              <label style={{ display: "grid", gap: "0.25rem" }}>
+                <span>
+                  First Day of School
+                  <span
+                    style={{
+                      color: "var(--text-subtle, #64748b)",
+                      fontWeight: "normal",
+                      marginLeft: "0.5rem",
+                    }}
+                  >
+                    Admin only. Optional.
+                  </span>
+                </span>
+                <input
+                  type="date"
+                  value={schoolSettings.firstDayOfSchool ?? ""}
+                  onChange={(e) =>
+                    setSchoolSettings({
+                      ...schoolSettings,
+                      firstDayOfSchool: e.target.value ? e.target.value : null,
+                    })
+                  }
+                  style={{
+                    padding: "0.4rem 0.6rem",
+                    border: "1px solid var(--border-subtle, #e2e8f0)",
+                    borderRadius: 6,
+                    maxWidth: 220,
+                  }}
+                />
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  The first student day of the current school year.
+                  Year-to-date reporting (e.g. Hall Pass reports) starts on
+                  this date. Leave blank to use August 1.
+                </span>
+              </label>
+            )}
             <label style={{ display: "grid", gap: "0.25rem" }}>
               <span>
                 Number of Periods in the School Day
@@ -26423,187 +27628,6 @@ function App() {
                 style={{ width: "6rem" }}
               />
             </label>
-            <div style={{ display: "grid", gap: "0.5rem" }}>
-              <span>
-                Hall Pass Time Limit
-                <span
-                  style={{
-                    color: "var(--text-subtle, #64748b)",
-                    fontWeight: "normal",
-                    marginLeft: "0.5rem",
-                  }}
-                >
-                  (caps the slider in the Create Pass modal)
-                </span>
-              </span>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.75rem",
-                }}
-              >
-                <input
-                  type="range"
-                  min={1}
-                  max={240}
-                  step={1}
-                  value={schoolSettings.hallPassMaxMinutes}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    const next = Number.isFinite(n)
-                      ? Math.max(1, Math.min(240, Math.trunc(n)))
-                      : schoolSettings.hallPassMaxMinutes;
-                    setSchoolSettings({
-                      ...schoolSettings,
-                      hallPassMaxMinutes: next,
-                      hallPassDefaultMinutes: Math.min(
-                        schoolSettings.hallPassDefaultMinutes,
-                        next,
-                      ),
-                    });
-                  }}
-                  style={{ flex: 1 }}
-                />
-                <input
-                  type="number"
-                  min={1}
-                  max={240}
-                  step={1}
-                  value={schoolSettings.hallPassMaxMinutes}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    const next = Number.isFinite(n)
-                      ? Math.max(1, Math.min(240, Math.trunc(n)))
-                      : schoolSettings.hallPassMaxMinutes;
-                    setSchoolSettings({
-                      ...schoolSettings,
-                      hallPassMaxMinutes: next,
-                      hallPassDefaultMinutes: Math.min(
-                        schoolSettings.hallPassDefaultMinutes,
-                        next,
-                      ),
-                    });
-                  }}
-                  style={{ width: "5rem" }}
-                />
-                <span style={{ color: "var(--text-subtle, #64748b)" }}>
-                  min
-                </span>
-              </div>
-              <span style={{ fontSize: "0.85rem" }}>
-                Default starting value
-                <span
-                  style={{
-                    color: "var(--text-subtle, #64748b)",
-                    fontWeight: "normal",
-                    marginLeft: "0.5rem",
-                  }}
-                >
-                  (where the slider opens — must be ≤ time limit)
-                </span>
-              </span>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.75rem",
-                }}
-              >
-                <input
-                  type="range"
-                  min={1}
-                  max={schoolSettings.hallPassMaxMinutes}
-                  step={1}
-                  value={schoolSettings.hallPassDefaultMinutes}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    setSchoolSettings({
-                      ...schoolSettings,
-                      hallPassDefaultMinutes: Number.isFinite(n)
-                        ? Math.max(
-                            1,
-                            Math.min(
-                              schoolSettings.hallPassMaxMinutes,
-                              Math.trunc(n),
-                            ),
-                          )
-                        : schoolSettings.hallPassDefaultMinutes,
-                    });
-                  }}
-                  style={{ flex: 1 }}
-                />
-                <input
-                  type="number"
-                  min={1}
-                  max={schoolSettings.hallPassMaxMinutes}
-                  step={1}
-                  value={schoolSettings.hallPassDefaultMinutes}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    setSchoolSettings({
-                      ...schoolSettings,
-                      hallPassDefaultMinutes: Number.isFinite(n)
-                        ? Math.max(
-                            1,
-                            Math.min(
-                              schoolSettings.hallPassMaxMinutes,
-                              Math.trunc(n),
-                            ),
-                          )
-                        : schoolSettings.hallPassDefaultMinutes,
-                    });
-                  }}
-                  style={{ width: "5rem" }}
-                />
-                <span style={{ color: "var(--text-subtle, #64748b)" }}>
-                  min
-                </span>
-              </div>
-            </div>
-            <div style={{ display: "grid", gap: "0.25rem" }}>
-              <span>
-                Auto-end forgotten passes after
-                <span
-                  style={{
-                    color: "var(--text-subtle, #64748b)",
-                    fontWeight: "normal",
-                    marginLeft: "0.5rem",
-                  }}
-                >
-                  (a still-active pass this old is closed automatically, marked
-                  “Auto Ended,” with its end time capped here)
-                </span>
-              </span>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.75rem",
-                }}
-              >
-                <input
-                  type="number"
-                  min={1}
-                  max={240}
-                  step={1}
-                  value={schoolSettings.hallPassAutoEndMinutes}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    setSchoolSettings({
-                      ...schoolSettings,
-                      hallPassAutoEndMinutes: Number.isFinite(n)
-                        ? Math.max(1, Math.min(240, Math.trunc(n)))
-                        : schoolSettings.hallPassAutoEndMinutes,
-                    });
-                  }}
-                  style={{ width: "5rem" }}
-                />
-                <span style={{ color: "var(--text-subtle, #64748b)" }}>
-                  min
-                </span>
-              </div>
-            </div>
             <label style={{ display: "grid", gap: "0.25rem" }}>
               <span>Email Signature</span>
               <textarea
@@ -26715,6 +27739,153 @@ function App() {
       </FeatureGate>
     </div>
     </RoleProvider>
+  );
+}
+
+// Forced-acknowledgement modal for escort-required safety plans. Mirrors
+// the keep-apart override pattern: the teacher can proceed (they may be
+// the escort, or be arranging one) but only after an explicit checkbox.
+function EscortOverrideModal({
+  planItems,
+  onCancel,
+  onConfirm,
+}: {
+  planItems: string[];
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const [acked, setAcked] = useState(false);
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="escort-required-title"
+      onClick={onCancel}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.6)",
+        zIndex: 1100,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "1rem",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff",
+          borderRadius: 12,
+          width: "min(460px, 95vw)",
+          padding: "1.25rem 1.4rem",
+          display: "flex",
+          flexDirection: "column",
+          gap: "1rem",
+          borderTop: "6px solid #f59e0b",
+          boxShadow: "0 20px 50px rgba(0,0,0,0.25)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span aria-hidden style={{ fontSize: "1.4rem" }}>⚠️</span>
+          <h3
+            id="escort-required-title"
+            style={{ margin: 0, color: "#92400e", fontSize: "1.1rem" }}
+          >
+            Safety plan — escort required
+          </h3>
+        </div>
+
+        <div
+          style={{
+            background: "#fffbeb",
+            border: "1px solid #fcd34d",
+            borderRadius: 8,
+            padding: "0.7rem 0.85rem",
+            color: "#78350f",
+            fontSize: "0.9rem",
+            lineHeight: 1.45,
+          }}
+        >
+          This student's active safety plan requires a{" "}
+          <strong>staff escort</strong> when out of the classroom.
+          {planItems.length > 0 && (
+            <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+              {planItems.map((it, i) => (
+                <li key={`${it}-${i}`}>{it}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <label
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 10,
+            fontSize: "0.9rem",
+            cursor: "pointer",
+            padding: "0.5rem",
+            border: "1px solid #cbd5e1",
+            borderRadius: 6,
+            background: "#f8fafc",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={acked}
+            onChange={(e) => setAcked(e.target.checked)}
+            style={{ marginTop: 3, width: 18, height: 18, flexShrink: 0 }}
+            autoFocus
+          />
+          <span>
+            An escort is arranged for this student — I take responsibility
+            for issuing this pass.
+          </span>
+        </label>
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 8,
+            marginTop: 4,
+          }}
+        >
+          <button
+            type="button"
+            onClick={onCancel}
+            style={{
+              background: "#fff",
+              border: "1px solid #cbd5e1",
+              borderRadius: 6,
+              padding: "0.45rem 0.9rem",
+              fontSize: "0.9rem",
+              cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={!acked}
+            onClick={onConfirm}
+            style={{
+              background: acked ? "#d97706" : "#fcd34d",
+              color: "#fff",
+              border: "none",
+              borderRadius: 6,
+              padding: "0.45rem 1rem",
+              fontSize: "0.9rem",
+              fontWeight: 600,
+              cursor: acked ? "pointer" : "not-allowed",
+            }}
+          >
+            Escort arranged — create pass
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -28,6 +28,8 @@ import {
 import { and, eq, isNull, inArray, sql, desc } from "drizzle-orm";
 import PDFDocument from "pdfkit";
 import { requireSchool } from "../lib/scope.js";
+import { isCoreTeam } from "../lib/coreTeam.js";
+import { getVisibleStudentIds } from "./insights.js";
 import { computeWalletsForSchool } from "../lib/storeRedemptions.js";
 
 // Neutralize CSV formula injection: a cell starting with = + - @ (or a control
@@ -473,25 +475,36 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
   });
 });
 
-// School-wide hall pass report for a single day. Admin / ESE only.
+// School-wide hall pass report for a single day.
 //   GET /api/reports/hall-passes?date=YYYY-MM-DD  (default: today UTC)
 // Returns: totals + top-10 lists (student takers, student lost minutes,
 // teacher granters, destinations).
+// Open to ALL active staff (was admin/ESE-only): teachers now get the
+// Hall Pass Reports hub too — but NON-privileged staff (not Core Team /
+// ESE coordinator) see numbers computed ONLY over their own visible
+// students (section rosters + trusted-adult assignments); school-wide
+// data never leaves the server for them. `scoped: true` in the response
+// tells the client to label the report accordingly.
 router.get("/reports/hall-passes", requireStaff, async (req, res) => {
-  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
-    .staff;
-  if (!staff.isSuperUser && !staff.isAdmin && !staff.isEseCoordinator) {
-    res.status(403).json({ error: "Admin or ESE coordinator only" });
-    return;
-  }
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
   const dateRaw = req.query.date ? String(req.query.date) : todayIsoDate();
   if (!parseStrictIsoDate(dateRaw)) {
     res
       .status(400)
       .json({ error: "date must be a valid YYYY-MM-DD calendar date" });
     return;
+  }
+
+  const privileged = isCoreTeam(staff) || Boolean(staff.isEseCoordinator);
+  let visibleIds: string[] | null = null; // null = school-wide
+  if (!privileged) {
+    const visibility = await getVisibleStudentIds(staff, schoolId);
+    if (!visibility.full) {
+      visibleIds = Array.from(visibility.ids);
+    }
   }
 
   const passes = await db
@@ -508,6 +521,13 @@ router.get("/reports/hall-passes", requireStaff, async (req, res) => {
       and(
         eq(hallPassesTable.schoolId, schoolId),
         sql`substring(${hallPassesTable.createdAt}, 1, 10) = ${dateRaw}`,
+        ...(visibleIds
+          ? [
+              visibleIds.length
+                ? inArray(hallPassesTable.studentId, visibleIds)
+                : sql`false`,
+            ]
+          : []),
       ),
     );
 
@@ -583,6 +603,7 @@ router.get("/reports/hall-passes", requireStaff, async (req, res) => {
 
   res.json({
     date: dateRaw,
+    scoped: visibleIds != null,
     asOf: new Date(nowMs).toISOString(),
     totalPasses: passes.length,
     totalLostMinutes: Math.round(totalLost),
