@@ -779,6 +779,27 @@ export async function runSisSyncForSchool(
   return null;
 }
 
+// The section upsert arbitrates on the SCHOOL-SCOPED unique key. Production
+// runs with RUN_BOOT_SEED off, so the boot ensure that migrates the legacy
+// district-wide key (teacher, period[, course]) may not have run there yet —
+// leaving a key that makes any teacher shared between two schools collide and
+// fail that school's whole sync. Repair it here, once per process, so a sync
+// cannot depend on a restart having happened first. Index-only and idempotent.
+let classSectionIndexEnsured = false;
+async function ensureSchoolScopedSectionIndex(): Promise<void> {
+  if (classSectionIndexEnsured) return;
+  await db.execute(
+    sql`DROP INDEX IF EXISTS class_sections_teacher_period_unique`,
+  );
+  await db.execute(
+    sql`DROP INDEX IF EXISTS class_sections_teacher_period_course_unique`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS class_sections_school_teacher_period_course_unique ON class_sections (school_id, teacher_staff_id, period, course_name)`,
+  );
+  classSectionIndexEnsured = true;
+}
+
 export async function runSisSync(
   row: DistrictIntegrationRow,
 ): Promise<SisSyncResult> {
@@ -791,6 +812,14 @@ export async function runSisSync(
     enrollmentsWritten: 0,
     roomsUpdated: 0,
   };
+
+  try {
+    await ensureSchoolScopedSectionIndex();
+  } catch (err) {
+    // Non-fatal: if the legacy index cannot be migrated (e.g. duplicate rows
+    // block the new key) the sync still runs and reports the real failure.
+    logger.warn({ err }, "SIS sync: class_sections index ensure failed");
+  }
 
   const resolved = await resolveSchoolIdForIntegration(row);
   if (!resolved) {

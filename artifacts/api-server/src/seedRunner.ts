@@ -364,11 +364,16 @@ export async function bootstrapCriticalColumns(): Promise<void> {
     await ensureParentMessagesSchema();
     await ensurePulseDnaVideosSchema();
     await ensureMfaSchema();
+    // Roster sync depends on the SCHOOL-SCOPED unique key
+    // (school_id, teacher_staff_id, period, course_name). Production runs with
+    // RUN_BOOT_SEED off, so runSeed/runMigrations never execute there and the
+    // legacy district-wide key survived — any teacher shared between schools
+    // then collided and failed that school's entire sync (Nature Coast).
+    // This ensure is idempotent and index-only, so it belongs on the boot path
+    // that actually runs in production.
+    await ensureClassSectionsSchema();
   } catch (err) {
     logger.error({ err }, "[boot] critical column bootstrap failed");
     throw err;
-
-
-
   }
 }

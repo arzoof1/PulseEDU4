@@ -14,7 +14,7 @@
 //      duplicate degrades to a reuse instead of aborting the school.
 // Requires DATABASE_URL; skipped otherwise.
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -194,6 +194,37 @@ describe.skipIf(!HAS_DB)("SIS sync — planning-row unique collision", () => {
       );
     expect(rows).toHaveLength(1);
     expect(rows[0]!.isPlanning).toBe(true);
+  });
+
+  it("migrates a LEGACY district-wide section index before syncing", async () => {
+    // Production's actual state: RUN_BOOT_SEED is off there, so the boot
+    // ensure never ran and class_sections still carried the pre-multi-school
+    // key without school_id. Any teacher shared between two schools then
+    // collided and failed that school's entire sync.
+    await db.execute(
+      sql`DROP INDEX IF EXISTS class_sections_school_teacher_period_course_unique`,
+    );
+    await db.execute(
+      sql`CREATE UNIQUE INDEX class_sections_teacher_period_course_unique ON class_sections (teacher_staff_id, period, course_name)`,
+    );
+
+    // The repair is once-per-process; re-import with a fresh module registry so
+    // this test exercises it rather than riding an earlier test's flag.
+    vi.resetModules();
+    const freshRunSisSync = (await import("../lib/sisRosterSync")).runSisSync;
+    const result = await freshRunSisSync(integrationRow);
+    expect(result.status).not.toBe("failed");
+
+    const idx = await db.execute(
+      sql`SELECT indexname FROM pg_indexes WHERE tablename = 'class_sections'`,
+    );
+    const names = (idx.rows as Array<{ indexname: string }>).map(
+      (r) => r.indexname,
+    );
+    expect(names).toContain(
+      "class_sections_school_teacher_period_course_unique",
+    );
+    expect(names).not.toContain("class_sections_teacher_period_course_unique");
   });
 
   it("remains idempotent across repeated syncs", async () => {
