@@ -63,6 +63,21 @@ type InviteRow = {
   emailError?: string;
 };
 
+type DiscoveredSchool = {
+  sourcedId: string;
+  name: string;
+  identifier: string | null;
+  stateCode: string | null;
+};
+
+type DiscoveryResponse = {
+  newSchools: DiscoveredSchool[];
+  skippedNoCode: DiscoveredSchool[];
+  existingCount: number;
+  totalFeedSchools: number;
+  usingFixtures: boolean;
+};
+
 function formatWhen(iso: string | null): string {
   if (!iso) return "Never";
   try {
@@ -123,6 +138,10 @@ export default function ClassLinkSyncPanel() {
     invites: InviteRow[];
     message: string;
   } | null>(null);
+  // "Check for new schools" flow: null = closed; otherwise the discovery
+  // result plus which sourcedIds the admin has ticked for onboarding.
+  const [discovery, setDiscovery] = useState<DiscoveryResponse | null>(null);
+  const [selectedOrgIds, setSelectedOrgIds] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setError(null);
@@ -272,6 +291,82 @@ export default function ClassLinkSyncPanel() {
     }
   }
 
+  async function checkNewSchools() {
+    setBusyId("all");
+    setBanner(null);
+    setInviteResults(null);
+    try {
+      const res = await authFetch("/api/sis-sync/discover-schools");
+      const json = (await res.json()) as DiscoveryResponse & { error?: string };
+      if (!res.ok) {
+        throw new Error(json.error || `Discovery failed (${res.status})`);
+      }
+      if (json.newSchools.length === 0) {
+        setBanner({
+          tone: "ok",
+          text: `No new schools in the ClassLink feed — all ${json.existingCount} school org(s) are already in PulseEDU.`,
+        });
+        return;
+      }
+      // Nothing pre-ticked: adding a school is an explicit, per-school choice
+      // (the feed can contain schools the district hasn't purchased).
+      setSelectedOrgIds(new Set());
+      setDiscovery(json);
+    } catch (err) {
+      setBanner({
+        tone: "err",
+        text: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function onboardSelected() {
+    if (selectedOrgIds.size === 0) return;
+    setBusyId("all");
+    setBanner(null);
+    try {
+      const res = await authFetch("/api/sis-sync/onboard-schools", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourcedIds: [...selectedOrgIds] }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        message?: string;
+        error?: string;
+        onboarded?: Array<{ name: string }>;
+      };
+      if (!res.ok) {
+        throw new Error(json.error || `Onboarding failed (${res.status})`);
+      }
+      setDiscovery(null);
+      setSelectedOrgIds(new Set());
+      setBanner({
+        tone: json.ok ? "ok" : "warn",
+        text: json.message ?? "Done.",
+      });
+      await load();
+    } catch (err) {
+      setBanner({
+        tone: "err",
+        text: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  function toggleOrg(sourcedId: string) {
+    setSelectedOrgIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(sourcedId)) next.delete(sourcedId);
+      else next.add(sourcedId);
+      return next;
+    });
+  }
+
   async function copyText(text: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -325,6 +420,11 @@ export default function ClassLinkSyncPanel() {
               New ClassLink administrators are flagged as PulseEDU admins on
               first import only.
             </li>
+            <li>
+              When the district adds a school to ClassLink, use Check for new
+              schools to review and add it here, then run that school's Sync
+              button to pull its roster.
+            </li>
           </ol>
         </RoleSection>
       </HowToUseHelp>
@@ -371,6 +471,21 @@ export default function ClassLinkSyncPanel() {
           }}
         >
           Refresh counts
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void checkNewSchools()}
+          style={{
+            padding: "8px 14px",
+            borderRadius: 8,
+            border: "1px solid var(--border, #d1d5db)",
+            background: "transparent",
+            fontWeight: 600,
+            cursor: busy ? "wait" : "pointer",
+          }}
+        >
+          Check for new schools
         </button>
         {data?.mockMode && (
           <span style={{ fontSize: 13, color: "#a16207" }}>
@@ -420,6 +535,143 @@ export default function ClassLinkSyncPanel() {
         <p style={{ color: "var(--muted, #6b7280)" }}>
           No ClassLink integrations configured in district_integrations yet.
         </p>
+      )}
+
+      {discovery && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="New ClassLink schools"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 60,
+            background: "rgba(15, 23, 42, 0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              maxWidth: 560,
+              maxHeight: "85vh",
+              overflowY: "auto",
+              background: "var(--surface, #fff)",
+              borderRadius: 12,
+              padding: 20,
+              boxShadow: "0 20px 45px rgba(15, 23, 42, 0.25)",
+            }}
+          >
+            <h3 style={{ margin: "0 0 6px", fontSize: 18 }}>
+              New schools in the ClassLink feed
+            </h3>
+            <p
+              style={{
+                margin: "0 0 14px",
+                fontSize: 13,
+                color: "var(--muted, #6b7280)",
+              }}
+            >
+              {discovery.totalFeedSchools} school org(s) in the feed ·{" "}
+              {discovery.existingCount} already in PulseEDU ·{" "}
+              {discovery.newSchools.length} new. Tick the schools to add — only
+              ticked schools are created. Rosters are pulled afterwards with
+              each school's Sync button.
+              {discovery.usingFixtures
+                ? " (CLASSLINK_MOCK fixture data)"
+                : ""}
+            </p>
+            <div style={{ display: "grid", gap: 8, marginBottom: 14 }}>
+              {discovery.newSchools.map((org) => (
+                <label
+                  key={org.sourcedId}
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: 10,
+                    padding: "10px 12px",
+                    border: "1px solid var(--border, #e5e7eb)",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedOrgIds.has(org.sourcedId)}
+                    onChange={() => toggleOrg(org.sourcedId)}
+                    style={{ marginTop: 3 }}
+                  />
+                  <span>
+                    <span style={{ fontWeight: 600 }}>{org.name}</span>
+                    <span
+                      style={{
+                        display: "block",
+                        fontSize: 12,
+                        color: "var(--muted, #6b7280)",
+                      }}
+                    >
+                      State code {org.stateCode ?? "—"} · orgId {org.sourcedId}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            {discovery.skippedNoCode.length > 0 && (
+              <p style={{ fontSize: 12, color: "#a16207", marginBottom: 14 }}>
+                {discovery.skippedNoCode.length} org(s) have no state code and
+                cannot be onboarded:{" "}
+                {discovery.skippedNoCode.map((o) => o.name).join(", ")}
+              </p>
+            )}
+            <div
+              style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}
+            >
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setDiscovery(null);
+                  setSelectedOrgIds(new Set());
+                }}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: 8,
+                  border: "1px solid var(--border, #d1d5db)",
+                  background: "transparent",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busy || selectedOrgIds.size === 0}
+                onClick={() => void onboardSelected()}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: 8,
+                  border: "none",
+                  background:
+                    selectedOrgIds.size === 0 ? "#9ca3af" : "#0f766e",
+                  color: "#fff",
+                  fontWeight: 600,
+                  cursor:
+                    busy || selectedOrgIds.size === 0
+                      ? "not-allowed"
+                      : "pointer",
+                }}
+              >
+                {busyId === "all"
+                  ? "Adding…"
+                  : `Add ${selectedOrgIds.size} school${selectedOrgIds.size === 1 ? "" : "s"}`}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       <div style={{ display: "grid", gap: 16 }}>

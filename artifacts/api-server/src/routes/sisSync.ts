@@ -11,6 +11,7 @@ import {
   requireSchool,
   canImportSchoolData,
   canImportDistrictData,
+  getDistrictIdForSchool,
 } from "../lib/scope.js";
 import {
   ensureParrottClasslinkIntegration,
@@ -20,6 +21,11 @@ import {
   runSisSyncForIntegration,
   runSisSyncForSchool,
 } from "../lib/sisRosterSync.js";
+import {
+  discoverNewClasslinkSchools,
+  onboardClasslinkSchools,
+} from "../lib/sisSchoolOnboarding.js";
+import { writeAuthAudit } from "../lib/authAudit.js";
 import {
   hashStaffPasswordResetToken,
   issueStaffPasswordResetToken,
@@ -334,6 +340,103 @@ router.post(
       message: `Synced ${okCount} of ${results.length} school(s).`,
       results,
     });
+  },
+);
+
+/**
+ * GET /sis-sync/discover-schools — read-only diff of the live ClassLink org
+ * feed against Pulse: which school orgs exist in ClassLink but have no Pulse
+ * school/integration yet. The dry-run half of button-driven onboarding.
+ */
+router.get(
+  "/sis-sync/discover-schools",
+  requireDistrictSisSyncAdmin(),
+  async (_req, res) => {
+    try {
+      const result = await discoverNewClasslinkSchools();
+      res.json(result);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn({ err }, "ClassLink school discovery failed");
+      res
+        .status(502)
+        .json({ error: `Could not read the ClassLink org feed: ${msg}` });
+    }
+  },
+);
+
+/**
+ * POST /sis-sync/onboard-schools — create school + integration rows for an
+ * explicit selection of newly discovered orgs. Body: { sourcedIds: string[] }.
+ * Only sourcedIds are trusted from the client; names/codes are re-read from
+ * the feed. New schools land in the ACTOR'S district. Data arrives via the
+ * school's own Sync button afterwards (kept out of this request on purpose —
+ * inline multi-school syncs are what caused the run-all gateway timeouts).
+ */
+router.post(
+  "/sis-sync/onboard-schools",
+  requireDistrictSisSyncAdmin(),
+  async (req, res) => {
+    const actor = (req as Request & { staff: StaffRow }).staff;
+    const raw = (req.body ?? {}) as { sourcedIds?: unknown };
+    const sourcedIds = Array.isArray(raw.sourcedIds)
+      ? raw.sourcedIds.filter(
+          (s): s is string => typeof s === "string" && s.trim().length > 0,
+        )
+      : [];
+    if (sourcedIds.length === 0) {
+      res.status(400).json({ error: "sourcedIds must be a non-empty array." });
+      return;
+    }
+    if (sourcedIds.length > 50) {
+      res.status(400).json({ error: "Too many schools in one request (max 50)." });
+      return;
+    }
+
+    const districtId = await getDistrictIdForSchool(actor.schoolId);
+    if (districtId === null) {
+      res
+        .status(409)
+        .json({ error: "Your account's school is not linked to a district." });
+      return;
+    }
+
+    try {
+      const result = await onboardClasslinkSchools({ sourcedIds, districtId });
+      for (const o of result.onboarded) {
+        await writeAuthAudit({
+          action: "sis_school_onboarded",
+          schoolId: o.schoolId,
+          actorStaffId: actor.id,
+          actorName: actor.displayName,
+          ip: clientIp(req),
+          payload: {
+            schoolName: o.name,
+            stateSchoolCode: o.stateCode,
+            classlinkOrgSourcedId: o.sourcedId,
+            integrationId: o.integrationId,
+          },
+        });
+      }
+      const added = result.onboarded.length;
+      const rejectedNote =
+        result.rejected.length > 0
+          ? ` ${result.rejected.length} selection(s) skipped: ${result.rejected
+              .map((r) => r.reason)
+              .join(" · ")}`
+          : "";
+      res.json({
+        ...result,
+        message:
+          added > 0
+            ? `Added ${added} school(s). Use each school's Sync button to pull rosters.${rejectedNote}`
+            : `No schools were added.${rejectedNote}`,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error({ err }, "ClassLink school onboarding failed");
+      res.status(500).json({ error: `School onboarding failed: ${msg}` });
+    }
   },
 );
 
