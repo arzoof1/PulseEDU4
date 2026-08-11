@@ -1064,15 +1064,15 @@ router.get("/teacher-roster/teachers", async (req: Request, res: Response) => {
     res.json({ teachers: [] });
     return;
   }
+  // teacherIds already came from THIS school's class_sections, so the school
+  // is established. Re-filtering on staff.school_id additionally required the
+  // teacher to live here, which silently dropped shared / itinerant staff (a
+  // technical-school teacher whose home campus is elsewhere) from their own
+  // department list.
   const teachers = await db
     .select()
     .from(staffTable)
-    .where(
-      and(
-        eq(staffTable.schoolId, schoolId),
-        inArray(staffTable.id, teacherIds),
-      ),
-    );
+    .where(inArray(staffTable.id, teacherIds));
   const out = teachers
     .filter((t) => t.active)
     .map((t) => ({

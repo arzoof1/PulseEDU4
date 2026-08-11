@@ -15,6 +15,7 @@ import { isMfaRequiredForStaffCached } from "./lib/mfaPolicyCache.js";
 import { mfaEnrollmentGate } from "./lib/mfaEnrollmentGate.js";
 import { apiUsageAlertMiddleware } from "./lib/apiUsageMonitor.js";
 import { resolveActiveSchoolId } from "./lib/tenantScope.js";
+import { passwordSetupGate } from "./lib/passwordSetupGate.js";
 import { logger } from "./lib/logger";
 import {
   isStaffBearerAuthEnabled,
@@ -32,6 +33,11 @@ declare global {
       // it to block all non-enrollment routes. Fail-open: any resolution error
       // leaves it false (a transient DB blip must not wall the whole app).
       mfaEnrollmentRequired?: boolean;
+      // Set by the global auth middleware when staff.must_set_password is
+      // true — the account is on an admin-issued temp password. The
+      // passwordSetupGate reads it to block everything except changing the
+      // password. Fail-open on the same reasoning as MFA above.
+      passwordSetupRequired?: boolean;
       // Parent identity for HeartBEAT parent-portal routes. Resolved by a
       // router-level middleware inside parentAuth.ts (NOT by the global
       // staff middleware below) so the two identity systems stay isolated.
@@ -330,6 +336,7 @@ app.use(async (req, _res, next) => {
   }
   req.staffId = sid;
   req.mfaEnrollmentRequired = false;
+  req.passwordSetupRequired = false;
 
   // Resolve the active school for this request. For non-SuperUsers it is
   // strictly the staff's home school (session override is ignored). For
@@ -349,12 +356,21 @@ app.use(async (req, _res, next) => {
           isDistrictAdmin: staffTable.isDistrictAdmin,
           isAdmin: staffTable.isAdmin,
           mfaEnrolledAt: staffTable.mfaEnrolledAt,
+          mustSetPassword: staffTable.mustSetPassword,
           active: staffTable.active,
         })
         .from(staffTable)
         .where(eq(staffTable.id, sid));
       if (staff && staff.active) {
         req.homeSchoolId = staff.schoolId;
+
+        // Forced password change: this account is on an admin-issued temp
+        // password (bulk generator or roster-sync placeholder), so
+        // passwordSetupGate blocks everything except the change-password and
+        // sign-out routes. Read straight off the row — no policy lookup — and
+        // set here, before the school-active early-returns, so it lands on
+        // every code path.
+        req.passwordSetupRequired = staff.mustSetPassword === true;
 
         // MFA enrollment gate (Gate A / Section 1). Flag the request when this
         // staff's role is required by policy but they have not enrolled, so
@@ -484,6 +500,10 @@ app.use("/api", apiUsageAlertMiddleware);
 // route table: a not-yet-enrolled required user is 403'd on everything except
 // the enrollment + sign-out routes.
 app.use("/api", mfaEnrollmentGate);
+// Same shape as the MFA gate, mounted immediately after it: an account on an
+// admin-issued temp password is walled to /auth/change-password until it picks
+// its own. Ordering means a user owing both is asked for MFA first.
+app.use("/api", passwordSetupGate);
 app.use("/api", router);
 
 // -----------------------------------------------------------------------------

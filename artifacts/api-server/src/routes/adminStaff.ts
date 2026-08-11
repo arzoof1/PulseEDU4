@@ -29,6 +29,7 @@ import {
   getDistrictIdForSchool,
   getSchoolIdsForDistrict,
 } from "../lib/scope";
+import { staffAtSchoolWhere } from "../lib/schoolStaff.js";
 import {
   verifyPrivilegedReauth,
   hasFreshPrivilegedReauth,
@@ -394,10 +395,14 @@ router.get(
       res.status(400).json({ error: "No active school" });
       return;
     }
+    // Home-school staff PLUS teachers visiting from another campus (shared /
+    // itinerant staff keep their original school_id — see lib/schoolStaff.ts).
+    // Without this a technical school staffed by teachers from other campuses
+    // shows an empty roster even though their classes are here.
     const rows = await db
       .select(STAFF_SELECT)
       .from(staffTable)
-      .where(eq(staffTable.schoolId, schoolId))
+      .where(await staffAtSchoolWhere(schoolId))
       .orderBy(asc(staffTable.displayName));
     res.json(rows);
   },
@@ -1157,16 +1162,24 @@ router.post(
       // switched SuperUser would 403 on their own active school.
       bodySchoolId !== targetSchoolId
     ) {
-      const actorDistrictId = await getDistrictIdForSchool(actor.schoolId);
+      // Compare against the district of the school the actor is ACTING in, not
+      // their home school. A SuperUser switched into another district (allowed
+      // via ALLOW_CROSS_DISTRICT_SUPERUSER, and already validated by the
+      // tenant middleware) would otherwise be told their own active school is
+      // "outside your district" — a 403 on a legitimate create.
+      const actorDistrictId = await getDistrictIdForSchool(
+        targetSchoolId ?? actor.schoolId,
+      );
       const targetDistrictId = await getDistrictIdForSchool(bodySchoolId);
       if (
         actorDistrictId === null ||
         targetDistrictId === null ||
         actorDistrictId !== targetDistrictId
       ) {
-        res
-          .status(403)
-          .json({ error: "Cannot create staff in a school outside your district." });
+        res.status(403).json({
+          error:
+            "Cannot create staff in a school outside the district you are currently in.",
+        });
         return;
       }
       targetSchoolId = bodySchoolId;

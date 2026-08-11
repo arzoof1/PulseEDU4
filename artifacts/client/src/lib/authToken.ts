@@ -43,6 +43,29 @@ export function clearMfaEnrollmentBlocked(): void {
   mfaEnrollmentBlocked = false;
 }
 
+// Same pair for the forced-password-change wall (403 {
+// error: "password_setup_required" }): the account is on an admin-issued temp
+// password and must choose its own before anything else works. Handled at this
+// choke point so a session that was already open when an admin generated temp
+// passwords gets walled on its very next request.
+let passwordSetupRequiredHandler: (() => void) | null = null;
+
+export function setPasswordSetupRequiredHandler(
+  handler: (() => void) | null,
+): void {
+  passwordSetupRequiredHandler = handler;
+}
+
+let passwordSetupBlocked = false;
+
+export function isPasswordSetupBlocked(): boolean {
+  return passwordSetupBlocked;
+}
+
+export function clearPasswordSetupBlocked(): void {
+  passwordSetupBlocked = false;
+}
+
 export function setAuthToken(token: string | null | undefined) {
   inMemoryAuthToken = token && token.length > 0 ? token : null;
 }
@@ -134,6 +157,11 @@ export async function authFetch(
       // unblocks the user.
       mfaEnrollmentBlocked = true;
       mfaEnrollmentRequiredHandler?.();
+    } else if (body?.error === "password_setup_required") {
+      // Same contract as MFA above: the server is walling this account until it
+      // replaces its admin-issued temp password.
+      passwordSetupBlocked = true;
+      passwordSetupRequiredHandler?.();
     }
   }
 

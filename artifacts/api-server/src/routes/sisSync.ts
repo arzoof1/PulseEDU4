@@ -38,7 +38,12 @@ import {
   buildStaffPasswordResetUrl,
   sendStaffPasswordResetEmail,
 } from "../lib/staffPasswordResetEmail.js";
-import { ensureStaffPasswordResetsSchema } from "../seed.js";
+import {
+  ensureStaffPasswordResetsSchema,
+  ensureStaffSisInviteColumns,
+} from "../seed.js";
+import { generateAndHashTempPassword } from "../lib/tempPassword.js";
+import { staffAtSchoolWhere } from "../lib/schoolStaff.js";
 import { isEmailGloballyEnabled } from "../lib/emailGlobalSwitch.js";
 import { logger } from "../lib/logger.js";
 
@@ -572,6 +577,201 @@ router.post(
       truncated: targets.length > MAX,
       invites,
       message: `Created ${invites.length} invite(s); emailed ${emailSent}. Copy links are always included for admin handoff.`,
+    });
+  },
+);
+
+/**
+ * POST /sis-sync/temp-passwords
+ * Body: { schoolId?: number, integrationId?: number,
+ *         scope?: "needsPassword" | "all", offset?: number }
+ *
+ * Bulk sibling of POST /admin/staff/:id/reset-temp-password: issues a DISTINCT
+ * one-time password per staff member at one school and returns them in plain
+ * text exactly once (only the bcrypt hash is stored). Every target is flagged
+ * must_set_password, so passwordSetupGate walls them into the change-password
+ * screen on first sign-in — the "forces them to change" half of the request.
+ *
+ * This exists because district email is switched off, so the invite-link flow
+ * (which is the better UX when email works) cannot reach anyone. Deliberately
+ * NOT a single shared password: one credential for a whole staff would let any
+ * teacher sign in as any colleague, and this app holds safety plans, behaviour
+ * investigations, and medical notes.
+ */
+router.post(
+  "/sis-sync/temp-passwords",
+  requireDistrictSisSyncAdmin(),
+  async (req, res) => {
+    const actor = (req as Request & { staff: StaffRow }).staff;
+    const body = (req.body ?? {}) as {
+      schoolId?: unknown;
+      integrationId?: unknown;
+      scope?: unknown;
+      offset?: unknown;
+    };
+
+    // School resolution is intentionally identical to invite-passwords above so
+    // the two buttons on the panel cannot disagree about which school they mean.
+    let schoolId: number | null = null;
+    if (body.integrationId != null) {
+      const integrationId = Number(body.integrationId);
+      if (!Number.isFinite(integrationId) || integrationId <= 0) {
+        res.status(400).json({ error: "Invalid integrationId" });
+        return;
+      }
+      const dash = await getSisDistrictDashboard();
+      const row = dash.find((d) => d.id === integrationId);
+      if (!row?.resolvedSchoolId) {
+        res.status(404).json({
+          error: "Integration not found or school not mapped.",
+        });
+        return;
+      }
+      schoolId = row.resolvedSchoolId;
+    } else if (body.schoolId != null) {
+      schoolId = Number(body.schoolId);
+      if (!Number.isFinite(schoolId) || schoolId <= 0) {
+        res.status(400).json({ error: "Invalid schoolId" });
+        return;
+      }
+    } else {
+      res.status(400).json({ error: "schoolId or integrationId is required" });
+      return;
+    }
+
+    // Containment: a District Admin must not mint credentials outside their own
+    // district. (invite-passwords does not check this; issuing passwords is the
+    // stronger capability, so it is enforced here.)
+    const actorDistrictId = await getDistrictIdForSchool(actor.schoolId);
+    const targetDistrictId = await getDistrictIdForSchool(schoolId);
+    if (
+      actorDistrictId === null ||
+      targetDistrictId === null ||
+      actorDistrictId !== targetDistrictId
+    ) {
+      res
+        .status(403)
+        .json({ error: "Cannot issue passwords for a school outside your district." });
+      return;
+    }
+
+    const scopeAll = body.scope === "all";
+    const offset =
+      Number.isFinite(Number(body.offset)) && Number(body.offset) > 0
+        ? Math.floor(Number(body.offset))
+        : 0;
+
+    // Production runs RUN_BOOT_SEED off, so must_set_password provisioning
+    // cannot be assumed — same lazy-ensure pattern issueSetPasswordInvite uses.
+    await ensureStaffSisInviteColumns();
+
+    // Membership matches the Staff & Roles roster and the panel's counts:
+    // home-school staff plus teachers visiting from another campus, who
+    // otherwise could never be issued a password from the school they
+    // actually teach at (lib/schoolStaff.ts).
+    const conditions = [
+      await staffAtSchoolWhere(schoolId),
+      eq(staffTable.active, true),
+    ];
+    if (!scopeAll) {
+      conditions.push(eq(staffTable.mustSetPassword, true));
+    }
+
+    const candidates = await db
+      .select({
+        id: staffTable.id,
+        email: staffTable.email,
+        displayName: staffTable.displayName,
+        isSuperUser: staffTable.isSuperUser,
+        isDistrictAdmin: staffTable.isDistrictAdmin,
+      })
+      .from(staffTable)
+      .where(and(...conditions))
+      .orderBy(staffTable.id);
+
+    // Skip rules, reported rather than silently applied:
+    //   * never the actor (an admin must not lock themselves out mid-rollout)
+    //   * never a SuperUser / District Admin unless the actor is a SuperUser,
+    //     mirroring the per-person reset's role hierarchy.
+    const skipped: Array<{ displayName: string; reason: string }> = [];
+    const eligible = candidates.filter((s) => {
+      if (s.id === actor.id) {
+        skipped.push({
+          displayName: s.displayName,
+          reason: "your own account — use Change Password",
+        });
+        return false;
+      }
+      if ((s.isSuperUser || s.isDistrictAdmin) && !actor.isSuperUser) {
+        skipped.push({
+          displayName: s.displayName,
+          reason: "SuperUser / District Admin — SuperUser only",
+        });
+        return false;
+      }
+      return true;
+    });
+
+    // Paginate rather than silently truncating (the invite endpoint's MAX=100
+    // slice is a known wart). The caller re-invokes with nextOffset.
+    const BATCH = 250;
+    const batch = eligible.slice(offset, offset + BATCH);
+    const remaining = Math.max(0, eligible.length - (offset + batch.length));
+
+    const results: Array<{
+      staffId: number;
+      displayName: string;
+      email: string;
+      tempPassword: string;
+    }> = [];
+
+    for (const s of batch) {
+      const { tempPassword, passwordHash } = await generateAndHashTempPassword();
+      await db
+        .update(staffTable)
+        .set({ passwordHash, mustSetPassword: true })
+        .where(eq(staffTable.id, s.id));
+      await writeAuthAudit({
+        action: "admin_password_reset",
+        schoolId,
+        actorStaffId: actor.id,
+        actorName: actor.displayName,
+        targetStaffId: s.id,
+        ip: clientIp(req),
+        payload: {
+          targetName: s.displayName,
+          mode: "bulk_temp_password",
+          scope: scopeAll ? "all" : "needsPassword",
+        },
+      });
+      results.push({
+        staffId: s.id,
+        displayName: s.displayName,
+        email: s.email,
+        tempPassword,
+      });
+    }
+
+    const skippedNote =
+      skipped.length > 0 ? ` Skipped ${skipped.length}.` : "";
+    const remainingNote =
+      remaining > 0
+        ? ` ${remaining} more still to do — run it again to continue.`
+        : "";
+
+    res.json({
+      schoolId,
+      scope: scopeAll ? "all" : "needsPassword",
+      generated: results.length,
+      eligible: eligible.length,
+      remaining,
+      nextOffset: remaining > 0 ? offset + batch.length : null,
+      skipped,
+      results,
+      message:
+        results.length === 0
+          ? `No staff to update at this school.${skippedNote}`
+          : `Generated ${results.length} one-time password(s).${skippedNote}${remainingNote} They are shown once — copy or download them now.`,
     });
   },
 );

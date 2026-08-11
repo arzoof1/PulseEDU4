@@ -18,6 +18,7 @@ import {
   type SisStudent,
 } from "@workspace/sis-adapters";
 import { resolveSisSchoolMapping } from "./sisSchoolMapping.js";
+import { staffAtSchoolWhere } from "./schoolStaff.js";
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { bcryptHash } from "./bcrypt.js";
@@ -1148,6 +1149,10 @@ async function loadSchoolLiveCounts(
     .from(studentsTable)
     .where(eq(studentsTable.schoolId, schoolId));
 
+  // Home-school staff PLUS teachers visiting from another campus. Shared /
+  // itinerant staff keep the school_id of whichever school synced them first,
+  // so a school staffed largely by visiting teachers (Nature Coast) reported
+  // zero teachers here while its sections and enrollments were correct.
   const staffRows = await db
     .select({
       sisRole: staffTable.sisRole,
@@ -1156,7 +1161,7 @@ async function loadSchoolLiveCounts(
       active: staffTable.active,
     })
     .from(staffTable)
-    .where(eq(staffTable.schoolId, schoolId));
+    .where(await staffAtSchoolWhere(schoolId));
 
   let staffActive = 0;
   let teachers = 0;

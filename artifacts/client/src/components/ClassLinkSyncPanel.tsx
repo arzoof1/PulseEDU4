@@ -71,6 +71,25 @@ type InviteRow = {
   emailError?: string;
 };
 
+type TempPasswordRow = {
+  staffId: number;
+  displayName: string;
+  email: string;
+  tempPassword: string;
+};
+
+type TempPasswordResponse = {
+  schoolId: number;
+  scope: "needsPassword" | "all";
+  generated: number;
+  eligible: number;
+  remaining: number;
+  nextOffset: number | null;
+  skipped: Array<{ displayName: string; reason: string }>;
+  results: TempPasswordRow[];
+  message: string;
+};
+
 type DiscoveredSchool = {
   sourcedId: string;
   name: string;
@@ -150,6 +169,20 @@ export default function ClassLinkSyncPanel() {
   // result plus which sourcedIds the admin has ticked for onboarding.
   const [discovery, setDiscovery] = useState<DiscoveryResponse | null>(null);
   const [selectedOrgIds, setSelectedOrgIds] = useState<Set<string>>(new Set());
+  // Temp-password flow: `confirm` holds the school awaiting confirmation (this
+  // invalidates passwords, so it is never one-click), `results` holds the
+  // generated list. Passwords exist ONLY here — the server stores hashes — so
+  // the results table stays until dismissed.
+  const [tempPwConfirm, setTempPwConfirm] = useState<IntegrationRow | null>(
+    null,
+  );
+  const [tempPwScopeAll, setTempPwScopeAll] = useState(false);
+  const [tempPwResults, setTempPwResults] = useState<{
+    schoolName: string;
+    rows: TempPasswordRow[];
+    message: string;
+    skipped: Array<{ displayName: string; reason: string }>;
+  } | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -396,6 +429,109 @@ export default function ClassLinkSyncPanel() {
     });
   }
 
+  async function generateTempPasswords(row: IntegrationRow, scopeAll: boolean) {
+    setBusyId(row.id);
+    setBanner(null);
+    setInviteResults(null);
+    setTempPwConfirm(null);
+    try {
+      const collected: TempPasswordRow[] = [];
+      const skipped: Array<{ displayName: string; reason: string }> = [];
+      let offset = 0;
+      let message = "";
+      // The endpoint pages at 250 to keep each request small; loop until it
+      // reports nothing remaining so a large high school completes in one click
+      // instead of silently stopping short.
+      for (;;) {
+        const res = await authFetch("/api/sis-sync/temp-passwords", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            integrationId: row.id,
+            scope: scopeAll ? "all" : "needsPassword",
+            offset,
+          }),
+        });
+        const json = (await res.json()) as TempPasswordResponse & {
+          error?: string;
+        };
+        if (!res.ok) {
+          throw new Error(json.error || `Failed (${res.status})`);
+        }
+        collected.push(...json.results);
+        if (offset === 0) skipped.push(...json.skipped);
+        message = json.message;
+        if (json.nextOffset == null) break;
+        offset = json.nextOffset;
+      }
+
+      if (collected.length === 0) {
+        setBanner({ tone: "warn", text: `${row.schoolName}: ${message}` });
+        return;
+      }
+      setTempPwResults({
+        schoolName: row.schoolName,
+        rows: collected,
+        message,
+        skipped,
+      });
+      setBanner({
+        tone: "ok",
+        text: `${row.schoolName}: generated ${collected.length} one-time password(s). Copy or download them now — they are not recoverable.`,
+      });
+      await load();
+    } catch (err) {
+      setBanner({
+        tone: "err",
+        text: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  // Guard against spreadsheet formula injection, mirroring csvCell() on the
+  // server (adminStaff.ts) — a display name starting with = / + / - / @ would
+  // otherwise execute when the CSV is opened in Excel.
+  function csvCell(value: string): string {
+    const v = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+    return `"${v.replace(/"/g, '""')}"`;
+  }
+
+  function downloadTempPasswordCsv() {
+    if (!tempPwResults) return;
+    const header = ["Name", "Email", "Temporary password"];
+    const lines = [
+      header.map(csvCell).join(","),
+      ...tempPwResults.rows.map((r) =>
+        [r.displayName, r.email, r.tempPassword].map(csvCell).join(","),
+      ),
+    ];
+    // Leading BOM so Excel reads UTF-8 correctly; download via a hidden anchor
+    // rather than opening the blob in a tab (blobs render blank inside the
+    // Replit preview iframe).
+    const blob = new Blob(["﻿" + lines.join("\r\n") + "\r\n"], {
+      type: "text/csv;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const slug = tempPwResults.schoolName.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+    a.download = `temp-passwords-${slug}-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function copyAllTempPasswords() {
+    if (!tempPwResults) return;
+    const text = tempPwResults.rows
+      .map((r) => `${r.displayName}\t${r.email}\t${r.tempPassword}`)
+      .join("\n");
+    await copyText(text);
+  }
+
   async function copyText(text: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -444,6 +580,12 @@ export default function ClassLinkSyncPanel() {
             <li>
               For staff still needing a password, use Invite passwords — email
               when enabled, otherwise copy the link and send it yourself.
+            </li>
+            <li>
+              With district email off, Generate temp passwords is usually
+              faster: it issues a one-time password per person for the whole
+              school at once, downloadable as a CSV. Each person must choose
+              their own password the first time they sign in.
             </li>
             <li>
               New ClassLink administrators are flagged as PulseEDU admins on
@@ -703,6 +845,157 @@ export default function ClassLinkSyncPanel() {
         </div>
       )}
 
+      {tempPwConfirm && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Generate temporary passwords"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 60,
+            background: "rgba(15, 23, 42, 0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              maxWidth: 520,
+              background: "var(--surface, #fff)",
+              borderRadius: 12,
+              padding: 20,
+              boxShadow: "0 20px 45px rgba(15, 23, 42, 0.25)",
+            }}
+          >
+            <h3 style={{ margin: "0 0 6px", fontSize: 18 }}>
+              Generate temporary passwords
+            </h3>
+            <p
+              style={{
+                margin: "0 0 16px",
+                fontSize: 13,
+                color: "var(--muted, #6b7280)",
+                lineHeight: 1.5,
+              }}
+            >
+              Each person gets their own one-time password and must choose a new
+              one the first time they sign in. Passwords are shown{" "}
+              <strong>once</strong> — copy or download them before closing.
+            </p>
+
+            <label
+              style={{
+                display: "flex",
+                gap: 10,
+                alignItems: "flex-start",
+                padding: "10px 12px",
+                border: `1px solid ${!tempPwScopeAll ? "#2563eb" : "var(--border, #e5e7eb)"}`,
+                borderRadius: 8,
+                marginBottom: 8,
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="radio"
+                checked={!tempPwScopeAll}
+                onChange={() => setTempPwScopeAll(false)}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                <span style={{ fontWeight: 600 }}>
+                  Only staff who still need a password
+                </span>
+                <span
+                  style={{
+                    display: "block",
+                    fontSize: 12,
+                    color: "var(--muted, #6b7280)",
+                  }}
+                >
+                  {tempPwConfirm.live
+                    ? `${tempPwConfirm.live.needingPassword} at ${tempPwConfirm.schoolName}. `
+                    : ""}
+                  Anyone who already chose their own password keeps it.
+                </span>
+              </span>
+            </label>
+
+            <label
+              style={{
+                display: "flex",
+                gap: 10,
+                alignItems: "flex-start",
+                padding: "10px 12px",
+                border: `1px solid ${tempPwScopeAll ? "#b45309" : "var(--border, #e5e7eb)"}`,
+                borderRadius: 8,
+                marginBottom: 14,
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="radio"
+                checked={tempPwScopeAll}
+                onChange={() => setTempPwScopeAll(true)}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                <span style={{ fontWeight: 600 }}>All staff at this school</span>
+                <span
+                  style={{
+                    display: "block",
+                    fontSize: 12,
+                    color: "#92400e",
+                  }}
+                >
+                  Replaces working passwords too — anyone signed in now will be
+                  asked to set a new one. Use only for a school starting fresh.
+                </span>
+              </span>
+            </label>
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setTempPwConfirm(null)}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: 8,
+                  border: "1px solid var(--border, #d1d5db)",
+                  background: "transparent",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  void generateTempPasswords(tempPwConfirm, tempPwScopeAll)
+                }
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: 8,
+                  border: "none",
+                  background: tempPwScopeAll ? "#b45309" : "#0f766e",
+                  color: "#fff",
+                  fontWeight: 600,
+                  cursor: busy ? "wait" : "pointer",
+                }}
+              >
+                {busy ? "Generating…" : "Generate passwords"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: "grid", gap: 16 }}>
         {integrations.map((row) => {
           const live = row.live;
@@ -789,6 +1082,28 @@ export default function ClassLinkSyncPanel() {
                       ? ` (${live.needingPassword})`
                       : ""}
                   </button>
+                  <button
+                    type="button"
+                    disabled={busy || row.resolvedSchoolId == null}
+                    onClick={() => {
+                      setTempPwScopeAll(false);
+                      setTempPwConfirm(row);
+                    }}
+                    title="Generate one-time passwords to hand out when district email is off"
+                    style={{
+                      padding: "8px 12px",
+                      borderRadius: 8,
+                      // Amber outline: this replaces passwords, unlike the
+                      // purely additive buttons beside it.
+                      border: "1px solid #f59e0b",
+                      background: "transparent",
+                      color: "#92400e",
+                      fontWeight: 600,
+                      cursor: busy ? "wait" : "pointer",
+                    }}
+                  >
+                    Generate temp passwords
+                  </button>
                 </div>
               </div>
 
@@ -860,6 +1175,143 @@ export default function ClassLinkSyncPanel() {
                       <button
                         type="button"
                         onClick={() => void copyText(inv.resetUrl)}
+                        style={{
+                          padding: "4px 8px",
+                          borderRadius: 6,
+                          border: "1px solid #d1d5db",
+                          background: "#fff",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Copy
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {tempPwResults && tempPwResults.rows.length > 0 && (
+        <section style={{ marginTop: 28 }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: 10,
+              marginBottom: 8,
+            }}
+          >
+            <h3 style={{ margin: 0 }}>
+              Temporary passwords — {tempPwResults.schoolName}
+            </h3>
+            <button
+              type="button"
+              onClick={() => downloadTempPasswordCsv()}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 8,
+                border: "none",
+                background: "#0f766e",
+                color: "#fff",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Download CSV
+            </button>
+            <button
+              type="button"
+              onClick={() => void copyAllTempPasswords()}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 8,
+                border: "1px solid var(--border, #d1d5db)",
+                background: "transparent",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Copy all
+            </button>
+            <button
+              type="button"
+              onClick={() => setTempPwResults(null)}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 8,
+                border: "1px solid var(--border, #d1d5db)",
+                background: "transparent",
+                cursor: "pointer",
+              }}
+            >
+              Done
+            </button>
+          </div>
+          <p
+            style={{
+              fontSize: 13,
+              color: "#92400e",
+              background: "#fffbeb",
+              border: "1px solid #fde68a",
+              borderRadius: 8,
+              padding: "10px 12px",
+            }}
+          >
+            {tempPwResults.message} These passwords are shown only once and
+            cannot be recovered — download the CSV before leaving this page.
+            Each person will be asked to choose their own password when they
+            first sign in.
+          </p>
+          {tempPwResults.skipped.length > 0 && (
+            <p style={{ fontSize: 12, color: "var(--muted, #6b7280)" }}>
+              Skipped:{" "}
+              {tempPwResults.skipped
+                .map((s) => `${s.displayName} (${s.reason})`)
+                .join(" · ")}
+            </p>
+          )}
+          <div style={{ overflowX: "auto" }}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: 13,
+              }}
+            >
+              <thead>
+                <tr
+                  style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}
+                >
+                  <th style={{ padding: "8px 6px" }}>Name</th>
+                  <th style={{ padding: "8px 6px" }}>Email</th>
+                  <th style={{ padding: "8px 6px" }}>Temporary password</th>
+                  <th style={{ padding: "8px 6px" }}>Copy</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tempPwResults.rows.map((r) => (
+                  <tr
+                    key={r.staffId}
+                    style={{ borderBottom: "1px solid #f3f4f6" }}
+                  >
+                    <td style={{ padding: "8px 6px" }}>{r.displayName}</td>
+                    <td style={{ padding: "8px 6px" }}>{r.email}</td>
+                    <td
+                      style={{
+                        padding: "8px 6px",
+                        fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                      }}
+                    >
+                      {r.tempPassword}
+                    </td>
+                    <td style={{ padding: "8px 6px" }}>
+                      <button
+                        type="button"
+                        onClick={() => void copyText(r.tempPassword)}
                         style={{
                           padding: "4px 8px",
                           borderRadius: 6,

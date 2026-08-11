@@ -156,6 +156,11 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     isCoreTeam: row.isCoreTeam,
     isConfidentialSecretary: row.isConfidentialSecretary,
     defaultRoom: row.defaultRoom,
+    // Set for accounts holding an admin-issued temp password (bulk generator
+    // or roster-sync placeholder). The server enforces it via
+    // passwordSetupGate; the client reads it here to render the forced
+    // set-password screen instead of the app shell.
+    mustSetPassword: row.mustSetPassword,
     // Per-teacher opt-in: the Classroom Store is hidden by default and a
     // teacher reveals it from a toggle. Stored in ui_prefs (no migration);
     // surfaced here so the client can gate the nav item + hub view in one

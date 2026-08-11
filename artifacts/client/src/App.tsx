@@ -23,6 +23,7 @@ import ParentNotificationsPanel from "./components/ParentNotificationsPanel";
 import PulloutNotificationsPanel from "./components/PulloutNotificationsPanel";
 import PulseDnaStudio from "./components/PulseDnaStudio";
 import TwoFactorSettings from "./components/TwoFactorSettings";
+import ForcedPasswordChange from "./components/ForcedPasswordChange";
 import { TeacherPicker } from "./components/TeacherPicker";
 import HelpAssistant from "./components/HelpAssistant";
 import { TileHome, type Tile as TileHomeTile } from "./pages/TileHome";
@@ -188,6 +189,8 @@ import {
   authFetch,
   setMfaEnrollmentRequiredHandler,
   clearMfaEnrollmentBlocked,
+  setPasswordSetupRequiredHandler,
+  clearPasswordSetupBlocked,
 } from "./lib/authToken";
 import {
   AreaChart,
@@ -5684,6 +5687,10 @@ function App() {
     // the Recognition sidebar item + the Classroom Store view. Persisted in
     // staff.ui_prefs server-side and surfaced via /api/auth/me.
     classroomStoreEnabled?: boolean;
+    // Account is signed in on an admin-issued temp password. The server walls
+    // every route except change-password (passwordSetupGate); the client shows
+    // ForcedPasswordChange until it clears.
+    mustSetPassword?: boolean;
     capStaffRoles?: boolean;
     capManageRoles?: boolean;
     // Delegated data-importer caps — Admin/Core Team can grant each
@@ -7786,6 +7793,7 @@ function App() {
   // dashboard (and 403-crash) before we know they must enroll.
   useEffect(() => {
     clearMfaEnrollmentBlocked();
+    clearPasswordSetupBlocked();
     setMfaChecked(false);
     loadMfaStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -7801,6 +7809,17 @@ function App() {
   useEffect(() => {
     setMfaEnrollmentRequiredHandler(() => loadMfaStatusRef.current());
     return () => setMfaEnrollmentRequiredHandler(null);
+  }, []);
+
+  // Same catch-up path for the forced password change: if an admin generates a
+  // temp password while this user is already signed in, their next request 403s
+  // with password_setup_required and we flip authUser.mustSetPassword locally,
+  // which raises the wall on the spot instead of at the next full reload.
+  useEffect(() => {
+    setPasswordSetupRequiredHandler(() =>
+      setAuthUser((u) => (u && !u.mustSetPassword ? { ...u, mustSetPassword: true } : u)),
+    );
+    return () => setPasswordSetupRequiredHandler(null);
   }, []);
 
   useEffect(() => {
@@ -11451,6 +11470,20 @@ function App() {
   if (mfaStatus?.required && !mfaStatus.enrolled) {
     return (
       <TwoFactorSettings forced onClose={() => window.location.reload()} />
+    );
+  }
+
+  // Forced password change, for the same reason the MFA wall sits here: the
+  // server 403s every other route for this account (passwordSetupGate), so the
+  // app shell must not mount and fire dozens of doomed data loads. Placed after
+  // MFA so an account owing both is asked for two-factor first — matching the
+  // middleware order. Reload on completion for a clean bootstrap.
+  if (authUser?.mustSetPassword) {
+    return (
+      <ForcedPasswordChange
+        displayName={authUser.displayName}
+        onDone={() => window.location.reload()}
+      />
     );
   }
 
