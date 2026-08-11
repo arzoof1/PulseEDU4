@@ -518,6 +518,13 @@ async function upsertStaffRooms(
       })
       .onConflictDoUpdate({
         target: staffDefaultsTable.staffId,
+        // staff_defaults_staff_id_unique is a PARTIAL index
+        // (WHERE staff_id IS NOT NULL). Postgres only accepts a partial index
+        // as an ON CONFLICT arbiter when the statement repeats its predicate —
+        // without this the insert raises "no unique or exclusion constraint
+        // matching the ON CONFLICT specification" and rolls back the whole
+        // sync transaction for any school whose feed carries teacher rooms.
+        targetWhere: sql`${staffDefaultsTable.staffId} IS NOT NULL`,
         set: {
           schoolId,
           defaultLocationName: room,
@@ -551,6 +558,30 @@ async function rebuildSchedules(
       ),
     );
 
+  // Planning rows survive the delete above (they are demo/manual artifacts,
+  // never produced by sync — the OneRoster mapper always emits
+  // isPlanning:false). They still occupy the school-scoped unique key
+  // (school, teacher, period, course), so a feed section matching a surviving
+  // planning row collided and rolled back the WHOLE sync — the Nature Coast
+  // "failed: insert into class_sections" failure. Load the survivors and skip
+  // re-inserting their identities rather than deleting rows sync does not own.
+  const survivingPlanning = await ex
+    .select({
+      teacherStaffId: classSectionsTable.teacherStaffId,
+      period: classSectionsTable.period,
+      courseName: classSectionsTable.courseName,
+      id: classSectionsTable.id,
+    })
+    .from(classSectionsTable)
+    .where(eq(classSectionsTable.schoolId, schoolId));
+  const planningKeyToSectionId = new Map<string, number>();
+  for (const row of survivingPlanning) {
+    planningKeyToSectionId.set(
+      `${row.teacherStaffId}|${row.period}|${row.courseName}`,
+      row.id,
+    );
+  }
+
   const classExternalToSectionId = new Map<string, number>();
   const sectionInserts: Array<typeof classSectionsTable.$inferInsert> = [];
   // De-dupe on the section's business identity within this school
@@ -574,6 +605,9 @@ async function rebuildSchedules(
     const courseName = sec.courseName.trim() || "Class";
     const key = `${teacherStaffId}|${sec.period}|${courseName}`;
     externalToKey.set(sec.externalId, key);
+    // Identity already held by a surviving planning row — reuse it instead of
+    // inserting a duplicate that the unique index would reject.
+    if (planningKeyToSectionId.has(key)) continue;
     if (!keyToInsertIndex.has(key)) {
       keyToInsertIndex.set(key, sectionInserts.length);
       sectionInserts.push({
@@ -586,21 +620,31 @@ async function rebuildSchedules(
     }
   }
 
-  if (sectionInserts.length === 0) {
-    return { sections: 0, enrollments: 0 };
-  }
-
-  const insertedSections = await ex
-    .insert(classSectionsTable)
-    .values(sectionInserts)
-    .returning({ id: classSectionsTable.id });
-
-  // insertedSections aligns positionally with sectionInserts → key → section id,
-  // then every external class id (including de-duped ones) maps to its section.
-  const keyToSectionId = new Map<string, number>();
+  // Insert one row at a time via a returning upsert keyed on the school-scoped
+  // unique index. A single unforeseen duplicate must degrade to "reuse that
+  // row" — never abort the transaction and cost the school its entire roster,
+  // which is what a multi-row VALUES insert did at Nature Coast.
+  const keyToSectionId = new Map<string, number>(planningKeyToSectionId);
+  let sectionsWritten = 0;
   for (const [key, idx] of keyToInsertIndex) {
-    const row = insertedSections[idx];
-    if (row) keyToSectionId.set(key, row.id);
+    const values = sectionInserts[idx]!;
+    const [row] = await ex
+      .insert(classSectionsTable)
+      .values(values)
+      .onConflictDoUpdate({
+        target: [
+          classSectionsTable.schoolId,
+          classSectionsTable.teacherStaffId,
+          classSectionsTable.period,
+          classSectionsTable.courseName,
+        ],
+        set: { courseName: values.courseName },
+      })
+      .returning({ id: classSectionsTable.id });
+    if (row) {
+      keyToSectionId.set(key, row.id);
+      sectionsWritten++;
+    }
   }
   for (const [externalId, key] of externalToKey) {
     const sectionId = keyToSectionId.get(key);
@@ -632,7 +676,7 @@ async function rebuildSchedules(
   }
 
   return {
-    sections: insertedSections.length,
+    sections: sectionsWritten,
     enrollments: rosterRows.length,
   };
 }

@@ -9,9 +9,11 @@
 //   5. a Pulse school whose state code matches under prefix-tolerant lookup
 //      (ENT0241) is treated as existing even with no integration row —
 //      the Wilton duplicate-org lesson.
-// Requires DATABASE_URL; skipped otherwise. No other suite touches
-// district_integrations or state-coded schools, so table-level cleanup here
-// cannot race a parallel suite.
+// Requires DATABASE_URL; skipped otherwise. This suite deletes ALL classlink
+// integrations to control the discovery diff, and sisSyncPlanningCollision
+// drives a sync off one — vitest runs files in parallel, so the two would race
+// over the same fixture school (code 0241). Both declare the same sequence
+// group to force them to run one after the other.
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq, and, sql } from "drizzle-orm";
