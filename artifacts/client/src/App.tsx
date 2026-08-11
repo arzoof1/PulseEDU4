@@ -23,7 +23,6 @@ import ParentNotificationsPanel from "./components/ParentNotificationsPanel";
 import PulloutNotificationsPanel from "./components/PulloutNotificationsPanel";
 import PulseDnaStudio from "./components/PulseDnaStudio";
 import TwoFactorSettings from "./components/TwoFactorSettings";
-import ForcedPasswordChange from "./components/ForcedPasswordChange";
 import { TeacherPicker } from "./components/TeacherPicker";
 import HelpAssistant from "./components/HelpAssistant";
 import { TileHome, type Tile as TileHomeTile } from "./pages/TileHome";
@@ -7811,14 +7810,20 @@ function App() {
     return () => setMfaEnrollmentRequiredHandler(null);
   }, []);
 
-  // Same catch-up path for the forced password change: if an admin generates a
-  // temp password while this user is already signed in, their next request 403s
-  // with password_setup_required and we flip authUser.mustSetPassword locally,
-  // which raises the wall on the spot instead of at the next full reload.
+  // Catch-up path for a session that was ALREADY open when an admin generated
+  // its temp password: the next request 403s with password_setup_required, and
+  // we reload so PasswordSetupBoundary (which owns the wall — see main.tsx)
+  // re-checks and takes over before App can mount again. Reloading rather than
+  // flipping local state is deliberate: the boundary sits above this component,
+  // so no state here could raise the wall, and continuing would just 403 every
+  // subsequent request. Guarded so repeated 403s cannot loop the page.
+  const reloadedForPasswordSetup = useRef(false);
   useEffect(() => {
-    setPasswordSetupRequiredHandler(() =>
-      setAuthUser((u) => (u && !u.mustSetPassword ? { ...u, mustSetPassword: true } : u)),
-    );
+    setPasswordSetupRequiredHandler(() => {
+      if (reloadedForPasswordSetup.current) return;
+      reloadedForPasswordSetup.current = true;
+      window.location.reload();
+    });
     return () => setPasswordSetupRequiredHandler(null);
   }, []);
 
@@ -11473,19 +11478,11 @@ function App() {
     );
   }
 
-  // Forced password change, for the same reason the MFA wall sits here: the
-  // server 403s every other route for this account (passwordSetupGate), so the
-  // app shell must not mount and fire dozens of doomed data loads. Placed after
-  // MFA so an account owing both is asked for two-factor first — matching the
-  // middleware order. Reload on completion for a clean bootstrap.
-  if (authUser?.mustSetPassword) {
-    return (
-      <ForcedPasswordChange
-        displayName={authUser.displayName}
-        onDone={() => window.location.reload()}
-      />
-    );
-  }
+  // NOTE: the forced-password wall is NOT here. It lives in
+  // PasswordSetupBoundary, which wraps <App /> in main.tsx — an early return at
+  // this point still lets App's ~55 auth-keyed effects fire first, flooding the
+  // server with requests it 403s and crashing views on the error bodies.
+  // Gating above the mount is what actually stops them.
 
   // -----------------------------------------------------------------
   // TILE HOME — full-screen launcher. Renders BEFORE the normal app
