@@ -17,7 +17,6 @@ import {
   ensureParrottClasslinkIntegration,
   getSisDistrictDashboard,
   listSisSyncIntegrations,
-  runScheduledSisRosterSyncs,
   runSisSyncForIntegration,
   runSisSyncForSchool,
 } from "../lib/sisRosterSync.js";
@@ -25,6 +24,10 @@ import {
   discoverNewClasslinkSchools,
   onboardClasslinkSchools,
 } from "../lib/sisSchoolOnboarding.js";
+import {
+  getSisSyncJob,
+  startSisSyncJob,
+} from "../lib/sisSyncJobs.js";
 import { writeAuthAudit } from "../lib/authAudit.js";
 import {
   hashStaffPasswordResetToken,
@@ -303,8 +306,11 @@ router.post("/sis-sync/run", requireSisSyncAdmin(), async (req, res) => {
 });
 
 /**
- * POST /sis-sync/run/:integrationId — sync one school's ClassLink integration
- * (district console; does not require session school to match).
+ * POST /sis-sync/run/:integrationId — start a background sync job for one
+ * school's ClassLink integration and return 202 + job id immediately. A live
+ * cold-cache district pull exceeds the reverse-proxy timeout, so the sync must
+ * never run inside the request/response cycle — the panel polls
+ * GET /sis-sync/jobs/:jobId for the result.
  */
 router.post(
   "/sis-sync/run/:integrationId",
@@ -318,13 +324,14 @@ router.post(
     if (process.env.CLASSLINK_MOCK?.trim().toLowerCase() === "true") {
       await ensureParrottClasslinkIntegration();
     }
-    const result = await runSisSyncForIntegration(integrationId);
-    res.status(result.ok ? 200 : 500).json(result);
+    const { job, alreadyRunning } = startSisSyncJob("integration", integrationId);
+    res.status(202).json({ jobId: job.id, alreadyRunning });
   },
 );
 
 /**
- * POST /sis-sync/run-all — sync every ClassLink integration (same loop as cron).
+ * POST /sis-sync/run-all — start a background job syncing every ClassLink
+ * integration (same loop as cron). 202 + job id; poll /sis-sync/jobs/:jobId.
  */
 router.post(
   "/sis-sync/run-all",
@@ -333,13 +340,25 @@ router.post(
     if (process.env.CLASSLINK_MOCK?.trim().toLowerCase() === "true") {
       await ensureParrottClasslinkIntegration();
     }
-    const results = await runScheduledSisRosterSyncs();
-    const okCount = results.filter((r) => r.ok).length;
-    res.json({
-      ok: okCount === results.length,
-      message: `Synced ${okCount} of ${results.length} school(s).`,
-      results,
-    });
+    const { job, alreadyRunning } = startSisSyncJob("all");
+    res.status(202).json({ jobId: job.id, alreadyRunning });
+  },
+);
+
+/** GET /sis-sync/jobs/:jobId — status/result of a background sync job. */
+router.get(
+  "/sis-sync/jobs/:jobId",
+  requireDistrictSisSyncAdmin(),
+  async (req, res) => {
+    const job = getSisSyncJob(String(req.params.jobId));
+    if (!job) {
+      res.status(404).json({
+        error:
+          "Job not found (the server may have restarted). Use Refresh counts — completed syncs are persisted per school.",
+      });
+      return;
+    }
+    res.json(job);
   },
 );
 

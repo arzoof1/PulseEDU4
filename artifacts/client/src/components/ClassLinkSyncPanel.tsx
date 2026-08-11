@@ -53,6 +53,14 @@ type SyncResult = {
   errors?: string[];
 };
 
+type SyncJob = {
+  id: string;
+  kind: "all" | "integration";
+  status: "running" | "done" | "failed";
+  result: unknown;
+  error: string | null;
+};
+
 type InviteRow = {
   staffId: number;
   email: string;
@@ -166,34 +174,64 @@ export default function ClassLinkSyncPanel() {
     void load();
   }, [load]);
 
+  // Sync runs as a background job on the server (a cold-cache district pull
+  // outlives the reverse-proxy timeout, which used to surface here as
+  // "Unexpected token '<' … not valid JSON"). POST returns a job id in ~1s;
+  // we poll until the job reports done/failed.
+  async function startSyncJob(url: string): Promise<SyncJob> {
+    const res = await authFetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const json = (await res.json()) as {
+      jobId?: string;
+      alreadyRunning?: boolean;
+      error?: string;
+    };
+    if (!res.ok || !json.jobId) {
+      throw new Error(json.error || `Could not start sync (${res.status})`);
+    }
+    if (json.alreadyRunning) {
+      setBanner({
+        tone: "warn",
+        text: "A sync is already running — showing its progress.",
+      });
+    }
+    const started = Date.now();
+    // Poll every 4s for up to 30 minutes.
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 4000));
+      const jr = await authFetch(`/api/sis-sync/jobs/${json.jobId}`);
+      const job = (await jr.json()) as SyncJob & { error?: string };
+      if (!jr.ok) {
+        throw new Error(job.error || `Lost track of the sync job (${jr.status}) — use Refresh counts.`);
+      }
+      if (job.status !== "running") return job;
+      if (Date.now() - started > 30 * 60 * 1000) {
+        throw new Error("Sync is taking unusually long — use Refresh counts to check progress.");
+      }
+    }
+  }
+
   async function runOne(row: IntegrationRow) {
     setBusyId(row.id);
     setBanner(null);
     setInviteResults(null);
     try {
-      const res = await authFetch(`/api/sis-sync/run/${row.id}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-      const json = (await res.json()) as SyncResult & { error?: string };
-      if (!res.ok && !json.message) {
-        throw new Error(json.error || `Sync failed (${res.status})`);
+      const job = await startSyncJob(`/api/sis-sync/run/${row.id}`);
+      if (job.status === "failed") {
+        throw new Error(job.error || "Sync failed.");
       }
-      const counts = json.counts
+      const json = job.result as SyncResult | null;
+      const counts = json?.counts
         ? ` students ${json.counts.studentsUpserted ?? 0}, staff ${json.counts.staffUpserted ?? 0}, sections ${json.counts.sectionsWritten ?? 0}`
         : "";
-      const warnBits = (json.errors ?? []).slice(0, 2).join(" · ");
+      const warnBits = (json?.errors ?? []).slice(0, 2).join(" · ");
       setBanner({
-        tone: json.ok
-          ? json.status === "partial"
-            ? "warn"
-            : "ok"
-          : json.status === "partial"
-            ? "warn"
-            : "err",
-        text: `${row.syncButtonLabel}: ${json.message || json.error || "Done."}${counts}${
-          warnBits && json.status === "partial" ? ` — ${warnBits}` : ""
+        tone: json?.ok ? (json.status === "partial" ? "warn" : "ok") : "err",
+        text: `${row.syncButtonLabel}: ${json?.message ?? "Done."}${counts}${
+          warnBits && json?.status === "partial" ? ` — ${warnBits}` : ""
         }`,
       });
       await load();
@@ -212,24 +250,15 @@ export default function ClassLinkSyncPanel() {
     setBanner(null);
     setInviteResults(null);
     try {
-      const res = await authFetch("/api/sis-sync/run-all", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-      const json = (await res.json()) as {
-        ok: boolean;
-        message: string;
-        error?: string;
-        results?: SyncResult[];
-      };
-      if (!res.ok) {
-        throw new Error(json.error || `Sync-all failed (${res.status})`);
+      const job = await startSyncJob("/api/sis-sync/run-all");
+      if (job.status === "failed") {
+        throw new Error(job.error || "Sync-all failed.");
       }
-      const failed = (json.results ?? []).filter((r) => !r.ok).length;
+      const results = (job.result ?? []) as SyncResult[];
+      const failed = results.filter((r) => !r.ok).length;
       setBanner({
-        tone: json.ok ? "ok" : failed > 0 ? "warn" : "err",
-        text: json.message,
+        tone: failed === 0 ? "ok" : "warn",
+        text: `Synced ${results.length - failed} of ${results.length} school(s).`,
       });
       await load();
     } catch (err) {

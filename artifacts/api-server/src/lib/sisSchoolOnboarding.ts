@@ -17,8 +17,10 @@ import {
   schoolsTable,
 } from "@workspace/db";
 import {
-  ClasslinkRosterAdapter,
+  buildSchoolOrgIndex,
   classlinkUsesFixtures,
+  loadOneRosterFixtures,
+  OneRosterLiveClient,
   resolveOneRosterBaseUrl,
   schoolCodeLookupKeys,
   type ClasslinkConfig,
@@ -102,11 +104,40 @@ async function getDiscoveryConfig(): Promise<ClasslinkConfig> {
   };
 }
 
+// Orgs-only fetch — deliberately NOT the roster adapter's listSchoolOrgs(),
+// which pulls the FULL district bundle (students, enrollments, …) just to
+// read the org list and takes minutes on a cold cache. /orgs alone returns
+// in seconds.
 async function fetchFeedSchoolOrgs(
   config: ClasslinkConfig,
 ): Promise<SisSchoolOrg[]> {
-  const adapter = new ClasslinkRosterAdapter(config);
-  return adapter.listSchoolOrgs();
+  let orgs;
+  if (classlinkUsesFixtures(config)) {
+    orgs = loadOneRosterFixtures().orgs;
+  } else {
+    const baseUrl = resolveOneRosterBaseUrl(config.rostersBaseUrl);
+    if (!baseUrl) {
+      throw new Error(
+        "Missing ClassLink OneRoster base URL (sis_config.rostersBaseUrl or CLASSLINK_ONEROSTER_BASE_URL).",
+      );
+    }
+    const idVar = config.rostersClientIdEnvVar ?? DEFAULT_ID_ENV;
+    const secretVar = config.rostersClientSecretEnvVar ?? DEFAULT_SECRET_ENV;
+    const consumerKey = process.env[idVar]?.trim();
+    const consumerSecret = process.env[secretVar]?.trim();
+    if (!consumerKey || !consumerSecret) {
+      throw new Error(`Missing ClassLink credentials (env ${idVar} / ${secretVar}).`);
+    }
+    const client = new OneRosterLiveClient({ baseUrl, consumerKey, consumerSecret });
+    orgs = await client.fetchOrgs();
+  }
+  // Same school filter + shape as the adapter's mapOneRosterSchoolOrgs.
+  return buildSchoolOrgIndex(orgs).schools.map((org) => ({
+    sourcedId: org.sourcedId,
+    identifier: org.identifier?.trim() ?? null,
+    name: org.name,
+    type: org.type,
+  }));
 }
 
 /**
