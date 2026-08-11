@@ -1906,6 +1906,26 @@ function AddStaffModal({
   const [makeSuper, setMakeSuper] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // The school the new row is created in must be the ACTIVE school (the one
+  // whose roster this page shows), not the actor's home school — a switched
+  // SuperUser adding staff otherwise drops them into their home school.
+  // Sent explicitly so the request states its intent; if the lookup hasn't
+  // resolved yet the server falls back to the same active-school default.
+  const [activeSchoolId, setActiveSchoolId] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    authFetch("/api/tenancy/schools")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { activeSchoolId?: number } | null) => {
+        if (!cancelled && j && typeof j.activeSchoolId === "number") {
+          setActiveSchoolId(j.activeSchoolId);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function submit() {
     setBusy(true);
@@ -1921,6 +1941,7 @@ function AddStaffModal({
           isAdmin: makeAdmin,
           isDistrictAdmin: makeDistrict,
           isSuperUser: makeSuper,
+          ...(activeSchoolId != null ? { schoolId: activeSchoolId } : {}),
         }),
       });
       if (!res.ok) {

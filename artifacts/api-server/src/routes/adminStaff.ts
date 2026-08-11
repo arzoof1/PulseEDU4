@@ -1134,18 +1134,28 @@ router.post(
     }
 
     // School assignment for the new row:
-    //   * SuperUser may target any school via body.schoolId IN THEIR OWN
-    //     DISTRICT (defaults to their own school if not supplied). Cross-
-    //     district seeding is rejected — that would be a Hernando admin
-    //     creating staff inside a Pasco school.
+    //   * Default is the ACTIVE school (req.schoolId) — for a switched
+    //     SuperUser that is the school they are currently acting in, matching
+    //     the roster the Staff & Roles page shows. Using actor.schoolId here
+    //     silently dropped every new row into the SuperUser's home school.
+    //     req.schoolId is already tenant-validated (resolveActiveSchoolId:
+    //     SuperUser-only override, active school, district-gated).
+    //   * SuperUser may also target any school via body.schoolId IN THEIR OWN
+    //     DISTRICT. Cross-district seeding is rejected — that would be a
+    //     Hernando admin creating staff inside a Pasco school.
     //   * Everyone else creates strictly into their own school — body
     //     overrides are ignored to prevent cross-school staff seeding.
     const bodySchoolId = Number((req.body as { schoolId?: unknown })?.schoolId);
-    let targetSchoolId = actor.schoolId;
+    let targetSchoolId = req.schoolId ?? actor.schoolId;
     if (
       actor.isSuperUser &&
       Number.isInteger(bodySchoolId) &&
-      bodySchoolId > 0
+      bodySchoolId > 0 &&
+      // The resolved active school is already tenant-validated by the
+      // middleware (incl. the cross-district env gate) — don't re-run the
+      // same-district check against it, or a legitimately cross-district-
+      // switched SuperUser would 403 on their own active school.
+      bodySchoolId !== targetSchoolId
     ) {
       const actorDistrictId = await getDistrictIdForSchool(actor.schoolId);
       const targetDistrictId = await getDistrictIdForSchool(bodySchoolId);
