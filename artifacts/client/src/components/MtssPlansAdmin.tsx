@@ -655,6 +655,35 @@ export default function MtssPlansAdmin({
           })}
         </div>
 
+        {/* A behavior PLAN and the teacher-facing Behavior PILL are two
+            different records, and that surprised people: a coordinator can
+            open a full Tier 2/3 Behavior plan here and teachers still see no
+            purple pill on their roster. The plan drives the tier badge; the
+            pill is driven by a Behavior Supports snapshot, which is the
+            short "what to do in the moment" card teachers actually read.
+            Say so at the point of confusion rather than documenting it
+            elsewhere. */}
+        {(tierTab === "t2b" || tierTab === "t3b") && (
+          <div
+            style={{
+              border: "1px solid #ddd6fe",
+              background: "#f5f3ff",
+              borderRadius: 8,
+              padding: "0.6rem 0.9rem",
+              marginBottom: "1rem",
+              fontSize: "0.85rem",
+              color: "#4c1d95",
+            }}
+          >
+            <strong>Teachers see the tier badge from these plans.</strong>{" "}
+            The purple <strong>Behavior</strong> pill on the Teacher Roster is
+            separate — it comes from a <strong>Behavior Supports</strong>{" "}
+            snapshot (Student Support → Behavior Supports), the short
+            triggers/responses card teachers read at a glance. Add one there
+            for any student whose teachers need in-the-moment guidance.
+          </div>
+        )}
+
         {error && (
           <div
             style={{
