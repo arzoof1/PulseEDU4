@@ -41,6 +41,7 @@ import {
   pulloutsTable,
   studentAccommodationsTable,
   schoolAccommodationsTable,
+  behaviorSupportsTable,
   interventionEntriesTable,
   parentStudentsTable,
   studentSeparationsTable,
@@ -814,6 +815,44 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
       ),
     );
 
+  // The active Behavior Supports snapshot — the teacher-facing
+  // triggers/responses card that drives the purple roster pill.
+  //
+  // This was missing from the profile entirely, which made the page
+  // contradict itself: a coordinator could save a snapshot, see the pill
+  // appear on the Teacher Roster, then open the Student Profile and read
+  // "No active supports on record". It is unambiguously a support, so it
+  // counts toward the Supports axis like accommodations and MTSS plans.
+  //
+  // Audience note: this is deliberately NOT gated to Core Team the way the
+  // Behavior Supports admin page is. That page's gate governs who may EDIT
+  // snapshots and browse them school-wide; the content itself is written to
+  // be read by classroom teachers — it is already on every teacher's roster
+  // as the Behavior pill's hover card. Anyone reaching this profile has
+  // passed getVisibleStudentIds for this student, so showing it here reveals
+  // nothing they cannot already see on their own roster.
+  const [behaviorSupport] = await db
+    .select({
+      behaviors: behaviorSupportsTable.behaviors,
+      triggers: behaviorSupportsTable.triggers,
+      responses: behaviorSupportsTable.responses,
+      replacementBehaviors: behaviorSupportsTable.replacementBehaviors,
+      reinforcement: behaviorSupportsTable.reinforcement,
+      reviewDate: behaviorSupportsTable.reviewDate,
+      updatedAt: behaviorSupportsTable.updatedAt,
+      updatedByName: behaviorSupportsTable.updatedByName,
+    })
+    .from(behaviorSupportsTable)
+    .where(
+      and(
+        eq(behaviorSupportsTable.schoolId, schoolId),
+        eq(behaviorSupportsTable.studentId, studentId),
+        eq(behaviorSupportsTable.isActive, true),
+        isNull(behaviorSupportsTable.archivedAt),
+      ),
+    )
+    .limit(1);
+
   const interventionsAll = await db
     .select({
       interventionType: interventionEntriesTable.interventionType,
@@ -1217,16 +1256,24 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
   );
   if (recentInterventions30d.length > 0) supportsScore += 15;
   if (trustedAdults.length > 0) supportsScore += 10;
+  if (behaviorSupport) supportsScore += 15;
   supportsScore = Math.max(0, Math.min(100, supportsScore));
   const supportsTotal =
     accommodations.length +
     activeMtssPlans.length +
     recentInterventions30d.length +
-    trustedAdults.length;
+    trustedAdults.length +
+    (behaviorSupport ? 1 : 0);
   const supportsRationale =
     supportsTotal === 0
       ? "No active supports on record"
-      : `${accommodations.length} accommodations, ${activeMtssPlans.length} active MTSS plans, ${recentInterventions30d.length} interventions in last 30d, ${trustedAdults.length} trusted adult${trustedAdults.length === 1 ? "" : "s"}`;
+      : [
+          `${accommodations.length} accommodations`,
+          `${activeMtssPlans.length} active MTSS plans`,
+          `${recentInterventions30d.length} interventions in last 30d`,
+          `${trustedAdults.length} trusted adult${trustedAdults.length === 1 ? "" : "s"}`,
+          ...(behaviorSupport ? ["behavior support active"] : []),
+        ].join(", ");
 
   // Family connection: comms channels + linked parent account.
   let familyScore = 0;
@@ -1528,6 +1575,10 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
         recentInterventions: interventionsAll,
         activeMtssPlans,
         trustedAdults,
+        // Null when there is no active snapshot. Same content the Teacher
+        // Roster's purple Behavior pill shows on hover, so the two surfaces
+        // finally agree.
+        behaviorSupport: behaviorSupport ?? null,
       },
       family: {
         parentName: student.parentName,

@@ -203,6 +203,18 @@ interface ProfilePayload {
         goals: string;
       }>;
       trustedAdults: Array<{ id: number; staffId: number; staffName: string | null }>;
+      // Active Behavior Supports snapshot, or null. Same content the Teacher
+      // Roster's purple Behavior pill shows on hover.
+      behaviorSupport: {
+        behaviors: string[];
+        triggers: string[];
+        responses: string[];
+        replacementBehaviors: string[];
+        reinforcement: string[];
+        reviewDate: string | null;
+        updatedAt: string;
+        updatedByName: string | null;
+      } | null;
     };
     family: {
       parentName: string | null;
@@ -4162,9 +4174,82 @@ export default function StudentProfile({
             pillars.supports.activeAccommodationCount === 0 &&
             pillars.supports.activeMtssPlans.length === 0 &&
             pillars.supports.recentInterventions.length === 0 &&
-            pillars.supports.trustedAdults.length === 0
+            pillars.supports.trustedAdults.length === 0 &&
+            !pillars.supports.behaviorSupport
           }
         >
+          {/* Behavior support first: it is the "what do I do in the moment"
+              card, so it is the most actionable thing in this pillar. Mirrors
+              the purple Behavior pill on the Teacher Roster — before this, a
+              saved snapshot showed there but was invisible here. */}
+          {pillars.supports.behaviorSupport && (
+            <div
+              style={{
+                marginBottom: "0.6rem",
+                border: "1px solid #ddd6fe",
+                background: "#faf5ff",
+                borderRadius: 8,
+                padding: "0.5rem 0.65rem",
+              }}
+            >
+              <div
+                style={{
+                  fontWeight: 700,
+                  fontSize: "0.85rem",
+                  color: "#6b21a8",
+                  marginBottom: "0.3rem",
+                }}
+              >
+                Behavior support
+                {pillars.supports.behaviorSupport.reviewDate
+                  ? ` · review ${new Date(pillars.supports.behaviorSupport.reviewDate).toLocaleDateString()}`
+                  : ""}
+              </div>
+              {(
+                [
+                  ["Behaviors", pillars.supports.behaviorSupport.behaviors],
+                  ["Triggers", pillars.supports.behaviorSupport.triggers],
+                  ["What helps", pillars.supports.behaviorSupport.responses],
+                  [
+                    "Replacement behaviors",
+                    pillars.supports.behaviorSupport.replacementBehaviors,
+                  ],
+                  [
+                    "Reinforcement",
+                    pillars.supports.behaviorSupport.reinforcement,
+                  ],
+                ] as Array<[string, string[]]>
+              )
+                .filter(([, items]) => items.length > 0)
+                .map(([label, items]) => (
+                  <div key={label} style={{ marginBottom: "0.25rem" }}>
+                    <div style={{ fontSize: "0.78rem", fontWeight: 600 }}>
+                      {label}
+                    </div>
+                    <ul
+                      style={{
+                        margin: 0,
+                        paddingLeft: "1.2rem",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      {items.map((t, i) => (
+                        <li key={i}>{t}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              <div style={{ fontSize: "0.72rem", color: "#6b7280" }}>
+                Updated{" "}
+                {new Date(
+                  pillars.supports.behaviorSupport.updatedAt,
+                ).toLocaleDateString()}
+                {pillars.supports.behaviorSupport.updatedByName
+                  ? ` · ${pillars.supports.behaviorSupport.updatedByName}`
+                  : ""}
+              </div>
+            </div>
+          )}
           {pillars.supports.activeMtssPlans.length > 0 && (
             <div style={{ marginBottom: "0.5rem" }}>
               <div style={{ fontWeight: 600, fontSize: "0.85rem" }}>
