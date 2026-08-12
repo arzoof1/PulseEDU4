@@ -388,6 +388,14 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
     displayName: string;
     email: string;
   } | null>(null);
+  const [moveTarget, setMoveTarget] = useState<StaffRow | null>(null);
+  // Tri-tone status line for move results. The moved person leaves this
+  // school's roster, so a silent disappearance would read as a bug — the
+  // banner has to name the destination.
+  const [banner, setBanner] = useState<{
+    tone: "ok" | "warn" | "err";
+    text: string;
+  } | null>(null);
 
   const fullAuthority = hasFullRoleAuthority(currentUser);
   // Restricted mode: a Core-Team member without full role authority can only
@@ -398,6 +406,11 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
     Boolean(currentUser.isSuperUser) || Boolean(currentUser.capManageRoles);
   const canResetPasswords =
     Boolean(currentUser.isSuperUser) || Boolean(currentUser.isAdmin);
+  // Mirrors the server-side SuperUser gate in POST /admin/staff/move-school.
+  // Deliberately NOT cap_staff_roles or isAdmin: moving staff crosses a tenant
+  // boundary, so a school admin must not be able to push someone into another
+  // school. The server enforces this regardless of what the client renders.
+  const canMoveSchool = Boolean(currentUser.isSuperUser);
 
   async function generateTempPw(target: StaffRow) {
     // Confirm here (not on click) so the modal can stay simple, and so
@@ -764,6 +777,38 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
         </div>
       )}
 
+      {banner && (
+        <div
+          role="status"
+          style={{
+            marginTop: 8,
+            padding: 8,
+            borderRadius: 6,
+            border: `1px solid ${
+              banner.tone === "ok"
+                ? "#a7f3d0"
+                : banner.tone === "warn"
+                  ? "#fde68a"
+                  : "#fecaca"
+            }`,
+            background:
+              banner.tone === "ok"
+                ? "#ecfdf5"
+                : banner.tone === "warn"
+                  ? "#fffbeb"
+                  : "#fef2f2",
+            color:
+              banner.tone === "ok"
+                ? "#065f46"
+                : banner.tone === "warn"
+                  ? "#92400e"
+                  : "#991b1b",
+          }}
+        >
+          {banner.text}
+        </div>
+      )}
+
       <div style={{ overflow: "auto", marginTop: 12, maxHeight: "70vh" }}>
         <table className="pulse-table"
           style={{
@@ -932,6 +977,25 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                           </button>
                         </div>
                       )}
+                    {/* Separate from the password block above: a stranded
+                        INACTIVE account still needs moving, and moving is
+                        SuperUser-only rather than admin-level. */}
+                    {canMoveSchool && s.id !== currentUser.id && (
+                      <div style={{ marginTop: 4 }}>
+                        <button
+                          type="button"
+                          className="ghost"
+                          title="Move this person to another school in your district. Their history stays with this school."
+                          onClick={() => {
+                            setMoveTarget(s);
+                            setBanner(null);
+                          }}
+                          style={{ fontSize: 11, padding: "2px 6px" }}
+                        >
+                          Move school
+                        </button>
+                      </div>
+                    )}
                   </td>
                   <td
                     style={{
@@ -1256,7 +1320,318 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
           onSave={(ids) => saveReceivedLocations(coverageTarget.id, ids)}
         />
       )}
+      {moveTarget && (
+        <MoveSchoolModal
+          staff={moveTarget}
+          onClose={() => setMoveTarget(null)}
+          onMoved={async (text) => {
+            setMoveTarget(null);
+            setBanner({ tone: "ok", text });
+            await refresh();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+// Move a staff member to another school in the district.
+//
+// Three steps in one shell: pick a destination, read the consequences, then
+// confirm. The consequences are fetched from the server rather than guessed
+// client-side, because "do they still teach sections here?" decides whether
+// they will show up on two rosters afterwards — and that is the one outcome
+// that looks like a bug if it isn't explained first.
+function MoveSchoolModal({
+  staff,
+  onClose,
+  onMoved,
+}: {
+  staff: StaffRow;
+  onClose: () => void;
+  onMoved: (text: string) => void | Promise<void>;
+}) {
+  type SchoolOption = {
+    id: number;
+    name: string;
+    stateSchoolCode?: string | null;
+  };
+  type Preview = {
+    displayName: string;
+    fromSchool: { id: number; name: string } | null;
+    toSchool: { id: number; name: string } | null;
+    sectionsAtOldSchool: number;
+    houseName: string | null;
+    hasDefaultRoom: boolean;
+  };
+
+  const [schools, setSchools] = useState<SchoolOption[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [ack, setAck] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+
+  const staffSchoolId = (staff["schoolId"] as number | undefined) ?? null;
+
+  useEffect(() => {
+    let cancelled = false;
+    // Reuses the SuperUser-aware, district-scoped, active-only list that backs
+    // the top-bar school switcher — no new endpoint needed.
+    authFetch("/api/tenancy/schools")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { schools?: SchoolOption[] } | null) => {
+        if (cancelled) return;
+        const list = j?.schools ?? [];
+        // Their current school is not a destination.
+        setSchools(list.filter((s) => s.id !== staffSchoolId));
+      })
+      .catch(() => {
+        if (!cancelled) setErr("Could not load the list of schools.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [staffSchoolId]);
+
+  async function choose(schoolId: number) {
+    setSelected(schoolId);
+    setAck(false);
+    setErr("");
+    setPreview(null);
+    try {
+      const res = await authFetch(
+        `/api/admin/staff/${staff.id}/move-preview?toSchoolId=${schoolId}`,
+      );
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `Could not check the move (${res.status})`);
+      }
+      setPreview((await res.json()) as Preview);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function submit() {
+    if (selected == null) return;
+    if (!password.trim()) {
+      setErr("Enter your current password to confirm this move.");
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await authFetch("/api/admin/staff/move-school", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          staffIds: [staff.id],
+          toSchoolId: selected,
+          // The endpoint verifies the credential per-request (it does not read
+          // the session step-up window), so it travels in the body — the same
+          // shape StaffAccessModal sends for role changes.
+          reauth: { currentPassword: password, code: code.trim() || undefined },
+        }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        if (j.error === "reauth_required") {
+          throw new Error("Enter your current password to confirm this move.");
+        }
+        if (j.error === "mfa_code_required") {
+          throw new Error("Enter your MFA code or recovery code, then retry.");
+        }
+        throw new Error(j.error || `Move failed (${res.status})`);
+      }
+      const j = (await res.json()) as {
+        moved?: Array<{ displayName: string }>;
+        failed?: Array<{ reason: string }>;
+        toSchoolName?: string;
+      };
+      if (!j.moved?.length) {
+        throw new Error(j.failed?.[0]?.reason ?? "Nothing was moved.");
+      }
+      const dest =
+        j.toSchoolName ??
+        schools.find((s) => s.id === selected)?.name ??
+        "the new school";
+      await onMoved(
+        `${staff.displayName} moved to ${dest}. Switch to that school to see them.`,
+      );
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <ModalShell title={`Move ${staff.displayName}`} onClose={onClose}>
+      {loading ? (
+        <p style={{ color: "var(--text-subtle)" }}>Loading schools…</p>
+      ) : schools.length === 0 ? (
+        <p style={{ color: "var(--text-subtle)" }}>
+          There is no other school in this district to move them to.
+        </p>
+      ) : (
+        <>
+          <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-subtle)" }}>
+            Choose the school this person should belong to.
+          </p>
+          <div style={{ maxHeight: 220, overflowY: "auto", marginBottom: 12 }}>
+            {schools.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => choose(s.id)}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "8px 10px",
+                  marginBottom: 4,
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  border: `1px solid ${selected === s.id ? "#2563eb" : "var(--border, #d1d5db)"}`,
+                  background: selected === s.id ? "#eff6ff" : "transparent",
+                  fontWeight: selected === s.id ? 600 : 400,
+                }}
+              >
+                {s.name}
+                {s.stateSchoolCode ? (
+                  <span style={{ color: "#6b7280", marginLeft: 6 }}>
+                    #{s.stateSchoolCode}
+                  </span>
+                ) : null}
+              </button>
+            ))}
+          </div>
+
+          {preview && (
+            <div
+              style={{
+                border: "1px solid var(--border, #e5e7eb)",
+                borderRadius: 8,
+                padding: 12,
+                marginBottom: 12,
+                fontSize: 13,
+              }}
+            >
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                <li>
+                  Their hall passes, referrals and logs stay with{" "}
+                  <strong>{preview.fromSchool?.name ?? "their old school"}</strong>
+                  . That school's reports do not change.
+                </li>
+                <li>Their roles and permissions move with them.</li>
+                {(preview.houseName || preview.hasDefaultRoom) && (
+                  <li>
+                    Their{" "}
+                    {[
+                      preview.houseName ? `house (${preview.houseName})` : null,
+                      preview.hasDefaultRoom ? "default classroom" : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" and ")}{" "}
+                    will be cleared.
+                  </li>
+                )}
+                {preview.sectionsAtOldSchool > 0 && (
+                  <li style={{ color: "#92400e" }}>
+                    ⚠️ They teach {preview.sectionsAtOldSchool} section
+                    {preview.sectionsAtOldSchool === 1 ? "" : "s"} at{" "}
+                    {preview.fromSchool?.name ?? "their old school"}. Those
+                    sections stay there, so they will appear on both schools'
+                    staff lists.
+                  </li>
+                )}
+              </ul>
+              <label
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  alignItems: "flex-start",
+                  marginTop: 10,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={ack}
+                  onChange={(e) => setAck(e.target.checked)}
+                  style={{ marginTop: 3 }}
+                />
+                <span>
+                  I understand their history stays with{" "}
+                  {preview.fromSchool?.name ?? "their old school"}.
+                </span>
+              </label>
+            </div>
+          )}
+
+          {preview && ack && (
+            <div style={{ marginBottom: 12 }}>
+              <label
+                style={{ display: "block", fontSize: 12, marginBottom: 4 }}
+              >
+                Current password
+              </label>
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                style={{ width: "100%", marginBottom: 8 }}
+              />
+              <label
+                style={{ display: "block", fontSize: 12, marginBottom: 4 }}
+              >
+                MFA code (only if you have MFA enabled)
+              </label>
+              <input
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                style={{ width: "100%" }}
+              />
+            </div>
+          )}
+
+          {err && (
+            <div role="alert" style={{ color: "#b91c1c", marginBottom: 8 }}>
+              {err}
+            </div>
+          )}
+
+          <div
+            style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}
+          >
+            <button type="button" className="ghost" onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={!preview || !ack || busy}
+              onClick={() => submit()}
+              style={{
+                opacity: preview && ack && !busy ? 1 : 0.5,
+                cursor: preview && ack && !busy ? "pointer" : "not-allowed",
+              }}
+            >
+              {busy ? "Moving…" : "Move"}
+            </button>
+          </div>
+        </>
+      )}
+    </ModalShell>
   );
 }
 

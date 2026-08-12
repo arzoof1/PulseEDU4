@@ -12,6 +12,10 @@ import {
   schoolsTable,
   staffMfaRecoveryCodesTable,
   authAuditLogTable,
+  classSectionsTable,
+  staffDefaultsTable,
+  staffReceivedLocationsTable,
+  teacherDestinationAllowlistTable,
 } from "@workspace/db";
 import { and, eq, asc, desc, inArray, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -1563,6 +1567,324 @@ router.post(
       ip: req.ip ?? null,
     });
     res.json({ ok: true });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Move staff between schools.
+//
+// staff.email is GLOBALLY unique and there is no delete, so someone created at
+// the wrong school could not be re-created at the right one ("already exists").
+// This is the ONLY code path in the app that writes staff.school_id.
+//
+// Nothing at the DB layer backs these checks up: staff.school_id has no FK to
+// schools.id and there is no RLS policy on staff, so every guarantee below is
+// application-level and must fail closed.
+//
+// What deliberately does NOT move: the person's history. 128 tables carry both
+// a staff reference and their own school_id; rewriting them would retroactively
+// change the old school's reports (their pass counts and PBIS totals would
+// silently drop). History belongs to the school it happened at.
+//
+// What DOES get cleared: school-scoped config that would be meaningless — or
+// actively wrong — at the new school. house_id is the important one: houses are
+// school-scoped, and the cross-school guard on PATCH only fires when houseId is
+// in the update body, so a school move would otherwise walk straight past it
+// and leave the person in another school's house.
+// ---------------------------------------------------------------------------
+
+type MoveFailure = { staffId: number; displayName: string | null; reason: string };
+
+router.post(
+  "/admin/staff/move-school",
+  requireAdminOrSuper(),
+  async (req: Request, res: Response): Promise<void> => {
+    const actor = (req as Request & { staff: StaffRow }).staff;
+
+    // 1. SuperUser only. Not cap_staff_roles, not isAdmin — a school admin
+    //    must never be able to push staff into another tenant.
+    if (!actor.isSuperUser) {
+      res
+        .status(403)
+        .json({ error: "Only a SuperUser can move staff between schools." });
+      return;
+    }
+
+    const body = (req.body ?? {}) as {
+      staffIds?: unknown;
+      toSchoolId?: unknown;
+      reauth?: { currentPassword?: unknown; code?: unknown };
+    };
+
+    // Array from day one so a future bulk UI needs no server change.
+    const rawIds = Array.isArray(body.staffIds) ? body.staffIds : [];
+    const staffIds = [
+      ...new Set(
+        rawIds
+          .map((v) => Number(v))
+          .filter((v) => Number.isInteger(v) && v > 0),
+      ),
+    ];
+    const toSchoolId = Number(body.toSchoolId);
+    if (staffIds.length === 0 || !Number.isInteger(toSchoolId) || toSchoolId <= 0) {
+      res.status(400).json({ error: "staffIds and toSchoolId are required." });
+      return;
+    }
+
+    // 2. Step-up reauth, exactly as role/capability changes require.
+    const reauth = await verifyPrivilegedReauth(actor, body.reauth);
+    if (!reauth.ok) {
+      res.status(reauth.status).json({ error: reauth.error });
+      return;
+    }
+
+    // 3. Destination must be in the district the actor is ACTING in, not their
+    //    home district — a legitimately cross-district-switched SuperUser
+    //    (ALLOW_CROSS_DISTRICT_SUPERUSER, already validated by the tenant
+    //    middleware) would otherwise 403 on their own active school.
+    const actorSchoolId = req.schoolId ?? actor.schoolId;
+    const actorDistrictId = await getDistrictIdForSchool(actorSchoolId);
+    if (actorDistrictId === null) {
+      res.status(400).json({ error: "No active school" });
+      return;
+    }
+    const districtSchoolIds = await getSchoolIdsForDistrict(actorDistrictId);
+    if (!districtSchoolIds.includes(toSchoolId)) {
+      res.status(403).json({
+        error: "Cannot move staff to a school outside your district.",
+      });
+      return;
+    }
+
+    // 4. Destination must exist and be active — never strand someone in a
+    //    retired tenant, which resolves to no school context at all.
+    const [destination] = await db
+      .select({
+        id: schoolsTable.id,
+        name: schoolsTable.name,
+        active: schoolsTable.active,
+      })
+      .from(schoolsTable)
+      .where(eq(schoolsTable.id, toSchoolId));
+    if (!destination || !destination.active) {
+      res
+        .status(400)
+        .json({ error: "Destination school not found or inactive." });
+      return;
+    }
+
+    // 5. Targets must be inside the actor's district. Anyone outside is not
+    //    reported as a distinct case — they simply aren't found, so this can't
+    //    be used to probe for staff in other districts.
+    const targets = await db
+      .select()
+      .from(staffTable)
+      .where(
+        and(
+          inArray(staffTable.id, staffIds),
+          districtSchoolIds.length > 0
+            ? inArray(staffTable.schoolId, districtSchoolIds)
+            : sql`false`,
+        ),
+      );
+    const foundIds = new Set(targets.map((t) => t.id));
+
+    const moved: Array<{
+      staffId: number;
+      displayName: string;
+      fromSchoolId: number;
+      toSchoolId: number;
+    }> = [];
+    const failed: MoveFailure[] = [];
+
+    for (const staffId of staffIds) {
+      if (!foundIds.has(staffId)) {
+        failed.push({
+          staffId,
+          displayName: null,
+          reason: "Staff member not found in your district.",
+        });
+      }
+    }
+
+    for (const target of targets) {
+      // 6. No self-move — that changes the actor's own tenancy underneath the
+      //    live session.
+      if (target.id === actor.id) {
+        failed.push({
+          staffId: target.id,
+          displayName: target.displayName,
+          reason: "You cannot move your own account.",
+        });
+        continue;
+      }
+      // 7. Already there — a no-op, reported rather than written.
+      if (target.schoolId === toSchoolId) {
+        failed.push({
+          staffId: target.id,
+          displayName: target.displayName,
+          reason: `Already at ${destination.name}.`,
+        });
+        continue;
+      }
+
+      const fromSchoolId = target.schoolId;
+
+      // Counted for the audit trail: a teacher who still holds sections at the
+      // old school stays visible at BOTH schools afterwards, because
+      // membership is derived as "home school OR teaches a section here".
+      const [sectionCount] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(classSectionsTable)
+        .where(
+          and(
+            eq(classSectionsTable.teacherStaffId, target.id),
+            eq(classSectionsTable.schoolId, fromSchoolId),
+          ),
+        );
+
+      await db.transaction(async (tx) => {
+        await tx
+          .update(staffTable)
+          .set({
+            schoolId: toSchoolId,
+            // Houses are school-scoped — see the header note.
+            houseId: null,
+            // A stale override still pointing at the old tenant.
+            activeSchoolOverride: null,
+            // A room name from the old campus means nothing at the new one.
+            defaultRoom: null,
+          })
+          .where(eq(staffTable.id, target.id));
+
+        // School-scoped config keyed by staff id. Left behind, these would
+        // keep pointing at the old school's rooms and locations.
+        await tx
+          .delete(staffDefaultsTable)
+          .where(eq(staffDefaultsTable.staffId, target.id));
+        await tx
+          .delete(staffReceivedLocationsTable)
+          .where(eq(staffReceivedLocationsTable.staffId, target.id));
+        await tx
+          .delete(teacherDestinationAllowlistTable)
+          .where(eq(teacherDestinationAllowlistTable.staffId, target.id));
+      });
+
+      await writeAuthAudit({
+        action: "staff_school_moved",
+        schoolId: toSchoolId,
+        actorStaffId: actor.id,
+        actorName: actor.displayName,
+        targetStaffId: target.id,
+        ip: req.ip ?? null,
+        payload: {
+          fromSchoolId,
+          toSchoolId,
+          clearedHouseId: target.houseId ?? null,
+          sectionsAtOldSchool: sectionCount?.n ?? 0,
+        },
+      });
+
+      moved.push({
+        staffId: target.id,
+        displayName: target.displayName,
+        fromSchoolId,
+        toSchoolId,
+      });
+    }
+
+    res.json({ moved, failed, toSchoolName: destination.name });
+  },
+);
+
+// Pre-flight for the move confirmation dialog: what the admin is about to
+// change, in terms they can read. Read-only, so no step-up reauth.
+router.get(
+  "/admin/staff/:id/move-preview",
+  requireAdminOrSuper(),
+  async (req: Request, res: Response): Promise<void> => {
+    const actor = (req as Request & { staff: StaffRow }).staff;
+    if (!actor.isSuperUser) {
+      res
+        .status(403)
+        .json({ error: "Only a SuperUser can move staff between schools." });
+      return;
+    }
+
+    const targetId = Number(req.params.id);
+    const toSchoolId = Number(req.query.toSchoolId);
+    if (!Number.isInteger(targetId) || targetId <= 0) {
+      res.status(400).json({ error: "Invalid staff id" });
+      return;
+    }
+
+    const actorSchoolId = req.schoolId ?? actor.schoolId;
+    const actorDistrictId = await getDistrictIdForSchool(actorSchoolId);
+    if (actorDistrictId === null) {
+      res.status(400).json({ error: "No active school" });
+      return;
+    }
+    const districtSchoolIds = await getSchoolIdsForDistrict(actorDistrictId);
+
+    const [target] = await db
+      .select()
+      .from(staffTable)
+      .where(
+        and(
+          eq(staffTable.id, targetId),
+          districtSchoolIds.length > 0
+            ? inArray(staffTable.schoolId, districtSchoolIds)
+            : sql`false`,
+        ),
+      );
+    if (!target) {
+      res.status(404).json({ error: "Staff member not found" });
+      return;
+    }
+
+    const [fromSchool] = await db
+      .select({ id: schoolsTable.id, name: schoolsTable.name })
+      .from(schoolsTable)
+      .where(eq(schoolsTable.id, target.schoolId));
+
+    const [toSchool] = Number.isInteger(toSchoolId)
+      ? await db
+          .select({ id: schoolsTable.id, name: schoolsTable.name })
+          .from(schoolsTable)
+          .where(eq(schoolsTable.id, toSchoolId))
+      : [undefined];
+
+    // Sections stay at the old school, so a non-zero count means the person
+    // will appear on BOTH schools' staff lists afterwards. The dialog says so.
+    const [sectionCount] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(classSectionsTable)
+      .where(
+        and(
+          eq(classSectionsTable.teacherStaffId, target.id),
+          eq(classSectionsTable.schoolId, target.schoolId),
+        ),
+      );
+
+    const [house] = target.houseId
+      ? await db
+          .select({ name: housesTable.name })
+          .from(housesTable)
+          .where(eq(housesTable.id, target.houseId))
+      : [undefined];
+
+    res.json({
+      staffId: target.id,
+      displayName: target.displayName,
+      fromSchool: fromSchool
+        ? { id: fromSchool.id, name: fromSchool.name }
+        : null,
+      toSchool: toSchool ? { id: toSchool.id, name: toSchool.name } : null,
+      sectionsAtOldSchool: sectionCount?.n ?? 0,
+      houseName: house?.name ?? null,
+      hasDefaultRoom: Boolean(target.defaultRoom),
+      isSelf: target.id === actor.id,
+    });
   },
 );
 
