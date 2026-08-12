@@ -15,6 +15,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { fetchAllStudents } from "../lib/students";
 import StudentPhoto from "./StudentPhoto";
 
 interface RecordRow {
@@ -180,11 +181,27 @@ export default function BehaviorSupportsPage({ canManage, onBack }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // GET /api/students returns a PAGE ({ items, nextCursor }), not a bare
+  // array. This used to call it directly and guard with Array.isArray, so the
+  // envelope failed the check and was dropped on the floor — `students` stayed
+  // empty forever and the "Choose a student" picker looked like its search box
+  // was broken. fetchAllStudents unwraps the envelope AND follows the cursor,
+  // which also fixes the second half: a single page would only have returned
+  // the first slice of a large school's roster.
+  const [studentsError, setStudentsError] = useState("");
   useEffect(() => {
-    authFetch("/api/students")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((rows: Student[]) => Array.isArray(rows) && setStudents(rows))
-      .catch(() => {});
+    let cancelled = false;
+    fetchAllStudents<Student>()
+      .then((rows) => {
+        if (!cancelled) setStudents(rows);
+      })
+      .catch(() => {
+        // Silent failure here is what made this hard to spot. Say so instead.
+        if (!cancelled) setStudentsError("Could not load the student list.");
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const visible = useMemo(() => {
@@ -565,6 +582,19 @@ export default function BehaviorSupportsPage({ canManage, onBack }: Props) {
               onChange={(e) => setPickerFilter(e.target.value)}
               style={{ width: "100%", marginBottom: "0.5rem" }}
             />
+            {studentsError ? (
+              <div style={{ color: "#b91c1c", fontSize: 13, padding: "0.5rem 0" }}>
+                {studentsError} Refresh the page and try again.
+              </div>
+            ) : students.length === 0 ? (
+              <div style={{ color: "#64748b", fontSize: 13, padding: "0.5rem 0" }}>
+                Loading students…
+              </div>
+            ) : pickerStudents.length === 0 ? (
+              <div style={{ color: "#64748b", fontSize: 13, padding: "0.5rem 0" }}>
+                No student matches “{pickerFilter}”.
+              </div>
+            ) : null}
             {pickerStudents.map((s) => {
               const has = currentIds.has(s.studentId);
               return (
