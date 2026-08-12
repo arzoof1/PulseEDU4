@@ -1,4 +1,5 @@
 import { backfillWitnessSequences } from "./lib/witnessStatementId";
+import { ensureStudentFleidColumn } from "./lib/fleidCrosswalk";
 import { reconcileAllSchoolYearFlips } from "./lib/schoolYearFlip";
 import { logger } from "./lib/logger";
 import {
@@ -372,6 +373,12 @@ export async function bootstrapCriticalColumns(): Promise<void> {
     // This ensure is idempotent and index-only, so it belongs on the boot path
     // that actually runs in production.
     await ensureClassSectionsSchema();
+    // students.fleid — the join column for every Florida FAST import. Same
+    // reasoning as the class_sections index above: production runs with
+    // RUN_BOOT_SEED off, so this has to be ensured on the boot path that
+    // actually executes there or the column never appears and every FAST
+    // upload silently matches nothing.
+    await ensureStudentFleidColumn();
   } catch (err) {
     logger.error({ err }, "[boot] critical column bootstrap failed");
     throw err;

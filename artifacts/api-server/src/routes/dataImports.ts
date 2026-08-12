@@ -64,6 +64,7 @@ import {
   schoolYearLabelFor,
 } from "../lib/schoolYear.js";
 import { getActiveSchoolYear } from "../lib/fastHistory.js";
+import { partitionByFleidMatch } from "../lib/fleidCrosswalk.js";
 import { hasFreshPrivilegedReauth } from "../lib/privilegedReauth.js";
 import { writeAuthAudit } from "../lib/authAudit.js";
 import { evaluateImportApproval } from "../lib/importApproval.js";
@@ -4238,6 +4239,39 @@ router.post(
       }
     }
 
+    // FLEID → local student_id crosswalk.
+    //
+    // Florida FAST exports key on the STATE id; ClassLink gives us the
+    // DISTRICT's local number as student_id. Writing the file's ids straight
+    // through produced student_fast_scores rows attached to no student — the
+    // import reported success and nothing surfaced anywhere.
+    //
+    // resolveStudentIdsByFleid accepts either id form, so a district export
+    // already keyed on local ids keeps working unchanged.
+    const fileIds = parsed.students.map((s) => s.studentId);
+    const { resolved, unmatched } = await partitionByFleidMatch(
+      schoolId,
+      fileIds,
+    );
+    const matchedStudents = parsed.students.filter((s) =>
+      resolved.has(s.studentId),
+    );
+
+    // Never import a file that matches NOTHING — that is the silent-success
+    // case, and it always means the wrong file, wrong school, or a roster
+    // that has not synced yet. Say so instead of writing orphan rows.
+    if (matchedStudents.length === 0) {
+      res.status(400).json({
+        error:
+          `None of the ${fileIds.length} students in this file match a student at this school. ` +
+          `Check you picked the right school, and that the roster has synced. ` +
+          `First unmatched ID: ${unmatched[0] ?? "(none)"}`,
+        unmatchedCount: unmatched.length,
+        unmatchedSample: unmatched.slice(0, 10),
+      });
+      return;
+    }
+
     const result = await db.transaction(async (tx) => {
       const [job] = await tx
         .insert(importJobsTable)
@@ -4250,8 +4284,17 @@ router.post(
           status: "committed",
           totalRows: parsed.students.length,
           successRows: 0,
-          errorRows: 0,
-          errorLog: parsed.warnings,
+          errorRows: unmatched.length,
+          errorLog: [
+            ...parsed.warnings,
+            // Unmatched ids belong in the job's error log, not just the
+            // response: the Import History screen is where someone looks
+            // afterwards to find out what happened.
+            ...unmatched.slice(0, 200).map((id) => ({
+              row: 0,
+              message: `No student at this school matches ID ${id} — row skipped.`,
+            })),
+          ],
           // Snapshot the admin-supplied year + detected windows so
           // History can render "PM2 25-26 for Reading" without
           // re-parsing the xlsx.
@@ -4273,9 +4316,10 @@ router.post(
       //    score lands in pm1/pm2/pm3 based on the window column.
       //    COALESCE means a PM1-only file doesn't wipe PM2/PM3.
       const now = new Date();
-      const scoreValues = parsed.students.map((s) => ({
+      const scoreValues = matchedStudents.map((s) => ({
         schoolId,
-        studentId: s.studentId,
+        // The LOCAL student_id, translated from whatever the file used.
+        studentId: resolved.get(s.studentId)!,
         subject,
         schoolYear,
         pm1: s.window === "pm1" ? s.scaleScore : null,
@@ -4330,9 +4374,9 @@ router.post(
       //     wipe real current-year data (it leaves the stamped scalar behind,
       //     which a re-import overwrites).
       if (isHistorical) {
-        const priorStamp = parsed.students.map((s) => ({
+        const priorStamp = matchedStudents.map((s) => ({
           schoolId,
-          studentId: s.studentId,
+          studentId: resolved.get(s.studentId)!,
           subject,
           schoolYear: current,
           priorYearScore: s.scaleScore,
@@ -4366,7 +4410,7 @@ router.post(
       //    existing rows for (school, subject, school_year, window)
       //    scoped to the student set in the file, then bulk insert
       //    fresh rows. Rollback then walks import_job_id.
-      const studentIds = parsed.students.map((s) => s.studentId);
+      const studentIds = matchedStudents.map((s) => resolved.get(s.studentId)!);
       const uniqueStudentIds = Array.from(new Set(studentIds));
       const windows = Array.from(parsed.windowsSeen);
       if (uniqueStudentIds.length > 0 && windows.length > 0) {
@@ -4388,11 +4432,11 @@ router.post(
 
       const itemRows: (typeof studentFastItemResponsesTable.$inferInsert)[] =
         [];
-      for (const s of parsed.students) {
+      for (const s of matchedStudents) {
         for (const it of s.items) {
           itemRows.push({
             schoolId,
-            studentId: s.studentId,
+            studentId: resolved.get(s.studentId)!,
             subject,
             schoolYear,
             window: s.window,
@@ -4415,7 +4459,7 @@ router.post(
       await tx
         .update(importJobsTable)
         .set({
-          successRows: parsed.students.length,
+          successRows: matchedStudents.length,
         })
         .where(eq(importJobsTable.id, job.id));
 
@@ -4425,7 +4469,8 @@ router.post(
     req.log.info(
       {
         jobId: result.id,
-        students: parsed.students.length,
+        students: matchedStudents.length,
+        unmatched: unmatched.length,
         items: result.items,
         subject,
         schoolYear,
@@ -4440,16 +4485,18 @@ router.post(
       schoolYear,
       gradeLabel: parsed.gradeLabel,
       windowsSeen: Array.from(parsed.windowsSeen).sort(),
-      totalStudents: parsed.students.length,
+      totalStudents: matchedStudents.length,
       totalItems: result.items,
       warningCount: parsed.warnings.length,
-      // Aliases to match the generic commit-result contract the
-      // client's success card renders (totalRows / successRows /
-      // errorRows). For Florida, every parsed student row commits
-      // (parser hard-fails on ambiguity), so success == total.
+      // Aliases matching the generic commit-result contract the client's
+      // success card renders. successRows counts students that resolved to a
+      // real student here; errorRows counts file rows whose ID matched
+      // nobody. Reporting the file's total as "success" is what made a
+      // fully-orphaned import look like it worked.
       totalRows: parsed.students.length,
-      successRows: parsed.students.length,
-      errorRows: 0,
+      successRows: matchedStudents.length,
+      errorRows: unmatched.length,
+      unmatchedSample: unmatched.slice(0, 10),
     });
   },
 );

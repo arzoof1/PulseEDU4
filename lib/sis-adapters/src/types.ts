@@ -27,6 +27,13 @@ export interface SisStudent {
   firstName: string;
   lastName: string;
   gradeLevel: string | null;
+  /**
+   * Florida Education Identifier (state id, "FL000008157762"). Separate from
+   * studentId, which is the district's local number. Florida FAST exports key
+   * on this, so it is what those imports join against.
+   * `undefined` = not provided by feed (preserve existing DB value on update).
+   */
+  fleid?: string;
   /** `undefined` = not provided by feed (preserve existing DB value on update). */
   gender?: string | null;
   ell?: boolean;

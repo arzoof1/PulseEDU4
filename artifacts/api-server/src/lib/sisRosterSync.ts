@@ -310,6 +310,7 @@ async function upsertStudents(
         is504: demo.is504 ?? false,
         race: demo.race ?? null,
         ethnicity: demo.ethnicity ?? null,
+        fleid: s.fleid ?? null,
       })
       .onConflictDoUpdate({
         target: studentsTable.studentId,
@@ -319,6 +320,10 @@ async function upsertStudents(
           lastName: s.lastName.trim(),
           grade,
           ...demo,
+          // Only overwrite when the feed actually supplied one, so a feed
+          // that omits FLEID can't wipe a value we already hold (same
+          // preserve-on-absent rule as the demographic patch).
+          ...(s.fleid ? { fleid: s.fleid } : {}),
         },
       });
     count++;

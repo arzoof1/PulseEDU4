@@ -39,6 +39,7 @@ export {
   mapStudentDemographics,
   parseOptionalBoolFlag,
 } from "./oneroster/demographicsMap.js";
+export { mapOneRosterStudents } from "./oneroster/mapToSis.js";
 
 import type { RosterAdapter, SsoAdapter } from "./types.js";
 import { SkywardAdapter } from "./skywardAdapter.js";

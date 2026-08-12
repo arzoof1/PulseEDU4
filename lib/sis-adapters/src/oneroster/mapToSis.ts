@@ -34,6 +34,21 @@ function districtStudentId(user: OneRosterUser): string {
   return user.sourcedId;
 }
 
+// The state id, carried in user metadata rather than as a userIds entry.
+// Hernando sends it as "FLEID"; the key is matched case-insensitively for the
+// same reason the demographic flags are — vendors have no shared convention,
+// and an exact-match lookup already cost us the ESE/ELL flags once.
+function fleidOf(user: OneRosterUser): string | undefined {
+  const meta = user.metadata;
+  if (!meta) return undefined;
+  for (const [key, value] of Object.entries(meta)) {
+    if (key.toLowerCase().replace(/[_-]/g, "") !== "fleid") continue;
+    const v = typeof value === "string" ? value.trim() : "";
+    if (v) return v;
+  }
+  return undefined;
+}
+
 function gradeLevel(user: OneRosterUser): string | null {
   const g = user.grades?.[0];
   if (!g?.trim()) return null;
@@ -135,6 +150,7 @@ export function mapOneRosterStudents(
       firstName: u.givenName.trim() || "Student",
       lastName: u.familyName.trim() || u.sourcedId,
       gradeLevel: gradeLevel(u),
+      fleid: fleidOf(u),
       ...mapStudentDemographics(u, demoMap.get(u.sourcedId)),
     }));
 }

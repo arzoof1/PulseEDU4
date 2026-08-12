@@ -63,6 +63,15 @@ export const studentsTable = pgTable("students", {
   // and parent letters reference. Not unique (different districts can
   // reuse numbers); not indexed unless a future search surface needs it.
   localSisId: text("local_sis_id"),
+  // Florida Education Identifier — the STATE-issued student id
+  // ("FL000008157762"). Distinct from student_id: Hernando's ClassLink feed
+  // makes student_id the district's LOCAL sis number and carries the FLEID
+  // separately in user.metadata.FLEID, so the two are not derivable from
+  // each other. Every Florida state assessment file (FAST PM1/PM2/PM3) keys
+  // on this, so it is the join column for those imports — without it a FAST
+  // upload matches nothing. Nullable: non-FL districts and any student whose
+  // feed omits it simply have none.
+  fleid: text("fleid"),
   // When TRUE, this student's benchmark_reteach_log entries are
   // exposed (read-only) to the linked parent portal account. Default
   // FALSE because reteach logs are teacher working data — admins
