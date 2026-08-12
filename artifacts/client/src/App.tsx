@@ -22056,9 +22056,15 @@ function App() {
                   borderRadius: 6,
                 }}
               >
+                {/* This only adds a ROW to the matrix below so the boxes can
+                    be ticked — it saves nothing on its own. The save happens
+                    on the first checkbox, which also sets the student's
+                    ESE/504/ELL flag (so the Teacher Roster pill appears).
+                    The label says so, because "Add new ESE student" read as
+                    though picking a name was itself the action. */}
                 <label style={{ fontWeight: 600 }}>
-                  Add new {eseAssignCategory === "IEP" ? "ESE" : eseAssignCategory}{" "}
-                  student:
+                  Add {eseAssignCategory === "IEP" ? "ESE" : eseAssignCategory}{" "}
+                  student to the list:
                 </label>
                 <StudentCombobox
                   students={students.filter(
@@ -22087,6 +22093,11 @@ function App() {
                   placeholder="Type name or ID then check accommodations…"
                   minWidth={320}
                 />
+                <span style={{ color: "#64748b", fontSize: "0.82rem" }}>
+                  Tick at least one box below to save — that also marks them{" "}
+                  {eseAssignCategory === "IEP" ? "ESE" : eseAssignCategory} on
+                  the Teacher Roster.
+                </span>
               </div>
 
               {eseMatrixMsg && (

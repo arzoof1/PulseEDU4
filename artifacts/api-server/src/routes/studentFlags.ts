@@ -43,11 +43,17 @@ function requireCoreTeam(
     staff.isAdmin ||
     staff.isBehaviorSpecialist ||
     staff.isMtssCoordinator ||
-    staff.isPbisCoordinator;
+    staff.isPbisCoordinator ||
+    // ESE Coordinators own the Accommodations surface for exactly these
+    // students, and assigning an IEP/504/ELL accommodation now sets the
+    // matching flag. Without them here that write would 403 while the
+    // accommodation itself saved — the same silent half-success this
+    // whole change exists to remove.
+    staff.isEseCoordinator;
   if (!allowed) {
     res.status(403).json({
       error:
-        "Only admins, Behavior Specialists, MTSS Coordinators, and PBIS Coordinators can edit student flags",
+        "Only admins, ESE Coordinators, Behavior Specialists, MTSS Coordinators, and PBIS Coordinators can edit student flags",
     });
     return false;
   }

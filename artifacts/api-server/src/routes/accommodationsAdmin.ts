@@ -348,6 +348,40 @@ router.get(
 
 // Assign one or more accommodations to a student. Idempotent: skips ones
 // already actively assigned. Body: { accommodationIds: number[] }
+// Accommodation category -> the student program flag it implies. "Strategy"
+// is a general teaching strategy, not a program, so it maps to nothing.
+const CATEGORY_TO_FLAG: Record<string, "ese" | "is504" | "ell"> = {
+  IEP: "ese",
+  "504": "is504",
+  ELL: "ell",
+};
+
+/**
+ * Which program flags a set of accommodations implies. Returns only flags to
+ * turn ON — never off, so this can be spread straight into an update.
+ */
+async function programFlagsForAccommodations(
+  schoolId: number,
+  accommodationIds: number[],
+): Promise<Partial<Record<"ese" | "is504" | "ell", boolean>>> {
+  if (accommodationIds.length === 0) return {};
+  const rows = await db
+    .select({ category: schoolAccommodationsTable.category })
+    .from(schoolAccommodationsTable)
+    .where(
+      and(
+        eq(schoolAccommodationsTable.schoolId, schoolId),
+        inArray(schoolAccommodationsTable.id, accommodationIds),
+      ),
+    );
+  const updates: Partial<Record<"ese" | "is504" | "ell", boolean>> = {};
+  for (const row of rows) {
+    const flag = CATEGORY_TO_FLAG[row.category];
+    if (flag) updates[flag] = true;
+  }
+  return updates;
+}
+
 router.post(
   "/students/:studentId/accommodations",
   requireEseOrAdmin,
@@ -425,9 +459,40 @@ router.post(
     if (toInsert.length > 0) {
       await db.insert(studentAccommodationsTable).values(toInsert);
     }
+
+    // Assigning a PROGRAM accommodation also flags the student, so the
+    // Teacher Roster's Programs pill agrees with this screen.
+    //
+    // These were two disconnected systems: assignments live in
+    // student_accommodations, the pills read students.ese/is504/ell. An ESE
+    // coordinator could add a class-worth of students under the "ESE / IEP"
+    // heading and every one still rendered an em-dash on the roster.
+    //
+    // One-way on purpose. Removing the last accommodation does NOT clear the
+    // flag (see the DELETE below): a student can be ESE with nothing
+    // recorded yet, and auto-clearing could silently strip a flag the
+    // district set via ClassLink. Un-flagging stays explicit, on the Student
+    // Profile. "Strategy" is not a program category and sets nothing.
+    const flagUpdates = await programFlagsForAccommodations(
+      schoolId,
+      accommodationIds as number[],
+    );
+    if (Object.keys(flagUpdates).length > 0) {
+      await db
+        .update(studentsTable)
+        .set(flagUpdates)
+        .where(
+          and(
+            eq(studentsTable.studentId, studentId),
+            eq(studentsTable.schoolId, schoolId),
+          ),
+        );
+    }
+
     res.status(201).json({
       inserted: toInsert.length,
       skipped: alreadyActive.size,
+      flagsSet: Object.keys(flagUpdates),
     });
   },
 );
