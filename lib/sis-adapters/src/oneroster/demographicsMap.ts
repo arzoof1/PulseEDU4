@@ -40,14 +40,44 @@ export function parseOptionalBoolFlag(
   return undefined;
 }
 
+// Metadata keys are matched case- and separator-insensitively.
+//
+// SIS vendors have no shared convention for these: Hernando's ClassLink feed
+// sends "ELL" / "SWD" (uppercase), fixtures use "ell" / "ese", and OneRoster
+// examples use "englishLearner" / "is_504". An exact `key in metadata` check
+// silently missed every uppercase variant — the flags were read as absent
+// rather than false, so ~469 ESE and ~102 ELL students synced as unflagged and
+// the Teacher Roster Programs column rendered empty for the whole district.
+//
+// Normalizing both sides (lowercase, strip _ and -) means "SWD", "swd" and
+// "S_W_D" all resolve to the same alias without needing every casing spelled
+// out in the alias lists below.
+function normalizeKey(key: string): string {
+  return key.toLowerCase().replace(/[_-]/g, "");
+}
+
 function readMetadataFlag(
   metadata: Record<string, unknown> | undefined,
   keys: string[],
 ): boolean | undefined {
   if (!metadata) return undefined;
+
+  // Index the feed's own keys once, normalized. Later duplicates lose to
+  // earlier ones only when the earlier key carried a usable value, so a
+  // populated "ELL" is never shadowed by an empty "ell".
+  const byNormalized = new Map<string, unknown>();
+  for (const [rawKey, value] of Object.entries(metadata)) {
+    const norm = normalizeKey(rawKey);
+    const existing = byNormalized.get(norm);
+    if (existing === undefined || parseOptionalBoolFlag(existing) === undefined) {
+      byNormalized.set(norm, value);
+    }
+  }
+
   for (const key of keys) {
-    if (key in metadata) {
-      const parsed = parseOptionalBoolFlag(metadata[key]);
+    const norm = normalizeKey(key);
+    if (byNormalized.has(norm)) {
+      const parsed = parseOptionalBoolFlag(byNormalized.get(norm));
       if (parsed !== undefined) return parsed;
     }
   }
