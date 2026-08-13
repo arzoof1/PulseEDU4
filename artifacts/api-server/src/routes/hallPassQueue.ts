@@ -15,6 +15,7 @@ import {
   studentsTable,
   staffTable,
   schoolsTable,
+  locationsTable,
 } from "@workspace/db";
 import { and, eq, inArray, isNull, gt, asc, ne, sql } from "drizzle-orm";
 import { genUrlSafeToken } from "../lib/urlSafeToken.js";
@@ -32,6 +33,7 @@ import {
   ESCORT_KIOSK_MESSAGE,
 } from "../lib/safetyPlanEscort.js";
 import { findDailyLimitConflict } from "./studentHallPassLimits";
+import { resolveStudentIdInput } from "../lib/studentIdResolver.js";
 import {
   loadRestroomDestinationNames,
   loadKioskTeacherDisplayName,
@@ -43,10 +45,14 @@ import {
 // just an upper bound for "I scanned this QR yesterday and forgot".
 const VIEWER_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
 
-// Predicate: can `staff` view/manage the queue for the given live
-// activation in their school? Mirrors the take-over policy decision
-// (admin/core team OR same default room OR original activator) so the
-// staff app and the activation flow stay consistent.
+// Predicate: can `staff` view/manage the line for the given ROOM?
+//
+// Mirrors the kiosk take-over policy (admin/core team OR the room is their
+// own OR they activated a live kiosk standing in it) so the staff app and the
+// activation flow stay consistent. Keyed on the room rather than an
+// activation row, because a teacher-created line has no activation at all —
+// the previous signature had no way to express "this is my room, there is no
+// kiosk".
 function canManageRoomQueue(
   staff: {
     id: number;
@@ -58,18 +64,33 @@ function canManageRoomQueue(
     isMtssCoordinator?: boolean | null;
     isSchoolPsychologist?: boolean | null;
   },
-  activation: { staffId: number; room: string },
+  target: { room: string; activatorStaffIds?: number[] },
 ): boolean {
   if (isCoreTeam(staff)) return true;
-  if (activation.staffId === staff.id) return true;
+  if ((target.activatorStaffIds ?? []).includes(staff.id)) return true;
   if (
     staff.defaultRoom &&
     staff.defaultRoom.trim().length > 0 &&
-    staff.defaultRoom === activation.room
+    staff.defaultRoom === target.room
   ) {
     return true;
   }
   return false;
+}
+
+// Clear every stale-period row across the school in one statement. The
+// per-room clearStaleAndList only touches one room; the staff panel spans
+// all rooms the user can manage, so it needs the school-wide sweep.
+async function clearStaleForSchool(schoolId: number) {
+  const periodKey = await getCurrentPeriodKey(schoolId);
+  await db
+    .delete(hallPassQueueTable)
+    .where(
+      and(
+        eq(hallPassQueueTable.schoolId, schoolId),
+        ne(hallPassQueueTable.periodKey, periodKey),
+      ),
+    );
 }
 
 const router: IRouter = Router();
@@ -162,13 +183,19 @@ export async function getCurrentPeriodKey(schoolId: number): Promise<string> {
 
 // Drop entries whose period key doesn't match "now", then return the
 // surviving queue rows ordered by position.
-async function clearStaleAndList(act: { id: number; schoolId: number }) {
+//
+// Scoped by (schoolId, room) rather than by activation: a kiosk and the
+// teacher standing in the same room must see ONE line. Callers pass the
+// room, which for a kiosk is `activation.room` and for staff is their
+// resolved default room.
+async function clearStaleAndList(act: { schoolId: number; room: string }) {
   const periodKey = await getCurrentPeriodKey(act.schoolId);
   await db
     .delete(hallPassQueueTable)
     .where(
       and(
-        eq(hallPassQueueTable.kioskActivationId, act.id),
+        eq(hallPassQueueTable.schoolId, act.schoolId),
+        eq(hallPassQueueTable.room, act.room),
         ne(hallPassQueueTable.periodKey, periodKey),
       ),
     );
@@ -201,9 +228,157 @@ async function clearStaleAndList(act: { id: number; schoolId: number }) {
         eq(studentsTable.schoolId, hallPassQueueTable.schoolId),
       ),
     )
-    .where(eq(hallPassQueueTable.kioskActivationId, act.id))
+    .where(
+      and(
+        eq(hallPassQueueTable.schoolId, act.schoolId),
+        eq(hallPassQueueTable.room, act.room),
+      ),
+    )
     .orderBy(asc(hallPassQueueTable.position), asc(hallPassQueueTable.id));
   return { periodKey, rows };
+}
+
+// Shared enqueue core. Both the kiosk path (student scans their own ID) and
+// the staff path (teacher adds a student) funnel through this so the cap,
+// duplicate rule, and position assignment cannot drift apart between the two
+// surfaces — the same lesson as the kiosk destination GET/POST parity rule.
+//
+// The critical section takes a row-level lock over the ROOM's rows. Anchored
+// to the activation this was `WHERE kiosk_activation_id = ?`; with teacher
+// entries carrying a null activation there is no such row to lock, so the cap
+// has to key on (school_id, room) or two simultaneous adds both slip past 5.
+export async function enqueueStudent(opts: {
+  schoolId: number;
+  room: string;
+  studentId: string;
+  firstName: string | null;
+  lastName: string | null;
+  destination: string;
+  kioskActivationId: number | null;
+}): Promise<
+  | { kind: "full" }
+  | { kind: "duplicate" }
+  | {
+      kind: "ok";
+      row: typeof hallPassQueueTable.$inferSelect;
+      after: Array<typeof hallPassQueueTable.$inferSelect>;
+    }
+> {
+  const periodKey = await getCurrentPeriodKey(opts.schoolId);
+
+  // Clear stale BEFORE the transaction. Rows from a previous period must
+  // never count toward this period's cap.
+  await db
+    .delete(hallPassQueueTable)
+    .where(
+      and(
+        eq(hallPassQueueTable.schoolId, opts.schoolId),
+        eq(hallPassQueueTable.room, opts.room),
+        ne(hallPassQueueTable.periodKey, periodKey),
+      ),
+    );
+
+  const roomScope = and(
+    eq(hallPassQueueTable.schoolId, opts.schoolId),
+    eq(hallPassQueueTable.room, opts.room),
+  );
+
+  try {
+    return await db.transaction(async (tx) => {
+      // Serialize on the ROOM, not on the room's existing rows.
+      //
+      // `SELECT ... FOR UPDATE` only locks rows that already exist. Under the
+      // old activation anchor that was fine — the activation row was always
+      // present to lock. Anchored to a room, an EMPTY line has nothing to
+      // lock, so N concurrent adds each saw zero rows and every one of them
+      // passed the cap check. (Verified: six simultaneous adds all returned
+      // 200 and the line held 6.)
+      //
+      // A transaction-scoped advisory lock keyed on (school, room) always
+      // exists, so it serializes the critical section even from empty. It's
+      // released automatically at commit/rollback.
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtext(${`hpq:${opts.schoolId}:${opts.room}`}))`,
+      );
+      const locked = await tx
+        .select()
+        .from(hallPassQueueTable)
+        .where(roomScope)
+        .orderBy(asc(hallPassQueueTable.position), asc(hallPassQueueTable.id))
+        .for("update");
+      if (locked.length >= QUEUE_CAP) return { kind: "full" as const };
+      if (locked.some((r) => r.studentId === opts.studentId)) {
+        return { kind: "duplicate" as const };
+      }
+      const nextPos =
+        locked.reduce((m, r) => (r.position > m ? r.position : m), 0) + 1;
+      const [row] = await tx
+        .insert(hallPassQueueTable)
+        .values({
+          schoolId: opts.schoolId,
+          kioskActivationId: opts.kioskActivationId,
+          room: opts.room,
+          studentId: opts.studentId,
+          firstName: opts.firstName,
+          lastName: opts.lastName,
+          destination: opts.destination,
+          position: nextPos,
+          periodKey,
+        })
+        .returning();
+      const after = await tx
+        .select()
+        .from(hallPassQueueTable)
+        .where(roomScope)
+        .orderBy(asc(hallPassQueueTable.position), asc(hallPassQueueTable.id));
+      return { kind: "ok" as const, row, after };
+    });
+  } catch (err: unknown) {
+    // 23505 = the room+student unique index caught a concurrent insert that
+    // raced past the in-transaction check. Same friendly outcome.
+    const code =
+      err && typeof err === "object" && "code" in err
+        ? (err as { code?: unknown }).code
+        : undefined;
+    if (code === "23505") return { kind: "duplicate" as const };
+    throw err;
+  }
+}
+
+// Resolve the room a staff member's queue actions apply to, enforcing the
+// same rule kiosk activation enforces: the room must exist as an ACTIVE
+// ORIGIN location for the school. Teacher rooms are free text on
+// staff_defaults/staff.default_room and can drift from the curated locations
+// list, so without this the teacher path would invent rooms a kiosk would
+// never accept. Returns null with a reason the caller turns into a 400.
+export async function resolveStaffRoom(
+  schoolId: number,
+  staff: { defaultRoom: string | null },
+): Promise<{ room: string } | { error: string }> {
+  const room = (staff.defaultRoom ?? "").trim();
+  if (!room) {
+    return {
+      error:
+        "You don't have a room set. Ask an admin to set your room before using the line.",
+    };
+  }
+  const [loc] = await db
+    .select({ name: locationsTable.name })
+    .from(locationsTable)
+    .where(
+      and(
+        eq(locationsTable.schoolId, schoolId),
+        eq(locationsTable.name, room),
+        eq(locationsTable.isOrigin, true),
+        eq(locationsTable.active, true),
+      ),
+    );
+  if (!loc) {
+    return {
+      error: `"${room}" is not a valid room for a hall pass line. Ask an admin to set it up as a location.`,
+    };
+  }
+  return { room };
 }
 
 function shapeEntry(
@@ -435,70 +610,19 @@ router.post("/kiosk/queue/:token/add", async (req, res) => {
     return;
   }
 
-  // Clear stale BEFORE the transaction. Stale rows belong to a previous
-  // period and should never count toward the current period's cap.
-  const periodKey = await getCurrentPeriodKey(act.schoolId);
-  await db
-    .delete(hallPassQueueTable)
-    .where(
-      and(
-        eq(hallPassQueueTable.kioskActivationId, act.id),
-        ne(hallPassQueueTable.periodKey, periodKey),
-      ),
-    );
-
-  // ---- Critical section: atomic cap + duplicate enforcement -------------
-  // Two students mashing "Get in line" at the same kiosk would otherwise
-  // both pass the cap pre-check and slip past 5. We open a transaction and
-  // take a row-level lock on this kiosk's existing queue rows
-  // (`.for("update")`), then recount inside the lock. The unique index on
-  // (kioskActivationId, studentId) is the second line of defense — if a
-  // duplicate insert races past the in-memory check, we map the resulting
-  // 23505 to a friendly 409 instead of bubbling a 500 to the kiosk.
+  // Cap, duplicate rule, and position assignment all live in the shared
+  // enqueue core so this path and the staff path can't drift.
   let inserted: typeof hallPassQueueTable.$inferSelect;
   let fresh: Array<typeof hallPassQueueTable.$inferSelect>;
   try {
-    const txnResult = await db.transaction(async (tx) => {
-      const locked = await tx
-        .select()
-        .from(hallPassQueueTable)
-        .where(eq(hallPassQueueTable.kioskActivationId, act.id))
-        .orderBy(
-          asc(hallPassQueueTable.position),
-          asc(hallPassQueueTable.id),
-        )
-        .for("update");
-      if (locked.length >= QUEUE_CAP) {
-        return { kind: "full" as const };
-      }
-      if (locked.some((r) => r.studentId === trimmedId)) {
-        return { kind: "duplicate" as const };
-      }
-      const nextPos =
-        locked.reduce((m, r) => (r.position > m ? r.position : m), 0) + 1;
-      const [row] = await tx
-        .insert(hallPassQueueTable)
-        .values({
-          schoolId: act.schoolId,
-          kioskActivationId: act.id,
-          room: act.room,
-          studentId: trimmedId,
-          firstName: student.firstName ?? null,
-          lastName: student.lastName ?? null,
-          destination: destination.trim(),
-          position: nextPos,
-          periodKey,
-        })
-        .returning();
-      const after = await tx
-        .select()
-        .from(hallPassQueueTable)
-        .where(eq(hallPassQueueTable.kioskActivationId, act.id))
-        .orderBy(
-          asc(hallPassQueueTable.position),
-          asc(hallPassQueueTable.id),
-        );
-      return { kind: "ok" as const, row, after };
+    const txnResult = await enqueueStudent({
+      schoolId: act.schoolId,
+      room: act.room,
+      studentId: trimmedId,
+      firstName: student.firstName ?? null,
+      lastName: student.lastName ?? null,
+      destination: destination.trim(),
+      kioskActivationId: act.id,
     });
     if (txnResult.kind === "full") {
       res
@@ -513,16 +637,6 @@ router.post("/kiosk/queue/:token/add", async (req, res) => {
     inserted = txnResult.row;
     fresh = txnResult.after;
   } catch (err: unknown) {
-    // Postgres unique-violation (23505) means a concurrent insert won the
-    // race for this same student on this kiosk — treat as "already in line".
-    const code =
-      err && typeof err === "object" && "code" in err
-        ? (err as { code?: unknown }).code
-        : undefined;
-    if (code === "23505") {
-      res.status(409).json({ error: "You're already in line." });
-      return;
-    }
     req.log.error({ err }, "hall-pass-queue add failed");
     res.status(500).json({ error: "Could not add to queue" });
     return;
@@ -560,7 +674,8 @@ router.post("/kiosk/queue/:token/skip", async (req, res) => {
     .delete(hallPassQueueTable)
     .where(
       and(
-        eq(hallPassQueueTable.kioskActivationId, act.id),
+        eq(hallPassQueueTable.schoolId, act.schoolId),
+        eq(hallPassQueueTable.room, act.room),
         eq(hallPassQueueTable.studentId, trimmedId),
       ),
     );
@@ -579,16 +694,20 @@ router.post("/kiosk/queue/:token/skip", async (req, res) => {
 // ---------------------------------------------------------------------------
 
 export async function consumeQueueEntry(
-  kioskActivationId: number,
+  scope: { schoolId: number; room: string },
   studentId: string,
 ) {
   // Callers pass the canonical student_id (resolved from local_sis_id in the
   // kiosk routes). Queue rows store that id verbatim, so match exactly.
+  //
+  // Room-scoped: consuming must clear the entry regardless of whether the
+  // student joined the line from a kiosk or was added by their teacher.
   await db
     .delete(hallPassQueueTable)
     .where(
       and(
-        eq(hallPassQueueTable.kioskActivationId, kioskActivationId),
+        eq(hallPassQueueTable.schoolId, scope.schoolId),
+        eq(hallPassQueueTable.room, scope.room),
         eq(hallPassQueueTable.studentId, studentId),
       ),
     );
@@ -630,8 +749,8 @@ async function firstEligible(
 }
 
 export async function peekNextInQueue(act: {
-  id: number;
   schoolId: number;
+  room: string;
 }) {
   const { rows } = await clearStaleAndList(act);
   if (rows.length === 0) return null;
@@ -649,11 +768,15 @@ router.get("/hall-pass-queue", requireStaff, async (req, res) => {
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
 
-  // Pull every queue entry in this school joined to its activation so we
-  // can compute `canManage` per entry on the server (the source of truth
-  // for authz). Entries we can't manage are filtered out — staff who
-  // can't reorder/remove a room's line have no need to see it in the
-  // companion panel either.
+  // Clear stale entries for every room this school has a line in, so the
+  // panel never shows a previous period's leftovers.
+  await clearStaleForSchool(schoolId);
+
+  // Pull every queue entry in this school. NO join to kiosk_activations:
+  // that join used to be an INNER JOIN, which silently dropped any entry
+  // without an activation — i.e. every teacher-created entry would have been
+  // invisible here and undeletable below. Authorization now comes from the
+  // entry's own room, which is the anchor.
   const rows = await db
     .select({
       id: hallPassQueueTable.id,
@@ -665,14 +788,8 @@ router.get("/hall-pass-queue", requireStaff, async (req, res) => {
       position: hallPassQueueTable.position,
       addedAt: hallPassQueueTable.addedAt,
       kioskActivationId: hallPassQueueTable.kioskActivationId,
-      activationStaffId: kioskActivationsTable.staffId,
-      activationRoom: kioskActivationsTable.room,
     })
     .from(hallPassQueueTable)
-    .innerJoin(
-      kioskActivationsTable,
-      eq(kioskActivationsTable.id, hallPassQueueTable.kioskActivationId),
-    )
     .where(eq(hallPassQueueTable.schoolId, schoolId))
     .orderBy(
       asc(hallPassQueueTable.room),
@@ -680,13 +797,36 @@ router.get("/hall-pass-queue", requireStaff, async (req, res) => {
       asc(hallPassQueueTable.id),
     );
 
-  const manageableRooms = new Set<string>();
-  const filteredRows = rows.filter((r) =>
+  // A room's line is manageable if the staff member owns that room (default
+  // room), is Core Team, or activated a live kiosk standing in it. The
+  // activation lookup is now an ENRICHMENT, not a filter.
+  const liveActivationsForAuthz = await db
+    .select({
+      room: kioskActivationsTable.room,
+      staffId: kioskActivationsTable.staffId,
+    })
+    .from(kioskActivationsTable)
+    .where(
+      and(
+        eq(kioskActivationsTable.schoolId, schoolId),
+        isNull(kioskActivationsTable.deactivatedAt),
+        gt(kioskActivationsTable.expiresAt, new Date()),
+      ),
+    );
+  const activatorsByRoom = new Map<string, number[]>();
+  for (const a of liveActivationsForAuthz) {
+    const list = activatorsByRoom.get(a.room) ?? [];
+    list.push(a.staffId);
+    activatorsByRoom.set(a.room, list);
+  }
+  const canManage = (room: string) =>
     canManageRoomQueue(staff, {
-      staffId: r.activationStaffId,
-      room: r.activationRoom,
-    }),
-  );
+      room,
+      activatorStaffIds: activatorsByRoom.get(room) ?? [],
+    });
+
+  const manageableRooms = new Set<string>();
+  const filteredRows = rows.filter((r) => canManage(r.room));
   // Compute keep-apart hold per entry. A queued student is "blocked" while
   // any of their polarity partners has an active hall pass right now. We
   // intentionally don't surface the partner's name to the panel — staff
@@ -699,8 +839,16 @@ router.get("/hall-pass-queue", requireStaff, async (req, res) => {
       return c !== null;
     }),
   );
+  // Present positions as a dense 1..n PER ROOM rather than echoing the stored
+  // `position`. Removing the student at position 1 leaves the rest stored as
+  // 2,3 — correct for ordering, but the panel would then show a line that
+  // starts at "2". The kiosk already renumbers this way in shapeEntry, so
+  // this keeps the two surfaces telling the teacher the same thing.
+  const seenPerRoom = new Map<string, number>();
   const entries = filteredRows.map((r, i) => {
-    manageableRooms.add(r.activationRoom);
+    manageableRooms.add(r.room);
+    const nth = (seenPerRoom.get(r.room) ?? 0) + 1;
+    seenPerRoom.set(r.room, nth);
     return {
       id: r.id,
       room: r.room,
@@ -708,7 +856,7 @@ router.get("/hall-pass-queue", requireStaff, async (req, res) => {
       firstName: r.firstName,
       lastName: r.lastName,
       destination: r.destination,
-      position: r.position,
+      position: nth,
       addedAt:
         r.addedAt instanceof Date ? r.addedAt.toISOString() : r.addedAt,
       kioskActivationId: r.kioskActivationId,
@@ -717,11 +865,12 @@ router.get("/hall-pass-queue", requireStaff, async (req, res) => {
     };
   });
 
-  // Also include rooms with NO queue but a live kiosk the staff can
-  // manage — so the panel still shows the room (and its active passes)
-  // when nobody is in line yet. Without this, a teacher with a kiosk up
-  // and one student already out on a pass would see nothing in the
-  // companion panel until somebody got in line.
+  // Rooms to show even when nobody is in line yet, so the panel is a place
+  // the teacher can START a line rather than something that only appears
+  // once a student is already waiting.
+  //
+  //  · the staff member's OWN room — the teacher-path case, no kiosk needed
+  //  · any room with a live kiosk they can manage — the original case
   const liveActivations = await db
     .select({
       id: kioskActivationsTable.id,
@@ -737,11 +886,28 @@ router.get("/hall-pass-queue", requireStaff, async (req, res) => {
       ),
     );
   const manageableKiosks = liveActivations
-    .filter((a) => canManageRoomQueue(staff, a))
+    .filter((a) =>
+      canManageRoomQueue(staff, {
+        room: a.room,
+        activatorStaffIds: [a.staffId],
+      }),
+    )
     .map((a) => {
       manageableRooms.add(a.room);
       return { kioskActivationId: a.id, room: a.room };
     });
+
+  // The teacher's own room, when it's a valid line room and isn't already
+  // present via a kiosk. `kioskActivationId: null` tells the client this is
+  // a teacher-managed line with no device behind it.
+  const ownRoom = await resolveStaffRoom(schoolId, staff);
+  const rooms: Array<{ kioskActivationId: number | null; room: string }> = [
+    ...manageableKiosks,
+  ];
+  if ("room" in ownRoom && !manageableRooms.has(ownRoom.room)) {
+    manageableRooms.add(ownRoom.room);
+    rooms.push({ kioskActivationId: null, room: ownRoom.room });
+  }
 
   // Active hall passes currently out from any room the staff can manage.
   // We join students for display name; the kiosk uses the same shape.
@@ -799,47 +965,189 @@ router.get("/hall-pass-queue", requireStaff, async (req, res) => {
     }));
   }
 
-  res.json({ entries, activePasses, kiosks: manageableKiosks });
+  res.json({ entries, activePasses, kiosks: rooms });
 });
 
-// Companion-panel endpoint: re-stamp positions for one room's queue.
-// Body: { kioskActivationId, orderedIds: number[] } — the ids in the order
-// they should appear (1..n). We look up the activation, authorize against
-// `canManageRoomQueue`, and rewrite positions inside a transaction so the
-// kiosk never sees a half-applied reorder.
+// Staff "Get in Line": a teacher adds a student to their own room's line.
+// This is the teacher-path counterpart to the kiosk's /kiosk/queue/:token/add
+// and the reason the queue had to stop depending on a kiosk activation.
+//
+// The room is DERIVED from the authenticated staff member, never taken from
+// the body — same rule as the create-on-behalf derivation on POST
+// /hall-passes. Letting a client name the room would allow a teacher to stuff
+// another room's line, and would dodge the origin-location validation.
+router.post("/hall-pass-queue/add", requireStaff, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const { studentId, destination } = req.body ?? {};
+  if (typeof studentId !== "string" || !studentId.trim()) {
+    res.status(400).json({ error: "studentId is required" });
+    return;
+  }
+  if (typeof destination !== "string" || !destination.trim()) {
+    res.status(400).json({ error: "destination is required" });
+    return;
+  }
+
+  const roomResult = await resolveStaffRoom(schoolId, staff);
+  if ("error" in roomResult) {
+    res.status(400).json({ error: roomResult.error });
+    return;
+  }
+  const room = roomResult.room;
+
+  // Accept either the local SIS id (what's on a student's badge) or the
+  // canonical id, and store the canonical one — matching how the kiosk path
+  // and POST /hall-passes both resolve student input.
+  const resolvedStudentId = await resolveStudentIdInput(
+    schoolId,
+    studentId.trim(),
+  );
+  if (!resolvedStudentId) {
+    res.status(404).json({ error: `No student with ID "${studentId}"` });
+    return;
+  }
+  const [student] = await db
+    .select()
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.studentId, resolvedStudentId),
+        eq(studentsTable.schoolId, schoolId),
+      ),
+    );
+  if (!student) {
+    res.status(404).json({ error: `No student with ID "${studentId}"` });
+    return;
+  }
+
+  // Escort-required safety plan: same hard block the kiosk applies. A queued
+  // student would eventually be issued a pass, so the hold belongs here too.
+  const escortHold = await findEscortHold(schoolId, resolvedStudentId);
+  if (escortHold) {
+    res.status(409).json({
+      code: "ESCORT_REQUIRED",
+      error:
+        "This student's safety plan requires a staff escort — they can't join the line.",
+    });
+    return;
+  }
+
+  // Already out on a pass from this room: nothing to queue for.
+  const [activePass] = await db
+    .select()
+    .from(hallPassesTable)
+    .where(
+      and(
+        eq(hallPassesTable.schoolId, schoolId),
+        eq(hallPassesTable.studentId, resolvedStudentId),
+        eq(hallPassesTable.status, "active"),
+      ),
+    );
+  if (activePass) {
+    res.status(409).json({
+      error: `That student is already out on a pass to ${activePass.destination}.`,
+    });
+    return;
+  }
+
+  let result: Awaited<ReturnType<typeof enqueueStudent>>;
+  try {
+    result = await enqueueStudent({
+      schoolId,
+      room,
+      studentId: resolvedStudentId,
+      firstName: student.firstName ?? null,
+      lastName: student.lastName ?? null,
+      destination: destination.trim(),
+      // Teacher-created: no device behind it. This null is the whole point.
+      kioskActivationId: null,
+    });
+  } catch (err) {
+    req.log.error({ err }, "staff hall-pass-queue add failed");
+    res.status(500).json({ error: "Could not add to the line" });
+    return;
+  }
+  if (result.kind === "full") {
+    res
+      .status(409)
+      .json({ error: `The line for ${room} is full (${QUEUE_CAP} waiting).` });
+    return;
+  }
+  if (result.kind === "duplicate") {
+    res.status(409).json({ error: "That student is already in line." });
+    return;
+  }
+
+  const myIdx = result.after.findIndex((r) => r.id === result.row.id);
+  res.json({
+    position: myIdx + 1,
+    capacity: QUEUE_CAP,
+    room,
+    entries: result.after.map((r, i) => shapeEntry(r, i)),
+  });
+});
+
+// Companion-panel endpoint: re-stamp positions for one room's line.
+// Body: { room, orderedIds: number[] } — the ids in the order they should
+// appear (1..n). Authorizes against `canManageRoomQueue` for that room and
+// rewrites positions inside a transaction so no reader ever sees a
+// half-applied reorder.
+//
+// `kioskActivationId` is still accepted as a legacy alias (resolved to its
+// room) so a browser tab loaded before this deploy keeps working.
 router.post("/hall-pass-queue/reorder", requireStaff, async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
-  const { kioskActivationId, orderedIds } = req.body ?? {};
+  const { room, kioskActivationId, orderedIds } = req.body ?? {};
   if (
-    !Number.isInteger(kioskActivationId) ||
     !Array.isArray(orderedIds) ||
     orderedIds.some((v) => !Number.isInteger(v))
   ) {
-    res
-      .status(400)
-      .json({ error: "kioskActivationId and orderedIds[] are required" });
+    res.status(400).json({ error: "orderedIds[] is required" });
     return;
   }
 
-  const [activation] = await db
-    .select()
+  let targetRoom: string | null =
+    typeof room === "string" && room.trim() ? room.trim() : null;
+  if (!targetRoom && Number.isInteger(kioskActivationId)) {
+    const [activation] = await db
+      .select({ room: kioskActivationsTable.room })
+      .from(kioskActivationsTable)
+      .where(
+        and(
+          eq(kioskActivationsTable.id, kioskActivationId),
+          eq(kioskActivationsTable.schoolId, schoolId),
+        ),
+      );
+    targetRoom = activation?.room ?? null;
+  }
+  if (!targetRoom) {
+    res.status(400).json({ error: "room is required" });
+    return;
+  }
+
+  const activators = await db
+    .select({ staffId: kioskActivationsTable.staffId })
     .from(kioskActivationsTable)
     .where(
       and(
-        eq(kioskActivationsTable.id, kioskActivationId),
         eq(kioskActivationsTable.schoolId, schoolId),
+        eq(kioskActivationsTable.room, targetRoom),
         isNull(kioskActivationsTable.deactivatedAt),
         gt(kioskActivationsTable.expiresAt, new Date()),
       ),
     );
-  if (!activation) {
-    res.status(404).json({ error: "Kiosk no longer active" });
-    return;
-  }
-  if (!canManageRoomQueue(staff, activation)) {
+  if (
+    !canManageRoomQueue(staff, {
+      room: targetRoom,
+      activatorStaffIds: activators.map((a) => a.staffId),
+    })
+  ) {
     res
       .status(403)
       .json({ error: "You can't manage the queue for that room" });
@@ -848,12 +1156,17 @@ router.post("/hall-pass-queue/reorder", requireStaff, async (req, res) => {
 
   try {
     await db.transaction(async (tx) => {
-      // Lock and verify every supplied id belongs to this activation —
-      // prevents a malformed payload from rewriting another room's line.
+      // Lock and verify every supplied id belongs to this room — prevents a
+      // malformed payload from rewriting another room's line.
       const live = await tx
         .select()
         .from(hallPassQueueTable)
-        .where(eq(hallPassQueueTable.kioskActivationId, activation.id))
+        .where(
+          and(
+            eq(hallPassQueueTable.schoolId, schoolId),
+            eq(hallPassQueueTable.room, targetRoom),
+          ),
+        )
         .for("update");
       const liveIds = new Set(live.map((r) => r.id));
       const orderedSet = new Set(orderedIds as number[]);
@@ -928,7 +1241,12 @@ router.post("/kiosk/viewer-token", requireStaff, async (req, res) => {
       .json({ error: `No active kiosk for room "${trimmedRoom}"` });
     return;
   }
-  if (!canManageRoomQueue(staff, activation)) {
+  if (
+    !canManageRoomQueue(staff, {
+      room: activation.room,
+      activatorStaffIds: [activation.staffId],
+    })
+  ) {
     res
       .status(403)
       .json({ error: "You can't share the queue for that room" });
@@ -1034,21 +1352,19 @@ router.delete("/hall-pass-queue/:id", requireStaff, async (req, res) => {
     res.status(400).json({ error: "Invalid id" });
     return;
   }
-  // Look up the entry + its activation so we can authorize against
-  // canManageRoomQueue. Without this any staff in the school could
-  // delete any entry — the chip-only UX hid the bug, but the endpoint
-  // is the source of truth.
+  // Look up the entry so we can authorize against canManageRoomQueue.
+  // Without this any staff in the school could delete any entry — the
+  // chip-only UX hid the bug, but the endpoint is the source of truth.
+  //
+  // No INNER JOIN on kiosk_activations: that made teacher-created entries
+  // (null activation) 404 here — visible in the panel but impossible to
+  // remove. Authorization comes from the entry's own room.
   const [target] = await db
     .select({
       entryId: hallPassQueueTable.id,
-      activationStaffId: kioskActivationsTable.staffId,
-      activationRoom: kioskActivationsTable.room,
+      room: hallPassQueueTable.room,
     })
     .from(hallPassQueueTable)
-    .innerJoin(
-      kioskActivationsTable,
-      eq(kioskActivationsTable.id, hallPassQueueTable.kioskActivationId),
-    )
     .where(
       and(
         eq(hallPassQueueTable.id, id),
@@ -1059,10 +1375,21 @@ router.delete("/hall-pass-queue/:id", requireStaff, async (req, res) => {
     res.status(404).json({ error: "Queue entry not found" });
     return;
   }
+  const targetActivators = await db
+    .select({ staffId: kioskActivationsTable.staffId })
+    .from(kioskActivationsTable)
+    .where(
+      and(
+        eq(kioskActivationsTable.schoolId, schoolId),
+        eq(kioskActivationsTable.room, target.room),
+        isNull(kioskActivationsTable.deactivatedAt),
+        gt(kioskActivationsTable.expiresAt, new Date()),
+      ),
+    );
   if (
     !canManageRoomQueue(staff, {
-      staffId: target.activationStaffId,
-      room: target.activationRoom,
+      room: target.room,
+      activatorStaffIds: targetActivators.map((a) => a.staffId),
     })
   ) {
     res

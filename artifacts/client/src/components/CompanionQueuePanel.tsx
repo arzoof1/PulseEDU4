@@ -29,7 +29,8 @@ interface QueueEntry {
   destination: string;
   position: number;
   addedAt: string;
-  kioskActivationId: number;
+  // Null for teacher-created entries — no kiosk device behind them.
+  kioskActivationId: number | null;
   blocked?: boolean;
   blockedReason?: string | null;
 }
@@ -47,7 +48,8 @@ interface ActivePass {
 }
 
 interface KioskRef {
-  kioskActivationId: number;
+  // Null when this room has no live kiosk and the line is teacher-managed.
+  kioskActivationId: number | null;
   room: string;
 }
 
@@ -138,35 +140,46 @@ export function CompanionQueuePanel({ user }: { user: AuthUser | null }) {
     };
   }, [user, load]);
 
-  // Group queue entries by activationId, then attach active passes by
-  // matching room. Rooms with no queue but a live kiosk still appear
-  // (server includes them in `kiosks`) so a teacher with a kiosk up
-  // and one student out always sees the room block.
+  // Group queue entries by ROOM, then attach active passes by matching room.
+  //
+  // This used to key on kioskActivationId. That id is now null for every
+  // teacher-created entry (no device behind it), and `null` is a single map
+  // key — so every teacher entry across every room would have collapsed into
+  // one bucket labelled with whichever room happened to arrive first. The
+  // room is the anchor on the server; it has to be the grouping key here too.
+  //
+  // Rooms with no queue still appear (the server includes the teacher's own
+  // room and any live kiosk in `kiosks`) so there is always somewhere to
+  // start a line from.
   const rooms = useMemo(() => {
-    const byKiosk = new Map<
-      number,
-      { kioskActivationId: number; room: string; queue: QueueEntry[] }
+    const byRoom = new Map<
+      string,
+      {
+        room: string;
+        kioskActivationId: number | null;
+        queue: QueueEntry[];
+      }
     >();
     for (const k of data.kiosks) {
-      byKiosk.set(k.kioskActivationId, {
-        kioskActivationId: k.kioskActivationId,
+      byRoom.set(k.room, {
         room: k.room,
+        kioskActivationId: k.kioskActivationId,
         queue: [],
       });
     }
     for (const e of data.entries) {
-      let bucket = byKiosk.get(e.kioskActivationId);
+      let bucket = byRoom.get(e.room);
       if (!bucket) {
         bucket = {
-          kioskActivationId: e.kioskActivationId,
           room: e.room,
+          kioskActivationId: e.kioskActivationId,
           queue: [],
         };
-        byKiosk.set(e.kioskActivationId, bucket);
+        byRoom.set(e.room, bucket);
       }
       bucket.queue.push(e);
     }
-    for (const b of byKiosk.values()) {
+    for (const b of byRoom.values()) {
       b.queue.sort((a, b2) => a.position - b2.position || a.id - b2.id);
     }
     const passesByRoom = new Map<string, ActivePass[]>();
@@ -175,7 +188,7 @@ export function CompanionQueuePanel({ user }: { user: AuthUser | null }) {
       list.push(p);
       passesByRoom.set(p.room, list);
     }
-    return Array.from(byKiosk.values())
+    return Array.from(byRoom.values())
       .map((b) => ({ ...b, activePasses: passesByRoom.get(b.room) ?? [] }))
       .sort((a, b) => a.room.localeCompare(b.room));
   }, [data]);
@@ -184,7 +197,7 @@ export function CompanionQueuePanel({ user }: { user: AuthUser | null }) {
     const target = data.entries.find((e) => e.id === entryId);
     if (!target) return;
     const roomList = data.entries
-      .filter((e) => e.kioskActivationId === target.kioskActivationId)
+      .filter((e) => e.room === target.room)
       .sort((a, b) => a.position - b.position || a.id - b.id);
     const idx = roomList.findIndex((e) => e.id === entryId);
     const swap = idx + direction;
@@ -196,10 +209,7 @@ export function CompanionQueuePanel({ user }: { user: AuthUser | null }) {
       const res = await authFetch("/api/hall-pass-queue/reorder", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kioskActivationId: target.kioskActivationId,
-          orderedIds,
-        }),
+        body: JSON.stringify({ room: target.room, orderedIds }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -210,6 +220,32 @@ export function CompanionQueuePanel({ user }: { user: AuthUser | null }) {
       setError(err instanceof Error ? err.message : "Network error");
     } finally {
       setBusy(null);
+    }
+  }
+
+  // "Get in Line": add a student to a room's waiting line from the staff app.
+  // The server derives the room from the signed-in staff member, so this
+  // deliberately sends only the student and destination — a room in the body
+  // would be ignored (and must be, or a teacher could stuff another room's
+  // line). Returns an error string to display, or null on success.
+  async function addToLine(
+    studentId: string,
+    destination: string,
+  ): Promise<string | null> {
+    try {
+      const res = await authFetch("/api/hall-pass-queue/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentId, destination }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        return body.error ?? `Could not add to the line (${res.status})`;
+      }
+      await load();
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err.message : "Network error";
     }
   }
 
@@ -280,6 +316,8 @@ export function CompanionQueuePanel({ user }: { user: AuthUser | null }) {
           onMove={move}
           onRemove={remove}
           onShowQr={() => setQrFor(r.room)}
+          onAddToLine={addToLine}
+          isOwnRoom={r.kioskActivationId === null}
         />
       ))}
 
@@ -298,6 +336,8 @@ function RoomBlock({
   onMove,
   onRemove,
   onShowQr,
+  onAddToLine,
+  isOwnRoom,
 }: {
   room: string;
   queue: QueueEntry[];
@@ -306,7 +346,35 @@ function RoomBlock({
   onMove: (id: number, dir: -1 | 1) => void;
   onRemove: (id: number) => void;
   onShowQr: () => void;
+  onAddToLine: (studentId: string, destination: string) => Promise<string | null>;
+  // True when this room has no live kiosk — the teacher-managed case. The
+  // "Show QR" button mirrors a kiosk screen, so it only makes sense when one
+  // is actually running.
+  isOwnRoom: boolean;
 }) {
+  const [addOpen, setAddOpen] = useState(false);
+  const [addId, setAddId] = useState("");
+  const [addDest, setAddDest] = useState("Restroom");
+  const [addErr, setAddErr] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const full = queue.length >= 5;
+
+  async function submitAdd() {
+    const sid = addId.trim();
+    if (!sid || adding) return;
+    setAdding(true);
+    setAddErr(null);
+    const err = await onAddToLine(sid, addDest);
+    setAdding(false);
+    if (err) {
+      setAddErr(err);
+      return;
+    }
+    // Success: clear the id but keep the form open and the destination as-is,
+    // so a teacher queueing several students in a row just keeps typing.
+    setAddId("");
+  }
+
   return (
     <div
       style={{
@@ -330,25 +398,134 @@ function RoomBlock({
             · {activePasses.length} out · {queue.length} waiting
           </span>
         </div>
-        <button
-          type="button"
-          onClick={onShowQr}
-          style={{
-            background: "#fff",
-            border: "1px solid #cbd5e1",
-            borderRadius: 6,
-            padding: "0.25rem 0.6rem",
-            fontSize: "0.8rem",
-            cursor: "pointer",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 4,
-          }}
-          title="Share a read-only QR code for phones in the room"
-        >
-          📱 Show QR
-        </button>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button
+            type="button"
+            onClick={() => {
+              setAddOpen((v) => !v);
+              setAddErr(null);
+            }}
+            disabled={full}
+            style={{
+              background: full ? "#f1f5f9" : "#2563eb",
+              border: full ? "1px solid #cbd5e1" : "1px solid #2563eb",
+              color: full ? "#94a3b8" : "#fff",
+              borderRadius: 6,
+              padding: "0.25rem 0.6rem",
+              fontSize: "0.8rem",
+              cursor: full ? "not-allowed" : "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+            title={
+              full
+                ? "This line is full (5 waiting)"
+                : "Add a student to this room's waiting line"
+            }
+          >
+            ➕ Get in Line
+          </button>
+          {!isOwnRoom && (
+            <button
+              type="button"
+              onClick={onShowQr}
+              style={{
+                background: "#fff",
+                border: "1px solid #cbd5e1",
+                borderRadius: 6,
+                padding: "0.25rem 0.6rem",
+                fontSize: "0.8rem",
+                cursor: "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+              }}
+              title="Share a read-only QR code for phones in the room"
+            >
+              📱 Show QR
+            </button>
+          )}
+        </div>
       </div>
+
+      {addOpen && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 6,
+            alignItems: "center",
+            marginBottom: "0.6rem",
+            padding: "0.5rem",
+            background: "#f8fafc",
+            border: "1px solid #e2e8f0",
+            borderRadius: 6,
+          }}
+        >
+          <input
+            value={addId}
+            onChange={(e) => setAddId(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submitAdd();
+            }}
+            placeholder="Student ID"
+            aria-label="Student ID"
+            style={{
+              flex: "1 1 8rem",
+              minWidth: "7rem",
+              padding: "0.3rem 0.5rem",
+              border: "1px solid #cbd5e1",
+              borderRadius: 5,
+              fontSize: "0.85rem",
+            }}
+          />
+          <input
+            value={addDest}
+            onChange={(e) => setAddDest(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submitAdd();
+            }}
+            placeholder="Destination"
+            aria-label="Destination"
+            style={{
+              flex: "1 1 8rem",
+              minWidth: "7rem",
+              padding: "0.3rem 0.5rem",
+              border: "1px solid #cbd5e1",
+              borderRadius: 5,
+              fontSize: "0.85rem",
+            }}
+          />
+          <button
+            type="button"
+            onClick={submitAdd}
+            disabled={!addId.trim() || adding}
+            style={{
+              background: !addId.trim() || adding ? "#e2e8f0" : "#2563eb",
+              color: !addId.trim() || adding ? "#94a3b8" : "#fff",
+              border: "none",
+              borderRadius: 5,
+              padding: "0.3rem 0.75rem",
+              fontSize: "0.85rem",
+              cursor: !addId.trim() || adding ? "not-allowed" : "pointer",
+            }}
+          >
+            {adding ? "Adding…" : "Add"}
+          </button>
+          {addErr && (
+            <div
+              style={{
+                flexBasis: "100%",
+                color: "#991b1b",
+                fontSize: "0.8rem",
+              }}
+            >
+              {addErr}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Currently OUT — students with an active pass from this room. */}
       <div style={{ marginBottom: queue.length > 0 ? "0.6rem" : 0 }}>

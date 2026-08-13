@@ -1459,10 +1459,14 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     })
     .returning();
 
-  // If this student was queued on this kiosk, remove their queue entry now
-  // that the pass has started. Safe no-op if they weren't in the queue
-  // (e.g. they walked up cold).
-  await consumeQueueEntry(act.id, normalizedStudentId);
+  // If this student was in this ROOM's line, remove their entry now that the
+  // pass has started. Safe no-op if they weren't in line (e.g. they walked up
+  // cold). Room-scoped so it also clears an entry their teacher added from
+  // the staff app — those carry no activation id.
+  await consumeQueueEntry(
+    { schoolId: act.schoolId, room: act.room },
+    normalizedStudentId,
+  );
 
   res.status(201).json({
     ...pass,
@@ -1557,8 +1561,8 @@ router.post("/kiosk/hall-passes/return", async (req, res) => {
   // do NOT auto-create the pass — the next student must scan/enter their
   // ID so they get their full allotted time.
   const nextInQueue = await peekNextInQueue({
-    id: act.id,
     schoolId: act.schoolId,
+    room: act.room,
   });
 
   res.json({

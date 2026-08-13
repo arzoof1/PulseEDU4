@@ -1,5 +1,6 @@
 import { backfillWitnessSequences } from "./lib/witnessStatementId";
 import { ensureStudentFleidColumn } from "./lib/fleidCrosswalk";
+import { ensureHallPassQueueRoomAnchor } from "./lib/hallPassQueueAnchor";
 import { reconcileAllSchoolYearFlips } from "./lib/schoolYearFlip";
 import { logger } from "./lib/logger";
 import {
@@ -379,6 +380,11 @@ export async function bootstrapCriticalColumns(): Promise<void> {
     // actually executes there or the column never appears and every FAST
     // upload silently matches nothing.
     await ensureStudentFleidColumn();
+    // hall_pass_queue anchoring: kiosk_activation_id must become nullable and
+    // the uniqueness guarantee must move to (school_id, room, student_id), or
+    // teacher-created queue entries can't be written at all. Same reasoning as
+    // the two ensures above — prod never runs migrations.
+    await ensureHallPassQueueRoomAnchor();
   } catch (err) {
     logger.error({ err }, "[boot] critical column bootstrap failed");
     throw err;
